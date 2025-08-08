@@ -1,67 +1,69 @@
 
-<img width="1190" alt="maybe_hero" src="https://github.com/user-attachments/assets/13fc5ef4-ce0f-4073-a163-9dbc3eb4c8e5" />
+<img width="1190" alt="sure_hero" src="https://github.com/user-attachments/assets/959f6e9f-2d8a-4f8c-893e-cd3e6eeb4ff2" />
 
-# Maybe: The personal finance app for everyone
+<p align="center">
+  <!-- Keep these links. Translations will automatically update with the README. -->
+  <a href="https://readme-i18n.com/de/we-promise/sure">Deutsch</a> | 
+  <a href="https://readme-i18n.com/es/we-promise/sure">Español</a> | 
+  <a href="https://readme-i18n.com/fr/we-promise/sure">Français</a> | 
+  <a href="https://readme-i18n.com/ja/we-promise/sure">日本語</a> | 
+  <a href="https://readme-i18n.com/ko/we-promise/sure">한국어</a> | 
+  <a href="https://readme-i18n.com/pt/we-promise/sure">Português</a> | 
+  <a href="https://readme-i18n.com/ru/we-promise/sure">Русский</a> | 
+  <a href="https://readme-i18n.com/zh/we-promise/sure">中文</a>
+</p>
+
+# ~Maybe~Sure: The personal finance app for everyone
 
 <b>Get
-involved: [Discord](https://link.maybe.co/discord) • [Website](https://maybefinance.com) • [Issues](https://github.com/maybe-finance/maybe/issues)</b>
+involved: [Discord](https://discord.gg/36ZGBsxYEK) • [(archived) Website](https://web.archive.org/web/20250715182050/https://maybefinance.com/) • [Issues](https://github.com/we-promise/sure/issues)</b>
+
+> [!IMPORTANT]
+> This repository is a community fork of the now-abandoned Maybe Finance project. 
+> Learn more in their [final release](https://github.com/maybe-finance/maybe/releases/tag/v0.6.0) doc.
 
 ## Backstory
 
-We spent the better part of 2021/2022 building a personal finance + wealth
-management app called, Maybe. Very full-featured, including an "Ask an Advisor"
-feature which connected users with an actual CFP/CFA to help them with their
-finances (all included in your subscription).
+The Maybe Finance team spent most of 2021–2022 building a full-featured personal finance and wealth management app. It even included an “Ask an Advisor” feature that connected users with a real CFP/CFA — all included with your subscription.
 
-The business end of things didn't work out, and so we shut things down mid-2023.
+The business end of things didn't work out, and so they stopped developing the app in mid-2023.
 
-We spent the better part of $1,000,000 building the app (employees +
-contractors, data providers/services, infrastructure, etc.).
+After spending nearly $1 million on development (employees, contractors, data providers, infra, etc.), the team open-sourced the app. Their goal was to let users self-host it for free — and eventually launch a hosted version for a small fee.
 
-We're now reviving the product as a fully open-source project. The goal is to
-let you run the app yourself, for free, and use it to manage your own finances
-and eventually offer a hosted version of the app for a small monthly fee.
+They actually did launch that hosted version … briefly.
 
-## Maybe Hosting
+That also didn’t work out — at least not as a sustainable B2C business — so now here we are: hosting a community-maintained fork to keep the codebase alive and see where this can go next.
 
-There are 2 primary ways to use the Maybe app:
+Join us!
 
-1. Managed (easiest) - we're in alpha and release invites in our Discord
-2. [Self-host with Docker](docs/hosting/docker.md)
+## Hosting ~Maybe~Sure
 
-## Contributing
+Sure is a fully working personal finance app that can be [self hosted with Docker](docs/hosting/docker.md).
 
-Before contributing, you'll likely find it helpful
-to [understand context and general vision/direction](https://github.com/maybe-finance/maybe/wiki).
+## Forking and Attribution
 
-Once you've done that, please visit
-our [contributing guide](https://github.com/maybe-finance/maybe/blob/main/CONTRIBUTING.md)
-to get started!
+This repo is a community fork of the archived Maybe Finance repo.
+You’re free to fork it under the AGPLv3 license — but we’d love it if you stuck around and contributed here instead.
 
-### Performance Issues
+To stay compliant and avoid trademark issues:
 
-With data-heavy apps, inevitably, there are performance issues. We've set up a public dashboard showing the problematic requests, along with the stacktraces to help debug them.
-
-Any contributions that help improve performance are very much welcome.
-
-https://oss.skylight.io/app/applications/XDpPIXEX52oi/recent/6h/endpoints
+- Be sure to include the original [AGPLv3 license](https://github.com/maybe-finance/maybe/blob/main/LICENSE) and clearly state in your README that your fork is based on Maybe Finance but is **not affiliated with or endorsed by** Maybe Finance Inc.
+- "Maybe" is a trademark of Maybe Finance Inc. and therefore, use of it is NOT allowed in forked repositories (or the logo)
 
 ## Local Development Setup
 
-**If you are trying to _self-host_ the Maybe app, stop here. You
-should [read this guide to get started](docs/hosting/docker.md).**
+**If you are trying to _self-host_ the app, [read this guide to get started](docs/hosting/docker.md).**
 
 The instructions below are for developers to get started with contributing to the app.
 
 ### Requirements
 
 - See `.ruby-version` file for required Ruby version
-- PostgreSQL >9.3 (ideally, latest stable version)
+- PostgreSQL >9.3 (latest stable version recommended)
 
-After cloning the repo, the basic setup commands are:
-
+### Getting Started
 ```sh
-cd maybe
+cd sure
 cp .env.local.example .env.local
 bin/setup
 bin/dev
@@ -70,35 +72,23 @@ bin/dev
 rake demo_data:default
 ```
 
-And visit http://localhost:3000 to see the app. You can use the following
-credentials to log in (generated by DB seed):
+Visit http://localhost:3000 to view the app. You can log in with these demo credentials (from the DB seed):
 
-- Email: `user@maybe.local`
+- Email: `user@sure.local`
 - Password: `password`
 
 For further instructions, see guides below.
 
-### Multi-currency support
-
-If you'd like multi-currency support, there are a few extra steps to follow.
-
-1. Sign up for an API key at [Synth](https://synthfinance.com). It's a Maybe
-   product and the free plan is sufficient for basic multi-currency support.
-2. Add your API key to your `.env` file.
-
 ### Setup Guides
 
-- [Mac dev setup guide](https://github.com/maybe-finance/maybe/wiki/Mac-Dev-Setup-Guide)
-- [Linux dev setup guide](https://github.com/maybe-finance/maybe/wiki/Linux-Dev-Setup-Guide)
-- [Windows dev setup guide](https://github.com/maybe-finance/maybe/wiki/Windows-Dev-Setup-Guide)
-- Dev containers - visit [this guide](https://code.visualstudio.com/docs/devcontainers/containers) to learn more
+- [Mac dev setup](https://github.com/we-promise/sure/wiki/Mac-Dev-Setup-Guide)
+- [Linux dev setup](https://github.com/we-promise/sure/wiki/Linux-Dev-Setup-Guide)
+- [Windows dev setup](https://github.com/we-promise/sure/wiki/Windows-Dev-Setup-Guide)
+- Dev containers - visit [this guide](https://code.visualstudio.com/docs/devcontainers/containers)
 
-## Repo Activity
+## License and Trademarks
 
-![Repo Activity](https://repobeats.axiom.co/api/embed/7866c9790deba0baf63ca1688b209130b306ea4e.svg "Repobeats analytics image")
-
-## Copyright & license
-
-Maybe is distributed under
-an [AGPLv3 license](https://github.com/maybe-finance/maybe/blob/main/LICENSE). "
-Maybe" is a trademark of Maybe Finance, Inc.
+Maybe and Sure are both distributed under
+an [AGPLv3 license](https://github.com/we-promise/sure/blob/main/LICENSE).
+- "Maybe" is a trademark of Maybe Finance, Inc.
+- "Sure" is not, and refers to this community fork.

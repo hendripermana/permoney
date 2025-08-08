@@ -18,7 +18,7 @@ class Trade::CreateForm
   end
 
   private
-    # Users can either look up a ticker from our provider (Synth) or enter a manual, "offline" ticker (that we won't fetch prices for)
+    # Users can either look up a ticker from a provider or enter a manual, "offline" ticker (that we won't fetch prices for)
     def security
       ticker_symbol, exchange_operating_mic = ticker.present? ? ticker.split("|") : [ manual_ticker, nil ]
 
@@ -29,13 +29,11 @@ class Trade::CreateForm
     end
 
     def create_trade
-      prefix = type == "sell" ? "Sell " : "Buy "
-      trade_name = prefix + "#{qty.to_i.abs} shares of #{security.ticker}"
       signed_qty = type == "sell" ? -qty.to_d : qty.to_d
       signed_amount = signed_qty * price.to_d
 
       trade_entry = account.entries.new(
-        name: trade_name,
+        name: Trade.build_name(type, qty, security.ticker),
         date: date,
         amount: signed_amount,
         currency: currency,

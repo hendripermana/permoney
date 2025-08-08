@@ -10,10 +10,9 @@ class Settings::ApiKeysTest < ApplicationSystemTestCase
   test "should show no API key state when user has no active keys" do
     visit settings_api_key_path
 
-    assert_text "Create Your API Key"
-    assert_text "Get programmatic access to your Maybe data"
-    assert_text "Access your account data programmatically"
+    assert_text "API Key"
     assert_link "Create API Key", href: new_settings_api_key_path
+    assert_text "Access your account data programmatically"
   end
 
   test "should navigate to create new API key form" do
@@ -33,7 +32,7 @@ class Settings::ApiKeysTest < ApplicationSystemTestCase
     fill_in "API Key Name", with: "Test Integration Key"
     choose "Read/Write"
 
-    click_button "Create API Key"
+    click_button "Save API Key"
 
     # Should redirect to show page with the API key details
     assert_current_path settings_api_key_path
@@ -100,7 +99,7 @@ class Settings::ApiKeysTest < ApplicationSystemTestCase
 
     fill_in "API Key Name", with: "New API Key"
     choose "Read Only"
-    click_button "Create API Key"
+    click_button "Save API Key"
 
     # Should redirect to show page with new key
     assert_text "New API Key"
@@ -124,20 +123,17 @@ class Settings::ApiKeysTest < ApplicationSystemTestCase
     # Click the revoke button to open the modal
     click_button "Revoke Key"
 
-    # Wait for the modal to appear and click Confirm
-    # The dialog might take a moment to appear
-    sleep 0.5
-
+    # Wait for the dialog and then confirm
+    assert_selector "#confirm-dialog", visible: true
     within "#confirm-dialog" do
-      assert_text "Are you sure you want to revoke this API key?"
       click_button "Confirm"
     end
 
-    # Wait for the page to update after revoke
-    sleep 0.5
+    # Wait for redirect after revoke
+    assert_no_selector "#confirm-dialog"
 
-    assert_text "Create Your API Key"
-    assert_text "Get programmatic access to your Maybe data"
+    assert_text "API Key"
+    assert_text "Access your account data programmatically"
 
     # Key should be revoked in the database
     api_key.reload
@@ -170,7 +166,7 @@ class Settings::ApiKeysTest < ApplicationSystemTestCase
 
     # Try to submit without name
     choose "Read Only"
-    click_button "Create API Key"
+    click_button "Save API Key"
 
     # Should stay on form with validation error
     assert_current_path new_settings_api_key_path

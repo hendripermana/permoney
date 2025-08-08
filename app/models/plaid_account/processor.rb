@@ -34,23 +34,43 @@ class PlaidAccount::Processor
           plaid_account_id: plaid_account.id
         )
 
-        # Name and subtype are the only attributes a user can override for Plaid accounts
+        # Create or assign the accountable if needed
+        if account.accountable.nil?
+          accountable = map_accountable(plaid_account.plaid_type)
+          account.accountable = accountable
+        end
+
+        # Name and subtype are the attributes a user can override for Plaid accounts
+        # Use enrichable pattern to respect locked attributes
         account.enrich_attributes(
           {
-            name: plaid_account.name,
+            name: plaid_account.name
+          },
+          source: "plaid"
+        )
+
+        # Enrich subtype on the accountable, respecting locks
+        account.accountable.enrich_attributes(
+          {
             subtype: map_subtype(plaid_account.plaid_type, plaid_account.plaid_subtype)
           },
           source: "plaid"
         )
 
         account.assign_attributes(
-          accountable: map_accountable(plaid_account.plaid_type),
           balance: balance_calculator.balance,
           currency: plaid_account.currency,
           cash_balance: balance_calculator.cash_balance
         )
 
         account.save!
+
+        # Create or update the current balance anchor valuation for event-sourced ledger
+        # Note: This is a partial implementation. In the future, we'll introduce HoldingValuation
+        # to properly track the holdings vs. cash breakdown, but for now we're only tracking
+        # the total balance in the current anchor. The cash_balance field on the account model
+        # is still being used for the breakdown.
+        account.set_current_balance(balance_calculator.balance)
       end
     end
 

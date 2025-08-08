@@ -38,7 +38,7 @@ class Demo::Generator
       end
 
       puts "👥 Creating empty family..."
-      create_family_and_users!("Demo Family", "user@maybe.local", onboarded: true, subscribed: true)
+      create_family_and_users!("Demo Family", "user@sure.local", onboarded: true, subscribed: true)
 
       puts "✅ Empty demo data loaded successfully!"
     end
@@ -53,14 +53,14 @@ class Demo::Generator
       end
 
       puts "👥 Creating new user family..."
-      create_family_and_users!("Demo Family", "user@maybe.local", onboarded: false, subscribed: false)
+      create_family_and_users!("Demo Family", "user@sure.local", onboarded: false, subscribed: false)
 
       puts "✅ New user demo data loaded successfully!"
     end
   end
 
   # Generate comprehensive realistic demo data with multi-currency
-  def generate_default_data!(skip_clear: false, email: "user@maybe.local")
+  def generate_default_data!(skip_clear: false, email: "user@sure.local")
     if skip_clear
       puts "⏭️  Skipping data clearing (appending new family)..."
     else
@@ -1174,42 +1174,42 @@ class Demo::Generator
 
       # Property valuations (these accounts are valued, not transaction-driven)
       @home.entries.create!(
-        entryable: Valuation.new,
+        entryable: Valuation.new(kind: "current_anchor"),
         amount: 350_000,
-        name: "Current Market Value",
+        name: Valuation.build_current_anchor_name(@home.accountable_type),
         currency: "USD",
         date: Date.current
       )
 
       # Vehicle valuations (these depreciate over time)
       @honda_accord.entries.create!(
-        entryable: Valuation.new,
+        entryable: Valuation.new(kind: "current_anchor"),
         amount: 18_000,
-        name: "Current Market Value",
+        name: Valuation.build_current_anchor_name(@honda_accord.accountable_type),
         currency: "USD",
         date: Date.current
       )
 
       @tesla_model3.entries.create!(
-        entryable: Valuation.new,
+        entryable: Valuation.new(kind: "current_anchor"),
         amount: 4_500,
-        name: "Current Market Value",
+        name: Valuation.build_current_anchor_name(@tesla_model3.accountable_type),
         currency: "USD",
         date: Date.current
       )
 
       @jewelry.entries.create!(
-        entryable: Valuation.new,
+        entryable: Valuation.new(kind: "reconciliation"),
         amount: 2000,
-        name: "Current Market Value",
+        name: Valuation.build_reconciliation_name(@jewelry.accountable_type),
         currency: "USD",
         date: 90.days.ago.to_date
       )
 
       @personal_loc.entries.create!(
-        entryable: Valuation.new,
+        entryable: Valuation.new(kind: "reconciliation"),
         amount: 800,
-        name: "Owed",
+        name: Valuation.build_reconciliation_name(@personal_loc.accountable_type),
         currency: "USD",
         date: 120.days.ago.to_date
       )
