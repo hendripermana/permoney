@@ -18,6 +18,7 @@ class Family < ApplicationRecord
   has_many :invitations, dependent: :destroy
 
   has_many :imports, dependent: :destroy
+  has_many :family_exports, dependent: :destroy
 
   has_many :entries, through: :accounts
   has_many :transactions, through: :accounts
@@ -68,10 +69,12 @@ class Family < ApplicationRecord
     country != "US" && country != "CA"
   end
 
-  def requires_data_provider?
+  def requires_securities_data_provider?
     # If family has any trades, they need a provider for historical prices
-    return true if trades.any?
+    trades.any?
+  end
 
+  def requires_exchange_rates_data_provider?
     # If family has any accounts not denominated in the family's currency, they need a provider for historical exchange rates
     return true if accounts.where.not(currency: self.currency).any?
 
@@ -84,7 +87,8 @@ class Family < ApplicationRecord
   end
 
   def missing_data_provider?
-    requires_data_provider? && Provider::Registry.get_provider(:synth).nil?
+    (requires_securities_data_provider? && Security.provider.nil?) ||
+    (requires_exchange_rates_data_provider? && ExchangeRate.provider.nil?)
   end
 
   def oldest_entry_date
@@ -100,7 +104,8 @@ class Family < ApplicationRecord
     [
       id,
       key,
-      data_invalidation_key
+      data_invalidation_key,
+      accounts.maximum(:updated_at)
     ].compact.join("_")
   end
 

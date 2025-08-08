@@ -5,7 +5,7 @@ class PagesController < ApplicationController
 
   def dashboard
     @balance_sheet = Current.family.balance_sheet
-    @accounts = Current.family.accounts.active.with_attached_logo
+    @accounts = Current.family.accounts.visible.with_attached_logo
 
     period_param = params[:cashflow_period]
     @cashflow_period = if period_param.present?
@@ -33,11 +33,11 @@ class PagesController < ApplicationController
     # Fallback if no release notes are available
     if @release_notes.nil?
       @release_notes = {
-        avatar: "https://github.com/maybe-finance.png",
-        username: "maybe-finance",
+        avatar: "https://github.com/we-promise.png",
+        username: "we-promise",
         name: "Release notes unavailable",
         published_at: Date.current,
-        body: "<p>Unable to fetch the latest release notes at this time. Please check back later or visit our <a href='https://github.com/maybe-finance/maybe/releases' target='_blank'>GitHub releases page</a> directly.</p>"
+        body: "<p>Unable to fetch the latest release notes at this time. Please check back later or visit our <a href='https://github.com/we-promise/sure/releases' target='_blank'>GitHub releases page</a> directly.</p>"
       }
     end
 
