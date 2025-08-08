@@ -5,22 +5,39 @@
       Cashflow
     </h2>
 
-    <%= form_with url: root_path, method: :get, data: { controller: "auto-submit-form", turbo_frame: "cashflow_sankey_section" } do |form| %>
-      <%= form.select :cashflow_period,
-                Period.as_options,
-                { selected: period.key },
-                data: { "auto-submit-form-target": "auto" },
-                class: "bg-container border border-secondary font-medium rounded-lg px-3 py-2 text-sm pr-7 cursor-pointer text-primary focus:outline-hidden focus:ring-0" %>
-    <% end %>
-  </div>
-
-  <% if sankey_data[:links].present? %>
-    <div class="w-full h-96">
+    <div class="flex items-center gap-3">
+      <%= form_with url: root_path, method: :get, data: { controller: "auto-submit-form", turbo_frame: "cashflow_sankey_section" } do |form| %>
+        <%= form.select :cashflow_period,
+              Period.as_options,
+              { selected: period.key },
+              data: { "auto-submit-form-target": "auto" },
+              class: "bg-container border border-secondary font-medium rounded-lg px-3 py-2 text-sm pr-7 cursor-pointer text-primary focus:outline-hidden focus:ring-0" %>
+      <% end %>
+      
+      <% if sankey_data[:links].present? %>
+        <button
+          data-controller="cashflow-fullscreen"
+          data-action="click->cashflow-fullscreen#toggleFullscreen"
+          data-cashflow-fullscreen-sankey-data-value="<%= sankey_data.to_json %>"
+          data-cashflow-fullscreen-currency-symbol-value="<%= sankey_data[:currency_symbol] %>"
+          data-cashflow-fullscreen-period-value="<%= period.key %>"
+          class="flex items-center justify-center w-10 h-10 rounded-lg border border-secondary bg-container hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors duration-200 group"
+          title="Fullscreen View"
+          type="button">
+          <svg class="w-5 h-5 text-gray-600 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-white transition-colors duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
+          </svg>
+        </button>
+      <% end %>
+    </div>
+  </div>  <% if sankey_data[:links].present? %>
+    <div class="w-full" style="height: min(650px, max(500px, 60vh));">
       <div
         data-controller="sankey-chart"
         data-sankey-chart-data-value="<%= sankey_data.to_json %>"
         data-sankey-chart-currency-symbol-value="<%= sankey_data[:currency_symbol] %>"
-        class="w-full h-full"></div>
+        class="w-full h-full rounded-lg overflow-visible bg-container"
+        style="min-height: 450px; display: block; position: relative; padding: 10px;"></div>
     </div>
   <% else %>
     <div class="h-[300px] lg:h-[340px] bg-container py-4 flex flex-col items-center justify-center">
