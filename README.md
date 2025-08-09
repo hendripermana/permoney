@@ -13,7 +13,7 @@
   <a href="https://readme-i18n.com/zh/we-promise/sure">中文</a>
 </p>
 
-# ~Maybe~Sure: The personal finance app for everyone
+# Permoney: The personal finance app for everyone (community fork)
 
 <b>Get
 involved: [Discord](https://discord.gg/36ZGBsxYEK) • [(archived) Website](https://web.archive.org/web/20250715182050/https://maybefinance.com/) • [Issues](https://github.com/we-promise/sure/issues)</b>
@@ -42,7 +42,7 @@ Sure is a fully working personal finance app that can be [self hosted with Docke
 
 ## Forking and Attribution
 
-This repo is a community fork of the archived Maybe Finance repo.
+This repo is a community fork of the archived Maybe Finance repo, rebranded as Permoney. It replaces the discontinued Synth data provider with pluggable alternatives (Twelve Data, Alpha Vantage) to restore market data, exchange rates, and net worth chart functionality.
 You’re free to fork it under the AGPLv3 license — but we’d love it if you stuck around and contributed here instead.
 
 To stay compliant and avoid trademark issues:

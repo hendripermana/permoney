@@ -9,7 +9,7 @@ if Rails.env.production? && ENV['NEW_RELIC_LICENSE_KEY'].present?
   # Custom attributes for better tracking
   NewRelic::Agent.add_custom_attributes({
     environment: Rails.env,
-    application_name: ENV['NEW_RELIC_APP_NAME'] || 'Maybe Finance App',
+  application_name: ENV['NEW_RELIC_APP_NAME'] || 'Permoney App',
     build_commit_sha: ENV['BUILD_COMMIT_SHA'],
     self_hosted: ENV['SELF_HOSTED']
   })

@@ -2,24 +2,22 @@ class AccountableSparklinesController < ApplicationController
   def show
     @accountable = Accountable.from_type(params[:accountable_type]&.classify)
 
+    # Always render a body for Turbo Frame requests so the placeholder gets replaced.
+    # Keep server-side caching via Rails.cache to avoid recomputing heavy queries.
     etag_key = cache_key
+    @series = Rails.cache.fetch(etag_key, expires_in: 24.hours) do
+      builder = Balance::ChartSeriesBuilder.new(
+        account_ids: account_ids,
+        currency: family.currency,
+        period: Period.last_30_days,
+        favorable_direction: @accountable.favorable_direction,
+        interval: "1 day"
+      )
 
-    # Use HTTP conditional GET so the client receives 304 Not Modified when possible.
-    if stale?(etag: etag_key, last_modified: family.latest_sync_completed_at)
-      @series = Rails.cache.fetch(etag_key, expires_in: 24.hours) do
-        builder = Balance::ChartSeriesBuilder.new(
-          account_ids: account_ids,
-          currency: family.currency,
-          period: Period.last_30_days,
-          favorable_direction: @accountable.favorable_direction,
-          interval: "1 day"
-        )
-
-        builder.balance_series
-      end
-
-      render layout: false
+      builder.balance_series
     end
+
+    render layout: false
   end
 
   private

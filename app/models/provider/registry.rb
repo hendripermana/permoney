@@ -40,6 +40,12 @@ class Provider::Registry
         Provider::TwelveData.new(api_key)
       end
 
+      def alpha_vantage
+        api_key = ENV["ALPHA_VANTAGE_API_KEY"]
+        return nil unless api_key.present?
+        Provider::AlphaVantage.new(api_key)
+      end
+
       def plaid_us
         config = Rails.application.config.plaid
 
@@ -92,9 +98,9 @@ class Provider::Registry
     def available_providers
       case concept
       when :exchange_rates
-        %i[twelve_data]
+  %i[twelve_data alpha_vantage]
       when :securities
-        %i[twelve_data]
+  %i[twelve_data alpha_vantage]
       when :llm
         %i[openai]
       else

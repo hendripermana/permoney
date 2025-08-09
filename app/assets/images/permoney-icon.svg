@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Permoney Logomark</title>
+  <desc id="desc">Green coin with stylized P and upward arrow</desc>
+  <defs>
+    <linearGradient id="pm-coin" x1="40" y1="28" x2="216" y2="228" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#18C964"/><stop offset="1" stop-color="#0EA35C"/>
+    </linearGradient>
+    <linearGradient id="pm-gloss" x1="64" y1="40" x2="160" y2="140" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity=".36"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <circle cx="128" cy="128" r="112" fill="url(#pm-coin)"/>
+  <circle cx="128" cy="128" r="112" fill="url(#pm-gloss)"/>
+  <path d="M96 72h24c34 0 56 18 56 44s-22 44-56 44h-12v24H96V72Z" fill="#fff" opacity=".96"/>
+  <path d="M118 128h22l18-18v14h18V86h-38v18h14l-16 16h-18v8z" fill="#fff"/>
+</svg>

@@ -2,7 +2,7 @@
 	"devDependencies": {
 		"@biomejs/biome": "^1.9.3"
 	},
-	"name": "sure",
+	"name": "permoney",
 	"version": "1.0.0",
 	"description": "The personal finance app for everyone",
 	"scripts": {
