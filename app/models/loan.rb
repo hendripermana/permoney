@@ -8,6 +8,14 @@ class Loan < ApplicationRecord
     "other" => { short: "Other", long: "Other Loan" }
   }.freeze
 
+  # Virtual attribute used only during origination flow
+  attr_accessor :imported
+
+  # Basic validations for new metadata (kept permissive for backward compatibility)
+  validates :debt_kind, inclusion: { in: %w[institutional personal] }, allow_nil: true
+  validates :counterparty_type, inclusion: { in: %w[institution person] }, allow_nil: true
+  validates :counterparty_name, length: { maximum: 255 }, allow_nil: true
+
   def monthly_payment
     return nil if term_months.nil? || interest_rate.nil? || rate_type.nil? || rate_type != "fixed"
     return Money.new(0, account.currency) if account.loan.original_balance.amount.zero? || term_months.zero?
@@ -25,7 +33,13 @@ class Loan < ApplicationRecord
   end
 
   def original_balance
-    Money.new(account.first_valuation_amount, account.currency)
+    # Prefer initial_balance column if present, fallback to first valuation amount
+    base_amount = if initial_balance.present?
+      initial_balance
+    else
+      account.first_valuation_amount
+    end
+    Money.new(base_amount, account.currency)
   end
 
   class << self
