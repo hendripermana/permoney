@@ -6,6 +6,30 @@
   <div class="space-y-2">
     <%= form.fields_for :accountable do |loan_form| %>
       <div class="flex items-center gap-2">
+        <%= loan_form.select :debt_kind,
+                              [["Institutional", "institutional"], ["Personal", "personal"]],
+                              { label: "Debt Type" } %>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <%= loan_form.select :counterparty_type,
+                              [["Institution", "institution"], ["Person", "person"]],
+                              { label: "Counterparty Type" } %>
+        <%= loan_form.text_field :counterparty_name, label: "Counterparty Name", placeholder: "e.g., BCA, Dana, John Doe" %>
+      </div>
+
+      <%# Disbursement account only when not imported. `form.object` is the Account; `loan_form.object` is the Loan. %>
+      <% unless form.object.import&.present? || loan_form.object.imported %>
+        <div class="flex items-center gap-2">
+          <%= loan_form.collection_select :disbursement_account_id,
+                                          Current.family.accounts.assets.alphabetically,
+                                          :id, :name,
+                                          { label: "Disbursement Account" } %>
+          <%= loan_form.date_field :origination_date, label: "Origination Date", value: Date.current %>
+        </div>
+      <% end %>
+
+      <div class="flex items-center gap-2">
         <%= loan_form.money_field :initial_balance,
                                  label: t("loans.form.initial_balance"),
                                  default_currency: Current.family.currency,

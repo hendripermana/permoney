@@ -26,7 +26,8 @@ class PagesControllerTest < ActionDispatch::IntegrationTest
     get changelog_path
     assert_response :ok
     assert_select "h2", text: "Release notes unavailable"
-    assert_select "a[href='https://github.com/we-promise/sure/releases']"
+    gh = Provider::Github.new
+    assert_select "a[href='#{gh.releases_url}']"
   end
 
   test "changelog with incomplete release notes" do
