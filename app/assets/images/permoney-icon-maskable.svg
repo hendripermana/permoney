@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Permoney Maskable Icon">
+  <rect width="512" height="512" rx="96" fill="#0EA35C"/>
+  <g transform="translate(64,64) scale(1.0)">
+    <defs>
+      <linearGradient id="pm-coin2" x1="40" y1="28" x2="384" y2="384" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#18C964"/><stop offset="1" stop-color="#0EA35C"/>
+      </linearGradient>
+    </defs>
+    <circle cx="192" cy="192" r="192" fill="url(#pm-coin2)"/>
+    <path d="M144 96h48c68 0 112 36 112 88s-44 88-112 88h-24v48h-24V96z" fill="#fff" opacity=".96"/>
+    <path d="M188 192h40l32-32v24h32v-64h-68v32h24l-28 28h-32v12z" fill="#fff"/>
+  </g>
+</svg>

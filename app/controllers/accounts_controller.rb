@@ -34,14 +34,10 @@ class AccountsController < ApplicationController
   end
 
   def sparkline
-    etag_key = @account.family.build_cache_key("#{@account.id}_sparkline", invalidate_on_data_updates: true)
-
-    # Short-circuit with 304 Not Modified when the client already has the latest version.
-    # We defer the expensive series computation until we know the content is stale.
-    if stale?(etag: etag_key, last_modified: @account.family.latest_sync_completed_at)
-      @sparkline_series = @account.sparkline_series
-      render layout: false
-    end
+  # Always render a body for Turbo Frame requests so the placeholder gets replaced.
+  # We still leverage server-side caching in Account::Chartable#sparkline_series.
+  @sparkline_series = @account.sparkline_series
+  render layout: false
   end
 
   def toggle_active

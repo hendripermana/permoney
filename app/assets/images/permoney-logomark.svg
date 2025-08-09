@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Permoney logo">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#12B76A"/>
+      <stop offset="100%" stop-color="#16A34A"/>
+    </linearGradient>
+  </defs>
+  <rect rx="200" ry="200" width="1024" height="1024" fill="url(#g)"/>
+  <g fill="#065F46">
+    <path d="M300 256h200c240 0 300 120 300 240s-60 240-300 240H300z"/>
+  </g>
+  <g transform="translate(300,340)">
+    <path d="M120 180h160l80-80" stroke="#22C55E" stroke-width="80" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M440 100v160h-160" stroke="#22C55E" stroke-width="80" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

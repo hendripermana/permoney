@@ -1,6 +1,16 @@
 module ApplicationHelper
   include Pagy::Frontend
 
+  def brand_name
+    "Permoney"
+  end
+
+  def full_title
+    base = brand_name
+    page = content_for?(:title) ? content_for(:title) : nil
+    page ? "#{page} · #{base}" : base
+  end
+
   def styled_form_with(**options, &block)
     options[:builder] = StyledFormBuilder
     form_with(**options, &block)

@@ -4,10 +4,36 @@ module Security::Provided
   SecurityInfoMissingError = Class.new(StandardError)
 
   class_methods do
+    # Returns the first available provider instance based on configured order.
+    # Order of precedence:
+    # 1) SECURITIES_PROVIDERS (comma-separated list), e.g. "twelve_data,alpha_vantage"
+    # 2) SECURITIES_PROVIDER (single value)
+    # 3) Registry default order for :securities concept
     def provider
-      provider = ENV["SECURITIES_PROVIDER"] || "twelve_data"
+      providers_in_order.first
+    end
+
+    # Returns an array of available provider instances in the configured order
+    def providers_in_order
       registry = Provider::Registry.for_concept(:securities)
-      registry.get_provider(provider.to_sym)
+
+      names = if ENV["SECURITIES_PROVIDERS"].present?
+        ENV["SECURITIES_PROVIDERS"].split(/\s*,\s*/)
+      elsif ENV["SECURITIES_PROVIDER"].present?
+        [ ENV["SECURITIES_PROVIDER"] ]
+      else
+        # Use registry ordering (%i[twelve_data alpha_vantage]) without hardcoding
+        # and let registry resolve each provider (may be nil if not configured)
+        registry.send(:available_providers)
+      end
+
+      Array(names).filter_map do |name|
+        begin
+          registry.get_provider(name.to_sym)
+        rescue => _e
+          nil
+        end
+      end
     end
 
     def search_provider(symbol, country_code: nil, exchange_operating_mic: nil)
@@ -18,10 +44,11 @@ module Security::Provided
         exchange_operating_mic: exchange_operating_mic
       }.compact_blank
 
-      response = provider.search_securities(symbol, **params)
+      providers_in_order.each do |prov|
+        response = prov.search_securities(symbol, **params)
+        next unless response.success? && response.data.present?
 
-      if response.success?
-        response.data.map do |provider_security|
+        return response.data.map do |provider_security|
           # Need to map to domain model so Combobox can display via to_combobox_option
           Security.new(
             ticker: provider_security.symbol,
@@ -31,9 +58,9 @@ module Security::Provided
             country_code: provider_security.country_code
           )
         end
-      else
-        []
       end
+
+      []
     end
   end
 
@@ -42,28 +69,34 @@ module Security::Provided
 
     return price if price.present?
 
-    # Make sure we have a data provider before fetching
-    return nil unless provider.present?
-    response = provider.fetch_security_price(
-      symbol: ticker,
-      exchange_operating_mic: exchange_operating_mic,
-      date: date
-    )
+    provs = self.class.providers_in_order
+    return nil if provs.empty?
 
-    return nil unless response.success? # Provider error
+    provs.each do |prov|
+      response = prov.fetch_security_price(
+        symbol: ticker,
+        exchange_operating_mic: exchange_operating_mic,
+        date: date
+      )
 
-    price = response.data
-    Security::Price.find_or_create_by!(
-      security_id: self.id,
-      date: price.date,
-      price: price.price,
-      currency: price.currency
-    ) if cache
-    price
+      next unless response.success?
+
+      price = response.data
+      Security::Price.find_or_create_by!(
+        security_id: self.id,
+        date: price.date,
+        price: price.price,
+        currency: price.currency
+      ) if cache
+      return price
+    end
+
+    nil
   end
 
   def import_provider_details(clear_cache: false)
-    unless provider.present?
+    provs = self.class.providers_in_order
+    if provs.empty?
       Rails.logger.warn("No provider configured for Security.import_provider_details")
       return
     end
@@ -72,38 +105,49 @@ module Security::Provided
       return
     end
 
-    response = provider.fetch_security_info(
-      symbol: ticker,
-      exchange_operating_mic: exchange_operating_mic
-    )
-
-    if response.success?
-      update(
-        name: response.data.name,
-        logo_url: response.data.logo_url,
+    provs.each do |prov|
+      response = prov.fetch_security_info(
+        symbol: ticker,
+        exchange_operating_mic: exchange_operating_mic
       )
-    else
-      Rails.logger.warn("Failed to fetch security info for #{ticker} from #{provider.class.name}: #{response.error.message}")
-      Sentry.capture_exception(SecurityInfoMissingError.new("Failed to get security info"), level: :warning) do |scope|
-        scope.set_tags(security_id: self.id)
-        scope.set_context("security", { id: self.id, provider_error: response.error.message })
+
+      if response.success?
+        update(
+          name: response.data.name,
+          logo_url: response.data.logo_url,
+        )
+        return
+      else
+        Rails.logger.warn("Failed to fetch security info for #{ticker} from #{prov.class.name}: #{response.error.message}")
       end
+    end
+
+    Sentry.capture_exception(SecurityInfoMissingError.new("Failed to get security info"), level: :warning) do |scope|
+      scope.set_tags(security_id: self.id)
+      scope.set_context("security", { id: self.id, provider_error: "all providers failed" })
     end
   end
 
   def import_provider_prices(start_date:, end_date:, clear_cache: false)
-    unless provider.present?
+    provs = self.class.providers_in_order
+    if provs.empty?
       Rails.logger.warn("No provider configured for Security.import_provider_prices")
       return 0
     end
 
-    Security::Price::Importer.new(
-      security: self,
-      security_provider: provider,
-      start_date: start_date,
-      end_date: end_date,
-      clear_cache: clear_cache
-    ).import_provider_prices
+    provs.each do |prov|
+      count = Security::Price::Importer.new(
+        security: self,
+        security_provider: prov,
+        start_date: start_date,
+        end_date: end_date,
+        clear_cache: clear_cache
+      ).import_provider_prices
+
+      return count if count.to_i > 0
+    end
+
+    0
   end
 
   private

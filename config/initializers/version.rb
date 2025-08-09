@@ -1,4 +1,4 @@
-module Maybe
+module Permoney
   class << self
     def version
       Semver.new(semver)

@@ -101,12 +101,27 @@ class Family < ApplicationRecord
     # By including it in the cache key, we can expire caches every time family account data changes.
     data_invalidation_key = invalidate_on_data_updates ? latest_sync_completed_at : nil
 
+    # Also include the most recent balance update time across the family's accounts.
+    # This ensures charts invalidate immediately when balances are materialized/backfilled,
+    # not only when a sync completes or an account record changes.
+    balances_max_updated_at = Balance
+      .where(account_id: accounts.select(:id))
+      .maximum(:updated_at)
+
     [
       id,
       key,
       data_invalidation_key,
-      accounts.maximum(:updated_at)
+      accounts.maximum(:updated_at),
+      balances_max_updated_at
     ].compact.join("_")
+  end
+
+  # Latest update timestamp across all balances in this family, memoized per request.
+  def balances_max_updated_at
+    @balances_max_updated_at ||= Balance
+      .where(account_id: accounts.select(:id))
+      .maximum(:updated_at)
   end
 
   # Used for invalidating entry related aggregation queries
