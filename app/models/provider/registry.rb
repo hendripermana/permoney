@@ -98,9 +98,9 @@ class Provider::Registry
     def available_providers
       case concept
       when :exchange_rates
-  %i[twelve_data alpha_vantage]
+        %i[twelve_data alpha_vantage]
       when :securities
-  %i[twelve_data alpha_vantage]
+        %i[twelve_data alpha_vantage]
       when :llm
         %i[openai]
       else

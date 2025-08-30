@@ -5,6 +5,7 @@ class AccountsController < ApplicationController
   def index
     @manual_accounts = family.accounts.manual.alphabetically
     @plaid_items = family.plaid_items.ordered
+    @simplefin_items = family.simplefin_items.ordered
 
     render layout: "settings"
   end
@@ -34,10 +35,10 @@ class AccountsController < ApplicationController
   end
 
   def sparkline
-  # Always render a body for Turbo Frame requests so the placeholder gets replaced.
-  # We still leverage server-side caching in Account::Chartable#sparkline_series.
-  @sparkline_series = @account.sparkline_series
-  render layout: false
+    # Always render a body for Turbo Frame requests so the placeholder gets replaced.
+    # We still leverage server-side caching in Account::Chartable#sparkline_series.
+    @sparkline_series = @account.sparkline_series
+    render layout: false
   end
 
   def toggle_active

@@ -92,7 +92,7 @@ class Balance::BaseCalculator
         non_cash_inflows: non_cash_inflows,
         non_cash_outflows: non_cash_outflows
       }
-    end
+      end
 
     def derive_cash_balance(cash_balance, date)
       entries = sync_cache.get_entries(date)

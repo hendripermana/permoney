@@ -2,24 +2,24 @@
 # This file configures additional New Relic settings beyond what's in newrelic.yml
 
 # Only enable New Relic in production environment if license key is present
-if Rails.env.production? && ENV['NEW_RELIC_LICENSE_KEY'].present?
+if Rails.env.production? && ENV["NEW_RELIC_LICENSE_KEY"].present?
   # Enable New Relic logging
   NewRelic::Agent.logger.info("New Relic monitoring enabled for #{Rails.env} environment")
-  
+
   # Custom attributes for better tracking
   NewRelic::Agent.add_custom_attributes({
     environment: Rails.env,
-  application_name: ENV['NEW_RELIC_APP_NAME'] || 'Permoney App',
-    build_commit_sha: ENV['BUILD_COMMIT_SHA'],
-    self_hosted: ENV['SELF_HOSTED']
+  application_name: ENV["NEW_RELIC_APP_NAME"] || "Permoney App",
+    build_commit_sha: ENV["BUILD_COMMIT_SHA"],
+    self_hosted: ENV["SELF_HOSTED"]
   })
-  
+
   # Add custom events for important business metrics
   # This can be used later for tracking user signups, transactions, etc.
-  NewRelic::Agent.record_custom_event('AppStartup', {
+  NewRelic::Agent.record_custom_event("AppStartup", {
     timestamp: Time.current,
     environment: Rails.env,
-    version: ENV['BUILD_COMMIT_SHA']&.slice(0, 7) || 'unknown'
+    version: ENV["BUILD_COMMIT_SHA"]&.slice(0, 7) || "unknown"
   })
 else
   if Rails.env.production?

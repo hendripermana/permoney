@@ -14,5 +14,3 @@ class AddDebtFieldsToLoans < ActiveRecord::Migration[7.2]
     add_foreign_key :loans, :accounts, column: :disbursement_account_id
   end
 end
-
-

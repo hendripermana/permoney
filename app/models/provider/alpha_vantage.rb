@@ -124,7 +124,7 @@ class Provider::AlphaVantage < Provider
 
     def fx_daily_series(from:, to:)
       @fx_cache ||= {}
-      key = [from, to].join(":")
+      key = [ from, to ].join(":")
       return @fx_cache[key] if @fx_cache[key]
 
       resp = client.get("/query") do |req|
