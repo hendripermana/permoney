@@ -16,14 +16,17 @@
       
       <% if sankey_data[:links].present? %>
         <button
-          data-controller="cashflow-fullscreen"
-          data-action="click->cashflow-fullscreen#toggleFullscreen"
-          data-cashflow-fullscreen-sankey-data-value="<%= sankey_data.to_json %>"
-          data-cashflow-fullscreen-currency-symbol-value="<%= sankey_data[:currency_symbol] %>"
-          data-cashflow-fullscreen-period-value="<%= period.key %>"
-          class="flex items-center justify-center w-10 h-10 rounded-lg border border-secondary bg-container hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors duration-200 group"
-          title="Fullscreen View"
-          type="button">
+          data-controller="cashflow-fullscreen-enhanced"
+          data-action="click->cashflow-fullscreen-enhanced#toggleFullscreen keydown->cashflow-fullscreen-enhanced#handleKeydown"
+          data-cashflow-fullscreen-enhanced-sankey-data-value="<%= sankey_data.to_json %>"
+          data-cashflow-fullscreen-enhanced-currency-symbol-value="<%= sankey_data[:currency_symbol] %>"
+          data-cashflow-fullscreen-enhanced-period-value="<%= period.key %>"
+          class="relative z-40 flex items-center justify-center w-10 h-10 rounded-lg border border-secondary bg-container hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors duration-200 group focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800"
+          title="Toggle fullscreen view"
+          type="button"
+          aria-label="Toggle fullscreen view"
+          aria-pressed="false"
+          tabindex="0">
           <svg class="w-5 h-5 text-gray-600 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-white transition-colors duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
           </svg>
@@ -33,11 +36,20 @@
   </div>  <% if sankey_data[:links].present? %>
     <div class="w-full" style="height: min(650px, max(500px, 60vh));">
       <div
-        data-controller="sankey-chart"
-        data-sankey-chart-data-value="<%= sankey_data.to_json %>"
-        data-sankey-chart-currency-symbol-value="<%= sankey_data[:currency_symbol] %>"
+        data-controller="sankey-autosizer"
+        data-sankey-autosizer-min-width-value="320"
+        data-sankey-autosizer-min-height-value="220"
+        data-sankey-autosizer-max-height-value="650"
+        data-sankey-autosizer-debounce-ms-value="100"
         class="w-full h-full rounded-lg overflow-visible bg-container"
-        style="min-height: 450px; display: block; position: relative; padding: 10px;"></div>
+        style="min-height: 450px; display: block; position: relative; padding: 10px;">
+        <div
+          data-controller="sankey-chart"
+          data-sankey-autosizer-target="chart"
+          data-sankey-chart-data-value="<%= sankey_data.to_json %>"
+          data-sankey-chart-currency-symbol-value="<%= sankey_data[:currency_symbol] %>"
+          class="w-full h-full"></div>
+      </div>
     </div>
   <% else %>
     <div class="h-[300px] lg:h-[340px] bg-container py-4 flex flex-col items-center justify-center">

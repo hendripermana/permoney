@@ -8,30 +8,94 @@ export default class extends Controller {
     data: Object,
     nodeWidth: { type: Number, default: 15 },
     nodePadding: { type: Number, default: 20 },
-    currencySymbol: { type: String, default: "$" }
+    currencySymbol: { type: String, default: "$" },
+    width: { type: Number, default: null },
+    height: { type: Number, default: null }
+  }
+
+  // Handle resize events from SankeyAutoSizer
+  handleExternalResize(event) {
+    const { width, height } = event.detail;
+    this.updateDimensions({ width, height });
+  }
+
+  // Public API method for updating dimensions
+  updateDimensions(dimensions) {
+    this.currentDimensions = dimensions;
+    this.#draw();
+  }
+
+  // Get effective dimensions (from props, autosizer, or container)
+  #getEffectiveDimensions() {
+    // Priority: explicit width/height values > autosizer dimensions > container measurement
+    if (this.widthValue && this.heightValue) {
+      return { width: this.widthValue, height: this.heightValue };
+    }
+    
+    if (this.currentDimensions) {
+      return this.currentDimensions;
+    }
+    
+    // Fallback to measuring container
+    const containerRect = this.element.getBoundingClientRect();
+    const computedStyle = window.getComputedStyle(this.element);
+    
+    const paddingTop = parseFloat(computedStyle.paddingTop) || 0;
+    const paddingBottom = parseFloat(computedStyle.paddingBottom) || 0;
+    const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0;
+    const paddingRight = parseFloat(computedStyle.paddingRight) || 0;
+    
+    const borderTop = parseFloat(computedStyle.borderTopWidth) || 0;
+    const borderBottom = parseFloat(computedStyle.borderBottomWidth) || 0;
+    const borderLeft = parseFloat(computedStyle.borderLeftWidth) || 0;
+    const borderRight = parseFloat(computedStyle.borderRightWidth) || 0;
+    
+    const availableWidth = containerRect.width - paddingLeft - paddingRight - borderLeft - borderRight;
+    const availableHeight = containerRect.height - paddingTop - paddingBottom - borderTop - borderBottom;
+    
+    return {
+      width: Math.max(320, availableWidth),
+      height: Math.max(220, availableHeight)
+    };
+  }
+
+  // Calculate dynamic padding based on container size (4% of min dimension)
+  #calculateDynamicPadding(width, height) {
+    const minDimension = Math.min(width, height);
+    const basePadding = Math.max(20, minDimension * 0.04); // 4% of min dimension, min 20px
+    
+    return {
+      top: Math.max(25, basePadding),
+      right: Math.max(60, basePadding * 2), // More space for labels
+      bottom: Math.max(25, basePadding),
+      left: Math.max(60, basePadding * 2)   // More space for labels
+    };
+  }
+
+  // Calculate responsive node dimensions
+  #calculateNodeDimensions(width, height) {
+    return {
+      nodeWidth: Math.max(8, Math.min(this.nodeWidthValue, width * 0.025)),
+      nodePadding: Math.max(8, Math.min(this.nodePaddingValue, height * 0.04))
+    };
+  }
+
+  // Calculate responsive font sizes
+  #calculateFontSizes(width) {
+    return {
+      labelFontSize: Math.max(10, Math.min(14, width * 0.022)),
+      valueFontSize: Math.max(9, Math.min(12, width * 0.018))
+    };
   };
 
   connect() {
     this.tooltip = null;
     this.#createTooltip();
+    this.currentDimensions = null;
+    this.lastDataHash = null;
     
-    // Debounced resize handler for better performance
-    this.debounceTimer = null;
-    this.resizeObserver = new ResizeObserver(() => {
-      if (this.debounceTimer) {
-        clearTimeout(this.debounceTimer);
-      }
-      
-      this.debounceTimer = setTimeout(() => {
-        const rect = this.element.getBoundingClientRect();
-        // Only redraw if there's a meaningful size change
-        if (rect.width > 0 && rect.height > 0) {
-          this.#draw();
-        }
-      }, 150); // 150ms debounce for smooth resizing
-    });
-    
-    this.resizeObserver.observe(this.element);
+    // Listen for resize events from SankeyAutoSizer
+    this.element.addEventListener('sankey:resize', this.handleExternalResize.bind(this));
     
     // Initial draw with a slight delay to ensure container is properly sized
     requestAnimationFrame(() => {
@@ -39,14 +103,30 @@ export default class extends Controller {
     });
   }
 
-  disconnect() {
-    // Clean up timers and observers
-    if (this.debounceTimer) {
-      clearTimeout(this.debounceTimer);
-      this.debounceTimer = null;
+  // Handle data value changes (called by Stimulus when data-value changes)
+  dataValueChanged() {
+    // Only redraw if data actually changed to prevent unnecessary renders
+    const currentDataHash = this.#hashData(this.dataValue);
+    if (currentDataHash !== this.lastDataHash) {
+      this.lastDataHash = currentDataHash;
+      this.#draw();
     }
-    
-    this.resizeObserver?.disconnect();
+  }
+
+  // Generate a simple hash of the data to detect changes
+  #hashData(data) {
+    if (!data) return null;
+    try {
+      return JSON.stringify(data);
+    } catch (error) {
+      console.warn('Failed to hash sankey data:', error);
+      return Math.random().toString(); // Force redraw on error
+    }
+  }
+
+  disconnect() {
+    // Clean up event listeners
+    this.element.removeEventListener('sankey:resize', this.handleExternalResize.bind(this));
     
     if (this.tooltip) {
       this.tooltip.remove();
@@ -87,49 +167,13 @@ export default class extends Controller {
     // Clear previous SVG
     d3.select(this.element).selectAll("svg").remove();
 
-    // Enhanced dimension calculation - make chart use FULL container width and height
-    const containerRect = this.element.getBoundingClientRect();
-    const computedStyle = window.getComputedStyle(this.element);
+    // Get effective dimensions using new responsive system
+    const { width, height } = this.#getEffectiveDimensions();
     
-    // Get the actual usable dimensions accounting for padding and borders
-    const paddingTop = parseFloat(computedStyle.paddingTop) || 0;
-    const paddingBottom = parseFloat(computedStyle.paddingBottom) || 0;
-    const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0;
-    const paddingRight = parseFloat(computedStyle.paddingRight) || 0;
-    
-    const borderTop = parseFloat(computedStyle.borderTopWidth) || 0;
-    const borderBottom = parseFloat(computedStyle.borderBottomWidth) || 0;
-    const borderLeft = parseFloat(computedStyle.borderLeftWidth) || 0;
-    const borderRight = parseFloat(computedStyle.borderRightWidth) || 0;
-    
-    // Calculate the ACTUAL available space inside the container
-    const availableWidth = containerRect.width - paddingLeft - paddingRight - borderLeft - borderRight;
-    const availableHeight = containerRect.height - paddingTop - paddingBottom - borderTop - borderBottom;
-    
-    // Use the FULL container dimensions with smart minimums
-    let width = Math.max(400, availableWidth);
-    let height = Math.max(300, availableHeight);
-    
-    // For regular containers, ensure the chart spreads to fill the space
-    if (availableWidth > 400) {
-      width = availableWidth; // Use FULL width available
-    }
-    
-    // For height, account for text labels and ensure no cutoff
-    const nodeCount = nodes.length;
-    const minHeightForNodes = Math.max(350, nodeCount * 30); // Increased min height for text space
-    const textSpaceBuffer = 60; // Extra space for text labels at top/bottom
-    
-    if (availableHeight > minHeightForNodes + textSpaceBuffer) {
-      height = Math.min(availableHeight, 650); // Use available height but cap at 650px
-    } else {
-      height = minHeightForNodes + textSpaceBuffer; // Ensure enough space for text
-    }
-    
-    // Ensure chart fills its container properly - remove artificial limits
-    if (containerRect.width > 800) {
-      width = Math.min(width, containerRect.width * 0.98); // Use 98% of container width
-    }
+    // Calculate dynamic spacing and sizing
+    const margin = this.#calculateDynamicPadding(width, height);
+    const { nodeWidth, nodePadding } = this.#calculateNodeDimensions(width, height);
+    const { labelFontSize, valueFontSize } = this.#calculateFontSizes(width);
 
     // Create responsive SVG that shows all content without cutoff
     const svg = d3
@@ -144,20 +188,14 @@ export default class extends Controller {
       .style("max-width", "100%")
       .style("max-height", "100%");
 
-    // Enhanced Sankey generator with proper margins to prevent text cutoff
-    const margin = { 
-      top: Math.max(25, height * 0.08), // Increased top margin for text labels
-      right: Math.max(80, width * 0.12), // Increased right margin for text
-      bottom: Math.max(25, height * 0.08), // Increased bottom margin for text labels
-      left: Math.max(80, width * 0.12) // Increased left margin for text
-    };
+    // Use dynamic margins calculated above
     const sankeyWidth = width - margin.left - margin.right;
     const sankeyHeight = height - margin.top - margin.bottom;
     
     // Ensure the Sankey uses the available space while preventing text cutoff
     const sankeyGenerator = sankey()
-      .nodeWidth(Math.max(10, Math.min(this.nodeWidthValue, sankeyWidth * 0.025))) // Responsive node width
-      .nodePadding(Math.max(10, Math.min(this.nodePaddingValue, sankeyHeight * 0.04))) // Responsive padding
+      .nodeWidth(nodeWidth)
+      .nodePadding(nodePadding)
       .extent([
         [margin.left, margin.top],
         [width - margin.right, height - margin.bottom],
@@ -316,7 +354,7 @@ export default class extends Controller {
       .attr("dy", "-0.2em")
       .attr("text-anchor", (d) => (d.x0 < width / 2 ? "start" : "end"))
       .attr("class", "font-medium text-primary fill-current select-none")
-      .style("font-size", `${Math.max(11, Math.min(14, width * 0.022))}px`) // Responsive font size
+      .style("font-size", `${labelFontSize}px`)
       .style("cursor", "default")
       .on("mouseenter", (event, d) => {
         // Find all links connected to this node
@@ -340,22 +378,31 @@ export default class extends Controller {
         const maxTextWidth = Math.min(150, width * 0.25);
         const isLeftSide = d.x0 < width / 2;
         
-        // Node Name on the first line with intelligent truncation
+        // Smart text truncation based on available space
+        const maxChars = Math.max(8, Math.min(20, Math.floor(maxTextWidth / (labelFontSize * 0.6))));
         let displayName = d.name;
-        if (displayName.length > 15) {
-          displayName = displayName.substring(0, 12) + "...";
+        let isNameTruncated = false;
+        
+        if (displayName.length > maxChars) {
+          displayName = displayName.substring(0, maxChars - 3) + "...";
+          isNameTruncated = true;
         }
         
-        textElement.append("tspan")
+        const nameSpan = textElement.append("tspan")
           .text(displayName)
           .attr("font-weight", "500");
+        
+        // Add tooltip for truncated names
+        if (isNameTruncated) {
+          nameSpan.attr("title", d.name);
+        }
 
         // Financial details on the second line with responsive sizing
         const financialDetailsTspan = textElement.append("tspan")
           .attr("x", textElement.attr("x"))
           .attr("dy", "1.3em")
           .attr("class", "font-mono text-secondary")
-          .style("font-size", `${Math.max(9, Math.min(12, width * 0.018))}px`); // Smaller, responsive font
+          .style("font-size", `${valueFontSize}px`)
 
         const formattedValue = stimulusControllerInstance.currencySymbolValue + 
           Number.parseFloat(d.value).toLocaleString(undefined, { 
@@ -426,4 +473,4 @@ export default class extends Controller {
         .style("opacity", 0);
     }
   }
-} 
+}

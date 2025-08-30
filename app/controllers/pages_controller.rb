@@ -49,6 +49,10 @@ class PagesController < ApplicationController
     render layout: "settings"
   end
 
+  def sankey_demo
+    # Demo page for responsive Sankey chart
+  end
+
   def redis_configuration_error
     render layout: "blank"
   end

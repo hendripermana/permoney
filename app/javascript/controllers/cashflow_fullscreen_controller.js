@@ -13,6 +13,9 @@ export default class extends Controller {
   connect() {
     // Bind escape key handler
     this.escapeHandler = this.handleEscape.bind(this);
+    this.currentRequest = null;
+    this.watchdogTimer = null;
+    this.isUnmounted = false;
     
     // Ensure we have required data
     if (!this.sankeyDataValue || !this.sankeyDataValue.nodes || !this.sankeyDataValue.links) {
@@ -22,6 +25,7 @@ export default class extends Controller {
   }
 
   disconnect() {
+    this.isUnmounted = true;
     this.cleanup();
   }
 
@@ -50,7 +54,13 @@ export default class extends Controller {
       this.fullscreenModal.classList.remove('opacity-0');
       
       // Initialize the sankey chart after modal is visible
-      setTimeout(() => this.initializeFullscreenChart(), 100);
+      setTimeout(() => {
+        this.initializeFullscreenChart();
+        // Force additional resize after initialization to ensure proper layout
+        setTimeout(() => {
+          this.forceFullscreenResize();
+        }, 200);
+      }, 100);
     });
   }
 
@@ -146,10 +156,18 @@ export default class extends Controller {
           <div 
             id="fullscreen-sankey-container"
             class="w-full h-full p-4"
-            data-controller="sankey-chart"
-            data-sankey-chart-data-value='${JSON.stringify(this.sankeyDataValue)}'
-            data-sankey-chart-currency-symbol-value="${this.currencySymbolValue}"
+            data-controller="sankey-autosizer"
+            data-sankey-autosizer-min-width-value="600"
+            data-sankey-autosizer-min-height-value="400"
+            data-sankey-autosizer-debounce-ms-value="100"
             style="min-height: 400px;">
+            <div
+              data-controller="sankey-chart"
+              data-sankey-autosizer-target="chart"
+              data-sankey-chart-data-value='${JSON.stringify(this.sankeyDataValue)}'
+              data-sankey-chart-currency-symbol-value="${this.currencySymbolValue}"
+              class="w-full h-full">
+            </div>
           </div>
         </div>
       </div>
@@ -174,11 +192,37 @@ export default class extends Controller {
   }
 
   initializeFullscreenChart() {
-    // Force re-initialization of Stimulus controller for the fullscreen chart
-    const chartContainer = this.fullscreenModal.querySelector('#fullscreen-sankey-container');
-    if (chartContainer && window.Stimulus) {
-      // Trigger Stimulus controller connection for the new element
+    // Force re-initialization of Stimulus controllers for the fullscreen chart
+    const autosizerContainer = this.fullscreenModal.querySelector('#fullscreen-sankey-container');
+    const chartContainer = this.fullscreenModal.querySelector('[data-controller="sankey-chart"]');
+    
+    if (autosizerContainer && chartContainer && window.Stimulus) {
+      // Trigger Stimulus controller connection for both autosizer and chart
+      window.Stimulus.connect(autosizerContainer);
       window.Stimulus.connect(chartContainer);
+      
+      // Force resize after a brief delay to ensure proper initialization
+      setTimeout(() => {
+        this.forceFullscreenResize();
+      }, 100);
+    }
+  }
+
+  forceFullscreenResize() {
+    // Force the autosizer to recalculate dimensions in fullscreen
+    const autosizerContainer = this.fullscreenModal?.querySelector('#fullscreen-sankey-container');
+    if (autosizerContainer) {
+      const autosizerController = this.application?.getControllerForElementAndIdentifier(
+        autosizerContainer, 
+        'sankey-autosizer'
+      );
+      
+      if (autosizerController && typeof autosizerController.forceResize === 'function') {
+        autosizerController.forceResize();
+      }
+      
+      // Also dispatch a resize event to trigger any listeners
+      window.dispatchEvent(new Event('resize'));
     }
   }
 
@@ -202,7 +246,7 @@ export default class extends Controller {
     const exportBtn = this.fullscreenModal.querySelector('#fullscreen-export-btn');
     if (exportBtn) {
       exportBtn.addEventListener('click', () => {
-        this.exportChart();
+        this.handleExport();
       });
     }
     
@@ -225,10 +269,19 @@ export default class extends Controller {
     // Store fullscreen state before making request
     const wasFullscreen = this.isFullscreenOpen();
     
-    // Show loading indicator
+    // Show loading indicator with stale-while-revalidate UX
     if (wasFullscreen) {
-      this.showLoadingIndicator();
+      this.showLoadingIndicatorWithStaleData();
     }
+    
+    // Use AbortController for request cancellation
+    if (this.currentRequest) {
+      this.currentRequest.abort();
+    }
+    this.currentRequest = new AbortController();
+    
+    // Start watchdog timer
+    this.startWatchdogTimer();
     
     try {
       // Make AJAX request to get new data without full page reload
@@ -241,7 +294,8 @@ export default class extends Controller {
           'Accept': 'text/html',
           'X-Requested-With': 'XMLHttpRequest',
           'Turbo-Frame': 'cashflow-frame'
-        }
+        },
+        signal: this.currentRequest.signal
       });
       
       if (!response.ok) {
@@ -281,19 +335,34 @@ export default class extends Controller {
         window.history.pushState({}, '', url.toString());
       }
     } catch (error) {
+      // Don't treat aborted requests as errors
+      if (error.name === 'AbortError') {
+        return;
+      }
+      
       console.error('Failed to update cashflow data:', error);
       
-      // Fallback to full page reload if AJAX fails
+      if (wasFullscreen) {
+        this.showErrorState(error.message);
+      }
+      
+      // Fallback to full page reload if AJAX fails (only for non-abort errors)
       if (window.Turbo) {
         window.Turbo.visit(url.toString());
       } else {
         window.location.href = url.toString();
       }
     } finally {
+      // Clear watchdog timer
+      this.clearWatchdogTimer();
+      
       // Hide loading indicator
       if (wasFullscreen) {
         this.hideLoadingIndicator();
       }
+      
+      // Clear current request
+      this.currentRequest = null;
     }
   }
 
@@ -491,9 +560,15 @@ export default class extends Controller {
     } finally {
       // Restore button
       const exportBtn = this.fullscreenModal?.querySelector('#fullscreen-export-btn');
-      if (exportBtn && originalContent) {
+      const originalContent = exportBtn?.innerHTML;
+      if (exportBtn) {
         exportBtn.disabled = false;
-        exportBtn.innerHTML = originalContent;
+        exportBtn.innerHTML = `
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+          </svg>
+          Export
+        `;
       }
     }
   }
@@ -539,6 +614,13 @@ export default class extends Controller {
   }
 
   cleanup() {
+    // Clear timers and requests
+    this.clearWatchdogTimer();
+    if (this.currentRequest) {
+      this.currentRequest.abort();
+      this.currentRequest = null;
+    }
+    
     // Remove event listeners
     document.removeEventListener('keydown', this.escapeHandler);
     
@@ -606,7 +688,7 @@ export default class extends Controller {
   }
   
   // Loading indicator for period changes
-  showLoadingIndicator() {
+  showLoadingIndicatorWithStaleData() {
     if (!this.fullscreenModal) return;
     
     const chartContainer = this.fullscreenModal.querySelector('#fullscreen-sankey-container');
@@ -626,6 +708,43 @@ export default class extends Controller {
     
     if (periodSelector) {
       periodSelector.disabled = true;
+    }
+  }
+
+  showErrorState(errorMessage) {
+    if (!this.fullscreenModal) return;
+    
+    const chartContainer = this.fullscreenModal.querySelector('#fullscreen-sankey-container');
+    if (chartContainer) {
+      const isDark = this.detectDarkTheme();
+      chartContainer.innerHTML = `
+        <div class="flex items-center justify-center h-full ${isDark ? 'text-red-300' : 'text-red-600'}">
+          <div class="flex flex-col items-center gap-3">
+            <svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"/>
+            </svg>
+            <span class="text-sm font-medium">Error loading data: ${errorMessage}</span>
+            <button class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700" onclick="location.reload()">Retry</button>
+          </div>
+        </div>
+      `;
+    }
+  }
+
+  startWatchdogTimer() {
+    this.clearWatchdogTimer();
+    this.watchdogTimer = setTimeout(() => {
+      if (this.currentRequest) {
+        this.currentRequest.abort();
+        this.showErrorState('Request timeout');
+      }
+    }, 30000); // 30 second timeout
+  }
+
+  clearWatchdogTimer() {
+    if (this.watchdogTimer) {
+      clearTimeout(this.watchdogTimer);
+      this.watchdogTimer = null;
     }
   }
 }
