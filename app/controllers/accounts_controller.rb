@@ -35,10 +35,10 @@ class AccountsController < ApplicationController
   end
 
   def sparkline
-  # Always render a body for Turbo Frame requests so the placeholder gets replaced.
-  # We still leverage server-side caching in Account::Chartable#sparkline_series.
-  @sparkline_series = @account.sparkline_series
-  render layout: false
+    # Always render a body for Turbo Frame requests so the placeholder gets replaced.
+    # We still leverage server-side caching in Account::Chartable#sparkline_series.
+    @sparkline_series = @account.sparkline_series
+    render layout: false
   end
 
   def toggle_active

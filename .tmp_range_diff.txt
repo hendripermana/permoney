@@ -1,0 +1,17 @@
+ 1:  6ee23465 =  1:  6ee23465 feat: Add New Relic monitoring setup
+ 2:  e5fbaa3f =  2:  ca625cc0 Fix: Complete sankey chart responsive design and fullscreen functionality
+ 3:  f0f09b22 =  3:  e56dd1f5 docs(copilot): add repo-specific Copilot rules, playbooks, prompts, glossary; link from CONTRIBUTING; add GitHub MCP setup guide
+ 4:  a06ce03e =  4:  26d163b2 Balances: fix non-cash asset flow accumulation; Dashboard totals use latest materialized balances; Sparkline frame rendering and cache invalidation; Providers: Twelve Data/Alpha Vantage fallback + cron; Brankas scaffolding; Fix ::Maybe constant; Deploy/monitoring stability
+ 5:  0faaa8a3 =  5:  e257b181 feat(loans): add debt origination fields and UI; wire disbursement account; improve feedback and app version UI\n\n- Migration: add debt_kind, counterparty_type, counterparty_name, disbursement_account_id (FK to accounts), origination_date to loans; add indexes\n- Model: validations and associations for new fields; service object for origination data\n- Controller: permit new params; integrate DebtOriginationService\n- Views: extend loan form for counterparty + disbursement account; small polish for feedback page, app version, and user menu\n- Misc: remove obsolete lib/maybe.rb; keep backups/ out of git\n\nNotes:\n- Backfilled handling is safe; fields are optional and nullable\n- No behavior change for existing loans until edited; migration is additive\n- Tested locally with Minitest pages_controller tests and manual form submissions
+ 6:  1ae9e3e8 <  -:  -------- feat(devcontainer): upgrade dev environment with better prompts, extensions, and configs (#95)
+ 7:  dd0cb60b <  -:  -------- feat: Add Brand Fetch logo link for logos (see #43) (#99)
+ 8:  6d4a5dd7 <  -:  -------- Add customizable menu order for user accounts (#44)
+ 9:  7e36b1c7 <  -:  -------- Feature/simplefin integration (#94)
+10:  16a1569e <  -:  -------- Bump version
+11:  a9caab21 <  -:  -------- Bump activerecord from 7.2.2.1 to 7.2.2.2 (#106)
+12:  26c18427 <  -:  -------- Add a 'Bank Sync' page in Settings (#111)
+13:  d162c587 <  -:  -------- build(docker): ensure build-stage packages installed with fresh apt metadata (#114)
+14:  fb6e094f <  -:  -------- Disable Gemini Code Assist for now (#115)
+15:  d054cd0b <  -:  -------- Reorganize Settings sections + add LLM model/prompt configs (#116)
+16:  5d6915a9 <  -:  -------- Add OpenAI token configuration to self-hosting settings (#122)
+17:  c9933514 <  -:  -------- Add OpenAI Codex instructions via AGENTS.md

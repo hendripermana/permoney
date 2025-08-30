@@ -2,7 +2,7 @@
 
 namespace :market_data do
   desc "Import all market data (exchange rates and security prices). Options: mode=[full|snapshot] clear_cache=[true|false]"
-  task :import, [:mode, :clear_cache] => :environment do |_t, args|
+  task :import, [ :mode, :clear_cache ] => :environment do |_t, args|
     mode = (args[:mode] || :full).to_sym
     clear_cache = ActiveModel::Type::Boolean.new.cast(args[:clear_cache])
 
@@ -12,7 +12,7 @@ namespace :market_data do
   end
 
   desc "Import exchange rates only"
-  task :exchange_rates, [:mode, :clear_cache] => :environment do |_t, args|
+  task :exchange_rates, [ :mode, :clear_cache ] => :environment do |_t, args|
     mode = (args[:mode] || :full).to_sym
     clear_cache = ActiveModel::Type::Boolean.new.cast(args[:clear_cache])
 
@@ -22,7 +22,7 @@ namespace :market_data do
   end
 
   desc "Import security prices only"
-  task :securities, [:mode, :clear_cache] => :environment do |_t, args|
+  task :securities, [ :mode, :clear_cache ] => :environment do |_t, args|
     mode = (args[:mode] || :full).to_sym
     clear_cache = ActiveModel::Type::Boolean.new.cast(args[:clear_cache])
 
