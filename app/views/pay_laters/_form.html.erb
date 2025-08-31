@@ -1,0 +1,26 @@
+<%# locals: (account:, url:) %>
+
+<%= render "accounts/form", account: account, url: url do |form| %>
+  <%= render "shared/ruler", classes: "my-4" %>
+
+  <div class="space-y-2">
+    <%= form.fields_for :accountable do |pl_form| %>
+      <div class="flex items-center gap-2">
+        <%= pl_form.text_field :provider_name, label: "Provider", placeholder: "e.g., GoPayLater, Kredivo" %>
+        <%= pl_form.money_field :credit_limit, label: "Credit Limit", default_currency: Current.family.currency %>
+        <%= pl_form.money_field :available_credit, label: "Available Credit", default_currency: Current.family.currency %>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <%= pl_form.number_field :free_interest_months, label: "Free-Interest Months", min: 0, step: 1 %>
+        <%= pl_form.money_field :late_fee_first7, label: "Late Fee (1-7 days)", default_currency: Current.family.currency %>
+        <%= pl_form.money_field :late_fee_per_day, label: "Late Fee (per extra day)", default_currency: Current.family.currency %>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <%= pl_form.text_area :interest_rate_table, label: "Interest Rate Table (JSON)", placeholder: '{"1":0.0,"3":0.03,"6":0.05,"12":0.09}' %>
+      </div>
+    <% end %>
+  </div>
+<% end %>
+

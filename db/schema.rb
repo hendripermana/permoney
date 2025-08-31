@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.2].define(version: 2025_08_10_120003) do
+ActiveRecord::Schema[7.2].define(version: 2025_08_31_110020) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pgcrypto"
   enable_extension "plpgsql"
@@ -549,6 +549,48 @@ ActiveRecord::Schema[7.2].define(version: 2025_08_10_120003) do
     t.string "subtype"
   end
 
+  create_table "pay_later_installments", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "account_id", null: false
+    t.integer "installment_no", null: false
+    t.date "due_date", null: false
+    t.string "status", default: "pending", null: false
+    t.decimal "principal_amount", precision: 19, scale: 4, null: false
+    t.decimal "interest_amount", precision: 19, scale: 4, null: false
+    t.decimal "fee_amount", precision: 19, scale: 4, default: "0.0", null: false
+    t.decimal "total_due", precision: 19, scale: 4, null: false
+    t.date "paid_on"
+    t.decimal "paid_amount", precision: 19, scale: 4
+    t.uuid "transfer_id"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["account_id", "installment_no"], name: "idx_paylater_installments_acct_no", unique: true
+    t.index ["account_id"], name: "index_pay_later_installments_on_account_id"
+  end
+
+  create_table "pay_later_rates", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.string "provider_name", null: false
+    t.integer "tenor_months", null: false
+    t.decimal "monthly_rate", precision: 9, scale: 6, null: false
+    t.date "effective_date", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["provider_name", "tenor_months", "effective_date"], name: "idx_pay_later_rates_provider_tenor_eff", unique: true
+  end
+
+  create_table "pay_laters", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.string "provider_name"
+    t.decimal "credit_limit", precision: 19, scale: 4
+    t.decimal "available_credit", precision: 19, scale: 4
+    t.integer "free_interest_months", default: 0, null: false
+    t.decimal "late_fee_first7", precision: 19, scale: 4, default: "50000.0", null: false
+    t.decimal "late_fee_per_day", precision: 19, scale: 4, default: "30000.0", null: false
+    t.jsonb "interest_rate_table", default: {}
+    t.jsonb "locked_attributes", default: {}
+    t.string "subtype"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+  end
+
   create_table "plaid_accounts", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.uuid "plaid_item_id", null: false
     t.string "plaid_id", null: false
@@ -920,6 +962,8 @@ ActiveRecord::Schema[7.2].define(version: 2025_08_10_120003) do
   add_foreign_key "mobile_devices", "users"
   add_foreign_key "oauth_access_grants", "oauth_applications", column: "application_id"
   add_foreign_key "oauth_access_tokens", "oauth_applications", column: "application_id"
+  add_foreign_key "pay_later_installments", "accounts", on_delete: :cascade
+  add_foreign_key "pay_later_installments", "transfers", on_delete: :nullify
   add_foreign_key "plaid_accounts", "plaid_items"
   add_foreign_key "plaid_items", "families"
   add_foreign_key "rejected_transfers", "transactions", column: "inflow_transaction_id"

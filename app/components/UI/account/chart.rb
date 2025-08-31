@@ -39,7 +39,7 @@ class UI::Account::Chart < ApplicationComponent
       end
     when "Property", "Vehicle"
       "Estimated #{account.accountable_type.humanize.downcase} value"
-    when "CreditCard", "OtherLiability"
+    when "CreditCard", "OtherLiability", "PayLater"
       "Debt balance"
     when "Loan"
       "Remaining principal balance"

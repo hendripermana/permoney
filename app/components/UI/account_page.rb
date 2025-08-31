@@ -42,6 +42,8 @@ class UI::AccountPage < ApplicationComponent
       [ :activity, :holdings ]
     when "Property", "Vehicle", "Loan"
       [ :activity, :overview ]
+    when "PayLater"
+      [ :activity, :schedule ]
     else
       [ :activity ]
     end
@@ -54,6 +56,8 @@ class UI::AccountPage < ApplicationComponent
     when :holdings, :overview
       # Accountable is responsible for implementing the partial in the correct folder
       render "#{account.accountable_type.downcase.pluralize}/tabs/#{tab}", account: account
+    when :schedule
+      render "pay_laters/tabs/schedule", account: account
     end
   end
 end

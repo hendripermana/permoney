@@ -191,6 +191,7 @@ Rails.application.routes.draw do
   end
   resources :vehicles, only: %i[new create edit update]
   resources :credit_cards, only: %i[new create edit update]
+  resources :pay_laters, only: %i[new create edit update]
   resources :loans, only: %i[new create edit update]
   resources :cryptos, only: %i[new create edit update]
   resources :other_assets, only: %i[new create edit update]
@@ -215,6 +216,12 @@ Rails.application.routes.draw do
       # Production API endpoints
       resources :accounts, only: [ :index ]
       resources :transactions, only: [ :index, :show, :create, :update, :destroy ]
+      # PayLater endpoints (manual-only)
+      namespace :debt do
+        post "paylater", to: "pay_later#create"
+        post "paylater/expense", to: "pay_later#expense"
+        post "paylater/installment/pay", to: "pay_later#pay_installment"
+      end
       resource :usage, only: [ :show ], controller: "usage"
 
       resources :chats, only: [ :index, :show, :create, :update, :destroy ] do
