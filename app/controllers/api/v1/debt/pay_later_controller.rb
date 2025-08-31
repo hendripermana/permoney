@@ -4,7 +4,7 @@ class Api::V1::Debt::PayLaterController < Api::V1::BaseController
   # POST /api/v1/debt/paylater
   # Params: { name, currency, provider_name, credit_limit, available_credit, ... }
   def create
-    service = ::PayLater::CreateAccount.new(
+    service = ::PayLaterServices::CreateAccount.new(
       family: current_resource_owner.family,
       params: account_params.to_h
     )
@@ -21,7 +21,7 @@ class Api::V1::Debt::PayLaterController < Api::V1::BaseController
   # POST /api/v1/debt/paylater/expense
   # Params: { account_id, name, amount, currency, date, category_id, merchant_id, tenor_months }
   def expense
-    service = ::PayLater::RecordExpense.new(
+    service = ::PayLaterServices::RecordExpense.new(
       family: current_resource_owner.family,
       params: expense_params.to_h
     )
@@ -38,7 +38,7 @@ class Api::V1::Debt::PayLaterController < Api::V1::BaseController
   # POST /api/v1/debt/paylater/installment/pay
   # Params: { account_id, installment_no, payment_date, source_account_id }
   def pay_installment
-    service = ::PayLater::PayInstallment.new(
+    service = ::PayLaterServices::PayInstallment.new(
       family: current_resource_owner.family,
       params: pay_params.to_h
     )
@@ -59,15 +59,18 @@ class Api::V1::Debt::PayLaterController < Api::V1::BaseController
 
     def account_params
       params.permit(:name, :currency, :provider_name, :credit_limit, :available_credit,
-                    :free_interest_months, :late_fee_first7, :late_fee_per_day, :interest_rate_table)
+                    :free_interest_months, :late_fee_first7, :late_fee_per_day, :interest_rate_table,
+                    :currency_code, :exchange_rate_to_idr, :approved_date, :expiry_date, :max_tenor,
+                    :status, :notes, :auto_update_rate, :contract_url, :grace_days, :is_compound,
+                    :early_settlement_allowed, :early_settlement_fee, :updated_by)
     end
 
     def expense_params
-      params.permit(:account_id, :name, :amount, :currency, :date, :category_id, :merchant_id, :tenor_months, :manual_monthly_rate)
+      params.permit(:account_id, :name, :amount, :currency, :date, :category_id, :merchant_id,
+                    :tenor_months, :manual_monthly_rate, :expense_exchange_rate_to_idr)
     end
 
     def pay_params
-      params.permit(:account_id, :installment_no, :payment_date, :source_account_id)
+      params.permit(:account_id, :installment_no, :payment_date, :source_account_id, :early_payoff)
     end
 end
-

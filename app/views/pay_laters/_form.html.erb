@@ -18,9 +18,42 @@
       </div>
 
       <div class="flex items-center gap-2">
-        <%= pl_form.text_area :interest_rate_table, label: "Interest Rate Table (JSON)", placeholder: '{"1":0.0,"3":0.03,"6":0.05,"12":0.09}' %>
+        <%= pl_form.text_area :interest_rate_table, label: "Interest Rate Table (JSON)", placeholder: '{"default":{"1":0.0,"3":0.03,"6":0.05,"12":0.0263},"overrides":{"electronics":{"12":0.0300}}}' %>
+      </div>
+
+      <%= render "shared/ruler", classes: "my-2" %>
+
+      <div class="flex items-center gap-2">
+        <%= pl_form.text_field :currency_code, label: "Currency (ISO-3)", placeholder: "IDR", value: pl_form.object.currency_code || "IDR" %>
+        <%= pl_form.number_field :exchange_rate_to_idr, label: "Rate → IDR (override)", step: 0.000001, placeholder: "auto" %>
+        <%= pl_form.number_field :max_tenor, label: "Max Tenor (months)", min: 1, step: 1, value: pl_form.object.max_tenor || 12 %>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <%= pl_form.date_field :approved_date, label: "Approved Date" %>
+        <%= pl_form.date_field :expiry_date, label: "Expiry Date" %>
+        <%= pl_form.select :status, [["ACTIVE","ACTIVE"],["CLOSED","CLOSED"],["SUSPENDED","SUSPENDED"]], { label: "Status" } %>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <%= pl_form.check_box :auto_update_rate, label: "Auto update rate", checked: true %>
+        <%= pl_form.check_box :is_compound, label: "Compound interest?" %>
+        <%= pl_form.number_field :grace_days, label: "Grace Days", min: 0, step: 1 %>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <%= pl_form.check_box :early_settlement_allowed, label: "Allow early repayment", checked: true %>
+        <%= pl_form.money_field :early_settlement_fee, label: "Early settlement fee", default_currency: Current.family.currency %>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <%= pl_form.text_field :contract_url, label: "Contract URL" %>
+        <%= pl_form.text_field :updated_by, label: "Updated By" %>
+      </div>
+
+      <div>
+        <%= pl_form.text_area :notes, label: "Notes", rows: 3 %>
       </div>
     <% end %>
   </div>
 <% end %>
-

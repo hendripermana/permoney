@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.2].define(version: 2025_08_31_110020) do
+ActiveRecord::Schema[7.2].define(version: 2025_08_31_113000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pgcrypto"
   enable_extension "plpgsql"
@@ -244,6 +244,15 @@ ActiveRecord::Schema[7.2].define(version: 2025_08_31_110020) do
     t.index ["date"], name: "index_entries_on_date"
     t.index ["entryable_type"], name: "index_entries_on_entryable_type"
     t.index ["import_id"], name: "index_entries_on_import_id"
+  end
+
+  create_table "exchange_rate_histories", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.string "currency_code", limit: 3, null: false
+    t.decimal "rate_to_idr", precision: 18, scale: 6, null: false
+    t.date "effective_date", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["currency_code", "effective_date"], name: "idx_exrate_hist_currency_date", unique: true
   end
 
   create_table "exchange_rates", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -563,6 +572,8 @@ ActiveRecord::Schema[7.2].define(version: 2025_08_31_110020) do
     t.uuid "transfer_id"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.decimal "applied_rate", precision: 9, scale: 6
+    t.decimal "total_cost", precision: 19, scale: 4
     t.index ["account_id", "installment_no"], name: "idx_paylater_installments_acct_no", unique: true
     t.index ["account_id"], name: "index_pay_later_installments_on_account_id"
   end
@@ -589,6 +600,20 @@ ActiveRecord::Schema[7.2].define(version: 2025_08_31_110020) do
     t.string "subtype"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.string "currency_code", limit: 3, default: "IDR", null: false
+    t.decimal "exchange_rate_to_idr", precision: 18, scale: 6
+    t.date "approved_date"
+    t.date "expiry_date"
+    t.integer "max_tenor", default: 12, null: false
+    t.string "status", default: "ACTIVE", null: false
+    t.text "notes"
+    t.boolean "auto_update_rate", default: true, null: false
+    t.string "contract_url"
+    t.integer "grace_days", default: 0, null: false
+    t.boolean "is_compound", default: false, null: false
+    t.boolean "early_settlement_allowed", default: true, null: false
+    t.decimal "early_settlement_fee", precision: 18, scale: 2
+    t.string "updated_by"
   end
 
   create_table "plaid_accounts", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|

@@ -1,4 +1,4 @@
-module PayLater
+module PayLaterServices
   class CreateAccount
     Result = Struct.new(:success?, :account, :error, keyword_init: true)
 
@@ -16,7 +16,7 @@ module PayLater
           family: family,
           name: params.fetch(:name),
           currency: params[:currency] || family.currency,
-          balance: 0,
+          balance: to_d(params[:balance]) || 0,
           accountable_type: "PayLater",
           accountable_attributes: accountable_attrs
         )
@@ -46,6 +46,20 @@ module PayLater
           late_fee_first7: to_d(params[:late_fee_first7]) || 50_000,
           late_fee_per_day: to_d(params[:late_fee_per_day]) || 30_000,
           interest_rate_table: parse_json(params[:interest_rate_table]),
+          currency_code: upcase3(params[:currency_code] || params[:currency]),
+          exchange_rate_to_idr: to_d(params[:exchange_rate_to_idr]),
+          approved_date: parse_date(params[:approved_date]),
+          expiry_date: parse_date(params[:expiry_date]),
+          max_tenor: to_i(params[:max_tenor]),
+          status: params[:status],
+          notes: params[:notes],
+          auto_update_rate: to_bool(params[:auto_update_rate]),
+          contract_url: params[:contract_url],
+          grace_days: to_i(params[:grace_days]),
+          is_compound: to_bool(params[:is_compound]),
+          early_settlement_allowed: to_bool(params[:early_settlement_allowed]),
+          early_settlement_fee: to_d(params[:early_settlement_fee]),
+          updated_by: params[:updated_by],
           subtype: "paylater"
         }.compact
       end
@@ -60,6 +74,27 @@ module PayLater
         return val if val.is_a?(Hash)
         JSON.parse(val) rescue {}
       end
+
+      def parse_date(val)
+        return val if val.is_a?(Date)
+        return nil if val.blank?
+        Date.parse(val.to_s)
+      rescue ArgumentError
+        nil
+      end
+
+      def to_bool(val)
+        ActiveModel::Type::Boolean.new.cast(val)
+      end
+
+      def to_i(val)
+        return nil if val.nil? || val == ""
+        val.to_i
+      end
+
+      def upcase3(code)
+        return nil if code.blank?
+        code.to_s.upcase[0,3]
+      end
   end
 end
-

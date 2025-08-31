@@ -2,7 +2,7 @@ class PayLaterInstallment < ApplicationRecord
   include Monetizable
   belongs_to :account
 
-  enum :status, { pending: "pending", paid: "paid", late: "late" }, prefix: true
+  enum :status, { pending: "pending", paid: "paid", late: "late", cancelled: "cancelled" }, prefix: true
 
   validates :installment_no, presence: true
   validates :due_date, presence: true

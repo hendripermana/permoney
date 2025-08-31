@@ -1,0 +1,41 @@
+<%# locals: (account:) %>
+
+<% installments = PayLaterInstallment.for_account(account.id).order(:installment_no) %>
+
+<div class="space-y-4">
+  <h3 class="text-lg font-medium">Schedule</h3>
+
+  <% if installments.any? %>
+    <div class="divide-y divide-gray-200 rounded-lg border">
+      <% installments.each do |inst| %>
+        <div class="p-3 flex items-center justify-between">
+          <div>
+            <div class="font-medium">Installment <%= inst.installment_no %> — due <%= inst.due_date %></div>
+            <div class="text-xs text-subtle">
+              Principal: <%= Money.new(inst.principal_amount, account.currency).format %>
+              · Interest: <%= Money.new(inst.interest_amount, account.currency).format %>
+              · Fee: <%= Money.new(inst.fee_amount, account.currency).format %>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-xs px-2 py-1 rounded bg-alpha-black-50"><%= inst.status %></span>
+            <% if inst.status == "pending" %>
+              <%= button_to "Pay Now",
+                           api_v1_debt_paylater_installment_pay_path(
+                             account_id: account.id,
+                             installment_no: inst.installment_no,
+                             payment_date: Date.current,
+                             source_account_id: Current.family.accounts.assets.first&.id
+                           ),
+                           method: :post,
+                           class: "btn btn-primary" %>
+            <% end %>
+          </div>
+        </div>
+      <% end %>
+    </div>
+  <% else %>
+    <p class="text-sm text-subtle">No installments scheduled.</p>
+  <% end %>
+</div>
+

@@ -44,12 +44,20 @@ module ExchangeRate::Provided
       return nil unless response&.success?
 
       rate = response.data
-      ExchangeRate.find_or_create_by!(
-        from_currency: rate.from,
-        to_currency: rate.to,
-        date: rate.date,
-        rate: rate.rate
-      ) if cache
+      # Guard against providers returning a response without a usable rate.
+      # If the rate is missing, do not attempt to cache an invalid record —
+      # instead, return nil to allow callers to use their own fallbacks.
+      return nil unless rate && rate.respond_to?(:rate) && rate.rate.present?
+
+      if cache
+        ExchangeRate.find_or_create_by!(
+          from_currency: rate.from,
+          to_currency: rate.to,
+          date: rate.date,
+          rate: rate.rate
+        )
+      end
+
       rate
     end
 
