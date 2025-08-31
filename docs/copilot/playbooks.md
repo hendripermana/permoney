@@ -27,12 +27,14 @@ See also: github MCP setup at docs/copilot/github-mcp.md
 
 3) Add/modify a Stimulus controller
 - Files:
-  - Global controller: app/javascript/controllers/<name>_controller.js
-  - Component controller: app/components/<component>/<name>_controller.js
+ - Global controller: app/javascript/controllers/<name>_controller.js
+ - Component controller: app/components/<component>/<name>_controller.js
 - Rules:
   - Declarative usage in ERB: data-controller, data-action, data-*-target/value.
   - Keep under ~7 targets; small public API; avoid domain logic.
-  - Pin in config/importmap.rb if adding a new global controller file.
+  - Importmap: controllers are auto-pinned via `pin_all_from 'app/javascript/controllers', under: 'controllers'`.
+  - Loader: `@hotwired/stimulus-loading` is pinned to local `app/javascript/stimulus-loading.js` and eager‑loads controllers.
+  - After adding/renaming controllers, restart `bin/dev` (and `bin/rails tmp:cache:clear` if digests look stale).
 
 4) Add an API endpoint under /api/v1
 - Steps:

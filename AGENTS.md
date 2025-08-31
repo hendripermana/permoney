@@ -15,6 +15,16 @@
 - Lint/format JS/CSS: `npm run lint` and `npm run format` — uses Biome.
 - Security scan: `bin/brakeman` — static analysis for common Rails issues.
 
+## Assets, Importmap, and Controllers
+- Asset pipeline: Propshaft with Importmap (no bundler). Assets are served from:
+  - `app/assets/builds` for Tailwind output (`tailwind.css`)
+  - `app/javascript` for app code and Stimulus controllers
+  - `vendor/javascript` for third‑party ESM files
+- Controller loading:
+  - We pin `@hotwired/stimulus-loading` to a local shim at `app/javascript/stimulus-loading.js` via `config/importmap.rb`.
+  - `app/javascript/controllers/index.js` eager‑loads controllers under the `controllers/*` importmap namespace.
+- After adding controllers or vendor JS, restart `bin/dev` and consider `bin/rails tmp:cache:clear` if digests look stale.
+
 ## Coding Style & Naming Conventions
 - Ruby: 2-space indent, `snake_case` for methods/vars, `CamelCase` for classes/modules. Follow Rails conventions for folders and file names.
 - Views: ERB checked by `erb-lint` (see `.erb_lint.yml`). Avoid heavy logic in views; prefer helpers/components.

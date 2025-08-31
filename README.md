@@ -79,6 +79,26 @@ Visit http://localhost:3000 to view the app. You can log in with these demo cred
 
 For further instructions, see guides below.
 
+### Frontend Tooling
+
+- Assets are served by Propshaft with Importmap (no JS bundler).
+- Sources:
+  - `app/assets/builds` for Tailwind output (`tailwind.css`)
+  - `app/javascript` for application JS and Stimulus controllers
+  - `vendor/javascript` for pinned third‑party ESM packages
+- Stimulus controllers are auto‑registered via `app/javascript/controllers/index.js` using a local loader shim pinned as `@hotwired/stimulus-loading` → `app/javascript/stimulus-loading.js`.
+
+### Troubleshooting: 404s for assets in development
+
+If you see 404s like `/assets/tailwind-*.css` or `/assets/d3-*.js`:
+
+1. Stop `bin/dev` completely.
+2. Clear caches: `bin/rails tmp:cache:clear`.
+3. Restart: `bin/dev` and hard‑refresh the browser.
+4. Ensure paths are present in `config/initializers/assets.rb`:
+   - `app/assets/builds`, `app/javascript`, and `vendor/javascript` are in `config.assets.paths`.
+5. If importmap looks stale, bump `Rails.application.config.assets.version` and reload.
+
 ### Setup Guides
 
 - [Mac dev setup](https://github.com/we-promise/sure/wiki/Mac-Dev-Setup-Guide)

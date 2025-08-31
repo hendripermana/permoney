@@ -48,7 +48,9 @@ The following files contain local customizations that were preserved:
 - `SANKEY_CHART_FIX_REPORT.md` - Sankey chart fix documentation
 - `app/assets/images/permoney-*` - Custom branding assets
 - `app/controllers/brankas_controller.rb` - Brankas integration controller
-- `app/javascript/controllers/cashflow_fullscreen_controller.js` - Fullscreen functionality
+- `app/javascript/controllers/cashflow_fullscreen_controller.js` - Fullscreen functionality (legacy)
+- `app/javascript/controllers/cashflow_fullscreen_enhanced_controller.js` - Enhanced fullscreen controller
+- `app/javascript/stimulus-loading.js` - Local Stimulus loader shim for Importmap
 - `app/jobs/brankas/sync_job.rb` - Brankas sync job
 - `app/models/debt_origination_service.rb` - Debt origination service
 - `app/models/provider/alpha_vantage.rb` - Alpha Vantage provider
@@ -67,6 +69,7 @@ The following files contain local customizations that were preserved:
 ### Modified Files
 - `CONTRIBUTING.md` - Updated contribution guidelines
 - `README.md` - Updated project documentation
+- `config/initializers/assets.rb` - Asset paths/sweepers for Importmap + Propshaft
 - `app/controllers/accounts_controller.rb` - Enhanced account functionality
 - `app/controllers/loans_controller.rb` - Loan origination features
 - `app/controllers/pages_controller.rb` - Page enhancements

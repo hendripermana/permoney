@@ -7,7 +7,8 @@ High-signal prompts for Copilot Chat (paste into Chat to kick off tasks)
   - Generate component class, template, and minimal tests. Use Tailwind and accessible attributes. Provide content slots.
 
 - Add a Stimulus controller to <do-thing>
-  - Use declarative data-action and targets in ERB. Keep controller lean. Pin in importmap if global.
+  - Use declarative data-action and targets in ERB. Keep controller lean.
+  - Controllers are auto-pinned via `pin_all_from` and eager‑loaded by a local `stimulus-loading` shim; restart `bin/dev` after adding.
 
 - Add API endpoint: GET /api/v1/<resource>
   - Inherit from Api::V1::BaseController, authorize_scope!("read"), render JSON with pagination via Pagy.

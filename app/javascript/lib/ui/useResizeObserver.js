@@ -6,7 +6,8 @@
 export class ResizeObserverManager {
   constructor() {
     this.observers = new Map();
-    this.isSSR = typeof window === 'undefined' || typeof document === 'undefined';
+    this.isSSR =
+      typeof window === "undefined" || typeof document === "undefined";
   }
 
   /**
@@ -19,10 +20,8 @@ export class ResizeObserverManager {
    * @returns {Function} Cleanup function
    */
   observe(element, callback, options = {}) {
-    const {
-      debounceMs = 100,
-      initialSize = { width: 800, height: 600 }
-    } = options;
+    const { debounceMs = 100, initialSize = { width: 800, height: 600 } } =
+      options;
 
     // SSR guard - return no-op cleanup function
     if (this.isSSR || !element) {
@@ -32,8 +31,10 @@ export class ResizeObserverManager {
     }
 
     // Check if ResizeObserver is supported
-    if (typeof ResizeObserver === 'undefined') {
-      console.warn('ResizeObserver not supported, falling back to window resize');
+    if (typeof ResizeObserver === "undefined") {
+      console.warn(
+        "ResizeObserver not supported, falling back to window resize",
+      );
       return this.fallbackToWindowResize(element, callback, debounceMs);
     }
 
@@ -51,10 +52,17 @@ export class ResizeObserverManager {
         if (!entry) return;
 
         const { width, height } = entry.contentRect;
-        
+
         // Only trigger callback if size actually changed
-        const currentSize = { width: Math.round(width), height: Math.round(height) };
-        if (!lastSize || lastSize.width !== currentSize.width || lastSize.height !== currentSize.height) {
+        const currentSize = {
+          width: Math.round(width),
+          height: Math.round(height),
+        };
+        if (
+          !lastSize ||
+          lastSize.width !== currentSize.width ||
+          lastSize.height !== currentSize.height
+        ) {
           lastSize = currentSize;
           callback(currentSize);
         }
@@ -76,16 +84,16 @@ export class ResizeObserverManager {
         }
         observer.disconnect();
         this.observers.delete(observerId);
-      }
+      },
     });
 
     // Trigger initial measurement
     requestAnimationFrame(() => {
       const rect = element.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) {
-        const initialMeasurement = { 
-          width: Math.round(rect.width), 
-          height: Math.round(rect.height) 
+        const initialMeasurement = {
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
         };
         lastSize = initialMeasurement;
         callback(initialMeasurement);
@@ -115,27 +123,31 @@ export class ResizeObserverManager {
 
       debounceTimer = setTimeout(() => {
         if (!element.isConnected) return;
-        
+
         const rect = element.getBoundingClientRect();
-        const currentSize = { 
-          width: Math.round(rect.width), 
-          height: Math.round(rect.height) 
+        const currentSize = {
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
         };
-        
-        if (!lastSize || lastSize.width !== currentSize.width || lastSize.height !== currentSize.height) {
+
+        if (
+          !lastSize ||
+          lastSize.width !== currentSize.width ||
+          lastSize.height !== currentSize.height
+        ) {
           lastSize = currentSize;
           callback(currentSize);
         }
       }, debounceMs);
     };
 
-    window.addEventListener('resize', handleResize);
-    
+    window.addEventListener("resize", handleResize);
+
     // Initial measurement
     handleResize();
 
     return () => {
-      window.removeEventListener('resize', handleResize);
+      window.removeEventListener("resize", handleResize);
       if (debounceTimer) {
         clearTimeout(debounceTimer);
       }
@@ -185,8 +197,11 @@ export function useResizeObserver(element, callback, options = {}) {
  * @param {Object} fallback - Fallback dimensions
  * @returns {Object} Dimensions object with width and height
  */
-export function getElementDimensions(element, fallback = { width: 800, height: 600 }) {
-  if (typeof window === 'undefined' || !element) {
+export function getElementDimensions(
+  element,
+  fallback = { width: 800, height: 600 },
+) {
+  if (typeof window === "undefined" || !element) {
     return fallback;
   }
 
@@ -194,10 +209,10 @@ export function getElementDimensions(element, fallback = { width: 800, height: 6
     const rect = element.getBoundingClientRect();
     return {
       width: Math.round(rect.width) || fallback.width,
-      height: Math.round(rect.height) || fallback.height
+      height: Math.round(rect.height) || fallback.height,
     };
   } catch (error) {
-    console.warn('Failed to get element dimensions:', error);
+    console.warn("Failed to get element dimensions:", error);
     return fallback;
   }
 }
@@ -206,5 +221,5 @@ export default {
   ResizeObserverManager,
   resizeObserverManager,
   useResizeObserver,
-  getElementDimensions
+  getElementDimensions,
 };

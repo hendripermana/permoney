@@ -112,6 +112,12 @@ Sidekiq handles asynchronous tasks:
   - Always use functional tokens (e.g., `text-primary` not `text-white`)
   - Prefer semantic HTML elements over JS components
   - Use `icon` helper for icons, never `lucide_icon` directly
+  
+### Assets & Importmap
+- Importmap + Propshaft serve JS/CSS without a bundler.
+- Sources: `app/assets/builds` (Tailwind output), `app/javascript` (app/controllers), `vendor/javascript` (ESM vendor files).
+- Stimulus loader shim: `@hotwired/stimulus-loading` is pinned to `app/javascript/stimulus-loading.js` (local), which eager‑registers controllers under the `controllers/*` namespace.
+- When adding controllers or vendor JS, restart `bin/dev`; if assets 404, run `bin/rails tmp:cache:clear` and hard refresh.
 
 ### Multi-Currency Support
 - All monetary values stored in base currency (user's primary currency)
@@ -149,6 +155,11 @@ Sidekiq handles asynchronous tasks:
 - Environment variables via `.env` files
 - Lookbook for component development (`/lookbook`)
 - Letter Opener for email preview in development
+
+### Troubleshooting Assets in Dev
+- 404s for `/assets/*.js` or `/assets/*.css` can be due to stale digests or missing paths.
+- Ensure `config/initializers/assets.rb` includes `app/assets/builds`, `app/javascript`, and `vendor/javascript`.
+- Clear caches: `bin/rails tmp:cache:clear` → restart `bin/dev` → hard refresh.
 
 ## Project Conventions
 

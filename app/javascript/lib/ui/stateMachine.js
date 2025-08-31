@@ -29,9 +29,9 @@ export class StateMachine {
   // Transition to new state
   transition(newState, data = null) {
     const previousState = this.currentState;
-    
+
     // Validate transition if states config provided
-    if (this.states[previousState] && this.states[previousState].transitions) {
+    if (this.states[previousState]?.transitions) {
       const allowedTransitions = this.states[previousState].transitions;
       if (!allowedTransitions.includes(newState)) {
         console.warn(`Invalid transition from ${previousState} to ${newState}`);
@@ -41,23 +41,23 @@ export class StateMachine {
 
     this.currentState = newState;
     this.history.push(newState);
-    
+
     // Keep history manageable
     if (this.history.length > 10) {
       this.history.shift();
     }
 
     // Notify listeners
-    this.listeners.forEach(listener => {
+    this.listeners.forEach((listener) => {
       try {
         listener({
           from: previousState,
           to: newState,
           data,
-          machine: this
+          machine: this,
         });
       } catch (error) {
-        console.error('State machine listener error:', error);
+        console.error("State machine listener error:", error);
       }
     });
 
@@ -67,7 +67,7 @@ export class StateMachine {
   // Subscribe to state changes
   subscribe(listener) {
     this.listeners.add(listener);
-    
+
     // Return unsubscribe function
     return () => {
       this.listeners.delete(listener);
@@ -87,37 +87,37 @@ export class StateMachine {
 
 // Predefined state machine for data fetching
 export function createDataFetchStateMachine() {
-  return new StateMachine('idle', {
+  return new StateMachine("idle", {
     idle: {
-      transitions: ['loading']
+      transitions: ["loading"],
     },
     loading: {
-      transitions: ['success', 'error', 'idle']
+      transitions: ["success", "error", "idle"],
     },
     success: {
-      transitions: ['loading', 'idle']
+      transitions: ["loading", "idle"],
     },
     error: {
-      transitions: ['loading', 'idle']
-    }
+      transitions: ["loading", "idle"],
+    },
   });
 }
 
 // Predefined state machine for UI components
 export function createUIStateMachine() {
-  return new StateMachine('hidden', {
+  return new StateMachine("hidden", {
     hidden: {
-      transitions: ['showing', 'visible']
+      transitions: ["showing", "visible"],
     },
     showing: {
-      transitions: ['visible', 'hiding', 'hidden']
+      transitions: ["visible", "hiding", "hidden"],
     },
     visible: {
-      transitions: ['hiding', 'hidden']
+      transitions: ["hiding", "hidden"],
     },
     hiding: {
-      transitions: ['hidden', 'showing', 'visible']
-    }
+      transitions: ["hidden", "showing", "visible"],
+    },
   });
 }
 

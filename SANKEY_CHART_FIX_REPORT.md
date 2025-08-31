@@ -186,6 +186,9 @@ const sankeyGenerator = sankey()
 ### Files Modified:
 - `app/javascript/controllers/sankey_chart_controller.js` - Enhanced sizing and responsiveness
 - `app/views/pages/dashboard/_cashflow_sankey.html.erb` - Responsive container sizing
+  
+Related fullscreen view (separate controller):
+- `app/javascript/controllers/cashflow_fullscreen_enhanced_controller.js` - Fullscreen modal with period selector and export
 
 ### Deployment Steps Completed:
 1. ✅ JavaScript syntax validation

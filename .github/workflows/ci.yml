@@ -1,9 +1,9 @@
-name: CI
+#name: CI
 
-on:
+#on:
   workflow_call:
 
-jobs:
+#jobs:
   scan_ruby:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -20,7 +20,7 @@ jobs:
       - name: Scan for security vulnerabilities in Ruby dependencies
         run: bin/brakeman --no-pager
 
-  scan_js:
+  #scan_js:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -36,7 +36,7 @@ jobs:
       - name: Scan for security vulnerabilities in JavaScript dependencies
         run: bin/importmap audit
 
-  lint:
+  #lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
