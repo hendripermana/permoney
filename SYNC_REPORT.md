@@ -30,10 +30,9 @@ The following upstream commits were included in this sync (from fork point b7d9c
 
 All 5 unique local commits were successfully preserved and rebased:
 
-1. **6ee23465** - feat: Add New Relic monitoring setup
-2. **ca625cc0** - Fix: Complete sankey chart responsive design and fullscreen functionality  
-3. **e56dd1f5** - docs(copilot): add repo-specific Copilot rules, playbooks, prompts, glossary; link from CONTRIBUTING; add GitHub MCP setup guide
-4. **26d163b2** - Balances: fix non-cash asset flow accumulation; Dashboard totals use latest materialized balances; Sparkline frame rendering and cache invalidation; Providers: Twelve Data/Alpha Vantage fallback + cron; Brankas scaffolding; Fix ::Maybe constant; Deploy/monitoring stability
+1. **ca625cc0** - Fix: Complete sankey chart responsive design and fullscreen functionality  
+2. **e56dd1f5** - docs(copilot): add repo-specific Copilot rules, playbooks, prompts, glossary; link from CONTRIBUTING; add GitHub MCP setup guide
+3. **26d163b2** - Balances: fix non-cash asset flow accumulation; Dashboard totals use latest materialized balances; Sparkline frame rendering and cache invalidation; Providers: Twelve Data/Alpha Vantage fallback + cron; Fix ::Maybe constant; Deploy/monitoring stability
 5. **e257b181** - feat(loans): add debt origination fields and UI; wire disbursement account; improve feedback and app version UI
 
 ## Files Modified by Local Enhancements
@@ -47,23 +46,16 @@ The following files contain local customizations that were preserved:
 - `PROMTAIL_FIX_REPORT.md` - Promtail fix documentation
 - `SANKEY_CHART_FIX_REPORT.md` - Sankey chart fix documentation
 - `app/assets/images/permoney-*` - Custom branding assets
-- `app/controllers/brankas_controller.rb` - Brankas integration controller
 - `app/javascript/controllers/cashflow_fullscreen_controller.js` - Fullscreen functionality (legacy)
 - `app/javascript/controllers/cashflow_fullscreen_enhanced_controller.js` - Enhanced fullscreen controller
 - `app/javascript/stimulus-loading.js` - Local Stimulus loader shim for Importmap
-- `app/jobs/brankas/sync_job.rb` - Brankas sync job
 - `app/models/debt_origination_service.rb` - Debt origination service
 - `app/models/provider/alpha_vantage.rb` - Alpha Vantage provider
-- `app/services/brankas/client.rb` - Brankas client service
-- `bin/verify-newrelic.sh` - New Relic verification script
-- `config/initializers/newrelic.rb` - New Relic configuration
 - `config/initializers/sidekiq_cron.rb` - Sidekiq cron configuration
 - `db/migrate/20250705000000_add_provider_to_accounts.rb` - Provider migration
 - `db/migrate/20250809120000_add_debt_fields_to_loans.rb` - Debt fields migration
-- `docs/NEWRELIC_MONITORING.md` - New Relic documentation
 - `docs/copilot/*` - Copilot documentation
 - `lib/tasks/market_data.rake` - Market data tasks
-- `newrelic.yml` - New Relic configuration
 - `validate-monitoring.sh` - Monitoring validation script
 
 ### Modified Files
