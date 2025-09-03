@@ -9,9 +9,23 @@
     <%= format_money account.balance_money %>
   <% end %>
 
-  <%= summary_card title: t(".interest_rate") do %>
-    <% if account.loan.interest_rate.present? %>
+  <%= summary_card title: account.loan.rate_label do %>
+    <% if account.loan.sharia_compliant? %>
+      <% if account.loan.islamic_product_type == "murabaha" && account.loan.margin_rate.present? %>
+        <%= number_to_percentage(account.loan.margin_rate, precision: 3) %>
+        <span class="text-xs text-secondary block">Margin Rate</span>
+      <% elsif account.loan.islamic_product_type.in?(%w[musyarakah mudharabah]) && account.loan.profit_sharing_ratio.present? %>
+        <%= number_to_percentage(account.loan.profit_sharing_ratio * 100, precision: 1) %>
+        <span class="text-xs text-secondary block">Profit Share</span>
+      <% elsif account.loan.islamic_product_type == "qard_hasan" %>
+        <span class="text-success">Interest-Free</span>
+        <span class="text-xs text-secondary block">Qard Hasan</span>
+      <% else %>
+        <%= t(".unknown") %>
+      <% end %>
+    <% elsif account.loan.interest_rate.present? %>
       <%= number_to_percentage(account.loan.interest_rate, precision: 3) %>
+      <span class="text-xs text-secondary block">Interest Rate</span>
     <% else %>
       <%= t(".unknown") %>
     <% end %>

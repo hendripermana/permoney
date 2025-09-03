@@ -28,7 +28,6 @@ class Account < ApplicationRecord
   has_one_attached :logo
 
   delegated_type :accountable, types: Accountable::TYPES, dependent: :destroy
-  delegate :subtype, to: :accountable, allow_nil: true
 
   accepts_nested_attributes_for :accountable, update_only: true
 
@@ -201,10 +200,12 @@ class Account < ApplicationRecord
     case accountable_type
     when "Depository", "CreditCard"
       :cash
-    when "Property", "Vehicle", "OtherAsset", "Loan", "OtherLiability"
+    when "Property", "Vehicle", "OtherAsset", "Loan", "OtherLiability", "PersonalLending"
       :non_cash
     when "Investment", "Crypto"
       :investment
+    when "PayLater"
+      :cash
     else
       raise "Unknown account type: #{accountable_type}"
     end

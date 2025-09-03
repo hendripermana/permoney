@@ -16,6 +16,13 @@ class Transfer < ApplicationRecord
     def kind_for_account(account)
       if account.loan?
         "loan_payment"
+      elsif account.accountable_type == "PersonalLending"
+        # For personal lending accounts, determine based on lending direction
+        if account.accountable.lending_direction == "lending_out"
+          "personal_lending" # Payment to someone you lent money to
+        else
+          "personal_borrowing" # Payment from someone you borrowed from
+        end
       elsif account.liability?
         "cc_payment"
       else
@@ -86,8 +93,16 @@ class Transfer < ApplicationRecord
     outflow_transaction&.kind == "cc_payment"
   end
 
+  def personal_lending_payment?
+    outflow_transaction&.kind == "personal_lending" || outflow_transaction&.kind == "personal_borrowing"
+  end
+
   def regular_transfer?
     outflow_transaction&.kind == "funds_movement"
+  end
+
+  def islamic_finance_transfer?
+    outflow_transaction&.islamic_finance? || inflow_transaction&.islamic_finance?
   end
 
   def transfer_type

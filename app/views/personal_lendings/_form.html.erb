@@ -1,0 +1,77 @@
+<%# locals: (account:, url:) %>
+
+<%= render "accounts/form", account: account, url: url do |form| %>
+  <%= render "shared/ruler", classes: "my-4" %>
+
+  <div class="space-y-2">
+    <%= form.fields_for :accountable do |lending_form| %>
+      <div class="flex items-center gap-2">
+        <%= lending_form.select :lending_direction,
+                                [["I am lending money to someone", "lending_out"], ["I am borrowing money from someone", "borrowing_from"]],
+                                { label: "Lending Direction" } %>
+        <%= lending_form.select :lending_type,
+                                [
+                                  ["Qard Hasan (Islamic Interest-Free)", "qard_hasan"],
+                                  ["Interest-Free Personal Loan", "interest_free"],
+                                  ["Informal with Written Agreement", "informal_with_agreement"],
+                                  ["Informal Verbal Agreement", "informal"]
+                                ],
+                                { label: "Loan Type" } %>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <%= lending_form.text_field :counterparty_name, 
+                                   label: "Person's Name", 
+                                   placeholder: "e.g., Ahmad, Sarah, Budi",
+                                   required: true %>
+        <%= lending_form.select :relationship,
+                                [
+                                  ["Family Member", "family"],
+                                  ["Friend", "friend"],
+                                  ["Colleague", "colleague"],
+                                  ["Business Partner", "business_partner"],
+                                  ["Neighbor", "neighbor"],
+                                  ["Other", "other"]
+                                ],
+                                { label: "Relationship", include_blank: "Select relationship..." } %>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <%= lending_form.money_field :initial_amount,
+                                    label: "Loan Amount",
+                                    default_currency: Current.family.currency,
+                                    required: true %>
+        <%= lending_form.date_field :expected_return_date, 
+                                   label: "Expected Return Date", 
+                                   min: Date.current + 1.day,
+                                   required: true %>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <%= lending_form.select :reminder_frequency,
+                                [
+                                  ["No Reminders", "none"],
+                                  ["Before Due Date", "before_due"],
+                                  ["Weekly", "weekly"],
+                                  ["Monthly", "monthly"]
+                                ],
+                                { label: "Reminder Frequency" } %>
+        <%= lending_form.check_box :has_written_agreement, 
+                                  label: "Has Written Agreement" %>
+      </div>
+
+      <div class="space-y-2">
+        <%= lending_form.text_field :witness_name, 
+                                   label: "Witness Name (Optional)", 
+                                   placeholder: "Name of witness to the agreement" %>
+        <%= lending_form.text_field :contact_info, 
+                                   label: "Contact Information", 
+                                   placeholder: "Phone number or email for reminders" %>
+        <%= lending_form.text_area :agreement_notes,
+                                  label: "Agreement Details",
+                                  placeholder: "Additional details about the loan agreement, terms, or Islamic compliance notes",
+                                  rows: 4 %>
+      </div>
+    <% end %>
+  </div>
+<% end %>

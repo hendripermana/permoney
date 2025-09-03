@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.2].define(version: 2025_08_31_113000) do
+ActiveRecord::Schema[7.2].define(version: 2025_09_02_132143) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pgcrypto"
   enable_extension "plpgsql"
@@ -194,6 +194,11 @@ ActiveRecord::Schema[7.2].define(version: 2025_08_31_113000) do
     t.decimal "annual_fee", precision: 10, scale: 2
     t.jsonb "locked_attributes", default: {}
     t.string "subtype"
+    t.string "compliance_type", default: "conventional"
+    t.string "card_type"
+    t.boolean "interest_free_period", default: false
+    t.string "fee_structure"
+    t.index ["compliance_type"], name: "index_credit_cards_on_compliance_type"
   end
 
   create_table "cryptos", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -447,9 +452,20 @@ ActiveRecord::Schema[7.2].define(version: 2025_08_31_113000) do
     t.datetime "rescheduled_at"
     t.text "reschedule_reason"
     t.string "subtype"
+    t.string "compliance_type", default: "conventional"
+    t.string "islamic_product_type"
+    t.decimal "profit_sharing_ratio", precision: 5, scale: 4
+    t.decimal "margin_rate", precision: 10, scale: 3
+    t.string "late_penalty_type", default: "conventional_fee"
+    t.string "fintech_type"
+    t.text "agreement_notes"
+    t.string "witness_name"
+    t.index ["compliance_type"], name: "index_loans_on_compliance_type"
     t.index ["counterparty_type"], name: "index_loans_on_counterparty_type"
     t.index ["debt_kind"], name: "index_loans_on_debt_kind"
     t.index ["disbursement_account_id"], name: "index_loans_on_disbursement_account_id"
+    t.index ["fintech_type"], name: "index_loans_on_fintech_type"
+    t.index ["islamic_product_type"], name: "index_loans_on_islamic_product_type"
   end
 
   create_table "merchants", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -463,10 +479,6 @@ ActiveRecord::Schema[7.2].define(version: 2025_08_31_113000) do
     t.string "type", null: false
     t.string "source"
     t.string "provider_merchant_id"
-    t.index ["family_id", "name"], name: "index_merchants_on_family_id_and_name", unique: true, where: "((type)::text = 'FamilyMerchant'::text)"
-    t.index ["family_id"], name: "index_merchants_on_family_id"
-    t.index ["source", "name"], name: "index_merchants_on_source_and_name", unique: true, where: "((type)::text = 'ProviderMerchant'::text)"
-    t.index ["type"], name: "index_merchants_on_type"
   end
 
   create_table "messages", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -574,8 +586,10 @@ ActiveRecord::Schema[7.2].define(version: 2025_08_31_113000) do
     t.datetime "updated_at", null: false
     t.decimal "applied_rate", precision: 9, scale: 6
     t.decimal "total_cost", precision: 19, scale: 4
+    t.uuid "purchase_entry_id"
     t.index ["account_id", "installment_no"], name: "idx_paylater_installments_acct_no", unique: true
     t.index ["account_id"], name: "index_pay_later_installments_on_account_id"
+    t.index ["purchase_entry_id"], name: "index_pay_later_installments_on_purchase_entry_id"
   end
 
   create_table "pay_later_rates", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -614,6 +628,26 @@ ActiveRecord::Schema[7.2].define(version: 2025_08_31_113000) do
     t.boolean "early_settlement_allowed", default: true, null: false
     t.decimal "early_settlement_fee", precision: 18, scale: 2
     t.string "updated_by"
+  end
+
+  create_table "personal_lendings", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.string "counterparty_name", null: false
+    t.string "lending_direction", null: false
+    t.string "lending_type", default: "informal"
+    t.date "expected_return_date"
+    t.date "actual_return_date"
+    t.text "agreement_notes"
+    t.string "witness_name"
+    t.string "reminder_frequency"
+    t.decimal "initial_amount", precision: 19, scale: 4
+    t.string "relationship"
+    t.boolean "has_written_agreement", default: false
+    t.string "contact_info"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["expected_return_date"], name: "index_personal_lendings_on_expected_return_date"
+    t.index ["lending_direction"], name: "index_personal_lendings_on_lending_direction"
+    t.index ["lending_type"], name: "index_personal_lendings_on_lending_type"
   end
 
   create_table "plaid_accounts", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -885,8 +919,12 @@ ActiveRecord::Schema[7.2].define(version: 2025_08_31_113000) do
     t.jsonb "locked_attributes", default: {}
     t.string "kind", default: "standard", null: false
     t.string "external_id"
+    t.boolean "is_sharia_compliant", default: true
+    t.string "islamic_transaction_type"
     t.index ["category_id"], name: "index_transactions_on_category_id"
     t.index ["external_id"], name: "index_transactions_on_external_id"
+    t.index ["is_sharia_compliant"], name: "index_transactions_on_is_sharia_compliant"
+    t.index ["islamic_transaction_type"], name: "index_transactions_on_islamic_transaction_type"
     t.index ["kind"], name: "index_transactions_on_kind"
     t.index ["merchant_id"], name: "index_transactions_on_merchant_id"
   end
@@ -905,7 +943,7 @@ ActiveRecord::Schema[7.2].define(version: 2025_08_31_113000) do
   end
 
   create_table "users", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
-    t.uuid "family_id", null: false
+    t.uuid "family_id"
     t.string "first_name"
     t.string "last_name"
     t.string "email"
@@ -956,62 +994,23 @@ ActiveRecord::Schema[7.2].define(version: 2025_08_31_113000) do
     t.string "subtype"
   end
 
-  add_foreign_key "accounts", "families"
-  add_foreign_key "accounts", "imports"
-  add_foreign_key "accounts", "plaid_accounts"
-  add_foreign_key "accounts", "simplefin_accounts"
-  add_foreign_key "active_storage_attachments", "active_storage_blobs", column: "blob_id"
-  add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
-  add_foreign_key "api_keys", "users"
-  add_foreign_key "balances", "accounts", on_delete: :cascade
-  add_foreign_key "budget_categories", "budgets"
-  add_foreign_key "budget_categories", "categories"
-  add_foreign_key "budgets", "families"
-  add_foreign_key "categories", "families"
-  add_foreign_key "chats", "users"
-  add_foreign_key "entries", "accounts"
-  add_foreign_key "entries", "imports"
-  add_foreign_key "family_exports", "families"
-  add_foreign_key "holdings", "accounts"
-  add_foreign_key "holdings", "securities"
-  add_foreign_key "impersonation_session_logs", "impersonation_sessions"
-  add_foreign_key "impersonation_sessions", "users", column: "impersonated_id"
-  add_foreign_key "impersonation_sessions", "users", column: "impersonator_id"
-  add_foreign_key "import_rows", "imports"
-  add_foreign_key "imports", "families"
-  add_foreign_key "invitations", "families"
-  add_foreign_key "invitations", "users", column: "inviter_id"
-  add_foreign_key "loans", "accounts", column: "disbursement_account_id"
-  add_foreign_key "merchants", "families"
-  add_foreign_key "messages", "chats"
   add_foreign_key "mobile_devices", "users"
   add_foreign_key "oauth_access_grants", "oauth_applications", column: "application_id"
   add_foreign_key "oauth_access_tokens", "oauth_applications", column: "application_id"
-  add_foreign_key "pay_later_installments", "accounts", on_delete: :cascade
   add_foreign_key "pay_later_installments", "transfers", on_delete: :nullify
   add_foreign_key "plaid_accounts", "plaid_items"
-  add_foreign_key "plaid_items", "families"
   add_foreign_key "rejected_transfers", "transactions", column: "inflow_transaction_id"
   add_foreign_key "rejected_transfers", "transactions", column: "outflow_transaction_id"
   add_foreign_key "rule_actions", "rules"
   add_foreign_key "rule_conditions", "rule_conditions", column: "parent_id"
   add_foreign_key "rule_conditions", "rules"
-  add_foreign_key "rules", "families"
   add_foreign_key "security_prices", "securities"
-  add_foreign_key "sessions", "impersonation_sessions", column: "active_impersonator_session_id"
   add_foreign_key "sessions", "users"
   add_foreign_key "simplefin_accounts", "simplefin_items"
-  add_foreign_key "simplefin_items", "families"
-  add_foreign_key "subscriptions", "families"
   add_foreign_key "syncs", "syncs", column: "parent_id"
   add_foreign_key "taggings", "tags"
-  add_foreign_key "tags", "families"
   add_foreign_key "tool_calls", "messages"
   add_foreign_key "trades", "securities"
-  add_foreign_key "transactions", "categories", on_delete: :nullify
-  add_foreign_key "transactions", "merchants"
   add_foreign_key "transfers", "transactions", column: "inflow_transaction_id", on_delete: :cascade
   add_foreign_key "transfers", "transactions", column: "outflow_transaction_id", on_delete: :cascade
-  add_foreign_key "users", "chats", column: "last_viewed_chat_id"
-  add_foreign_key "users", "families"
 end
