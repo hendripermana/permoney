@@ -1,7 +1,7 @@
 class User < ApplicationRecord
   has_secure_password
 
-  belongs_to :family
+  belongs_to :family, optional: true
   belongs_to :last_viewed_chat, class_name: "Chat", optional: true
   has_many :sessions, dependent: :destroy
   has_many :chats, dependent: :destroy
@@ -10,7 +10,7 @@ class User < ApplicationRecord
   has_many :invitations, foreign_key: :inviter_id, dependent: :destroy
   has_many :impersonator_support_sessions, class_name: "ImpersonationSession", foreign_key: :impersonator_id, dependent: :destroy
   has_many :impersonated_support_sessions, class_name: "ImpersonationSession", foreign_key: :impersonated_id, dependent: :destroy
-  accepts_nested_attributes_for :family, update_only: true
+  accepts_nested_attributes_for :family
 
   validates :email, presence: true, uniqueness: true, format: { with: URI::MailTo::EMAIL_REGEXP }
   validate :ensure_valid_profile_image
@@ -162,6 +162,37 @@ class User < ApplicationRecord
 
   def needs_onboarding?
     !onboarded?
+  end
+
+  # Comprehensive onboarding completion check
+  def onboarding_complete?
+    # For invited users, onboarded_at timestamp indicates completion
+    return true if onboarded_at.present?
+
+    # For regular users, all onboarding steps must be completed
+    all_steps_complete = set_onboarding_preferences_at.present? && set_onboarding_goals_at.present?
+    return true if all_steps_complete
+
+    # For self-hosted users with families, consider onboarding complete
+    # This handles legacy users who may not have explicit onboarding timestamps
+    if Rails.application.config.app_mode.self_hosted? && family.present?
+      return true
+    end
+
+    # Only consider onboarding complete if explicitly marked
+    false
+  end
+
+  # Auto-mark onboarded for self-hosted users with families (used only in specific contexts)
+  def auto_mark_onboarded_if_family_exists!
+    if Rails.application.config.app_mode.self_hosted? && family.present? && onboarded_at.blank?
+      update_column(:onboarded_at, Time.current)
+    end
+  end
+
+  # Mark user as having completed onboarding
+  def mark_onboarded!
+    update_column(:onboarded_at, Time.current) if onboarded_at.blank?
   end
 
   def account_order

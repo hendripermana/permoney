@@ -19,6 +19,8 @@
 
     <%= styled_form_with model: @user do |form| %>
       <%= form.hidden_field :redirect_to, value: @invitation ? "home" : "onboarding_preferences" %>
+      <%# Only set onboarded_at for invited users who should skip the full onboarding flow %>
+      <%# For regular users, onboarding completion will be set in the goals step %>
       <%= form.hidden_field :onboarded_at, value: Time.current if @invitation %>
 
       <div class="mb-6">
@@ -30,7 +32,7 @@
         <%= form.text_field :last_name, placeholder: "Last name", label: "Last name", container_class: "bg-container md:w-1/2 w-full", required: true %>
       </div>
 
-      <% unless @invitation %>
+      <% if !@invitation %>
         <div class="space-y-4 mb-4">
           <%= form.fields_for :family do |family_form| %>
             <%= family_form.text_field :name, placeholder: "Household name", label: "Household name" %>

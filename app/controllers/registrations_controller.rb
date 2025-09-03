@@ -18,15 +18,21 @@ class RegistrationsController < ApplicationController
       @user.role = @invitation.role
       @user.email = @invitation.email
     else
-      family = Family.new
-      @user.family = family
+      # For new signups without invitation, don't create family yet
+      # Let the onboarding process handle family creation
       @user.role = :admin
     end
 
     if @user.save
       @invitation&.update!(accepted_at: Time.current)
       @session = create_session_for(@user)
-      redirect_to root_path, notice: t(".success")
+      
+      # Redirect invited users to dashboard, new users to onboarding
+      if @invitation
+        redirect_to root_path, notice: t(".success")
+      else
+        redirect_to onboarding_path, notice: t(".success")
+      end
     else
       render :new, status: :unprocessable_entity, alert: t(".failure")
     end

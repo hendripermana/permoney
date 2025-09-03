@@ -4,6 +4,24 @@ class PagesController < ApplicationController
   skip_authentication only: :redis_configuration_error
 
   def dashboard
+    # For self-hosted environments, auto-create a family if user doesn't have one
+    # This prevents redirect loops and ensures a valid state, but only if user has completed onboarding
+    if Rails.application.config.app_mode.self_hosted? && Current.user && !Current.family && Current.user.onboarding_complete?
+      family = Current.user.create_family!(
+        name: "#{Current.user.first_name || Current.user.email.split('@').first}'s Family",
+        currency: default_currency_for_user,
+        country: default_country_for_user,
+        locale: I18n.locale.to_s,
+        date_format: "%m-%d-%Y",
+        timezone: Time.zone.name
+      )
+      Current.user.update!(family: family)
+      log_dashboard_decision("Auto-created family for self-hosted user with currency: #{family.currency}, country: #{family.country}, locale: #{family.locale}")
+    end
+
+    unless Current.family
+      redirect_to onboarding_path and return
+    end
     @balance_sheet = Current.family.balance_sheet
     @accounts = Current.family.accounts.visible.with_attached_logo
 
@@ -60,6 +78,162 @@ class PagesController < ApplicationController
   private
     def github_provider
       Provider::Registry.get_provider(:github)
+    end
+
+    # Determine default currency based on user locale, browser headers, or fallback to USD
+    def default_currency_for_user
+      # Try to determine from user's locale first
+      currency_from_locale = currency_from_locale(I18n.locale)
+      return currency_from_locale if currency_from_locale
+
+      # Try to determine from browser's Accept-Language header
+      currency_from_browser = currency_from_browser_locale
+      return currency_from_browser if currency_from_browser
+
+      # Fallback to highest priority currency (USD)
+      "USD"
+    end
+
+    # Determine default country based on user locale, browser headers, or fallback to US
+    def default_country_for_user
+      # Try to determine from user's locale first
+      country_from_locale = country_from_locale(I18n.locale)
+      return country_from_locale if country_from_locale
+
+      # Try to determine from browser's Accept-Language header
+      country_from_browser = country_from_browser_locale
+      return country_from_browser if country_from_browser
+
+      # Fallback to US
+      "US"
+    end
+
+    # Map common locales to currencies using existing data sources
+    def currency_from_locale(locale)
+      # Common locale to currency mappings based on geographical regions
+      # This uses knowledge of which currencies are used in which regions
+      locale_str = locale.to_s.downcase
+      
+      case locale_str
+      when /^en[-_]?us?$/, /^en$/
+        "USD"
+      when /^en[-_]ca$/
+        "CAD"
+      when /^en[-_]gb$/
+        "GBP"
+      when /^en[-_]au$/
+        "AUD"
+      when /^fr[-_]?fr?$/, /^fr$/, /^de[-_]?de?$/, /^de$/, /^es[-_]?es?$/, /^es$/, /^it[-_]?it?$/, /^it$/, /^pt[-_]pt$/, /^nl[-_]?nl?$/, /^nl$/, /^fi[-_]?fi?$/, /^fi$/
+        "EUR"
+      when /^fr[-_]ca$/
+        "CAD"
+      when /^de[-_]ch$/, /^fr[-_]ch$/, /^it[-_]ch$/
+        "CHF"
+      when /^es[-_]mx$/
+        "MXN"
+      when /^es[-_]ar$/
+        "ARS"
+      when /^pt[-_]br$/
+        "BRL"
+      when /^ja[-_]?jp?$/, /^ja$/
+        "JPY"
+      when /^ko[-_]?kr?$/, /^ko$/
+        "KRW"
+      when /^zh[-_]?cn?$/, /^zh$/
+        "CNY"
+      when /^zh[-_]tw$/
+        "TWD"
+      when /^zh[-_]hk$/
+        "HKD"
+      when /^ru[-_]?ru?$/, /^ru$/
+        "RUB"
+      when /^ar[-_]?sa?$/, /^ar$/
+        "SAR"
+      when /^ar[-_]ae$/
+        "AED"
+      when /^hi[-_]?in?$/, /^hi$/
+        "INR"
+      when /^th[-_]?th?$/, /^th$/
+        "THB"
+      when /^vi[-_]?vn?$/, /^vi$/
+        "VND"
+      when /^tr[-_]?tr?$/, /^tr$/
+        "TRY"
+      when /^pl[-_]?pl?$/, /^pl$/
+        "PLN"
+      when /^sv[-_]?se?$/, /^sv$/
+        "SEK"
+      when /^no[-_]?no?$/, /^no$/
+        "NOK"
+      when /^da[-_]?dk?$/, /^da$/
+        "DKK"
+      else
+        nil
+      end
+    end
+
+    # Map common locales to countries using existing LanguagesHelper data
+    def country_from_locale(locale)
+      # Use the existing COUNTRY_MAPPING from LanguagesHelper if available
+      return nil unless defined?(LanguagesHelper::COUNTRY_MAPPING)
+      
+      locale_str = locale.to_s.downcase
+      
+      # Extract country code from locale (e.g., "en-US" -> "US", "fr-CA" -> "CA")
+      if locale_str.include?('-') || locale_str.include?('_')
+        country_code = locale_str.split(/[-_]/).last.upcase
+        return country_code if LanguagesHelper::COUNTRY_MAPPING.key?(country_code.to_sym)
+      end
+      
+      # Fallback mappings for language-only locales
+      language_to_country = {
+        'en' => 'US', 'fr' => 'FR', 'de' => 'DE', 'es' => 'ES', 'it' => 'IT',
+        'pt' => 'PT', 'ja' => 'JP', 'ko' => 'KR', 'zh' => 'CN', 'ru' => 'RU',
+        'ar' => 'SA', 'hi' => 'IN', 'th' => 'TH', 'vi' => 'VN', 'tr' => 'TR',
+        'pl' => 'PL', 'nl' => 'NL', 'sv' => 'SE', 'no' => 'NO', 'da' => 'DK', 'fi' => 'FI'
+      }
+      
+      language = locale_str.split(/[-_]/).first
+      country_code = language_to_country[language]
+      return country_code if country_code && LanguagesHelper::COUNTRY_MAPPING.key?(country_code.to_sym)
+      
+      nil
+    end
+
+    # Try to determine currency from browser's Accept-Language header
+    def currency_from_browser_locale
+      return nil unless request.headers["Accept-Language"]
+      
+      # Parse Accept-Language header to get preferred locales
+      accepted_locales = request.headers["Accept-Language"]
+        .split(",")
+        .map { |lang| lang.split(";").first.strip.downcase }
+        .first(3) # Only check first 3 preferences
+      
+      accepted_locales.each do |locale|
+        currency = currency_from_locale(locale)
+        return currency if currency
+      end
+      
+      nil
+    end
+
+    # Try to determine country from browser's Accept-Language header
+    def country_from_browser_locale
+      return nil unless request.headers["Accept-Language"]
+      
+      # Parse Accept-Language header to get preferred locales
+      accepted_locales = request.headers["Accept-Language"]
+        .split(",")
+        .map { |lang| lang.split(";").first.strip.downcase }
+        .first(3) # Only check first 3 preferences
+      
+      accepted_locales.each do |locale|
+        country = country_from_locale(locale)
+        return country if country
+      end
+      
+      nil
     end
 
     def build_cashflow_sankey_data(income_totals, expense_totals, currency_symbol)
