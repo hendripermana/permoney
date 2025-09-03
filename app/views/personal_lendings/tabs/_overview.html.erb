@@ -1,0 +1,88 @@
+<%# locals: (account:) %>
+
+<div class="grid grid-cols-3 gap-2">
+  <%= summary_card title: "Original Amount" do %>
+    <%= format_money Money.new(account.accountable.initial_amount, account.currency) %>
+  <% end %>
+
+  <%= summary_card title: "Current Balance" do %>
+    <%= format_money account.balance_money %>
+  <% end %>
+
+  <%= summary_card title: "Lending Type" do %>
+    <% if account.accountable.sharia_compliant? %>
+      <span class="text-success"><%= account.accountable.lending_type.titleize %></span>
+      <span class="text-xs text-secondary block">Sharia Compliant</span>
+    <% else %>
+      <%= account.accountable.lending_type.titleize %>
+    <% end %>
+  <% end %>
+
+  <%= summary_card title: "Counterparty" do %>
+    <%= account.accountable.counterparty_name %>
+    <% if account.accountable.relationship.present? %>
+      <span class="text-xs text-secondary block"><%= account.accountable.relationship.titleize %></span>
+    <% end %>
+  <% end %>
+
+  <%= summary_card title: "Expected Return" do %>
+    <%= account.accountable.expected_return_date&.strftime("%b %d, %Y") || "Not set" %>
+    <% if account.accountable.overdue? %>
+      <span class="text-xs text-danger block">Overdue</span>
+    <% elsif account.accountable.days_until_due && account.accountable.days_until_due <= 7 %>
+      <span class="text-xs text-warning block">Due Soon</span>
+    <% end %>
+  <% end %>
+
+  <%= summary_card title: "Status" do %>
+    <% case account.accountable.status %>
+    <% when "returned" %>
+      <span class="text-success">Returned</span>
+      <% if account.accountable.actual_return_date %>
+        <span class="text-xs text-secondary block">
+          <%= account.accountable.actual_return_date.strftime("%b %d, %Y") %>
+        </span>
+      <% end %>
+    <% when "overdue" %>
+      <span class="text-danger">Overdue</span>
+      <span class="text-xs text-secondary block">
+        <%= pluralize(account.accountable.days_until_due.abs, "day") %> late
+      </span>
+    <% when "due_soon" %>
+      <span class="text-warning">Due Soon</span>
+      <span class="text-xs text-secondary block">
+        <%= pluralize(account.accountable.days_until_due, "day") %> left
+      </span>
+    <% else %>
+      <span class="text-secondary">Active</span>
+    <% end %>
+  <% end %>
+</div>
+
+<% if account.accountable.agreement_notes.present? || account.accountable.witness_name.present? %>
+  <div class="mt-6 p-4 bg-container rounded-lg">
+    <h4 class="font-medium text-primary mb-2">Agreement Details</h4>
+    
+    <% if account.accountable.witness_name.present? %>
+      <div class="mb-2">
+        <span class="text-sm text-secondary">Witness:</span>
+        <span class="text-sm text-primary"><%= account.accountable.witness_name %></span>
+      </div>
+    <% end %>
+    
+    <% if account.accountable.agreement_notes.present? %>
+      <div class="text-sm text-secondary">
+        <%= simple_format(account.accountable.agreement_notes) %>
+      </div>
+    <% end %>
+  </div>
+<% end %>
+
+<div class="flex justify-center py-8">
+  <%= render DS::Link.new(
+    text: "Edit lending details",
+    variant: "ghost",
+    href: edit_personal_lending_path(account),
+    frame: :modal
+  ) %>
+</div>

@@ -193,6 +193,7 @@ Rails.application.routes.draw do
   resources :credit_cards, only: %i[new create edit update]
   resources :pay_laters, only: %i[new create edit update]
   resources :loans, only: %i[new create edit update]
+  resources :personal_lendings, only: %i[new create edit update]
   resources :cryptos, only: %i[new create edit update]
   resources :other_assets, only: %i[new create edit update]
   resources :other_liabilities, only: %i[new create edit update]

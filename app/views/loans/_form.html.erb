@@ -3,12 +3,39 @@
 <%= render "accounts/form", account: account, url: url do |form| %>
   <%= render "shared/ruler", classes: "my-4" %>
 
-  <div class="space-y-2">
+  <div class="space-y-2" data-controller="conditional-fields">
     <%= form.fields_for :accountable do |loan_form| %>
       <div class="flex items-center gap-2">
+        <%= loan_form.select :compliance_type,
+                              [["Conventional Banking", "conventional"], ["Islamic Banking (Sharia)", "sharia"]],
+                              { label: "Banking Type", include_blank: "Select banking type..." },
+                              { "data-action": "change->conditional-fields#triggerChanged" } %>
         <%= loan_form.select :debt_kind,
                               [["Institutional", "institutional"], ["Personal", "personal"]],
                               { label: "Debt Type" } %>
+      </div>
+
+      <div class="flex items-center gap-2" data-conditional-fields-target="field" data-show-when="sharia" style="display: none;">
+        <%= loan_form.select :islamic_product_type,
+                              [
+                                ["Murabaha (Cost-Plus Financing)", "murabaha"],
+                                ["Musyarakah (Partnership)", "musyarakah"],
+                                ["Mudharabah (Profit-Sharing)", "mudharabah"],
+                                ["Ijarah (Islamic Leasing)", "ijarah"],
+                                ["Qard Hasan (Interest-Free)", "qard_hasan"]
+                              ],
+                              { label: "Islamic Product Type", include_blank: "Select Islamic product..." } %>
+      </div>
+      
+      <div class="flex items-center gap-2">
+        <%= loan_form.select :fintech_type,
+                              [
+                                ["Traditional Bank", "bank"],
+                                ["Pinjol (Online Lending)", "pinjol"],
+                                ["P2P Lending Platform", "p2p_lending"],
+                                ["Credit Cooperative", "cooperative"]
+                              ],
+                              { label: "Institution Type", include_blank: "Select institution type..." } %>
       </div>
 
       <div class="flex items-center gap-2">
@@ -37,14 +64,48 @@
       </div>
 
       <div class="flex items-center gap-2">
+        <!-- Conventional Interest Rate -->
         <%= loan_form.number_field :interest_rate,
-                                 label: t("loans.form.interest_rate"),
-                                 placeholder: t("loans.form.interest_rate_placeholder"),
+                                 label: "Interest Rate (%)",
+                                 placeholder: "5.25",
                                  min: 0,
-                                 step: 0.005 %>
+                                 step: 0.005,
+                                 "data-conditional-fields-target": "field",
+                                 "data-show-when": "conventional" %>
+        
+        <!-- Islamic Margin Rate -->
+        <%= loan_form.number_field :margin_rate,
+                                 label: "Margin Rate (%)",
+                                 placeholder: "3.50",
+                                 min: 0,
+                                 step: 0.005,
+                                 "data-conditional-fields-target": "field",
+                                 "data-show-when": "sharia" %>
+        
+        <!-- Profit Sharing Ratio -->
+        <%= loan_form.number_field :profit_sharing_ratio,
+                                 label: "Profit Sharing Ratio",
+                                 placeholder: "0.60",
+                                 min: 0,
+                                 max: 1,
+                                 step: 0.01,
+                                 "data-conditional-fields-target": "field",
+                                 "data-show-when": "sharia" %>
+        
         <%= loan_form.select :rate_type,
                            [["Fixed", "fixed"], ["Variable", "variable"], ["Adjustable", "adjustable"]],
                            { label: t("loans.form.rate_type") } %>
+      </div>
+
+      <!-- Islamic Finance Additional Fields -->
+      <div class="flex items-center gap-2" data-conditional-fields-target="field" data-show-when="sharia">
+        <%= loan_form.text_field :witness_name, 
+                                label: "Witness Name", 
+                                placeholder: "Name of witness for Islamic agreement" %>
+        <%= loan_form.text_area :agreement_notes,
+                               label: "Agreement Notes",
+                               placeholder: "Details about Islamic compliance and agreement terms",
+                               rows: 3 %>
       </div>
 
       <div class="flex items-center gap-2">

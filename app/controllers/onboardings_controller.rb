@@ -19,6 +19,9 @@ class OnboardingsController < ApplicationController
     end
 
     def load_invitation
+      # Handle case where Current.family might be nil during onboarding
+      return unless Current.family && Current.user
+      
       @invitation = Current.family.invitations.accepted.find_by(email: Current.user.email)
     end
 end
