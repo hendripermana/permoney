@@ -9,10 +9,11 @@ class PersonalLendingsController < ApplicationController
 
   # Override create to handle personal lending logic
   def create
-    @account = Current.family.accounts.build(account_params)
-    @account.accountable = PersonalLending.new
-
-    if @account.save
+    ApplicationRecord.transaction do
+      @account = Current.family.accounts.build(account_params)
+      @account.accountable = PersonalLending.new
+      @account.save!
+      
       # Set the account subtype to match the lending_type for proper delegation
       @account.update!(subtype: @account.accountable.lending_type)
       
@@ -21,9 +22,10 @@ class PersonalLendingsController < ApplicationController
       
       redirect_to account_params[:return_to].presence || @account, 
                   notice: t("accounts.create.success", type: "Personal Lending")
-    else
-      render :new, status: :unprocessable_entity
     end
+  rescue ActiveRecord::RecordInvalid => e
+    @account ||= Current.family.accounts.build(account_params.merge(accountable: PersonalLending.new))
+    render :new, status: :unprocessable_entity
   end
 
   private

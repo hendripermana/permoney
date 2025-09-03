@@ -2,7 +2,7 @@ import { Controller } from "@hotwired/stimulus"
 
 // Connects to data-controller="conditional-fields"
 export default class extends Controller {
-  static targets = ["field"]
+  static targets = ["field", "trigger"]
   static values = { trigger: String }
 
   connect() {
@@ -10,28 +10,25 @@ export default class extends Controller {
   }
 
   showHideFields() {
-    const triggerValue = this.triggerValue
-    const selectedValue = this.element.querySelector('select')?.value
+    const triggerEl = this.hasTriggerTarget ? this.triggerTarget : this.element.querySelector('select')
+    const selectedValue = triggerEl ? triggerEl.value : null
 
     this.fieldTargets.forEach(field => {
       const showWhen = field.dataset.showWhen
-      
+      const controls = field.querySelectorAll('input, select, textarea')
+
       if (showWhen === selectedValue) {
         field.style.display = "flex"
-        field.querySelectorAll('input, select, textarea').forEach(input => {
-          input.disabled = false
-        })
+        controls.forEach(input => { input.disabled = false })
       } else {
         field.style.display = "none"
-        field.querySelectorAll('input, select, textarea').forEach(input => {
-          input.disabled = true
-        })
+        controls.forEach(input => { input.disabled = true })
       }
     })
   }
 
   // Called when the trigger select changes
-  triggerChanged(event) {
+  triggerChanged() {
     this.showHideFields()
   }
 }

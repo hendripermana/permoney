@@ -47,11 +47,13 @@ class Transaction < ApplicationRecord
 
   # Check if transaction is Sharia compliant
   def sharia_compliant?
-    return is_sharia_compliant if is_sharia_compliant != nil
-    
+    return is_sharia_compliant unless is_sharia_compliant.nil?
+
     # Auto-detect based on transaction type
-    islamic_finance? || 
-    (personal_debt? && entry.account.accountable.respond_to?(:sharia_compliant?) && entry.account.accountable.sharia_compliant?)
+    islamic_finance? ||
+      (personal_debt? &&
+        entry&.account&.accountable&.respond_to?(:sharia_compliant?) &&
+        entry.account.accountable.sharia_compliant?)
   end
 
   def set_category!(category)

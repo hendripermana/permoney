@@ -50,51 +50,57 @@ class Loan < ApplicationRecord
   validate :islamic_product_consistency
 
   def monthly_payment
-    return nil if term_months.nil? || term_months.zero?
-    return Money.new(0, account.currency) if account.loan.original_balance.amount.zero?
+    return nil if term_months.blank? || term_months.to_i <= 0
 
-    # For Sharia-compliant loans, use margin_rate instead of interest_rate
-    if sharia_compliant?
-      return sharia_monthly_payment
-    end
+    principal = account.loan.original_balance.amount
+    return Money.new(0, account.currency) if principal.nil? || principal.zero?
+
+    return sharia_monthly_payment if sharia_compliant?
 
     # Conventional loan calculation
-    return nil if interest_rate.nil? || rate_type.nil? || rate_type != "fixed"
-    
-    annual_rate = interest_rate / 100.0
-    monthly_rate = annual_rate / 12.0
+    return nil if interest_rate.nil? || rate_type != "fixed"
 
-    if monthly_rate.zero?
-      payment = account.loan.original_balance.amount / term_months
-    else
-      payment = (account.loan.original_balance.amount * monthly_rate * (1 + monthly_rate)**term_months) / ((1 + monthly_rate)**term_months - 1)
-    end
+    annual_rate = interest_rate.to_d / 100
+    monthly_rate = annual_rate / 12
+
+    payment =
+      if monthly_rate.zero?
+        principal.to_d / term_months
+      else
+        p = principal.to_d
+        r = monthly_rate
+        n = term_months
+        (p * r * (1 + r)**n) / ((1 + r)**n - 1)
+      end
 
     Money.new(payment.round, account.currency)
   end
 
   # Calculate monthly payment for Sharia-compliant loans
   def sharia_monthly_payment
+    principal = account.loan.original_balance.amount
+    return Money.new(0, account.currency) if principal.nil? || principal.zero?
+    
     case islamic_product_type
     when "murabaha"
       # Murabaha: fixed margin spread over term
       return nil unless margin_rate && term_months
       
-      total_amount = account.loan.original_balance.amount * (1 + margin_rate / 100.0)
+      total_amount = principal.to_d * (1 + margin_rate.to_d / 100)
       payment = total_amount / term_months
       Money.new(payment.round, account.currency)
     when "qard_hasan"
       # Qard Hasan: no additional cost, just principal
-      payment = account.loan.original_balance.amount / term_months
+      payment = principal.to_d / term_months
       Money.new(payment.round, account.currency)
     when "musyarakah", "mudharabah"
       # Profit-sharing: payment varies based on actual profits
       # Return estimated payment based on principal only
-      payment = account.loan.original_balance.amount / term_months
+      payment = principal.to_d / term_months
       Money.new(payment.round, account.currency)
     else
       # Default to principal-only payment
-      payment = account.loan.original_balance.amount / term_months
+      payment = principal.to_d / term_months
       Money.new(payment.round, account.currency)
     end
   end
