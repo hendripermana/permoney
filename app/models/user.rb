@@ -166,12 +166,9 @@ class User < ApplicationRecord
 
   # Comprehensive onboarding completion check
   def onboarding_complete?
-    # For invited users, onboarded_at timestamp indicates completion
-    return true if onboarded_at.present?
-
-    # For regular users, all onboarding steps must be completed
-    all_steps_complete = set_onboarding_preferences_at.present? && set_onboarding_goals_at.present?
-    return true if all_steps_complete
+    # Check if any onboarding timestamp is present
+    timestamps_complete = onboarded_at.present? || set_onboarding_goals_at.present? || set_onboarding_preferences_at.present?
+    return true if timestamps_complete
 
     # For self-hosted users with families, consider onboarding complete
     # This handles legacy users who may not have explicit onboarding timestamps

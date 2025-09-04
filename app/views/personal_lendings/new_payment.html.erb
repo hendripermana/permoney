@@ -1,0 +1,120 @@
+<%= render DS::Dialog.new do |dialog| %>
+  <% dialog.with_header(title: "Make Payment") %>
+  <% dialog.with_body do %>
+  <% if @error_message %>
+    <div class="text-destructive flex items-center gap-2 mb-4">
+      <%= icon "circle-alert", size: "sm" %>
+      <p class="text-sm"><%= @error_message %></p>
+    </div>
+  <% end %>
+
+  <%= styled_form_with url: create_payment_personal_lending_path(@account), 
+                      scope: :payment,
+                      class: "space-y-4",
+                      data: { turbo_frame: "_top" } do |f| %>
+    
+    <%= f.hidden_field :personal_lending_account_id, value: @account.id %>
+    
+    <div class="bg-container p-4 rounded-lg mb-4">
+      <h3 class="font-medium text-primary mb-2">
+        <% if @account.accountable.lending_direction == "borrowing_from" %>
+          Repayment Details
+        <% else %>
+          Payment Collection Details
+        <% end %>
+      </h3>
+      <div class="space-y-2 text-sm">
+        <div class="flex justify-between">
+          <span class="text-secondary">
+            <% if @account.accountable.lending_direction == "borrowing_from" %>
+              Paying back to:
+            <% else %>
+              Collecting from:
+            <% end %>
+          </span>
+          <span class="text-primary font-medium"><%= @account.accountable.counterparty_name %></span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-secondary">Relationship:</span>
+          <span class="text-primary"><%= @account.accountable.relationship&.humanize || "Not specified" %></span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-secondary">Current Balance:</span>
+          <span class="text-primary font-medium"><%= format_money(@account.balance_money) %></span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-secondary">Loan Type:</span>
+          <span class="text-primary"><%= @account.accountable.lending_type.humanize %></span>
+        </div>
+        <% if @account.accountable.sharia_compliant? %>
+          <div class="flex items-center gap-2 text-success">
+            <%= icon "check-circle", size: "sm" %>
+            <span class="text-sm">Syariah Compliant (No Interest)</span>
+          </div>
+        <% end %>
+      </div>
+    </div>
+
+    <section class="space-y-4">
+      <%= f.collection_select :source_account_id,
+                             @source_accounts,
+                             :id,
+                             :name,
+                             { 
+                               label: @account.accountable.lending_direction == "borrowing_from" ? "Pay From Account" : "Receive Payment To Account",
+                               prompt: "Select account"
+                             },
+                             { required: true } %>
+
+      <%= f.money_field :amount,
+                        label: "Payment Amount",
+                        default_currency: @account.currency,
+                        required: true,
+                        placeholder: "100000" %>
+
+      <%= f.date_field :date,
+                      label: "Payment Date",
+                      value: Date.current,
+                      required: true,
+                      max: Date.current %>
+
+      <%= f.text_area :notes,
+                      label: "Notes (optional)",
+                      placeholder: "e.g., Transfer via BCA, reference #...",
+                      rows: 3 %>
+    </section>
+
+    <div class="bg-muted p-4 rounded-lg">
+      <div class="flex items-start gap-2">
+        <%= icon "info", size: "sm", class: "text-secondary mt-0.5" %>
+        <div class="text-sm text-secondary">
+          <p class="font-medium mb-1">What will happen:</p>
+          <ul class="list-disc list-inside space-y-1">
+            <% if @account.accountable.lending_direction == "borrowing_from" %>
+              <li>Money will be transferred from your account to reduce the debt</li>
+              <li>Your debt balance will decrease by the payment amount</li>
+              <li>This is recorded as a repayment transaction</li>
+            <% else %>
+              <li>Money will be received from the borrower</li>
+              <li>The loan balance will decrease (they owe you less)</li>
+              <li>This is recorded as a loan collection</li>
+            <% end %>
+            <li>Syariah compliant - no interest calculations</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <section class="flex gap-3">
+      <%= f.submit @account.accountable.lending_direction == "borrowing_from" ? "Make Payment" : "Record Payment Received", 
+                  class: "btn btn-primary" %>
+      <%= render DS::Link.new(
+        text: "Cancel",
+        variant: "ghost",
+        href: account_path(@account),
+        data: { turbo_frame: "_top" }
+      ) %>
+    </section>
+  <% end %>
+  <% end %>
+<% end %>

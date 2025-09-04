@@ -20,7 +20,6 @@
     <%= styled_form_with model: @user do |form| %>
       <%= form.hidden_field :redirect_to, value: @invitation ? "home" : "onboarding_preferences" %>
       <%# Only set onboarded_at for invited users who should skip the full onboarding flow %>
-      <%# For regular users, onboarding completion will be set in the goals step %>
       <%= form.hidden_field :onboarded_at, value: Time.current if @invitation %>
 
       <div class="mb-6">

@@ -68,6 +68,9 @@ class Transfer::Creator
     def outflow_transaction_kind
       if destination_account.loan?
         "loan_payment"
+      elsif destination_account.accountable_type == "PersonalLending"
+        # Use the Transfer class method to determine the correct kind
+        Transfer.kind_for_account(destination_account)
       elsif destination_account.liability?
         "cc_payment"
       else
@@ -76,7 +79,20 @@ class Transfer::Creator
     end
 
     def name_prefix
-      if destination_account.liability?
+      if destination_account.loan?
+        if destination_account.accountable.personal_loan?
+          "Loan repayment"
+        else
+          "Loan payment"
+        end
+      elsif destination_account.accountable_type == "PersonalLending"
+        personal_lending = destination_account.accountable
+        if personal_lending.lending_direction == "borrowing_from"
+          "Repayment"
+        else
+          "Payment received"
+        end
+      elsif destination_account.liability?
         "Payment"
       else
         "Transfer"

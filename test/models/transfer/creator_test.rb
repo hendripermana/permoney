@@ -90,12 +90,12 @@ class Transfer::CreatorTest < ActiveSupport::TestCase
     # Verify outflow transaction is marked as loan payment
     outflow = transfer.outflow_transaction
     assert_equal "loan_payment", outflow.kind
-    assert_equal "Payment to #{loan_account.name}", outflow.entry.name
+    assert_equal "Loan payment to #{loan_account.name}", outflow.entry.name
 
     # Verify inflow transaction
     inflow = transfer.inflow_transaction
     assert_equal "funds_movement", inflow.kind
-    assert_equal "Payment from #{@source_account.name}", inflow.entry.name
+    assert_equal "Loan payment from #{@source_account.name}", inflow.entry.name
   end
 
   test "creates credit card payment" do
