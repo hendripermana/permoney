@@ -74,6 +74,8 @@ class PersonalLending::PaymentService
         @transfer.update!(notes: note)
         @transfer.outflow_transaction.entry.update!(notes: note)
         @transfer.inflow_transaction.entry.update!(notes: note)
+
+        update_entry_names!(@transfer)
       end
     end
 
@@ -112,6 +114,20 @@ class PersonalLending::PaymentService
 
       user_note = params[:notes].to_s.strip
       user_note.present? ? "#{base_note} — #{user_note}" : base_note
+    end
+
+    def update_entry_names!(transfer)
+      pl = personal_lending_account.accountable
+      counterparty = pl.counterparty_name
+      if pl.lending_direction == "lending_out"
+        # Money received from borrower into bank
+        transfer.inflow_transaction.entry.update!(name: "Payment received from #{counterparty}")
+        transfer.outflow_transaction.entry.update!(name: "Payment received")
+      else # borrowing_from
+        # Money paid from bank to reduce liability
+        transfer.outflow_transaction.entry.update!(name: "Repayment to #{counterparty}")
+        transfer.inflow_transaction.entry.update!(name: "Repayment")
+      end
     end
 
     # Parameter accessors
