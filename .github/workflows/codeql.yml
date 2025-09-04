@@ -123,12 +123,8 @@ jobs:
       if: steps.changes.outputs.analyze_needed == 'true'
       uses: github/codeql-action/analyze@v3
       with:
-        category: "/language:${{matrix.language}}"
+        category: "/language:${{ matrix.language }}"
         upload: true
-        # Add threading for faster analysis
-        threads: 0
-        # Increase memory for large codebases
-        ram: 6144
 
     - name: Skip CodeQL analysis
       if: steps.changes.outputs.analyze_needed == 'false'
