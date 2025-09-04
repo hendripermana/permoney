@@ -42,6 +42,16 @@ This document provides guidance for AI agents working on the Permoney codebase.
 - Commits: Imperative subject ≤ 72 chars (e.g., "Add account balance validation"). Include rationale in body and reference issues (`#123`).
 - PRs: Clear description, linked issues, screenshots for UI changes, and migration notes if applicable. Ensure CI passes, tests added/updated, and `rubocop`/Biome are clean.
 
+## Documentation Guidelines
+- **DO NOT create new .md files** after completing tasks unless explicitly requested by the user.
+- **Update existing documentation** when your changes affect existing features or configurations.
+- **Only create documentation** when:
+  - User explicitly requests new documentation
+  - Adding entirely new features that require user guidance
+  - Creating API documentation for new endpoints
+- **Preferred approach**: Update existing files in `docs/`, `README.md`, or inline code comments.
+- **Avoid**: Creating summary reports, completion reports, or task-specific .md files.
+
 ## Security & Configuration Tips
 - Never commit secrets. Start from `.env.local.example`; use `.env.local` for development only.
 - Run `bin/brakeman` before major PRs. Prefer environment variables over hard-coded values.

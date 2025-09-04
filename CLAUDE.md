@@ -491,3 +491,6 @@ When working on this codebase:
 5. **Update documentation** when adding features
 6. **Consider both managed and self-hosted modes**
 7. **Respect the AGPLv3 license** and attribution requirements
+8. **DO NOT create new .md files** after completing tasks unless explicitly requested
+9. **Update existing docs** instead of creating new documentation files
+10. **Avoid creating** summary reports, completion reports, or task-specific documentation
