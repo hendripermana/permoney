@@ -1,9 +1,12 @@
----
-description: 
-globs: 
-alwaysApply: true
----
-This rule serves as high-level documentation for how you should write code for the Maybe codebase. 
+This rule serves as high-level documentation for how you should write code for the Permoney codebase. 
+
+## Prohibited actions
+
+- Do not run `rails server` in your responses.
+- Do not run `touch tmp/restart.txt`
+- Do not run `rails credentials`
+- Do not automatically run migrations
+- This rule serves as high-level documentation for how you should write code for the Permoney codebase. 
 
 ## Project Tech Stack
 
@@ -22,7 +25,7 @@ This rule serves as high-level documentation for how you should write code for t
 
 ## Project conventions
 
-These conventions should be used when writing code for Maybe.
+These conventions should be used when writing code for Permoney.
 
 ### Convention 1: Minimize dependencies, vanilla Rails is plenty
 
@@ -66,6 +69,11 @@ All code should maximize readability and simplicity.
   - Example 2: Avoid N+1 queries
 
 ### Convention 5: Use ActiveRecord for complex validations, DB for simple ones, keep business logic out of DB
+
+- Enforce `null` checks, unique indexes, and other simple validations in the DB
+- ActiveRecord validations _may_ mirror the DB level ones, but not 100% necessary.  These are for convenience when error handling in forms.  Always prefer client-side form validation when possible.
+- Complex validations and business logic should remain in ActiveRecord
+
 
 - Enforce `null` checks, unique indexes, and other simple validations in the DB
 - ActiveRecord validations _may_ mirror the DB level ones, but not 100% necessary.  These are for convenience when error handling in forms.  Always prefer client-side form validation when possible.

@@ -4,7 +4,7 @@ class Provider::Github
   def initialize
     # Allow runtime configuration via ENV or Setting
     @name = ENV["GITHUB_REPO_NAME"].presence || (defined?(Setting) && Setting.respond_to?(:github_repo_name) ? Setting.github_repo_name : nil) || "sure"
-    @owner = ENV["GITHUB_REPO_OWNER"].presence || (defined?(Setting) && Setting.respond_to?(:github_repo_owner) ? Setting.github_repo_owner : nil) || "we-promise"
+    @owner = ENV["GITHUB_REPO_OWNER"].presence || (defined?(Setting) && Setting.respond_to?(:github_repo_owner) ? Setting.github_repo_owner : nil) || "hendripermana"
     @branch = ENV["GITHUB_REPO_BRANCH"].presence || "main"
   end
 

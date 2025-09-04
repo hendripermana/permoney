@@ -1,68 +1,94 @@
 #!/bin/bash
 
-# EMERGENCY ROLLBACK SCRIPT for Maybe → Sure Migration
-# Created: $(date)
-# Use this script ONLY if the migration fails and you need to restore the previous state
+# EMERGENCY ROLLBACK SCRIPT for Application Migration
+# This script will rollback the system to the previous version
+# Use this ONLY in case of critical issues with the current deployment
 
 set -e
 
-BACKUP_TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+# Load configuration from environment or use defaults
+APP_NAME=${APP_NAME:-"Permoney"}
+DEPLOYMENT_PATH=${DEPLOYMENT_PATH:-"/home/ubuntu/permoney"}
+DOCKER_IMAGE_NAME=${DOCKER_IMAGE_NAME:-"ghcr.io/hendripermana/permoney"}
+DOCKER_IMAGE_TAG=${DOCKER_IMAGE_TAG:-"latest"}
+PREVIOUS_IMAGE=${PREVIOUS_IMAGE:-"maybe-finance:latest"}
+COMPOSE_FILE=${COMPOSE_FILE:-"docker-compose.yml"}
 
 echo "🚨 EMERGENCY ROLLBACK INITIATED"
-echo "Timestamp: $BACKUP_TIMESTAMP"
+echo "This will rollback from $APP_NAME to the previous version"
+echo "All data will be preserved, but the application will be reverted"
+echo "Deployment path: $DEPLOYMENT_PATH"
+echo "Current image: $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG"
+echo "Rollback image: $PREVIOUS_IMAGE"
+echo ""
 
-# Stop current services
-echo "=== STOPPING CURRENT SERVICES ==="
-docker-compose down
-
-# Restore git state
-echo "=== RESTORING GIT STATE ==="
-cd /home/ubuntu/maybe
-git checkout backup-pre-migration-20250808-110745 2>/dev/null || {
-    echo "⚠️  Backup branch not found, checking stash..."
-    git stash list | grep "Pre-migration stash" && {
-        git stash pop $(git stash list | grep "Pre-migration stash" | head -1 | cut -d: -f1)
-    }
-}
-
-# Restore environment files if needed
-echo "=== CHECKING ENVIRONMENT FILES ==="
-if [ -d "/tmp/env-backup-20250808-110654" ]; then
-    echo "Environment backup found, ready to restore if needed"
-    ls -la /tmp/env-backup-20250808-110654/
-else
-    echo "⚠️  No environment backup found"
+# Confirm rollback
+read -p "Are you sure you want to proceed with the rollback? (yes/no): " confirm
+if [ "$confirm" != "yes" ]; then
+    echo "Rollback cancelled."
+    exit 0
 fi
 
-# Remove new Docker images
-echo "=== CLEANING UP NEW IMAGES ==="
-docker images | grep "sure-latest" && {
-    docker rmi maybe-finance:sure-latest
-    echo "Removed Sure images"
-}
+echo "Starting emergency rollback..."
 
-# Restart with old configuration
-echo "=== RESTARTING ORIGINAL SERVICES ==="
-docker-compose up -d
+# Navigate to application directory
+if [ ! -d "$DEPLOYMENT_PATH" ]; then
+    echo "❌ Error: Deployment path $DEPLOYMENT_PATH does not exist"
+    exit 1
+fi
 
-# Verify services
-echo "=== VERIFYING ROLLBACK ==="
-sleep 10
-docker ps
-curl -f http://localhost:3000 &>/dev/null && {
-    echo "✅ Service rollback successful!"
-} || {
-    echo "❌ Service check failed, manual intervention required"
-}
+cd "$DEPLOYMENT_PATH"
 
-echo "🔄 ROLLBACK COMPLETED"
+# Stop current services
+echo "Stopping current services..."
+docker-compose -f "$COMPOSE_FILE" down
+
+# Remove current image (if it exists)
+echo "Removing current image..."
+if docker images | grep -q "$DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG"; then
+    docker rmi "$DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG" || echo "Warning: Could not remove current image"
+fi
+
+# Pull previous image
+echo "Pulling previous image..."
+if ! docker pull "$PREVIOUS_IMAGE"; then
+    echo "❌ Error: Could not pull previous image $PREVIOUS_IMAGE"
+    echo "Please check if the image exists and is accessible"
+    exit 1
+fi
+
+# Update compose file to use previous image
+echo "Updating $COMPOSE_FILE..."
+if [ -f "$COMPOSE_FILE" ]; then
+    # Create backup of compose file
+    cp "$COMPOSE_FILE" "$COMPOSE_FILE.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # Update image references
+    # Update image references only on image lines
+    sed -i.bak -E "s|^([[:space:]]*image:[[:space:]]*)$DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG$|\1$PREVIOUS_IMAGE|g" "$COMPOSE_FILE"
+    echo "Updated image references in $COMPOSE_FILE"
+else
+    echo "❌ Error: $COMPOSE_FILE not found"
+    exit 1
+fi
+
+# Start services with previous image
+echo "Starting services with previous image..."
+docker-compose -f "$COMPOSE_FILE" up -d
+
+# Wait for services to be ready
+echo "Waiting for services to be ready..."
+sleep 30
+
+# Verify services are running
+echo "Verifying services..."
+docker-compose -f "$COMPOSE_FILE" ps
+
 echo ""
-echo "MANUAL STEPS IF NEEDED:"
-echo "1. Check git status: git status"
-echo "2. Check environment: ls -la .env*"
-echo "3. Check services: docker ps"
-echo "4. Check logs: docker-compose logs"
-echo "5. Restore data if needed:"
-echo "   - PostgreSQL: /tmp/postgres-backup-20250808-110624.tar.gz"
-echo "   - Redis: /tmp/redis-backup-20250808-110637.tar.gz"
-echo "   - App Storage: /tmp/app-storage-backup-20250808-110644.tar.gz"
+echo "✅ Emergency rollback completed successfully!"
+echo "Application is now running the previous version: $PREVIOUS_IMAGE"
+echo "All data has been preserved"
+echo "Compose file backup created with timestamp"
+echo ""
+echo "To re-deploy $APP_NAME later, run the deployment process again"
+echo ""

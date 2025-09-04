@@ -1,160 +1,155 @@
-# Welcome to Sure!
+# Onboarding Guide
 
-This guide aims to assist new users through:
+Welcome to Permoney! This guide will help you get started with your personal finance management.
 
-1. Creating a Sure account
-2. Adding your first accounts
-3. Recording transactions
+## Getting Started
 
-This guide also covers the differences between **asset** and **liability** accounts, a key concept for using and understanding balances in Sure!
+### 1. Create Your Account
 
-> [!IMPORTANT]
-> Sure is evolving quickly. If you find something inaccurate while following this guide, please:
-> 
-> - Ask in the [Discord](https://discord.gg/36ZGBsxYEK)
-> - Open an [issue](https://github.com/we-promise/sure/issues/new/choose)
-> - Or if you know the answer, open a [PR](https://github.com/we-promise/sure/compare)!
+1. Visit your Permoney instance
+2. Click "Create Account"
+3. Enter your email and password
+4. Verify your email address
 
+### 2. Set Up Your Profile
 
-## 1. Creating your Sure Account
+1. Complete your profile information
+2. Set your preferred currency
+3. Configure your timezone
+4. Set up two-factor authentication (recommended)
 
-Once Sure is installed, open a browser and navigate to [localhost:3000](http://localhost:3000/sessions/new).<br />
-You will see the **login page** (pictured below). Since we do not have an account yet, click on **Sign Up** to begin. 
+### 3. Add Your First Account
 
-<img width="2508" height="1314" alt="Landing page on a fresh install." src="https://github.com/user-attachments/assets/2319dc87-5615-4473-bebc-8360dd983367" />
-<br />
-<br />
+1. Go to Settings > Accounts
+2. Click "Add Account"
+3. Choose your account type:
+   - **Bank Account**: For checking, savings, or credit cards
+   - **Investment**: For brokerage, 401k, or retirement accounts
+   - **Property**: For real estate or other assets
+   - **Vehicle**: For cars, boats, or other vehicles
+   - **Other Asset**: For jewelry, collectibles, etc.
 
-You’ll be guided through a short series of screens to set your **login details**, **personal information**, and **preferences**.<br />
-When you arrive at the main dashboard, showing **No accounts yet**, you’re all set up!
+### 4. Connect Your Banks (Optional)
 
-<img width="2508" height="1314" alt="Blank home screen of Sure, with no accounts yet." src="https://github.com/user-attachments/assets/f06ba8e2-f188-4bf9-98a7-fdef724e9b5a" />
-<br />
-<br />
+If you're using Plaid integration:
 
-> [!Note]
-> The next sections of this guide cover how to **manually add accounts and transactions** in Sure.<br />
-> If you’d like to use an integration with a data provider instead, see:
-> 
-> - **Lunch Flow** (WIP)
-> - [**Plaid**](/docs/hosting/plaid.md)
-> - **SimpleFin** (WIP)
->
-> Even if you use an integration, we still recommend reading through this guide to understand **account types** and how they work in Sure.
+1. Go to Settings > Bank Sync
+2. Click "Add Bank Account"
+3. Follow the Plaid Link flow
+4. Select your bank and authenticate
+5. Choose which accounts to sync
 
+### 5. Set Up Categories
 
-## 2. Account Types in Sure
+1. Go to Settings > Categories
+2. Review the default categories
+3. Add custom categories as needed
+4. Organize your spending structure
 
-Sure supports several account types, which are grouped into **Assets** (things you own) and **Debts/Liabilities** (things you owe):
+### 6. Import Historical Data (Optional)
 
-| Assets      | Debts/Liabilities |
-| ----------- | ----------------- |
-| Cash        | Credit Card       |
-| Investment  | Loan              |
-| Crypto      | Other Liability   |
-| Property    |                   |
-| Vehicle     |                   |
-| Other Asset |                   |
+1. Go to Settings > Imports
+2. Download your bank statements
+3. Upload CSV files
+4. Map columns to Permoney fields
+5. Review and confirm the import
 
+## Key Features
 
-## 3. How Asset Accounts Work
+### Dashboard
 
-Cash, checking and savings accounts **increase** when you add money and **decrease** when you spend money.
+- **Net Worth**: Track your total assets and liabilities
+- **Cash Flow**: Monitor income vs expenses
+- **Account Balances**: Quick view of all accounts
+- **Recent Transactions**: Latest activity across accounts
 
-Example:
+### Transactions
 
-- Starting balance: $500
-- Add an expense of $20 -> balance is now $480
-- Add an income of $100 -> balance is now $580
+- **Automatic Categorization**: AI-powered transaction categorization
+- **Manual Editing**: Fine-tune categories and tags
+- **Bulk Actions**: Select multiple transactions for batch operations
+- **Search & Filter**: Find specific transactions quickly
 
+### Budgeting
 
-## 4. How Debt Accounts Work (Liabilities)
+- **Monthly Budgets**: Set spending limits by category
+- **Rollover**: Unused budget carries to next month
+- **Alerts**: Get notified when approaching limits
+- **Reports**: Visualize spending patterns
 
-Liability accounts track how much money you **owe**, so the math can feel *backwards* compared to an asset account.
+### AI Assistant
 
-**Key rule:**
+- **Financial Questions**: Ask about your finances
+- **Transaction Analysis**: Get insights on spending
+- **Budget Recommendations**: AI-powered suggestions
+- **Goal Planning**: Get help with financial goals
 
-- **Positive Balances** = you owe money
-- **Negative balances** = the bank owes *you* (e.g. overpayment or refund)
+## Best Practices
 
-**Transactions behave like this:**
+### Security
 
-- **Expenses** (e.g. purchases) => increase your debt (you owe more)
-- **Payments or refunds** => decrease your debt (you owe less)
+- Use a strong, unique password
+- Enable two-factor authentication
+- Regularly review your account activity
+- Keep your software updated
 
-Credit Card example:
+### Data Management
 
-1. Balance: **$200 owed**
-2. Spend $20 => You now owe $220 (balance goes *up* in red)
-3. Pay off $50 => You now owe $170 (balance goes *down* in green)
+- Regularly sync your accounts
+- Review and categorize transactions
+- Back up your data regularly
+- Export important reports
 
-Overpayment Example:
+### Organization
 
-1. Balance: -$44 (bank owes you $44)
-2. Spend $1 => Bank now owes you **$43** (balance shown as -$43, moving towards zero)
+- Use consistent category names
+- Tag transactions for easy filtering
+- Set up recurring transactions
+- Review your setup monthly
 
-> [!TIP]
-> Why does it work this way? This matches standard accounting and what your credit card provider shows online. Think of a liability balance as "**Amount Owed**", not "available cash."
+## Troubleshooting
 
+### Common Issues
 
-## 5. Quick Reference: Assets vs. Liability Behavior
+1. **Account sync problems**
+   - Check your internet connection
+   - Verify your bank credentials
+   - Contact support if issues persist
 
-| Action           | Asset Account (e.g. Checking) | Liability Account (e.g. Credit Card) |
-| ---------------- | ----------------------------- | ------------------------------------ |
-| Spend $20        | Balance ↓ $20                 | Balance ↑ $20 (more debt)            |
-| Receive $50      | Balance ↑ $50                 | Balance ↓ $50 (less debt)            |
-| Negative Balance | Overdraft                     | Bank owes *you* money                |
+2. **Missing transactions**
+   - Check your sync settings
+   - Verify account permissions
+   - Manually import if needed
 
+3. **Categorization issues**
+   - Train the AI with manual corrections
+   - Create custom categories
+   - Use tags for better organization
 
-## 6. Adding Accounts
+### Getting Help
 
-For this example we'll add a **Savings Account**.<br />
+- **Documentation**: Check our [docs/](https://github.com/hendripermana/permoney/tree/main/docs)
+- **Issues**: Open an [issue](https://github.com/hendripermana/permoney/issues/new/choose)
+- **Discussions**: Start a [discussion](https://github.com/hendripermana/permoney/discussions)
+- **Community**: Join our [Discord](https://discord.gg/36ZGBsxYEK)
 
->[!TIP]
->If you’re adding a **credit card**, **loan**, or any other **debt**, be sure to select a **Credit Card** or **Liability** account type instead of **Cash**. This will ensure balances update correctly and match what your bank shows.
+## Next Steps
 
-Most bank accounts (checking, savings, money market) are **Cash Accounts**
-1. Click **+ Add Account** → **Cash** → **Enter Account Balance**
-2. Fill in details such as:
-   - Account name
-   - Current Balance
-   - Account Subtype (This is where you specify checking, savings, or other)
-3. Click **Create Account** when you are ready to proceed.
+Once you're comfortable with the basics:
 
-<img width="500" height="303" alt="Cash Account creation menu" src="https://github.com/user-attachments/assets/e564a447-c85e-403e-979b-efe770ea2a61" />
-<br />
-<br />
+1. **Set up goals**: Create financial targets
+2. **Explore reports**: Dive into detailed analytics
+3. **Customize**: Personalize your dashboard
+4. **Share**: Invite family members to collaborate
+5. **Automate**: Set up rules for recurring transactions
 
-Once created, you'll return to the **Home** screen.<br />
-You'll now see:
-- Your new cash account in the **Accounts** list (left side)
-- An overview of your accounts in the center, under the net worth bar.
+## Support
 
-To get this bar moving let's add some transactions!
+Need help? We're here for you:
 
-<img width="2508" height="1314" alt="Home screen of Sure, showing one account and no transactions." src="https://github.com/user-attachments/assets/7766a0cd-6b20-48f0-9ba2-87dfddd77236" />
+- **Documentation**: [docs/](https://github.com/hendripermana/permoney/tree/main/docs)
+- **Issues**: [GitHub Issues](https://github.com/hendripermana/permoney/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/hendripermana/permoney/discussions)
+- **Discord**: [Join our community](https://discord.gg/36ZGBsxYEK)
 
-## 7. Adding Transactions
-
-To add a transaction:
-1. Go to the **Transactions** page (left sidebar, under **Home**, above **Budgets**)
-2. Click **+ New Transaction** (top right)
-3. Choose the transaction type:
-   - **Expense** → Spending money
-   - **Income** → Receiving money
-   - **Transfer** → Move money between accounts
-4. Enter the details, then click **Add transaction**
-
-You will now see the transaction you added in your **transaction history**, as well as the **net worth chart** updating accordingly.
-
-<img width="500" height="512" alt="Filled-out expense form" src="https://github.com/user-attachments/assets/7c1d38d1-edb8-4d12-8b3e-bbef4836cc92" />
-
-## 8. Next Steps
-
-Now that you have one account and your first transaction:
-- Explore the other account types that Sure offers, adding ones relevant to your finances.
-- **Categorize** and **Tag** transactions for better searching and reporting.
-- Experiment with **Budgets** to track your spending habits.
-- If you have many historical transactions, use **Bulk Import** to load them in.
-
-More detailed user guides for these features are coming soon™.
+Welcome to Permoney! 🎉

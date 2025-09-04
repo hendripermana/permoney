@@ -1,4 +1,4 @@
-# CodeQL Analysis workflow for Permoney
+# CodeQL Analysis workflow for Maybe
 # This workflow performs CodeQL analysis to identify vulnerabilities and coding errors
 
 name: "CodeQL Analysis"
@@ -11,10 +11,11 @@ on:
   schedule:
     # Run CodeQL analysis every Monday at 6:00 AM UTC
     - cron: '0 6 * * 1'
+  workflow_dispatch:
 
 jobs:
   analyze:
-    name: Analyze
+    name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     timeout-minutes: 360
     permissions:
@@ -25,56 +26,115 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [ 'ruby', 'javascript' ]
+        include:
+          - language: 'ruby'
+            ruby-version: '3.3'
+          - language: 'javascript'
+            node-version: '20'
         # CodeQL supports [ 'cpp', 'csharp', 'go', 'java', 'javascript', 'python', 'ruby' ]
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Check for language-specific changes
+      id: changes
+      run: |
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }})
+          if [ "${{ matrix.language }}" = "ruby" ]; then
+            if echo "$CHANGED_FILES" | grep -E '\.(rb|rake|gemspec)$|Gemfile|Rakefile'; then
+              echo "analyze_needed=true" >> $GITHUB_OUTPUT
+            else
+              echo "analyze_needed=false" >> $GITHUB_OUTPUT
+            fi
+          elif [ "${{ matrix.language }}" = "javascript" ]; then
+            if echo "$CHANGED_FILES" | grep -E '\.(js|jsx|ts|tsx|vue|json)$|package\.json|yarn\.lock'; then
+              echo "analyze_needed=true" >> $GITHUB_OUTPUT
+            else
+              echo "analyze_needed=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+        else
+          echo "analyze_needed=true" >> $GITHUB_OUTPUT
+        fi
 
     - name: Initialize CodeQL
+      if: steps.changes.outputs.analyze_needed == 'true'
       uses: github/codeql-action/init@v3
       with:
         languages: ${{ matrix.language }}
-        # If you wish to specify custom queries, you can do so here or in a config file.
-        # By default, queries listed here will override any specified in a config file.
-        # Prefix the list here with "+" to use these queries and those in the config file.
-        queries: +security-and-quality
+        # Enhanced queries for better security coverage
+        queries: +security-extended,security-and-quality
+        config: |
+          name: "CodeQL Config"
+          disable-default-queries: false
+          queries:
+            - uses: security-extended
+            - uses: security-and-quality
+          paths-ignore:
+            - "**/node_modules"
+            - "**/vendor"
+            - "**/tmp"
+            - "**/log"
 
     # For Ruby, we need to set up the environment
     - name: Set up Ruby
-      if: matrix.language == 'ruby'
+      if: matrix.language == 'ruby' && steps.changes.outputs.analyze_needed == 'true'
       uses: ruby/setup-ruby@v1
       with:
-        ruby-version: '3.2'
+        ruby-version: ${{ matrix.ruby-version }}
         bundler-cache: true
 
     # For JavaScript, we need to set up Node.js
     - name: Set up Node.js
-      if: matrix.language == 'javascript'
+      if: matrix.language == 'javascript' && steps.changes.outputs.analyze_needed == 'true'
       uses: actions/setup-node@v4
       with:
-        node-version: '18'
-        cache: 'npm'
+        node-version: ${{ matrix.node-version }}
+        cache: 'yarn'
+
+    - name: Cache Yarn dependencies
+      if: matrix.language == 'javascript' && steps.changes.outputs.analyze_needed == 'true'
+      uses: actions/cache@v4
+      with:
+        path: |
+          node_modules
+          ~/.cache/yarn
+          .yarn/cache
+        key: ${{ runner.os }}-yarn-${{ matrix.node-version }}-${{ hashFiles('**/yarn.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-yarn-${{ matrix.node-version }}-
+          ${{ runner.os }}-yarn-
 
     - name: Install JavaScript dependencies
-      if: matrix.language == 'javascript'
+      if: matrix.language == 'javascript' && steps.changes.outputs.analyze_needed == 'true'
       run: npm ci
 
     # Autobuild attempts to build any compiled languages (C/C++, C#, Go, or Java).
     # If this step fails, then you should remove it and run the build manually
     - name: Autobuild
+      if: steps.changes.outputs.analyze_needed == 'true'
       uses: github/codeql-action/autobuild@v3
 
     - name: Perform CodeQL Analysis
+      if: steps.changes.outputs.analyze_needed == 'true'
       uses: github/codeql-action/analyze@v3
       with:
-        category: "/language:${{matrix.language}}"
+        category: "/language:${{ matrix.language }}"
+        upload: true
 
-    # Upload results to GitHub Security tab
-    - name: Upload CodeQL results
-      uses: github/codeql-action/upload-sarif@v3
-      if: always()
+    - name: Skip CodeQL analysis
+      if: steps.changes.outputs.analyze_needed == 'false'
+      run: echo "No ${{ matrix.language }} files changed, skipping CodeQL analysis"
+
+    # Upload detailed results as artifacts for debugging
+    - name: Upload CodeQL database
+      if: always() && steps.changes.outputs.analyze_needed == 'true'
+      uses: actions/upload-artifact@v4
       with:
-        sarif_file: ${{ runner.temp }}/codeql_databases/${{ matrix.language }}.sarif
-        category: "/language:${{matrix.language}}"
+        name: codeql-database-${{ matrix.language }}
+        path: ${{ runner.temp }}/codeql_databases/${{ matrix.language }}
+        retention-days: 7

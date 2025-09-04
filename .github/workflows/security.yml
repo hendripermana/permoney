@@ -1,4 +1,4 @@
-# Security Scanning workflow for Permoney
+# Security Scanning workflow for Maybe
 # This workflow performs additional security checks beyond CodeQL
 
 name: "Security Scanning"
@@ -11,95 +11,176 @@ on:
   schedule:
     # Run security scan every Tuesday at 6:00 AM UTC
     - cron: '0 6 * * 2'
+  workflow_dispatch:
 
 jobs:
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       security-events: write
       actions: read
+      pull-requests: write
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Check for security-relevant changes
+      id: changes
+      run: |
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }})
+          if echo "$CHANGED_FILES" | grep -E '\.(rb|rake|gemspec|js|jsx|ts|tsx)$|Gemfile|package\.json|yarn\.lock|Dockerfile'; then
+            echo "scan_needed=true" >> $GITHUB_OUTPUT
+          else
+            echo "scan_needed=false" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "scan_needed=true" >> $GITHUB_OUTPUT
+        fi
 
     - name: Set up Ruby
+      if: steps.changes.outputs.scan_needed == 'true'
       uses: ruby/setup-ruby@v1
       with:
-        ruby-version: '3.2'
+        ruby-version: '3.3'
         bundler-cache: true
 
     - name: Set up Node.js
+      if: steps.changes.outputs.scan_needed == 'true'
       uses: actions/setup-node@v4
       with:
-        node-version: '18'
-        cache: 'npm'
+        node-version: '20'
+        cache: 'yarn'
+
+    - name: Cache Yarn dependencies
+      if: steps.changes.outputs.scan_needed == 'true'
+      uses: actions/cache@v4
+      with:
+        path: |
+          node_modules
+          ~/.cache/yarn
+          .yarn/cache
+        key: ${{ runner.os }}-yarn-20-${{ hashFiles('**/yarn.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-yarn-20-
+          ${{ runner.os }}-yarn-
 
     - name: Install dependencies
+      if: steps.changes.outputs.scan_needed == 'true'
       run: |
-        bundle install
-        npm ci
+        bundle install --jobs 4 --retry 3
+        yarn install --frozen-lockfile
 
     # Ruby security scanning with Brakeman
+    - name: Cache Brakeman
+      if: steps.changes.outputs.scan_needed == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/brakeman
+        key: ${{ runner.os }}-brakeman-${{ hashFiles('Gemfile.lock') }}
+        restore-keys: ${{ runner.os }}-brakeman-
+
     - name: Run Brakeman security scan
+      if: steps.changes.outputs.scan_needed == 'true'
       run: |
-        bundle exec brakeman --format json --output brakeman-report.json || true
-        bundle exec brakeman --format sarif --output brakeman-report.sarif || true
+        bundle exec brakeman --format json --output brakeman-report.json --confidence-level 2 || true
+        bundle exec brakeman --format sarif --output brakeman-report.sarif --confidence-level 2 || true
 
     # Upload Brakeman results
     - name: Upload Brakeman SARIF
+      if: always() && steps.changes.outputs.scan_needed == 'true'
       uses: github/codeql-action/upload-sarif@v3
-      if: always()
       with:
         sarif_file: brakeman-report.sarif
         category: "brakeman"
 
     # Ruby dependency vulnerability check with bundler-audit
     - name: Run bundler-audit
+      if: steps.changes.outputs.scan_needed == 'true'
       run: |
         gem install bundler-audit
-        bundle audit --update
+        bundle audit --update --format json --output bundler-audit-report.json || true
 
     # JavaScript security scanning with npm audit
     - name: Run npm audit
+      if: steps.changes.outputs.scan_needed == 'true'
       run: |
-        npm audit --audit-level=moderate || true
-        npm audit --json > npm-audit-report.json || true
+        npm audit --audit-level=moderate --json > npm-audit-report.json || true
+        # Convert npm audit to SARIF format if possible
+        npx audit-ci --config .audit-ci.json || true
 
     # Secret scanning with TruffleHog
     - name: Run TruffleHog OSS
+      if: steps.changes.outputs.scan_needed == 'true'
       uses: trufflesecurity/trufflehog@main
       with:
         path: ./
-        base: main
+        base: ${{ github.event.repository.default_branch }}
         head: HEAD
-        extra_args: --debug --only-verified
+        extra_args: --debug --only-verified --json --output trufflehog-report.json
 
     # License compliance check
     - name: Check license compliance
+      if: steps.changes.outputs.scan_needed == 'true'
       run: |
-        bundle exec license_finder --decisions-file=.license_finder.yml || true
+        bundle exec license_finder --decisions-file=.license_finder.yml --format json --columns name,version,licenses,license_links > license-report.json || true
+
+    # SAST scanning with Semgrep
+    - name: Run Semgrep
+      if: steps.changes.outputs.scan_needed == 'true'
+      uses: semgrep/semgrep-action@v1
+      with:
+        config: >-
+          p/security-audit
+          p/secrets
+          p/owasp-top-ten
+          p/ruby
+          p/javascript
+        generateSarif: "1"
+      env:
+        SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+    # Upload Semgrep SARIF
+    - name: Upload Semgrep SARIF
+      if: always() && steps.changes.outputs.scan_needed == 'true'
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: semgrep.sarif
+        category: "semgrep"
 
     # Upload security artifacts
     - name: Upload security reports
+      if: always() && steps.changes.outputs.scan_needed == 'true'
       uses: actions/upload-artifact@v4
-      if: always()
       with:
         name: security-reports
         path: |
           brakeman-report.json
+          bundler-audit-report.json
           npm-audit-report.json
+          trufflehog-report.json
+          license-report.json
         retention-days: 30
+
+    - name: Skip security scan
+      if: steps.changes.outputs.scan_needed == 'false'
+      run: echo "No security-relevant files changed, skipping security scan"
 
   dependency-review:
     name: Dependency Review
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: write
+      security-events: write
 
     steps:
     - name: Checkout repository
@@ -109,6 +190,44 @@ jobs:
       uses: actions/dependency-review-action@v4
       with:
         fail-on-severity: moderate
-        allow-licenses: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, GPL-3.0
-        deny-licenses: GPL-2.0, LGPL-2.1
+        fail-on-scopes: runtime, development
+        allow-licenses: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, GPL-3.0, AGPL-3.0, Ruby, Artistic-2.0, CC0-1.0, Unlicense, WTFPL
+        deny-licenses: GPL-2.0, LGPL-2.1, LGPL-3.0, AGPL-1.0, AGPL-2.0, Commercial, Proprietary
         comment-summary-in-pr: always
+        retry-on-snapshot-warnings: true
+        warn-only: false
+        vulnerability-check: true
+        license-check: true
+        base-ref: ${{ github.event.pull_request.base.sha }}
+        head-ref: ${{ github.event.pull_request.head.sha }}
+
+  supply-chain-security:
+    name: Supply Chain Security
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Run SLSA verification
+      uses: slsa-framework/slsa-verifier/actions/installer@v2.5.1
+
+    - name: Generate SBOM
+      uses: anchore/sbom-action@v0
+      with:
+        path: ./
+        format: spdx-json
+        output-file: sbom.spdx.json
+
+    - name: Upload SBOM
+      uses: actions/upload-artifact@v4
+      with:
+        name: sbom
+        path: sbom.spdx.json
+        retention-days: 30

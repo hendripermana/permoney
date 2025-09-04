@@ -1,193 +1,172 @@
-# Self Hosting Sure with Docker
+# Docker Hosting Guide
 
-This guide will help you setup, update, and maintain your self-hosted Sure application with Docker Compose. Docker Compose is the most popular and recommended way to self-host the Sure app.
+This guide will help you set up Permoney using Docker Compose on your local machine or a cloud VPS.
 
-## Setup Guide
+## Quick Start
 
-Follow the guide below to get your app running.
+1. **Download the Docker Compose file:**
+   ```bash
+   curl -o compose.yml https://raw.githubusercontent.com/hendripermana/permoney/main/compose.example.yml
+   ```
 
-### Step 1: Install Docker
+2. **Create environment file:**
+   ```bash
+   cp .env.example .env
+   ```
 
-Complete the following steps:
+3. **Start the application:**
+   ```bash
+   docker-compose up -d
+   ```
 
-1. Install Docker Engine by following [the official guide](https://docs.docker.com/engine/install/)
-2. Start the Docker service on your machine
-3. Verify that Docker is installed correctly and is running by opening up a terminal and running the following command:
+4. **Visit the application:**
+   Open your browser and go to `http://localhost:3000`
 
-```bash
-# If Docker is setup correctly, this command will succeed
-docker run hello-world
-```
+## Configuration
 
-### Step 2: Configure your Docker Compose file and environment
+### Environment Variables
 
-#### Create a directory for your app to run
-
-Open your terminal and create a directory where your app will run. Below is an example command with a recommended directory:
-
-```bash
-# Create a directory on your computer for Docker files (name whatever you'd like)
-mkdir -p ~/docker-apps/sure
-
-# Once created, navigate your current working directory to the new folder
-cd ~/docker-apps/sure
-```
-
-#### Copy our sample Docker Compose file
-
-Make sure you are in the directory you just created and run the following command:
+Edit the `.env` file to configure your Permoney instance:
 
 ```bash
-# Download the sample compose.yml file from the GitHub repository
-curl -o compose.yml https://raw.githubusercontent.com/we-promise/sure/main/compose.example.yml
+# Database
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=your_secure_password
+POSTGRES_DB=permoney_production
+
+# Rails
+SECRET_KEY_BASE=your_secret_key_base
+RAILS_ENV=production
+
+# Optional: OpenAI for AI features
+OPENAI_ACCESS_TOKEN=your_openai_token
+
+# Optional: Market data providers
+TWELVE_DATA_API_KEY=your_twelve_data_key
+ALPHA_VANTAGE_API_KEY=your_alpha_vantage_key
+
+# Optional: Brand Fetch for company logos
+BRAND_FETCH_CLIENT_ID=your_brand_fetch_client_id
 ```
 
-This command will do the following:
+### Generate Secret Key Base
 
-1. Fetch the sample docker compose file from our public Github repository
-2. Creates a file in your current directory called `compose.yml` with the contents of the example file
-
-At this point, the only file in your current working directory should be `compose.yml`.
-
-### Step 3 (optional): Configure your environment
-
-By default, our `compose.example.yml` file runs without any configuration.  That said, if you would like extra security (important if you're running outside of a local network), you can follow the steps below to set things up.
-
-If you're running the app locally and don't care much about security, you can skip this step.
-
-#### Create your environment file
-
-In order to configure the app, you will need to create a file called `.env`, which is where Docker will read environment variables from.
-
-To do this, run the following command:
-
-```bash
-touch .env
-```
-
-#### Generate the app secret key
-
-The app requires an environment variable called `SECRET_KEY_BASE` to run.
-
-We will first need to generate this in the terminal. If you have `openssl` installed on your computer, you can generate it with the following command:
+Generate a secure secret key base:
 
 ```bash
 openssl rand -hex 64
 ```
 
-_Alternatively_, you can generate a key without openssl or any external dependencies by pasting the following bash command in your terminal and running it:
+## Data Persistence
+
+The Docker Compose configuration includes volumes for data persistence:
+
+- **PostgreSQL data**: `postgres_data` volume
+- **Application storage**: `app-storage` volume (for file uploads)
+
+## Updating
+
+To update to the latest version:
 
 ```bash
-head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n' && echo
-```
-
-Once you have generated a key, save it and move on to the next step.
-
-#### Fill in your environment file
-
-Open the file named `.env` that we created in a prior step using your favorite text editor.
-
-Fill in this file with the following variables:
-
-```txt
-SECRET_KEY_BASE="replacemewiththegeneratedstringfromthepriorstep"
-POSTGRES_PASSWORD="replacemewithyourdesireddatabasepassword"
-```
-
-### Step 4: Run the app
-
-You are now ready to run the app. Start with the following command to make sure everything is working:
-
-```bash
-docker compose up
-```
-
-This will pull our official Docker image and start the app. You will see logs in your terminal.
-
-Open your browser, and navigate to `http://localhost:3000`.
-
-If everything is working, you will see the Sure login screen.
-
-### Step 5: Create your account
-
-The first time you run the app, you will need to register a new account by hitting "create your account" on the login page.
-
-1. Enter your email
-2. Enter a password
-
-### Step 6: Run the app in the background
-
-Most self-hosting users will want the Sure app to run in the background on their computer so they can access it at all times. To do this, hit `Ctrl+C` to stop the running process, and then run the following command:
-
-```bash
-docker compose up -d
-```
-
-The `-d` flag will run Docker Compose in "detached" mode. To verify it is running, you can run the following command:
-
-```
-docker compose ls
-```
-
-### Step 7: Enjoy!
-
-Your app is now set up. You can visit it at `http://localhost:3000` in your browser.
-
-If you find bugs or have a feature request, be sure to read through our [contributing guide here](https://github.com/we-promise/sure/wiki/How-to-Contribute-Effectively-to-Sure).
-
-## How to update your app
-
-The mechanism that updates your self-hosted Sure app is the GHCR (Github Container Registry) Docker image that you see in the `compose.yml` file:
-
-```yml
-image: ghcr.io/we-promise/sure:latest
-```
-
-We recommend using one of the following images, but you can pin your app to whatever version you'd like (see [packages](https://github.com/we-promise/sure/pkgs/container/sure)):
-
-- `ghcr.io/we-promise/sure:latest` (latest commit)
-- `ghcr.io/we-promise/sure:stable` (latest release)
-
-By default, your app _will NOT_ automatically update. To update your self-hosted app, run the following commands in your terminal:
-
-```bash
-cd ~/docker-apps/sure # Navigate to whatever directory you configured the app in
-docker compose pull # This pulls the "latest" published image from GHCR
-docker compose build # This rebuilds the app with updates
-docker compose up --no-deps -d web worker # This restarts the app using the newest version
-```
-
-## How to change which updates your app receives
-
-If you'd like to pin the app to a specific version or tag, all you need to do is edit the `compose.yml` file:
-
-```yml
-image: ghcr.io/we-promise/sure:stable
-```
-
-After doing this, make sure and restart the app:
-
-```bash
-docker compose pull # This pulls the "latest" published image from GHCR
-docker compose build # This rebuilds the app with updates
-docker compose up --no-deps -d app # This restarts the app using the newest version
+docker-compose pull
+docker-compose up -d
 ```
 
 ## Troubleshooting
 
-### ActiveRecord::DatabaseConnectionError
+### Common Issues
 
-If you are trying to get Sure started for the **first time** and run into database connection issues, it is likely because Docker has already initialized the Postgres database with a _different_ default role (usually from a previous attempt to start the app).
+1. **Port 3000 already in use:**
+   ```bash
+   # Change the port in compose.yml
+   ports:
+     - "3001:3000"  # Use port 3001 instead
+   ```
 
-If you run into this issue, you can optionally **reset the database**.
+2. **Database connection issues:**
+   ```bash
+   # Check if the database is running
+   docker-compose ps
+   
+   # View database logs
+   docker-compose logs db
+   ```
 
-**PLEASE NOTE: this will delete any existing data that you have in your Sure database, so proceed with caution.**  For first-time users of the app just trying to get started, you're generally safe to run the commands below.
+3. **Permission issues:**
+   ```bash
+   # Fix file permissions
+   sudo chown -R $USER:$USER .
+   ```
 
-By running the commands below, you will delete your existing Sure database and "reset" it.
+### Getting Help
 
+If you find bugs or have a feature request, be sure to read through our [contributing guide here](https://github.com/hendripermana/permoney/wiki/How-to-Contribute-Effectively-to-Permoney).
+
+## Production Considerations
+
+### Security
+
+- Change default passwords
+- Use HTTPS in production
+- Set up proper firewall rules
+- Regularly update dependencies
+
+### Performance
+
+- Use a reverse proxy (nginx) for SSL termination
+- Set up monitoring and logging
+- Configure database backups
+- Use external Redis if needed
+
+### Scaling
+
+For high-traffic deployments:
+
+```yaml
+# Add to compose.yml
+services:
+  web:
+    deploy:
+      replicas: 3
+    environment:
+      - RAILS_MAX_THREADS=5
+      
+  worker:
+    deploy:
+      replicas: 2
 ```
-docker compose down
-docker volume rm sure_postgres-data # this is the name of the volume the DB is mounted to
-docker compose up
-docker exec -it sure-postgres-1 psql -U maybe -d maybe_production -c "SELECT 1;" # This will verify that the issue is fixed
+
+## Docker Images
+
+Permoney provides official Docker images:
+
+- **Latest**: `ghcr.io/hendripermana/permoney:latest`
+- **Stable**: `ghcr.io/hendripermana/permoney:stable`
+
+### Building from Source
+
+If you prefer to build your own image:
+
+```bash
+git clone https://github.com/hendripermana/permoney.git
+cd permoney
+docker build -t permoney:local .
 ```
+
+Then update your `compose.yml`:
+
+```yaml
+services:
+  web:
+    image: permoney:local
+  worker:
+    image: permoney:local
+```
+
+## Support
+
+- **Documentation**: [docs/](https://github.com/hendripermana/permoney/tree/main/docs)
+- **Issues**: [GitHub Issues](https://github.com/hendripermana/permoney/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/hendripermana/permoney/discussions)
+- **Discord**: [Join our community](https://discord.gg/36ZGBsxYEK)

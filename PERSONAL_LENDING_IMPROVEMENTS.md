@@ -1,8 +1,6 @@
 # Personal Lending Improvements
 
-## Overview
-
-This document outlines the improvements made to the Personal Lending feature in the Maybe app to better support Indonesian Syariah-compliant lending practices and provide a more contextual user experience.
+This document outlines the improvements made to the Personal Lending feature in the Permoney app to better support Indonesian Syariah-compliant lending practices and provide a more contextual user experience.
 
 ## Key Improvements
 

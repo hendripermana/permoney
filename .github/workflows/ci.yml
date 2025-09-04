@@ -1,133 +1,396 @@
-#name: CI
+name: CI
 
-#on:
-  #workflow_call:
+on:
+  workflow_call:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
 
-#jobs:
-  #scan_ruby:
-    #runs-on: ubuntu-latest
-    #timeout-minutes: 10
-    #steps:
-      #- name: Checkout code
-        #uses: actions/checkout@v4
+env:
+  RAILS_ENV: test
+  NODE_ENV: test
 
-      #- name: Set up Ruby
-        #uses: ruby/setup-ruby@v1
-        #with:
-          #ruby-version: .ruby-version
-          #bundler-cache: true
+jobs:
+  scan_ruby:
+    name: Ruby Security Scan
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    timeout-minutes: 10
+    continue-on-error: false
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      #- name: Scan for security vulnerabilities in Ruby dependencies
-        #run: bin/brakeman --no-pager
+      - name: Check for Ruby file changes
+        id: ruby_changes
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }})
+            if echo "$CHANGED_FILES" | grep -E '\.(rb|rake|gemspec)$|Gemfile|Rakefile'; then
+              echo "ruby_changed=true" >> $GITHUB_OUTPUT
+            else
+              echo "ruby_changed=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "ruby_changed=true" >> $GITHUB_OUTPUT
+          fi
 
-  #scan_js:
-    #runs-on: ubuntu-latest
-    #timeout-minutes: 10
-    #steps:
-      #- name: Checkout code
-        #uses: actions/checkout@v4
+      - name: Set up Ruby
+        if: steps.ruby_changes.outputs.ruby_changed == 'true'
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: .ruby-version
+          bundler-cache: true
 
-      #- name: Set up Ruby
-        #uses: ruby/setup-ruby@v1
-        #with:
-          #ruby-version: .ruby-version
-          #bundler-cache: true
+      - name: Cache Brakeman
+        if: steps.ruby_changes.outputs.ruby_changed == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/brakeman
+          key: brakeman-${{ runner.os }}-${{ hashFiles('Gemfile.lock') }}
+          restore-keys: |
+            brakeman-${{ runner.os }}-
 
-      #- name: Scan for security vulnerabilities in JavaScript dependencies
-        #run: bin/importmap audit
+      - name: Scan for security vulnerabilities in Ruby dependencies
+        if: steps.ruby_changes.outputs.ruby_changed == 'true'
+        run: bin/brakeman --no-pager
 
-  #lint:
-    #runs-on: ubuntu-latest
-    #timeout-minutes: 10
-    #steps:
-      #- name: Checkout code
-        #uses: actions/checkout@v4
+      - name: Skip Ruby scan
+        if: steps.ruby_changes.outputs.ruby_changed == 'false'
+        run: echo "No Ruby files changed, skipping Ruby security scan"
 
-      #- name: Set up Ruby
-        #uses: ruby/setup-ruby@v1
-        #with:
-          #ruby-version: .ruby-version
-          #bundler-cache: true
+  scan_js:
+    name: JavaScript Security Scan
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    timeout-minutes: 10
+    continue-on-error: false
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      #- name: Lint code for consistent style
-        #run: bin/rubocop -f github
+      - name: Check for JS file changes
+        id: js_changes
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }})
+            if echo "$CHANGED_FILES" | grep -E '\.(js|jsx|ts|tsx|vue|json)$|package\.json|yarn\.lock'; then
+              echo "js_changed=true" >> $GITHUB_OUTPUT
+            else
+              echo "js_changed=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "js_changed=true" >> $GITHUB_OUTPUT
+          fi
 
-  #lint_js:
-    #runs-on: ubuntu-latest
-    #timeout-minutes: 10
-    #steps:
-      #- name: Checkout code
-        #uses: actions/checkout@v4
+      - name: Set up Ruby
+        if: steps.js_changes.outputs.js_changed == 'true'
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: .ruby-version
+          bundler-cache: true
 
-      #- name: Setup Node.js environment
-        #uses: actions/setup-node@v4
-        #with:
-          #node-version: "20"
-          #cache: "npm"
+      - name: Scan for security vulnerabilities in JavaScript dependencies
+        if: steps.js_changes.outputs.js_changed == 'true'
+        run: bin/importmap audit
 
-      #- name: Install dependencies
-        #run: npm install
-        #shell: bash
+      - name: Skip JS scan
+        if: steps.js_changes.outputs.js_changed == 'false'
+        run: echo "No JavaScript files changed, skipping JS security scan"
 
-      #- name: Lint/Format js code
-        #run: npm run lint
+  lint:
+    name: Ruby Lint
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    timeout-minutes: 15
+    
+    strategy:
+      matrix:
+        ruby-version: ['3.2', '3.3']
+      fail-fast: true
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-  #test:
-    #runs-on: ubuntu-latest
-    #timeout-minutes: 10
+      - name: Check for Ruby file changes
+        id: ruby_changes
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }})
+            if echo "$CHANGED_FILES" | grep -E '\.(rb|rake|gemspec)$|Gemfile|Rakefile'; then
+              echo "ruby_changed=true" >> $GITHUB_OUTPUT
+            else
+              echo "ruby_changed=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "ruby_changed=true" >> $GITHUB_OUTPUT
+          fi
 
-    #env:
-      #PLAID_CLIENT_ID: foo
-      #PLAID_SECRET: bar
-      #DATABASE_URL: postgres://postgres:postgres@localhost:5432
-      #REDIS_URL: redis://localhost:6379
-      #RAILS_ENV: test
+      - name: Set up Ruby ${{ matrix.ruby-version }}
+        if: steps.ruby_changes.outputs.ruby_changed == 'true'
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby-version }}
+          bundler-cache: true
 
-    #services:
-      #postgres:
-        #image: postgres
-        #env:
-          #POSTGRES_USER: postgres
-          #POSTGRES_PASSWORD: postgres
-        #ports:
-          #- 5432:5432
-        #options: --health-cmd="pg_isready" --health-interval=10s --health-timeout=5s --health-retries=3
+      - name: Cache Bundler dependencies
+        if: steps.ruby_changes.outputs.ruby_changed == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/bundle
+            ~/.bundle
+          key: ${{ runner.os }}-bundler-${{ matrix.ruby-version }}-${{ hashFiles('**/Gemfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bundler-${{ matrix.ruby-version }}-
+            ${{ runner.os }}-bundler-
 
-      #redis:
-        #image: redis
-        #ports:
-          #- 6379:6379
-        #options: --health-cmd="redis-cli ping" --health-interval=10s --health-timeout=5s --health-retries=3
+      - name: Cache RuboCop
+        if: steps.ruby_changes.outputs.ruby_changed == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/rubocop_cache
+          key: rubocop-${{ runner.os }}-${{ matrix.ruby-version }}-${{ hashFiles('Gemfile.lock') }}
+          restore-keys: |
+            rubocop-${{ runner.os }}-${{ matrix.ruby-version }}-
 
-    #steps:
-      #- name: Install packages
-        #run: sudo apt-get update && sudo apt-get install --no-install-recommends -y google-chrome-stable curl libvips postgresql-client libpq-dev
+      - name: Lint code for consistent style
+        if: steps.ruby_changes.outputs.ruby_changed == 'true'
+        run: bin/rubocop -f github
 
-      #- name: Checkout code
-        #uses: actions/checkout@v4
+      - name: Skip Ruby lint
+        if: steps.ruby_changes.outputs.ruby_changed == 'false'
+        run: echo "No Ruby files changed, skipping Ruby linting"
 
-      #- name: Set up Ruby
-        #uses: ruby/setup-ruby@v1
-        #with:
-          #ruby-version: .ruby-version
-          #bundler-cache: true
+  lint_js:
+    name: JavaScript Lint
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    timeout-minutes: 10
+    
+    strategy:
+      matrix:
+        node-version: ['18', '20', '22']
+      fail-fast: true
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      #- name: DB setup and smoke test
-        #run: |
-          #bin/rails db:create
-          #bin/rails db:schema:load
-          #bin/rails db:seed
+      - name: Check for JS file changes
+        id: js_changes
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }})
+            if echo "$CHANGED_FILES" | grep -E '\.(js|jsx|ts|tsx|vue|json)$|package\.json|yarn\.lock'; then
+              echo "js_changed=true" >> $GITHUB_OUTPUT
+            else
+              echo "js_changed=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "js_changed=true" >> $GITHUB_OUTPUT
+          fi
 
-      #- name: Unit and integration tests
-        #run: bin/rails test
+      - name: Setup Node.js ${{ matrix.node-version }}
+        if: steps.js_changes.outputs.js_changed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
 
-      #- name: System tests
-        #run: DISABLE_PARALLELIZATION=true bin/rails test:system
+      - name: Cache Yarn dependencies
+        if: steps.js_changes.outputs.js_changed == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            ~/.cache/yarn
+            .yarn/cache
+          key: ${{ runner.os }}-yarn-${{ matrix.node-version }}-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-${{ matrix.node-version }}-
+            ${{ runner.os }}-yarn-
 
-      #- name: Keep screenshots from failed system tests
-        #uses: actions/upload-artifact@v4
-        #if: failure()
-        #with:
-          #name: screenshots
-          #path: ${{ github.workspace }}/tmp/screenshots
-          #if-no-files-found: ignore
+      - name: Install dependencies
+        if: steps.js_changes.outputs.js_changed == 'true'
+        run: npm ci
+
+      - name: Lint/Format js code
+        if: steps.js_changes.outputs.js_changed == 'true'
+        run: npm run lint
+
+      - name: Skip JS lint
+        if: steps.js_changes.outputs.js_changed == 'false'
+        run: echo "No JavaScript files changed, skipping JS linting"
+
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    timeout-minutes: 30
+    
+    strategy:
+      matrix:
+        ruby-version: ['3.2', '3.3']
+        test-type: ['unit', 'system']
+      fail-fast: true
+
+    env:
+      PLAID_CLIENT_ID: foo
+      PLAID_SECRET: bar
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/maybe_test
+      REDIS_URL: redis://localhost:6379
+      RAILS_ENV: test
+      COVERAGE: true
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: maybe_test
+        ports:
+          - 5432:5432
+        options: --health-cmd="pg_isready" --health-interval=10s --health-timeout=5s --health-retries=3
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: --health-cmd="redis-cli ping" --health-interval=10s --health-timeout=5s --health-retries=3
+
+    steps:
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            google-chrome-stable \
+            curl \
+            libvips \
+            postgresql-client \
+            libpq-dev
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for test-relevant changes
+        id: test_changes
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }})
+            if echo "$CHANGED_FILES" | grep -E '\.(rb|rake|gemspec|js|jsx|ts|tsx)$|Gemfile|Rakefile|package\.json|yarn\.lock|test/|spec/|app/|config/|db/'; then
+              echo "test_needed=true" >> $GITHUB_OUTPUT
+            else
+              echo "test_needed=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "test_needed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set up Ruby ${{ matrix.ruby-version }}
+        if: steps.test_changes.outputs.test_needed == 'true'
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby-version }}
+          bundler-cache: true
+
+      - name: Cache Rails assets and bootsnap
+        if: steps.test_changes.outputs.test_needed == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            public/assets
+            tmp/cache/assets
+            tmp/cache/bootsnap
+            public/packs
+            public/vite
+          key: assets-${{ runner.os }}-${{ matrix.ruby-version }}-${{ hashFiles('**/Gemfile.lock', 'app/assets/**/*', 'app/javascript/**/*', 'config/**/*', 'yarn.lock') }}
+          restore-keys: |
+            assets-${{ runner.os }}-${{ matrix.ruby-version }}-
+            assets-${{ runner.os }}-
+
+      - name: Setup database
+        if: steps.test_changes.outputs.test_needed == 'true'
+        run: |
+          bin/rails db:create
+          bin/rails db:schema:load
+          bin/rails db:seed
+
+      - name: Precompile assets
+        if: steps.test_changes.outputs.test_needed == 'true' && matrix.test-type == 'system'
+        run: bin/rails assets:precompile
+
+      - name: Run unit and integration tests
+        if: steps.test_changes.outputs.test_needed == 'true' && matrix.test-type == 'unit'
+        run: bin/rails test
+
+      - name: Run system tests
+        if: steps.test_changes.outputs.test_needed == 'true' && matrix.test-type == 'system'
+        run: DISABLE_PARALLELIZATION=true bin/rails test:system
+
+      - name: Upload test coverage
+        if: steps.test_changes.outputs.test_needed == 'true' && matrix.test-type == 'unit' && matrix.ruby-version == '3.3'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 7
+
+      - name: Upload system test screenshots
+        uses: actions/upload-artifact@v4
+        if: failure() && matrix.test-type == 'system' && steps.test_changes.outputs.test_needed == 'true'
+        with:
+          name: screenshots-ruby-${{ matrix.ruby-version }}
+          path: ${{ github.workspace }}/tmp/screenshots
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Skip tests
+        if: steps.test_changes.outputs.test_needed == 'false'
+        run: echo "No test-relevant files changed, skipping tests"
+
+  quality_gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    needs: [scan_ruby, scan_js, lint, lint_js, test]
+    if: always()
+    
+    steps:
+      - name: Check job results
+        run: |
+          if [[ "${{ needs.scan_ruby.result }}" != "success" ]]; then
+            echo "Ruby security scan failed"
+            exit 1
+          fi
+          if [[ "${{ needs.scan_js.result }}" != "success" ]]; then
+            echo "JavaScript security scan failed"
+            exit 1
+          fi
+          if [[ "${{ needs.lint.result }}" != "success" ]]; then
+            echo "Ruby linting failed"
+            exit 1
+          fi
+          if [[ "${{ needs.lint_js.result }}" != "success" ]]; then
+            echo "JavaScript linting failed"
+            exit 1
+          fi
+          if [[ "${{ needs.test.result }}" != "success" ]]; then
+            echo "Test suite failed"
+            exit 1
+          fi
+          echo "All quality checks passed!"
