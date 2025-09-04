@@ -38,7 +38,7 @@ class PersonalLending < ApplicationRecord
     "informal" => { short: "Informal", long: "Informal Personal Loan" }
   }.freeze
 
-  # Validations following Maybe app patterns
+  # Validations following Permoney app patterns
   validates :counterparty_name, presence: true, length: { maximum: 255 }
   validates :lending_direction, inclusion: { in: LENDING_DIRECTIONS.keys }
   validates :lending_type, inclusion: { in: LENDING_TYPES.keys }

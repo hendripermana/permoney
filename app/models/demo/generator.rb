@@ -134,7 +134,7 @@ class Demo::Generator
       family.users.create!(
         email: email,
         first_name: "Demo (admin)",
-        last_name: "Maybe",
+        last_name: "Permoney",
         role: "admin",
         password: "password",
         onboarded_at: onboarded ? Time.current : nil
@@ -144,7 +144,7 @@ class Demo::Generator
       family.users.create!(
         email: "partner_#{email}",
         first_name: "Demo (member)",
-        last_name: "Maybe",
+        last_name: "Permoney",
         role: "member",
         password: "password",
         onboarded_at: onboarded ? Time.current : nil

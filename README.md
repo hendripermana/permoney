@@ -16,9 +16,11 @@
 # Permoney: The personal finance app for everyone (community fork)
 
 <b>Get
-involved: [Discord](https://discord.gg/36ZGBsxYEK) • [(archived) Website](https://web.archive.org/web/20250715182050/https://maybefinance.com/) • [Issues](https://github.com/we-promise/sure/issues)</b>
+involved: [Discord](https://discord.gg/36ZGBsxYEK) • [(archived) Website](https://web.archive.org/web/20250715182050/https://maybefinance.com/) • [Issues](https://github.com/hendripermana/maybe/issues)</b>
 
 > [!IMPORTANT]
+> **Legal Disclaimer**: Permoney is a fork of the original Maybe Finance application, which is licensed under the GNU Affero General Public License v3.0. This project is not affiliated with, endorsed by, or connected to Maybe Finance Inc. "Maybe" is a trademark of Maybe Finance Inc. and is not used in this project.
+> 
 > This repository is a community fork of the now-abandoned Maybe Finance project. 
 > Learn more in their [final release](https://github.com/maybe-finance/maybe/releases/tag/v0.6.0) doc.
 
@@ -36,19 +38,21 @@ That also didn’t work out — at least not as a sustainable B2C business — s
 
 Join us!
 
-## Hosting ~Maybe~Sure
+## Hosting Permoney
 
-Sure is a fully working personal finance app that can be [self hosted with Docker](docs/hosting/docker.md).
+Permoney is a fully working personal finance app that can be [self hosted with Docker](docs/hosting/docker.md).
 
 ## Forking and Attribution
 
-This repo is a community fork of the archived Maybe Finance repo, rebranded as Permoney. It replaces the discontinued Synth data provider with pluggable alternatives (Twelve Data, Alpha Vantage) to restore market data, exchange rates, and net worth chart functionality.
-You’re free to fork it under the AGPLv3 license — but we’d love it if you stuck around and contributed here instead.
+This repo is a community fork of the archived Maybe Finance repo, rebranded as **Permoney**. It replaces the discontinued Synth data provider with pluggable alternatives (Twelve Data, Alpha Vantage) to restore market data, exchange rates, and net worth chart functionality.
 
-To stay compliant and avoid trademark issues:
+**Important Legal Notice:**
+- Permoney is based on the original Maybe Finance codebase but is completely independent and not affiliated with Maybe Finance Inc.
+- This project complies with the AGPLv3 license requirements
+- All "Maybe" branding and trademarks have been removed and replaced with "Permoney"
+- The original AGPLv3 license is preserved and included in this repository
 
-- Be sure to include the original [AGPLv3 license](https://github.com/maybe-finance/maybe/blob/main/LICENSE) and clearly state in your README that your fork is based on Maybe Finance but is **not affiliated with or endorsed by** Maybe Finance Inc.
-- "Maybe" is a trademark of Maybe Finance Inc. and therefore, use of it is NOT allowed in forked repositories (or the logo)
+You're free to fork it under the AGPLv3 license — but we'd love it if you stuck around and contributed here instead.
 
 ## Local Development Setup
 
@@ -74,7 +78,7 @@ rake demo_data:default
 
 Visit http://localhost:3000 to view the app. You can log in with these demo credentials (from the DB seed):
 
-- Email: `user@sure.local`
+- Email: `user@permoney.local`
 - Password: `password`
 
 For further instructions, see guides below.
@@ -108,7 +112,14 @@ If you see 404s like `/assets/tailwind-*.css` or `/assets/d3-*.js`:
 
 ## License and Trademarks
 
-Maybe and Sure are both distributed under
-an [AGPLv3 license](https://github.com/we-promise/sure/blob/main/LICENSE).
-- "Maybe" is a trademark of Maybe Finance, Inc.
-- "Sure" is not, and refers to this community fork.
+Permoney is distributed under the [AGPLv3 license](LICENSE), maintaining compliance with the original Maybe Finance licensing terms.
+
+**Trademark Notice:**
+- "Maybe" is a trademark of Maybe Finance, Inc. and is not used in this project
+- "Permoney" is the independent name for this community fork
+- This project is not affiliated with, endorsed by, or connected to Maybe Finance Inc.
+
+**AGPLv3 Compliance:**
+- Source code is freely available in this repository
+- All modifications are clearly documented
+- Original license terms are preserved and respected
