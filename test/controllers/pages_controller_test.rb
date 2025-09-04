@@ -35,7 +35,7 @@ class PagesControllerTest < ActionDispatch::IntegrationTest
     github_provider = mock
     incomplete_data = {
       avatar: nil,
-      username: "maybe-finance",
+      username: "hendripermana",
       name: "Test Release",
       published_at: nil,
       body: nil

@@ -1,6 +1,6 @@
-# Chat API Documentation
+# Chat API
 
-The Chat API allows external applications to interact with Maybe's AI chat functionality.
+The Chat API allows external applications to interact with Permoney's AI chat functionality.
 
 ## Authentication
 

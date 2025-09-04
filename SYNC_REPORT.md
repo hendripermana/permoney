@@ -1,11 +1,10 @@
 # Sync Report: Fork Update with Upstream Sure Project
 
-**Date:** August 30, 2025  
-**Target Upstream SHA:** c9933514749345b601cac67fa49d2a8dbfebee41 (August 27, 2025)  
-**Upstream Repository:** https://github.com/we-promise/sure  
-**Fork Repository:** https://github.com/hendripermana/maybe  
-**Sync Branch:** `sync/sure-2025-08-27-c993351`  
-**PR URL:** https://github.com/hendripermana/maybe/pull/new/sync/sure-2025-08-27-c993351  
+**Date:** 2025-08-27
+**Upstream Repository:** https://github.com/we-promise/sure
+**Fork Repository:** https://github.com/hendripermana/permoney
+**Sync Branch:** `sync/sure-2025-08-27-c993351`
+**PR URL:** https://github.com/hendripermana/permoney/pull/new/sync/sure-2025-08-27-c993351
 
 ## Executive Summary
 
@@ -145,7 +144,7 @@ Generated comprehensive range-diff showing 1:1 correspondence between original a
 
 ## Next Steps
 
-1. **Review PR**: https://github.com/hendripermana/maybe/pull/new/sync/sure-2025-08-27-c993351
+1. **Review PR**: https://github.com/hendripermana/permoney/pull/new/sync/sure-2025-08-27-c993351
 2. **Merge via PR**: Use GitHub's merge functionality (no direct push to main)
 3. **Post-merge cleanup**: Delete sync branch after successful merge
 4. **Monitor**: Verify application functionality in production

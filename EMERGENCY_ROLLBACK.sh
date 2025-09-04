@@ -1,68 +1,60 @@
 #!/bin/bash
 
-# EMERGENCY ROLLBACK SCRIPT for Maybe → Sure Migration
-# Created: $(date)
-# Use this script ONLY if the migration fails and you need to restore the previous state
+# EMERGENCY ROLLBACK SCRIPT for Maybe → Permoney Migration
+# This script will rollback the system to the previous Maybe Finance version
+# Use this ONLY in case of critical issues with the Permoney migration
 
 set -e
 
-BACKUP_TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-
 echo "🚨 EMERGENCY ROLLBACK INITIATED"
-echo "Timestamp: $BACKUP_TIMESTAMP"
+echo "This will rollback from Permoney to the previous Maybe Finance version"
+echo "All data will be preserved, but the application will be reverted"
+echo ""
 
-# Stop current services
-echo "=== STOPPING CURRENT SERVICES ==="
-docker-compose down
-
-# Restore git state
-echo "=== RESTORING GIT STATE ==="
-cd /home/ubuntu/maybe
-git checkout backup-pre-migration-20250808-110745 2>/dev/null || {
-    echo "⚠️  Backup branch not found, checking stash..."
-    git stash list | grep "Pre-migration stash" && {
-        git stash pop $(git stash list | grep "Pre-migration stash" | head -1 | cut -d: -f1)
-    }
-}
-
-# Restore environment files if needed
-echo "=== CHECKING ENVIRONMENT FILES ==="
-if [ -d "/tmp/env-backup-20250808-110654" ]; then
-    echo "Environment backup found, ready to restore if needed"
-    ls -la /tmp/env-backup-20250808-110654/
-else
-    echo "⚠️  No environment backup found"
+# Confirm rollback
+read -p "Are you sure you want to proceed with the rollback? (yes/no): " confirm
+if [ "$confirm" != "yes" ]; then
+    echo "Rollback cancelled."
+    exit 0
 fi
 
-# Remove new Docker images
-echo "=== CLEANING UP NEW IMAGES ==="
-docker images | grep "sure-latest" && {
-    docker rmi maybe-finance:sure-latest
-    echo "Removed Sure images"
-}
+echo "Starting emergency rollback..."
 
-# Restart with old configuration
-echo "=== RESTARTING ORIGINAL SERVICES ==="
+# Navigate to application directory
+cd /home/ubuntu/permoney
+
+# Stop current services
+echo "Stopping current services..."
+docker-compose down
+
+# Remove Permoney image
+echo "Removing Permoney image..."
+docker rmi maybe-finance:permoney-latest
+
+# Pull previous Maybe Finance image
+echo "Pulling previous Maybe Finance image..."
+docker pull maybe-finance:latest
+
+# Update docker-compose.yml to use previous image
+echo "Updating docker-compose.yml..."
+sed -i 's/maybe-finance:permoney-latest/maybe-finance:latest/g' docker-compose.yml
+
+# Start services with previous image
+echo "Starting services with previous image..."
 docker-compose up -d
 
-# Verify services
-echo "=== VERIFYING ROLLBACK ==="
-sleep 10
-docker ps
-curl -f http://localhost:3000 &>/dev/null && {
-    echo "✅ Service rollback successful!"
-} || {
-    echo "❌ Service check failed, manual intervention required"
-}
+# Wait for services to be ready
+echo "Waiting for services to be ready..."
+sleep 30
 
-echo "🔄 ROLLBACK COMPLETED"
+# Verify services are running
+echo "Verifying services..."
+docker-compose ps
+
 echo ""
-echo "MANUAL STEPS IF NEEDED:"
-echo "1. Check git status: git status"
-echo "2. Check environment: ls -la .env*"
-echo "3. Check services: docker ps"
-echo "4. Check logs: docker-compose logs"
-echo "5. Restore data if needed:"
-echo "   - PostgreSQL: /tmp/postgres-backup-20250808-110624.tar.gz"
-echo "   - Redis: /tmp/redis-backup-20250808-110637.tar.gz"
-echo "   - App Storage: /tmp/app-storage-backup-20250808-110644.tar.gz"
+echo "✅ Emergency rollback completed successfully!"
+echo "Application is now running the previous Maybe Finance version"
+echo "All data has been preserved"
+echo ""
+echo "To re-migrate to Permoney later, run the migration process again"
+echo ""

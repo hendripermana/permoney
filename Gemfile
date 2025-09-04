@@ -17,7 +17,7 @@ gem "bootsnap", require: false
 gem "importmap-rails"
 gem "propshaft"
 gem "tailwindcss-rails"
-gem "lucide-rails", github: "maybe-finance/lucide-rails"
+gem "lucide-rails", github: "hendripermana/lucide-rails"
 
 # Hotwire + UI
 gem "stimulus-rails"
@@ -116,4 +116,5 @@ group :test do
   gem "webmock"
   gem "climate_control"
   gem "simplecov", require: false
+  gem "simplecov-cobertura", require: false
 end

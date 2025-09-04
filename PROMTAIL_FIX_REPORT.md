@@ -79,7 +79,7 @@ positions:
 ```yaml
 external_labels:
   cluster: production                # ✅ Multi-cluster support
-  environment: maybe-finance         # ✅ Environment tagging
+  environment: permoney-finance         # ✅ Environment tagging
   region: asia-southeast            # ✅ Geographic context
 ```
 

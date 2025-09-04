@@ -1,4 +1,4 @@
-## 2025-09-03 [*](https://github.com/hendripermana/maybe/pull/1)
+## 2025-09-03 [*](https://github.com/hendripermana/permoney/pull/1)
 
 ### Added
 - Sharia-compliant debt management for loans and credit cards, including Islamic products and validations

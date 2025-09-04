@@ -1,8 +1,130 @@
-#name: Pull Request
+name: Pull Request
 
-#on:
-  #pull_request:
+on:
+  pull_request:
+    branches: [ main, develop ]
+    types: [opened, synchronize, reopened, ready_for_review]
 
-#jobs:
-  #ci:
-    #uses: ./.github/workflows/ci.yml
+env:
+  RAILS_ENV: test
+  NODE_ENV: test
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Skip draft PRs
+  check_pr_status:
+    name: Check PR Status
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.skip_check.outputs.should_skip }}
+    steps:
+      - name: Skip draft PRs
+        id: skip_check
+        run: |
+          if [[ "${{ github.event.pull_request.draft }}" == "true" ]]; then
+            echo "should_skip=true" >> $GITHUB_OUTPUT
+            echo "Skipping CI for draft PR"
+          else
+            echo "should_skip=false" >> $GITHUB_OUTPUT
+            echo "Running CI for ready PR"
+          fi
+
+  # Run CI workflow
+  ci:
+    name: Continuous Integration
+    needs: check_pr_status
+    if: needs.check_pr_status.outputs.should_skip != 'true'
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
+  # Dependency review for security
+  dependency_review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    needs: check_pr_status
+    if: needs.check_pr_status.outputs.should_skip != 'true'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate
+          allow-licenses: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, GPL-3.0
+          deny-licenses: GPL-2.0, LGPL-2.1
+          comment-summary-in-pr: always
+
+  # PR size check
+  pr_size_check:
+    name: PR Size Check
+    runs-on: ubuntu-latest
+    needs: check_pr_status
+    if: needs.check_pr_status.outputs.should_skip != 'true'
+    steps:
+      - name: Check PR size
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            
+            const additions = pr.additions;
+            const deletions = pr.deletions;
+            const changedFiles = pr.changed_files;
+            
+            console.log(`PR Stats: +${additions} -${deletions} files: ${changedFiles}`);
+            
+            let message = '';
+            let shouldWarn = false;
+            
+            if (changedFiles > 50) {
+              message += '⚠️ This PR changes more than 50 files. Consider breaking it into smaller PRs.\n';
+              shouldWarn = true;
+            }
+            
+            if (additions > 1000) {
+              message += '⚠️ This PR adds more than 1000 lines. Consider breaking it into smaller PRs.\n';
+              shouldWarn = true;
+            }
+            
+            if (shouldWarn) {
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: message
+              });
+            }
+
+  # Final status check
+  pr_status:
+    name: PR Status Check
+    runs-on: ubuntu-latest
+    needs: [check_pr_status, ci, dependency_review, pr_size_check]
+    if: always() && needs.check_pr_status.outputs.should_skip != 'true'
+    steps:
+      - name: Check all jobs status
+        run: |
+          if [[ "${{ needs.ci.result }}" != "success" ]]; then
+            echo "CI workflow failed"
+            exit 1
+          fi
+          if [[ "${{ needs.dependency_review.result }}" != "success" ]]; then
+            echo "Dependency review failed"
+            exit 1
+          fi
+          if [[ "${{ needs.pr_size_check.result }}" != "success" ]]; then
+            echo "PR size check failed"
+            exit 1
+          fi
+          echo "All PR checks passed! ✅"

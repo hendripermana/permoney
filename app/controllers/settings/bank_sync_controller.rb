@@ -13,7 +13,7 @@ class Settings::BankSyncController < ApplicationController
       {
         name: "Plaid",
         description: "US & Canada bank connections with transactions, investments, and liabilities.",
-        path: "https://github.com/we-promise/sure/blob/main/docs/hosting/plaid.md",
+        path: "https://github.com/hendripermana/permoney/blob/main/docs/hosting/plaid.md",
         target: "_blank",
         rel: "noopener noreferrer"
       },

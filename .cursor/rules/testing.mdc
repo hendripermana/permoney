@@ -1,86 +1,164 @@
----
-description: 
-globs: test/**
-alwaysApply: false
----
-Use this rule to learn how to write tests for the Maybe codebase.
+Use this rule to learn how to write tests for the Permoney codebase.
 
-Due to the open-source nature of this project, we have chosen Minitest + Fixtures for testing to maximize familiarity and predictability.
+## Testing Framework
 
-- **General testing rules**
-  - Always use Minitest and fixtures for testing, NEVER rspec or factories
-  - Keep fixtures to a minimum.  Most models should have 2-3 fixtures maximum that represent the "base cases" for that model.  "Edge cases" should be created on the fly, within the context of the test which it is needed.
-  - For tests that require a large number of fixture records to be created, use Rails helpers to help create the records needed for the test, then inline the creation. For example, [entries_test_helper.rb](mdc:test/support/entries_test_helper.rb) provides helpers to easily do this.
+Permoney uses **Minitest** as the testing framework, which is Rails' default testing framework.
 
-- **Write minimal, effective tests**
-  - Use system tests sparingly as they increase the time to complete the test suite
-  - Only write tests for critical and important code paths
-  - Write tests as you go, when required
-  - Take a practical approach to testing.  Tests are effective when their presence _significantly increases confidence in the codebase_.
+## Test Organization
 
-  Below are examples of necessary vs. unnecessary tests:
+Tests are organized to mirror the `app/` directory structure:
 
-  ```rb
-  # GOOD!!
-  # Necessary test - in this case, we're testing critical domain business logic
-  test "syncs balances" do
-    Holding::Syncer.any_instance.expects(:sync_holdings).returns([]).once
+```
+test/
+├── controllers/          # Controller tests
+├── models/              # Model tests  
+├── system/              # System/integration tests
+├── jobs/                # Job tests
+├── mailers/             # Mailer tests
+├── helpers/             # Helper tests
+├── components/          # Component tests
+└── fixtures/            # Test data
+```
 
-    @account.expects(:start_date).returns(2.days.ago.to_date)
+## Writing Tests
 
-    Balance::ForwardCalculator.any_instance.expects(:calculate).returns(
-      [
-        Balance.new(date: 1.day.ago.to_date, balance: 1000, cash_balance: 1000, currency: "USD"),
-        Balance.new(date: Date.current, balance: 1000, cash_balance: 1000, currency: "USD")
-      ]
-    )
+### Model Tests
 
-    assert_difference "@account.balances.count", 2 do
-      Balance::Syncer.new(@account, strategy: :forward).sync_balances
+Model tests should cover:
+- Validations
+- Associations
+- Scopes
+- Instance methods
+- Class methods
+
+```ruby
+class UserTest < ActiveSupport::TestCase
+  def setup
+    @user = users(:one)
+  end
+
+  test "should be valid" do
+    assert @user.valid?
+  end
+
+  test "email should be present" do
+    @user.email = nil
+    assert_not @user.valid?
+  end
+end
+```
+
+### Controller Tests
+
+Controller tests should cover:
+- Actions
+- Response codes
+- Redirects
+- Flash messages
+- Authentication/authorization
+
+```ruby
+class UsersControllerTest < ActionDispatch::IntegrationTest
+  def setup
+    @user = users(:one)
+  end
+
+  test "should get index" do
+    get users_url
+    assert_response :success
+  end
+
+  test "should create user" do
+    assert_difference('User.count') do
+      post users_url, params: { user: { email: 'test@example.com' } }
     end
+    assert_redirected_to user_url(User.last)
   end
+end
+```
 
-  # BAD!!
-  # Unnecessary test - in this case, this is simply testing ActiveRecord's functionality
-  test "saves balance" do 
-    balance_record = Balance.new(balance: 100, currency: "USD")
+### System Tests
 
-    assert balance_record.save
+System tests simulate real user interactions:
+
+```ruby
+class UserFlowsTest < ApplicationSystemTestCase
+  test "user can sign up" do
+    visit new_user_registration_path
+    
+    fill_in "Email", with: "test@example.com"
+    fill_in "Password", with: "password123"
+    click_button "Sign up"
+    
+    assert_text "Welcome! You have signed up successfully."
   end
-  ```
+end
+```
 
-- **Test boundaries correctly**
-  - Distinguish between commands and query methods. Test output of query methods; test that commands were called with the correct params. See an example below:
+## Fixtures
 
-  ```rb
-  class ExampleClass
-    def do_something
-      result = 2 + 2
+Use fixtures for test data:
 
-      CustomEventProcessor.process_result(result)
+```yaml
+# test/fixtures/users.yml
+one:
+  email: user1@example.com
+  encrypted_password: <%= User.new.send(:password_digest, 'password123') %>
 
-      result
-    end
-  end
+two:
+  email: user2@example.com
+  encrypted_password: <%= User.new.send(:password_digest, 'password123') %>
+```
 
-  class ExampleClass < ActiveSupport::TestCase
-    test "boundaries are tested correctly" do 
-      result = ExampleClass.new.do_something
+## Best Practices
 
-      # GOOD - we're only testing that the command was received, not internal implementation details
-      # The actual tests for CustomEventProcessor belong in a different test suite!
-      CustomEventProcessor.expects(:process_result).with(4).once
+1. **Test isolation**: Each test should be independent
+2. **Descriptive names**: Use clear, descriptive test names
+3. **Arrange-Act-Assert**: Structure tests in this pattern
+4. **Use fixtures**: Don't create data in tests unless necessary
+5. **Test edge cases**: Include boundary conditions and error cases
+6. **Keep tests fast**: Avoid slow operations in tests
 
-      # GOOD - we're testing the implementation of ExampleClass inside its own test suite
-      assert_equal 4, result
-    end
-  end
-  ```
+## Running Tests
 
-  - Never test the implementation details of one class in another classes test suite
+```bash
+# Run all tests
+bin/rails test
 
-- **Stubs and mocks**
-  - Use `mocha` gem 
+# Run specific test file
+bin/rails test test/models/user_test.rb
+
+# Run specific test
+bin/rails test test/models/user_test.rb:25
+
+# Run with verbose output
+bin/rails test -v
+```
+
+## Test Coverage
+
+Aim for high test coverage, especially for:
+- Critical business logic
+- User-facing functionality
+- Data integrity
+- Security features
+
+## VCR Cassettes
+
+For external API calls, use VCR cassettes:
+
+```ruby
+require 'vcr'
+
+VCR.use_cassette('plaid_exchange_token') do
+  # API call here
+end
+```
+
+Cassettes are stored in `test/vcr_cassettes/`.
+
+
+
   - Always prefer `OpenStruct` when creating mock instances, or in complex cases, a mock class
   - Only mock what's necessary. If you're not testing return values, don't mock a return value.
 

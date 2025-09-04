@@ -1,4 +1,6 @@
-# Repository Guidelines
+# Permoney Development Guide for AI Agents
+
+This document provides guidance for AI agents working on the Permoney codebase.
 
 ## Project Structure & Module Organization
 - Code: `app/` (Rails MVC, services, jobs, mailers, components), JS in `app/javascript/`, styles/assets in `app/assets/` (Tailwind, images, fonts).

@@ -1,39 +1,30 @@
 ---
 name: Other
-about: All other issues
+about: For questions, feature requests, or other issues that don't fit the bug report template
 title: ''
-labels: ''
+labels: 'question'
 assignees: ''
 
 ---
 
-## Before you start (required)
+**What is this about?**
+Please describe what you'd like to discuss or request.
 
-### Is this a bug?
+**Additional context**
+Add any other context, screenshots, or information that might be helpful.
 
-A bug is _broken functionality_ of the app (i.e. it prevents you from using the app).  For bugs, please use the ["Bug Report" template](https://github.com/we-promise/sure/issues) instead.
+**Before submitting**
+- [ ] I have searched [existing issues](https://github.com/hendripermana/permoney/issues?q=is:issue) and [discussions](https://github.com/hendripermana/permoney/discussions) to ensure this is not a duplicate
+- [ ] If this is a bug report, I have used the [Bug Report" template](https://github.com/hendripermana/permoney/issues) instead
+- [ ] If this is a feature request, I have checked if it's already on our [Roadmap](https://github.com/hendripermana/permoney/wiki/Roadmap) (coming soon!)
 
-### Is this a bug with _sensitive info_?
+**Note about feature requests**
+A feature request is functionality that you would like that is not already on our [Roadmap](https://github.com/hendripermana/permoney/wiki/Roadmap) (coming soon!).
 
-Make sure you feel comfortable with what you share.
+All feature requests should be opened in a [Feature request Discussion](https://github.com/hendripermana/permoney/discussions/categories/feature-requests).
 
-### Is this a feature request?
+**Note about Docker hosting issues**
+If you're having trouble with Docker hosting:
 
-A feature request is functionality that you would like that is not already on our [Roadmap](https://github.com/we-promise/sure/wiki/Roadmap) (coming soon!).
-
-All feature requests should be opened in a [Feature request Discussion](https://github.com/we-promise/sure/discussions/categories/feature-requests).
-
-Be sure to search existing discussions prior to opening a new feature request.
-
-### Is this related to Docker and/or hosting for self hosting?
-
-If you are having a Docker configuration issue, please do not open a Github issue unless you've identified a bug in our Dockerfile.  To get help with self hosting, there are several options:
-
-- **First**: Read our [Docker hosting guide](https://github.com/we-promise/sure/tree/main/docs/hosting/docker.md) and follow it step-by-step
-- Open a [Docker Discussion](https://github.com/we-promise/sure/discussions/categories/docker-compose-hosting)
-
----
-
-## Issue description
-
-If your issue does not fall into the categories above, please provide a **descriptive and complete** overview of your issue.
+- **First**: Read our [Docker hosting guide](https://github.com/hendripermana/permoney/tree/main/docs/hosting/docker.md) and follow it step-by-step
+- Open a [Docker Discussion](https://github.com/hendripermana/permoney/discussions/categories/docker-compose-hosting)
