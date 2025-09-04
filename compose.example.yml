@@ -19,11 +19,6 @@ services:
   # Main web application
   web:
     # NOTE: enabling OpenAI will incur costs when you use AI-related features in the app (chat, rules).  Make sure you have set appropriate spend limits on your account before adding this.
-    environment:
-      - OPENAI_ACCESS_TOKEN=${OPENAI_ACCESS_TOKEN:-}
-      - TWELVE_DATA_API_KEY=${TWELVE_DATA_API_KEY:-}
-      - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY:-}
-      - BRAND_FETCH_CLIENT_ID=${BRAND_FETCH_CLIENT_ID:-}
     image: ghcr.io/hendripermana/permoney:latest
     ports:
       - "3000:3000"
@@ -31,6 +26,10 @@ services:
       - db
       - redis
     environment:
+      - OPENAI_ACCESS_TOKEN=${OPENAI_ACCESS_TOKEN:-}
+      - TWELVE_DATA_API_KEY=${TWELVE_DATA_API_KEY:-}
+      - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY:-}
+      - BRAND_FETCH_CLIENT_ID=${BRAND_FETCH_CLIENT_ID:-}
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/permoney_production
       - REDIS_URL=redis://redis:6379/1
       - RAILS_ENV=production

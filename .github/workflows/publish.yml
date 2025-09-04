@@ -281,8 +281,13 @@ jobs:
             $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' $(cat ${{ runner.temp }}/digests/digest-*))
 
       - name: Inspect the multi-platform image
+        shell: bash
         run: |
-          MAIN_TAG=$(echo '${{ steps.meta.outputs.tags }}' | head -n1)
+          MAIN_TAG="$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
+          if [[ -z "$MAIN_TAG" || "$MAIN_TAG" == "null" ]]; then
+            echo "Error: Could not determine main tag from metadata" >&2
+            exit 1
+          fi
           docker buildx imagetools inspect "${MAIN_TAG}"
 
       # Final security scan of the merged image
