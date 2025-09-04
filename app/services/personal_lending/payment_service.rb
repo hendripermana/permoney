@@ -67,13 +67,13 @@ class PersonalLending::PaymentService
 
       # Update transaction kinds and notes contextually
       if @transfer.persisted?
-        @transfer.outflow_transaction.update!(kind: outflow_transaction_kind)
-        @transfer.inflow_transaction.update!(kind: inflow_transaction_kind)
+        @transfer.outflow_transaction&.update!(kind: outflow_transaction_kind)
+        @transfer.inflow_transaction&.update!(kind: inflow_transaction_kind)
 
         note = payment_notes
         @transfer.update!(notes: note)
-        @transfer.outflow_transaction.entry.update!(notes: note)
-        @transfer.inflow_transaction.entry.update!(notes: note)
+        @transfer.outflow_transaction&.entry&.update!(notes: note)
+        @transfer.inflow_transaction&.entry&.update!(notes: note)
 
         update_entry_names!(@transfer)
       end
@@ -121,12 +121,12 @@ class PersonalLending::PaymentService
       counterparty = pl.counterparty_name
       if pl.lending_direction == "lending_out"
         # Money received from borrower into bank
-        transfer.inflow_transaction.entry.update!(name: "Payment received from #{counterparty}")
-        transfer.outflow_transaction.entry.update!(name: "Payment received")
+        transfer.inflow_transaction&.entry&.update!(name: "Payment received from #{counterparty}")
+        transfer.outflow_transaction&.entry&.update!(name: "Payment received")
       else # borrowing_from
         # Money paid from bank to reduce liability
-        transfer.outflow_transaction.entry.update!(name: "Repayment to #{counterparty}")
-        transfer.inflow_transaction.entry.update!(name: "Repayment")
+        transfer.outflow_transaction&.entry&.update!(name: "Repayment to #{counterparty}")
+        transfer.inflow_transaction&.entry&.update!(name: "Repayment")
       end
     end
 

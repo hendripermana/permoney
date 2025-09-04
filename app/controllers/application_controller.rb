@@ -17,18 +17,40 @@ class ApplicationController < ActionController::Base
       return unless request.format.html?
       return if request.format.turbo_stream?
       return if request.xhr?
+      return if self_hosted? # Let self-hosted flows and Onboardable handle their own redirects
 
       current_path = request.fullpath
-      return if current_path.start_with?("/rails", "/assets", "/packs")
+      # Skip well-known safe areas and callbacks
+      safe_prefixes = [
+        "/rails", "/assets", "/packs", "/active_storage",
+        "/onboarding", "/oauth", "/auth", "/sessions", "/current_session",
+        "/impersonation_sessions", "/sidekiq", "/health", "/api", "/pwa", "/mfa"
+      ]
+      return if safe_prefixes.any? { |p| current_path.start_with?(p) }
 
       session[:redirect_history] ||= []
       history = session[:redirect_history]
 
+      # Bind history to user-agent/IP to reduce false sharing and stale data
+      signature = "#{request.ip}|#{request.user_agent.to_s[0,120]}"
+      if session[:redirect_signature] != signature
+        session[:redirect_signature] = signature
+        session[:redirect_history] = []
+        history = session[:redirect_history]
+      end
+
       # Evaluate loop using recent history without being overly aggressive.
-      # Trigger only if the same path appears at least 3 times within the last 5 visits
-      # AND the immediate previous visit was to the same path (typical redirect loop).
+      # Trigger only if immediate previous visit is the same path (self-redirect)
+      # AND the path appears multiple times within a small recent window.
       recent = history.last(5)
-      if recent.count(current_path) >= 2 && history.last == current_path
+      begin
+        referer_uri = URI.parse(request.referer) if request.referer.present?
+      rescue URI::InvalidURIError
+        referer_uri = nil
+      end
+      same_referrer = referer_uri && referer_uri.host == request.host && referer_uri.request_uri == current_path
+
+      if same_referrer && history.last == current_path && recent.count(current_path) >= 2
         Rails.logger.warn "[REDIRECT LOOP DETECTED] Path: #{current_path}, History: #{history.last(10)}"
 
         # Clear redirect history and redirect to a safe fallback

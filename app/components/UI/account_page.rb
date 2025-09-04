@@ -55,9 +55,16 @@ class UI::AccountPage < ApplicationComponent
       activity_feed
     when :holdings, :overview
       # Accountable is responsible for implementing the partial in the correct folder
-      render "#{account.accountable_type.downcase.pluralize}/tabs/#{tab}", account: account
+      render "#{accountable_template_root}/tabs/#{tab}", account: account
     when :schedule
       render "pay_laters/tabs/schedule", account: account
     end
   end
+
+  private
+    def accountable_template_root
+      # Use Rails inflection to map camel-cased types to proper folder names
+      # e.g., PersonalLending -> personal_lendings, OtherAsset -> other_assets
+      account.accountable_type.underscore.pluralize
+    end
 end
