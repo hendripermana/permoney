@@ -1,0 +1,114 @@
+# Security Scanning workflow for Permoney
+# This workflow performs additional security checks beyond CodeQL
+
+name: "Security Scanning"
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main", "develop" ]
+  schedule:
+    # Run security scan every Tuesday at 6:00 AM UTC
+    - cron: '0 6 * * 2'
+
+jobs:
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Ruby
+      uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: '3.2'
+        bundler-cache: true
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: |
+        bundle install
+        npm ci
+
+    # Ruby security scanning with Brakeman
+    - name: Run Brakeman security scan
+      run: |
+        bundle exec brakeman --format json --output brakeman-report.json || true
+        bundle exec brakeman --format sarif --output brakeman-report.sarif || true
+
+    # Upload Brakeman results
+    - name: Upload Brakeman SARIF
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: brakeman-report.sarif
+        category: "brakeman"
+
+    # Ruby dependency vulnerability check with bundler-audit
+    - name: Run bundler-audit
+      run: |
+        gem install bundler-audit
+        bundle audit --update
+
+    # JavaScript security scanning with npm audit
+    - name: Run npm audit
+      run: |
+        npm audit --audit-level=moderate || true
+        npm audit --json > npm-audit-report.json || true
+
+    # Secret scanning with TruffleHog
+    - name: Run TruffleHog OSS
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: main
+        head: HEAD
+        extra_args: --debug --only-verified
+
+    # License compliance check
+    - name: Check license compliance
+      run: |
+        bundle exec license_finder --decisions-file=.license_finder.yml || true
+
+    # Upload security artifacts
+    - name: Upload security reports
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: security-reports
+        path: |
+          brakeman-report.json
+          npm-audit-report.json
+        retention-days: 30
+
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Dependency Review
+      uses: actions/dependency-review-action@v4
+      with:
+        fail-on-severity: moderate
+        allow-licenses: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, GPL-3.0
+        deny-licenses: GPL-2.0, LGPL-2.1
+        comment-summary-in-pr: always

@@ -1,12 +1,118 @@
+# Dependabot configuration for Permoney
+# This file configures automatic dependency updates
+
 version: 2
 updates:
-  - package-ecosystem: bundler
+  # Ruby dependencies (Gemfile)
+  - package-ecosystem: "bundler"
     directory: "/"
     schedule:
-      interval: weekly
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "UTC"
     open-pull-requests-limit: 10
-  - package-ecosystem: github-actions
+    reviewers:
+      - "hendripermana"
+    assignees:
+      - "hendripermana"
+    commit-message:
+      prefix: "deps"
+      prefix-development: "deps-dev"
+      include: "scope"
+    groups:
+      rails:
+        patterns:
+          - "rails*"
+          - "actionpack*"
+          - "actionview*"
+          - "activerecord*"
+          - "activesupport*"
+          - "actionmailer*"
+          - "activejob*"
+          - "actioncable*"
+          - "activestorage*"
+      testing:
+        patterns:
+          - "rspec*"
+          - "factory_bot*"
+          - "capybara*"
+          - "selenium*"
+          - "webdrivers*"
+      security:
+        patterns:
+          - "devise*"
+          - "omniauth*"
+          - "rack*"
+          - "puma*"
+
+  # JavaScript dependencies (package.json)
+  - package-ecosystem: "npm"
     directory: "/"
     schedule:
-      interval: weekly
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "UTC"
     open-pull-requests-limit: 10
+    reviewers:
+      - "hendripermana"
+    assignees:
+      - "hendripermana"
+    commit-message:
+      prefix: "deps"
+      prefix-development: "deps-dev"
+      include: "scope"
+    groups:
+      build-tools:
+        patterns:
+          - "@babel/*"
+          - "webpack*"
+          - "esbuild*"
+          - "vite*"
+      ui-framework:
+        patterns:
+          - "tailwindcss*"
+          - "@tailwindcss/*"
+          - "stimulus*"
+          - "turbo*"
+      testing:
+        patterns:
+          - "jest*"
+          - "@testing-library/*"
+          - "cypress*"
+          - "playwright*"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/.github/workflows"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "hendripermana"
+    assignees:
+      - "hendripermana"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+
+  # Docker dependencies
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "hendripermana"
+    assignees:
+      - "hendripermana"
+    commit-message:
+      prefix: "docker"
+      include: "scope"

@@ -1,0 +1,80 @@
+# CodeQL Analysis workflow for Permoney
+# This workflow performs CodeQL analysis to identify vulnerabilities and coding errors
+
+name: "CodeQL Analysis"
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main", "develop" ]
+  schedule:
+    # Run CodeQL analysis every Monday at 6:00 AM UTC
+    - cron: '0 6 * * 1'
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'ruby', 'javascript' ]
+        # CodeQL supports [ 'cpp', 'csharp', 'go', 'java', 'javascript', 'python', 'ruby' ]
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: ${{ matrix.language }}
+        # If you wish to specify custom queries, you can do so here or in a config file.
+        # By default, queries listed here will override any specified in a config file.
+        # Prefix the list here with "+" to use these queries and those in the config file.
+        queries: +security-and-quality
+
+    # For Ruby, we need to set up the environment
+    - name: Set up Ruby
+      if: matrix.language == 'ruby'
+      uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: '3.2'
+        bundler-cache: true
+
+    # For JavaScript, we need to set up Node.js
+    - name: Set up Node.js
+      if: matrix.language == 'javascript'
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install JavaScript dependencies
+      if: matrix.language == 'javascript'
+      run: npm ci
+
+    # Autobuild attempts to build any compiled languages (C/C++, C#, Go, or Java).
+    # If this step fails, then you should remove it and run the build manually
+    - name: Autobuild
+      uses: github/codeql-action/autobuild@v3
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+      with:
+        category: "/language:${{matrix.language}}"
+
+    # Upload results to GitHub Security tab
+    - name: Upload CodeQL results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: ${{ runner.temp }}/codeql_databases/${{ matrix.language }}.sarif
+        category: "/language:${{matrix.language}}"

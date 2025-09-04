@@ -1,0 +1,56 @@
+# License Finder configuration for Permoney
+# This file defines approved licenses and dependency decisions
+
+# Approved licenses for the project
+approved_licenses:
+  - MIT
+  - Apache-2.0
+  - BSD-2-Clause
+  - BSD-3-Clause
+  - ISC
+  - GPL-3.0
+  - AGPL-3.0  # Our project license
+  - Ruby
+  - Artistic-2.0
+  - CC0-1.0
+  - Unlicense
+  - WTFPL
+
+# Restricted licenses that should not be used
+restricted_licenses:
+  - GPL-2.0
+  - LGPL-2.1
+  - LGPL-3.0
+  - AGPL-1.0
+  - AGPL-2.0
+  - Commercial
+  - Proprietary
+
+# Ignored groups (development/test dependencies)
+ignored_groups:
+  - development
+  - test
+  - assets
+
+# Ignored dependencies (if any specific gems need to be ignored)
+ignored_dependencies:
+  # Add any dependencies that should be ignored here
+  # Example:
+  # - some_gem_name
+
+# Project path configuration
+project_path: .
+
+# Decisions for specific dependencies (if manual approval is needed)
+decisions:
+  # Example decisions (uncomment and modify as needed):
+  # - - :approve
+  #   - some_dependency_name
+  #   - :who
+  #   - maintainer
+  #   - :why
+  #   - "Approved for use in Permoney project"
+  #   - :versions
+  #   - []
+  #   - :when
+  #   - 2024-01-15T00:00:00.000Z
