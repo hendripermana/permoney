@@ -64,7 +64,8 @@ if [ -f "$COMPOSE_FILE" ]; then
     cp "$COMPOSE_FILE" "$COMPOSE_FILE.backup.$(date +%Y%m%d_%H%M%S)"
     
     # Update image references
-    sed -i.bak "s|$DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG|$PREVIOUS_IMAGE|g" "$COMPOSE_FILE"
+    # Update image references only on image lines
+    sed -i.bak -E "s|^([[:space:]]*image:[[:space:]]*)$DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG$|\1$PREVIOUS_IMAGE|g" "$COMPOSE_FILE"
     echo "Updated image references in $COMPOSE_FILE"
 else
     echo "❌ Error: $COMPOSE_FILE not found"
