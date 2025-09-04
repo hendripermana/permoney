@@ -19,7 +19,7 @@ We actively support security updates for the following versions of Permoney:
 We take security vulnerabilities seriously. If you discover a security issue in Permoney, please report it responsibly:
 
 **🔒 For Security Issues:**
-- **Email:** [security@permoney.dev](mailto:security@permoney.dev) (if available)
+- **Email:** [security@permoney.dev](mailto:hendri@permoney.icu) (if available)
 - **GitHub Security Advisory:** Use GitHub's [private vulnerability reporting](https://github.com/hendripermana/permoney/security/advisories/new)
 - **Alternative:** Create a private issue by emailing the maintainers directly
 
