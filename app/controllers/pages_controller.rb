@@ -7,16 +7,18 @@ class PagesController < ApplicationController
     # For self-hosted environments, auto-create a family if user doesn't have one
     # This prevents redirect loops and ensures a valid state, but only if user has completed onboarding
     if Rails.application.config.app_mode.self_hosted? && Current.user && !Current.family && Current.user.onboarding_complete?
-      family = Current.user.families.create!(
-        name: "#{Current.user.first_name || Current.user.email.split('@').first}'s Family",
-        currency: default_currency_for_user,
-        country: default_country_for_user,
-        locale: I18n.locale.to_s,
-        date_format: "%m-%d-%Y",
-        timezone: Time.zone.name
-      )
-      Current.user.update!(family: family)
-      log_dashboard_decision("Auto-created family for self-hosted user with currency: #{family.currency}, country: #{family.country}, locale: #{family.locale}")
+      ApplicationRecord.transaction do
+        family = Current.user.families.create!(
+          name: "#{Current.user.first_name || Current.user.email.split('@').first}'s Family",
+          currency: default_currency_for_user,
+          country: default_country_for_user,
+          locale: I18n.locale.to_s,
+          date_format: "%m-%d-%Y",
+          timezone: Time.zone.name
+        )
+        Current.user.update!(family: family)
+        log_dashboard_decision("Auto-created family for self-hosted user with currency: #{family.currency}, country: #{family.country}, locale: #{family.locale}")
+      end
     end
 
     unless Current.family
