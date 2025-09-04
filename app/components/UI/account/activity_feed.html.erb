@@ -4,23 +4,105 @@
       <%= tag.h2 "Activity", class: "font-medium text-lg" %>
 
       <% if account.manual? %>
-        <%= render DS::Menu.new(variant: "button") do |menu| %>
-          <% menu.with_button(text: "New", variant: "secondary", icon: "plus") %>
+        <% if account.accountable_type == "PersonalLending" %>
+          <%= render DS::Menu.new(variant: "button") do |menu| %>
+            <% menu.with_button(text: "Quick Actions", variant: "secondary", icon: "plus") %>
 
-          <% menu.with_item(
-              variant: "link",
-              text: "New balance",
-              icon: "circle-dollar-sign",
-              href: new_valuation_path(account_id: account.id),
-              data: { turbo_frame: :modal }) %>
+            <% if account.accountable.lending_direction == "borrowing_from" %>
+              <% menu.with_item(
+                  variant: "link",
+                  text: "Borrow More Money",
+                  icon: "plus",
+                  href: new_borrowing_personal_lending_path(account),
+                  data: { turbo_frame: :modal }) %>
+              
+              <% menu.with_item(
+                  variant: "link",
+                  text: "Make Payment",
+                  icon: "credit-card",
+                  href: new_payment_personal_lending_path(account),
+                  data: { turbo_frame: :modal }) %>
+            <% else %>
+              <% menu.with_item(
+                  variant: "link",
+                  text: "Lend More Money",
+                  icon: "plus",
+                  href: new_borrowing_personal_lending_path(account),
+                  data: { turbo_frame: :modal }) %>
+              
+              <% menu.with_item(
+                  variant: "link",
+                  text: "Record Payment Received",
+                  icon: "banknote",
+                  href: new_payment_personal_lending_path(account),
+                  data: { turbo_frame: :modal }) %>
+            <% end %>
 
-          <% unless account.crypto? %>
             <% menu.with_item(
                 variant: "link",
-                text: "New transaction",
-                icon: "credit-card",
-                href: account.investment? ? new_trade_path(account_id: account.id) : new_transaction_path(account_id: account.id),
+                text: "New balance",
+                icon: "circle-dollar-sign",
+                href: new_valuation_path(account_id: account.id),
                 data: { turbo_frame: :modal }) %>
+
+            <% menu.with_item(
+                variant: "link",
+                text: "Generic transaction",
+                icon: "receipt",
+                href: new_transaction_path(account_id: account.id),
+                data: { turbo_frame: :modal }) %>
+          <% end %>
+        <% elsif account.accountable_type == "Loan" && account.accountable.personal_loan? %>
+          <%= render DS::Menu.new(variant: "button") do |menu| %>
+            <% menu.with_button(text: "Personal Loan Actions", variant: "secondary", icon: "plus") %>
+
+            <% menu.with_item(
+                variant: "link",
+                text: "Borrow More Money",
+                icon: "plus",
+                href: new_borrowing_loan_path(account),
+                data: { turbo_frame: :modal }) %>
+            
+            <% menu.with_item(
+                variant: "link",
+                text: "Make Payment",
+                icon: "credit-card",
+                href: new_payment_loan_path(account),
+                data: { turbo_frame: :modal }) %>
+
+            <% menu.with_item(
+                variant: "link",
+                text: "New balance",
+                icon: "circle-dollar-sign",
+                href: new_valuation_path(account_id: account.id),
+                data: { turbo_frame: :modal }) %>
+
+            <% menu.with_item(
+                variant: "link",
+                text: "Generic transaction",
+                icon: "receipt",
+                href: new_transaction_path(account_id: account.id),
+                data: { turbo_frame: :modal }) %>
+          <% end %>
+        <% else %>
+          <%= render DS::Menu.new(variant: "button") do |menu| %>
+            <% menu.with_button(text: "New", variant: "secondary", icon: "plus") %>
+
+            <% menu.with_item(
+                variant: "link",
+                text: "New balance",
+                icon: "circle-dollar-sign",
+                href: new_valuation_path(account_id: account.id),
+                data: { turbo_frame: :modal }) %>
+
+            <% unless account.crypto? %>
+              <% menu.with_item(
+                  variant: "link",
+                  text: "New transaction",
+                  icon: "credit-card",
+                  href: account.investment? ? new_trade_path(account_id: account.id) : new_transaction_path(account_id: account.id),
+                  data: { turbo_frame: :modal }) %>
+            <% end %>
           <% end %>
         <% end %>
       <% end %>

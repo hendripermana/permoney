@@ -11,11 +11,44 @@
   </section>
 
   <section class="space-y-2">
-    <%= f.collection_select :from_account_id, Current.family.accounts.manual.alphabetically, :id, :name, { prompt: t(".select_account"), label: t(".from") }, required: true %>
+    <%= f.collection_select :from_account_id, Current.family.accounts.manual.alphabetically, :id, :name, { prompt: t(".select_account"), label: t(".from") }, required: true, data: { controller: "transfer-form", action: "transfer-form#updateToAccountOptions" } %>
     <%= f.collection_select :to_account_id, Current.family.accounts.manual.alphabetically, :id, :name, { prompt: t(".select_account"), label: t(".to") }, required: true %>
     <%= f.number_field :amount, label: t(".amount"), required: true, min: 0, placeholder: "100", step: 0.00000001 %>
     <%= f.date_field :date, value: transfer.inflow_transaction&.entry&.date || Date.current, label: t(".date"), required: true, max: Date.current %>
   </section>
+
+  <% if params[:account_id].present? %>
+    <% suggested_account = Current.family.accounts.find_by(id: params[:account_id]) %>
+    <% if suggested_account&.accountable_type == "Loan" && suggested_account.accountable.personal_loan? %>
+      <div class="bg-amber-50 border border-amber-200 p-4 rounded-lg">
+        <div class="flex items-start gap-2">
+          <%= icon "info", size: "sm", class: "text-amber-600 mt-0.5" %>
+          <div class="text-sm text-amber-800">
+            <p class="font-medium mb-1">Personal Loan Transfer</p>
+            <p>This appears to be a payment related to your personal loan with <%= suggested_account.accountable.counterparty_name || "a person" %>.</p>
+            <p class="mt-2">
+              <%= link_to "Use enhanced payment form instead", new_payment_loan_path(suggested_account), 
+                          class: "underline hover:no-underline text-amber-700", data: { turbo_frame: :modal } %>
+            </p>
+          </div>
+        </div>
+      </div>
+    <% elsif suggested_account&.accountable_type == "PersonalLending" %>
+      <div class="bg-amber-50 border border-amber-200 p-4 rounded-lg">
+        <div class="flex items-start gap-2">
+          <%= icon "info", size: "sm", class: "text-amber-600 mt-0.5" %>
+          <div class="text-sm text-amber-800">
+            <p class="font-medium mb-1">Personal Lending Transfer</p>
+            <p>This appears to be a payment related to your personal lending with <%= suggested_account.accountable.counterparty_name %>.</p>
+            <p class="mt-2">
+              <%= link_to "Use enhanced payment form instead", new_payment_personal_lending_path(suggested_account), 
+                          class: "underline hover:no-underline text-amber-700", data: { turbo_frame: :modal } %>
+            </p>
+          </div>
+        </div>
+      </div>
+    <% end %>
+  <% end %>
 
   <section>
     <%= f.submit t(".submit") %>

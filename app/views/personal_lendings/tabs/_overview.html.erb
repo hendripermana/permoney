@@ -78,6 +78,70 @@
   </div>
 <% end %>
 
+<% unless account.accountable.status == "returned" %>
+  <div class="bg-container p-4 rounded-lg mt-6">
+    <h4 class="font-medium text-primary mb-4">Quick Actions</h4>
+    
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <% if account.accountable.lending_direction == "borrowing_from" %>
+        <%= render DS::Link.new(
+          text: "Borrow More Money",
+          variant: "primary",
+          icon: "plus",
+          href: new_borrowing_personal_lending_path(account),
+          frame: :modal,
+          class: "w-full"
+        ) %>
+        
+        <%= render DS::Link.new(
+          text: "Make Payment",
+          variant: "secondary",
+          icon: "credit-card",
+          href: new_payment_personal_lending_path(account),
+          frame: :modal,
+          class: "w-full"
+        ) %>
+      <% else %>
+        <%= render DS::Link.new(
+          text: "Lend More Money",
+          variant: "primary",
+          icon: "plus",
+          href: new_borrowing_personal_lending_path(account),
+          frame: :modal,
+          class: "w-full"
+        ) %>
+        
+        <%= render DS::Link.new(
+          text: "Record Payment Received",
+          variant: "secondary",
+          icon: "banknote",
+          href: new_payment_personal_lending_path(account),
+          frame: :modal,
+          class: "w-full"
+        ) %>
+      <% end %>
+    </div>
+
+    <div class="mt-4 pt-4 border-t border-primary">
+      <div class="text-xs text-secondary space-y-1">
+        <% if account.accountable.sharia_compliant? %>
+          <div class="flex items-center gap-2">
+            <%= icon "check-circle", size: "xs", class: "text-success" %>
+            <span>Syariah Compliant - No Interest Charges</span>
+          </div>
+        <% end %>
+        <% if account.accountable.lending_direction == "borrowing_from" %>
+          <p>• Use "Borrow More" if you need additional funds from <%= account.accountable.counterparty_name %></p>
+          <p>• Use "Make Payment" for partial or full repayments</p>
+        <% else %>
+          <p>• Use "Lend More" to record additional money lent to <%= account.accountable.counterparty_name %></p>
+          <p>• Use "Record Payment" when they pay you back</p>
+        <% end %>
+      </div>
+    </div>
+  </div>
+<% end %>
+
 <div class="flex justify-center py-8">
   <%= render DS::Link.new(
     text: "Edit lending details",

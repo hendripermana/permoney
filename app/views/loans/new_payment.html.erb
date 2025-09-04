@@ -1,0 +1,107 @@
+<%= render DS::Dialog.new do |dialog| %>
+  <% dialog.with_header(title: "Make Loan Payment") %>
+  <% dialog.with_body do %>
+  <% if @error_message %>
+    <div class="text-destructive flex items-center gap-2 mb-4">
+      <%= icon "circle-alert", size: "sm" %>
+      <p class="text-sm"><%= @error_message %></p>
+    </div>
+  <% end %>
+
+  <%= styled_form_with url: create_payment_loan_path(@account), 
+                      scope: :payment,
+                      class: "space-y-4",
+                      data: { turbo_frame: "_top" } do |f| %>
+    
+    <%= f.hidden_field :loan_account_id, value: @account.id %>
+    
+    <div class="bg-container p-4 rounded-lg mb-4">
+      <h3 class="font-medium text-primary mb-2">Payment Details</h3>
+      <div class="space-y-2 text-sm">
+        <div class="flex justify-between">
+          <span class="text-secondary">
+            <% if @account.accountable.counterparty_name.present? %>
+              Paying back to:
+            <% else %>
+              Loan Type:
+            <% end %>
+          </span>
+          <span class="text-primary font-medium">
+            <% if @account.accountable.counterparty_name.present? %>
+              <%= @account.accountable.counterparty_name %>
+            <% else %>
+              Personal Loan
+            <% end %>
+          </span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-secondary">Current Balance:</span>
+          <span class="text-primary font-medium"><%= format_money(@account.balance_money) %></span>
+        </div>
+        <% if @account.accountable.sharia_compliant? %>
+          <div class="flex items-center gap-2 text-success">
+            <%= icon "check-circle", size: "sm" %>
+            <span class="text-sm">Syariah Compliant (<%= @account.accountable.islamic_product_type&.humanize || 'No Interest' %>)</span>
+          </div>
+        <% end %>
+      </div>
+    </div>
+
+    <section class="space-y-4">
+      <%= f.collection_select :source_account_id,
+                             @source_accounts,
+                             :id,
+                             :name,
+                             { 
+                               label: "Pay From Account",
+                               prompt: "Select account to pay from"
+                             },
+                             { required: true } %>
+
+      <%= f.money_field :amount,
+                        label: "Payment Amount",
+                        default_currency: @account.currency,
+                        required: true,
+                        placeholder: "100000" %>
+
+      <%= f.date_field :date,
+                      label: "Payment Date",
+                      value: Date.current,
+                      required: true,
+                      max: Date.current %>
+
+      <%= f.text_area :notes,
+                      label: "Notes (optional)",
+                      placeholder: "e.g., Transfer via BCA, reference #...",
+                      rows: 3 %>
+    </section>
+
+    <div class="bg-muted p-4 rounded-lg">
+      <div class="flex items-start gap-2">
+        <%= icon "info", size: "sm", class: "text-secondary mt-0.5" %>
+        <div class="text-sm text-secondary">
+          <p class="font-medium mb-1">What will happen:</p>
+          <ul class="list-disc list-inside space-y-1">
+            <li>Money will be transferred from your account to reduce the loan</li>
+            <li>Your loan balance will decrease by the payment amount</li>
+            <li>This is recorded as a loan payment transaction</li>
+            <% if @account.accountable.sharia_compliant? %>
+              <li>Syariah compliant - no interest calculations</li>
+            <% end %>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <section class="flex gap-3">
+      <%= f.submit "Make Payment", class: "btn btn-primary" %>
+      <%= render DS::Link.new(
+        text: "Cancel",
+        variant: "ghost",
+        href: account_path(@account),
+        data: { turbo_frame: "_top" }
+      ) %>
+    </section>
+  <% end %>
+  <% end %>
+<% end %>

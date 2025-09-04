@@ -142,6 +142,31 @@ class Loan < ApplicationRecord
     end
   end
 
+  # Check if this is a personal loan (from/to individual)
+  def personal_loan?
+    debt_kind == "personal" || counterparty_type == "person"
+  end
+
+  # Check if this is borrowing from someone (liability perspective)
+  def borrowing_from_person?
+    personal_loan? && counterparty_name.present?
+  end
+
+  # Get the relationship context for personal loans
+  def personal_loan_context
+    return nil unless personal_loan?
+    
+    if counterparty_name.present?
+      if sharia_compliant?
+        "#{islamic_product_type&.humanize || 'Syariah-compliant'} loan #{debt_kind == 'personal' ? 'from' : 'to'} #{counterparty_name}"
+      else
+        "Personal loan #{debt_kind == 'personal' ? 'from' : 'to'} #{counterparty_name}"
+      end
+    else
+      "Personal loan"
+    end
+  end
+
   def original_balance
     # Prefer initial_balance column if present, fallback to first valuation amount
     base_amount = if initial_balance.present?

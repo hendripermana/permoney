@@ -1,0 +1,107 @@
+<%= render DS::Dialog.new do |dialog| %>
+  <% dialog.with_header(title: "Borrow More Money") %>
+  <% dialog.with_body do %>
+  <% if @error_message %>
+    <div class="text-destructive flex items-center gap-2 mb-4">
+      <%= icon "circle-alert", size: "sm" %>
+      <p class="text-sm"><%= @error_message %></p>
+    </div>
+  <% end %>
+
+  <%= styled_form_with url: create_borrowing_loan_path(@account), 
+                      scope: :borrowing,
+                      class: "space-y-4",
+                      data: { turbo_frame: "_top" } do |f| %>
+    
+    <%= f.hidden_field :loan_account_id, value: @account.id %>
+    
+    <div class="bg-container p-4 rounded-lg mb-4">
+      <h3 class="font-medium text-primary mb-2">Loan Details</h3>
+      <div class="space-y-2 text-sm">
+        <div class="flex justify-between">
+          <span class="text-secondary">
+            <% if @account.accountable.counterparty_name.present? %>
+              Borrowing from:
+            <% else %>
+              Loan Type:
+            <% end %>
+          </span>
+          <span class="text-primary font-medium">
+            <% if @account.accountable.counterparty_name.present? %>
+              <%= @account.accountable.counterparty_name %>
+            <% else %>
+              Personal Loan
+            <% end %>
+          </span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-secondary">Current Balance:</span>
+          <span class="text-primary font-medium"><%= format_money(@account.balance_money) %></span>
+        </div>
+        <% if @account.accountable.sharia_compliant? %>
+          <div class="flex items-center gap-2 text-success">
+            <%= icon "check-circle", size: "sm" %>
+            <span class="text-sm">Syariah Compliant (<%= @account.accountable.islamic_product_type&.humanize || 'Interest-Free' %>)</span>
+          </div>
+        <% end %>
+      </div>
+    </div>
+
+    <section class="space-y-4">
+      <%= f.money_field :amount,
+                        label: "Additional Amount to Borrow",
+                        default_currency: @account.currency,
+                        required: true,
+                        placeholder: "500000" %>
+
+      <%= f.collection_select :transfer_account_id,
+                             @available_accounts,
+                             :id,
+                             :name,
+                             { 
+                               label: "Transfer Money To",
+                               prompt: "Select where the money should go"
+                             },
+                             { required: true } %>
+
+      <%= f.date_field :date,
+                      label: "Borrowing Date",
+                      value: Date.current,
+                      required: true,
+                      max: Date.current %>
+
+      <%= f.text_area :notes,
+                     label: "Notes (Optional)",
+                     placeholder: "Additional details about this borrowing...",
+                     rows: 3 %>
+    </section>
+
+    <div class="bg-muted p-4 rounded-lg">
+      <div class="flex items-start gap-2">
+        <%= icon "info", size: "sm", class: "text-secondary mt-0.5" %>
+        <div class="text-sm text-secondary">
+          <p class="font-medium mb-1">What will happen:</p>
+          <ul class="list-disc list-inside space-y-1">
+            <li>Your loan balance will increase by the borrowed amount</li>
+            <li>Money will be transferred to your selected account</li>
+            <% if @account.accountable.sharia_compliant? %>
+              <li>This follows Syariah principles (no interest charges)</li>
+            <% end %>
+            <li>You can make partial payments anytime</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <section class="flex gap-3">
+      <%= f.submit "Record Borrowing", class: "btn btn-primary" %>
+      <%= render DS::Link.new(
+        text: "Cancel",
+        variant: "ghost",
+        href: account_path(@account),
+        data: { turbo_frame: "_top" }
+      ) %>
+    </section>
+  <% end %>
+  <% end %>
+<% end %>
