@@ -22,9 +22,8 @@ restricted_licenses:
   - LGPL-2.1
   - LGPL-3.0
   - AGPL-1.0
-  - AGPL-2.0
-  - Commercial
-  - Proprietary
+  # Note: AGPL-2.0, Commercial, and Proprietary are not valid SPDX identifiers
+  # and have been removed to maintain compatibility with dependency review tools
 
 # Ignored groups (development/test dependencies)
 ignored_groups:
