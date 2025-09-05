@@ -17,4 +17,3 @@ class PayLaterRate < ApplicationRecord
       .first
   end
 end
-

@@ -33,7 +33,7 @@ class Loan::PaymentService
       end
 
       raise ArgumentError, "Amount must be positive" if amount.to_d <= 0
-      
+
       unless loan_account.accountable_type == "Loan"
         raise ArgumentError, "Account must be a Loan account"
       end
@@ -41,7 +41,7 @@ class Loan::PaymentService
 
     def create_payment_transfer!
       loan = loan_account.accountable
-      
+
       # Create a contextualized transfer for loan payment
       @transfer = Transfer::Creator.new(
         family: family,
@@ -69,7 +69,7 @@ class Loan::PaymentService
     def payment_notes(loan)
       if loan.counterparty_name.present?
         base_note = "Repayment to #{loan.counterparty_name}"
-        
+
         base_note = if loan.sharia_compliant?
           "#{base_note} (Syariah compliant - #{loan.islamic_product_type&.humanize || 'Interest-free'})"
         else

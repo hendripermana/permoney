@@ -13,7 +13,7 @@ export function eagerLoadControllersFrom(prefix, application) {
     specifiers.forEach(async (specifier) => {
       try {
         const module = await import(specifier);
-        const controller = module && module.default;
+        const controller = module?.default;
         if (!controller) return;
 
         const identifier = specifier

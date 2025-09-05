@@ -34,7 +34,7 @@ class Loan::AdditionalBorrowingService
       end
 
       raise ArgumentError, "Amount must be positive" if amount.to_d <= 0
-      
+
       unless loan_account.accountable_type == "Loan"
         raise ArgumentError, "Account must be a Loan account"
       end
@@ -46,10 +46,10 @@ class Loan::AdditionalBorrowingService
 
     def create_borrowing_transaction!
       loan = loan_account.accountable
-      
+
       counterparty = loan.counterparty_name.present? ? loan.counterparty_name : "lender"
       transaction_name = "Additional money borrowed from #{counterparty}"
-      
+
       # For borrowing: negative amount (inflow to the liability account, increases debt)
       @borrowing_entry = loan_account.entries.create!(
         amount: -amount.to_d,

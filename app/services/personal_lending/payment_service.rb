@@ -33,7 +33,7 @@ class PersonalLending::PaymentService
       end
 
       raise ArgumentError, "Amount must be positive" if amount.to_d <= 0
-      
+
       unless personal_lending_account.accountable_type == "PersonalLending"
         raise ArgumentError, "Account must be a Personal Lending account"
       end
@@ -103,9 +103,9 @@ class PersonalLending::PaymentService
     def payment_notes
       personal_lending = personal_lending_account.accountable
       direction = personal_lending.lending_direction == "borrowing_from" ? "repayment to" : "payment from"
-      
+
       base_note = "#{direction.capitalize} #{personal_lending.counterparty_name}"
-      
+
       base_note = if personal_lending.sharia_compliant?
         "#{base_note} (Syariah compliant - #{personal_lending.lending_type.humanize})"
       else

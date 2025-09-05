@@ -32,7 +32,7 @@ class ApplicationController < ActionController::Base
       history = session[:redirect_history]
 
       # Bind history to user-agent/IP to reduce false sharing and stale data
-      signature = "#{request.ip}|#{request.user_agent.to_s[0,120]}"
+      signature = "#{request.ip}|#{request.user_agent.to_s[0, 120]}"
       if session[:redirect_signature] != signature
         session[:redirect_signature] = signature
         session[:redirect_history] = []

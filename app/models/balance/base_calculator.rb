@@ -56,7 +56,7 @@ class Balance::BaseCalculator
       change_holdings_value - net_buy_sell_value
     end
 
-  def flows_for_date(date)
+    def flows_for_date(date)
       entries = sync_cache.get_entries(date)
 
       cash_inflows = 0
@@ -92,7 +92,7 @@ class Balance::BaseCalculator
         non_cash_inflows: non_cash_inflows,
         non_cash_outflows: non_cash_outflows
       }
-      end
+    end
 
     def derive_cash_balance(cash_balance, date)
       entries = sync_cache.get_entries(date)

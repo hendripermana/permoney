@@ -25,4 +25,3 @@ class CreatePayLaterInstallments < ActiveRecord::Migration[7.2]
     add_foreign_key :pay_later_installments, :transfers, column: :transfer_id, on_delete: :nullify
   end
 end
-

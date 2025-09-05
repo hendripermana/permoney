@@ -25,7 +25,7 @@ class AddPayLaterEnhancements < ActiveRecord::Migration[7.2]
       t.date    :effective_date, null: false
       t.timestamps
     end
-    add_index :exchange_rate_histories, [:currency_code, :effective_date], unique: true, name: 'idx_exrate_hist_currency_date'
+    add_index :exchange_rate_histories, [ :currency_code, :effective_date ], unique: true, name: 'idx_exrate_hist_currency_date'
 
     # Extend installments with applied_rate and total_cost (full-schedule TCO)
     change_table :pay_later_installments do |t|
@@ -43,4 +43,3 @@ class AddPayLaterEnhancements < ActiveRecord::Migration[7.2]
     end
   end
 end
-

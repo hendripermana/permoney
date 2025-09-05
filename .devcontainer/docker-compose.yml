@@ -1,3 +1,7 @@
+# Base Docker Compose configuration for Permoney development
+# Uses standard Docker networking with service discovery (db, redis hostnames work)
+# For Gitpod-specific overrides, see docker-compose.gitpod.yml
+
 x-db-env: &db_env
   POSTGRES_USER: postgres
   POSTGRES_DB: postgres
@@ -10,6 +14,7 @@ x-rails-env: &rails_env
   POSTGRES_PASSWORD: postgres
   BUNDLE_PATH: /bundle
   REDIS_URL: redis://redis:6379/1
+  GITPOD_HOST: ${GITPOD_WORKSPACE_URL}
 
 services:
   app:

@@ -67,14 +67,14 @@ class PersonalLendingsController < ApplicationController
       @account = Current.family.accounts.build(account_params)
       @account.accountable = PersonalLending.new
       @account.save!
-      
+
       # Set the account subtype to match the lending_type for proper delegation
       @account.update!(subtype: @account.accountable.lending_type)
-      
+
       # Create the initial transaction to record the lending/borrowing
       create_initial_transaction(@account)
-      
-      redirect_to account_params[:return_to].presence || @account, 
+
+      redirect_to account_params[:return_to].presence || @account,
                   notice: t("accounts.create.success", type: "Personal Lending")
     end
   rescue ActiveRecord::RecordInvalid => e
@@ -84,51 +84,51 @@ class PersonalLendingsController < ApplicationController
 
   private
 
-  def borrowing_params
-    params.require(:borrowing).permit(:personal_lending_account_id, :amount, :transfer_account_id, :date, :notes)
-  end
-
-  def payment_params
-    params.require(:payment).permit(:personal_lending_account_id, :source_account_id, :amount, :date, :notes)
-  end
-
-  def create_initial_transaction(account)
-    personal_lending = account.accountable
-    
-    # Create a transaction to record the initial lending/borrowing
-    transaction_name = if personal_lending.lending_direction == "lending_out"
-      "Money lent to #{personal_lending.counterparty_name}"
-    else
-      "Money borrowed from #{personal_lending.counterparty_name}"
+    def borrowing_params
+      params.require(:borrowing).permit(:personal_lending_account_id, :amount, :transfer_account_id, :date, :notes)
     end
 
-    # For lending out: positive amount (outflow from your perspective)
-    # For borrowing: negative amount (inflow to your account)
-    amount = if personal_lending.lending_direction == "lending_out"
-      personal_lending.initial_amount
-    else
-      -personal_lending.initial_amount
+    def payment_params
+      params.require(:payment).permit(:personal_lending_account_id, :source_account_id, :amount, :date, :notes)
     end
 
-    transaction_kind = if personal_lending.lending_direction == "lending_out"
-      "personal_lending"
-    else
-      "personal_borrowing"
-    end
+    def create_initial_transaction(account)
+      personal_lending = account.accountable
 
-    Entry.create!(
-      account: account,
-      amount: amount,
-      currency: account.currency,
-      date: Date.current,
-      name: transaction_name,
-      entryable: Transaction.new(
-        kind: transaction_kind,
-        is_sharia_compliant: personal_lending.sharia_compliant?,
-        islamic_transaction_type: personal_lending.lending_type
+      # Create a transaction to record the initial lending/borrowing
+      transaction_name = if personal_lending.lending_direction == "lending_out"
+        "Money lent to #{personal_lending.counterparty_name}"
+      else
+        "Money borrowed from #{personal_lending.counterparty_name}"
+      end
+
+      # For lending out: positive amount (outflow from your perspective)
+      # For borrowing: negative amount (inflow to your account)
+      amount = if personal_lending.lending_direction == "lending_out"
+        personal_lending.initial_amount
+      else
+        -personal_lending.initial_amount
+      end
+
+      transaction_kind = if personal_lending.lending_direction == "lending_out"
+        "personal_lending"
+      else
+        "personal_borrowing"
+      end
+
+      Entry.create!(
+        account: account,
+        amount: amount,
+        currency: account.currency,
+        date: Date.current,
+        name: transaction_name,
+        entryable: Transaction.new(
+          kind: transaction_kind,
+          is_sharia_compliant: personal_lending.sharia_compliant?,
+          islamic_transaction_type: personal_lending.lending_type
+        )
       )
-    )
 
-    account.sync_later
-  end
+      account.sync_later
+      end
 end

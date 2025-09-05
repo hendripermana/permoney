@@ -4,6 +4,5 @@ class ExchangeRateHistory < ApplicationRecord
   validates :effective_date, presence: true
 
   scope :for_currency, ->(code) { where(currency_code: code) }
-  scope :effective_on_or_before, ->(date) { where('effective_date <= ?', date) }
+  scope :effective_on_or_before, ->(date) { where("effective_date <= ?", date) }
 end
-

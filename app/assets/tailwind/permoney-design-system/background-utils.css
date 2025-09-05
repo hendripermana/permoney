@@ -1,81 +1,41 @@
 @utility bg-surface {
-  @apply bg-gray-50;
-
-  @variant theme-dark {
-    @apply bg-black;
-  }
+  @apply bg-gray-50 theme-dark:bg-black;
 }
 
 @utility bg-surface-hover {
-  @apply bg-gray-100;
-
-  @variant theme-dark {
-    @apply bg-gray-900;
-  }
+  @apply bg-gray-100 theme-dark:bg-gray-900;
 }
 
 @utility bg-surface-inset {
-  @apply bg-gray-100;
-
-  @variant theme-dark {
-    @apply bg-gray-800;
-  }
+  @apply bg-gray-100 theme-dark:bg-gray-800;
 }
 
 @utility bg-surface-inset-hover {
-  @apply bg-gray-200;
-
-  @variant theme-dark {
-    @apply bg-gray-800;
-  }
+  @apply bg-gray-200 theme-dark:bg-gray-800;
 }
 
 @utility bg-container {
-  @apply bg-white;
-
-  @variant theme-dark {
-    @apply bg-gray-900;
-  }
+  @apply bg-white theme-dark:bg-gray-900;
 }
 
 @utility bg-container-hover {
-  @apply bg-gray-50;
-
-  @variant theme-dark {
-    @apply bg-gray-800;
-  }
+  @apply bg-gray-50 theme-dark:bg-gray-800;
 }
 
 @utility bg-container-inset {
-  @apply bg-gray-50;
-
-  @variant theme-dark {
-    @apply bg-gray-800;
-  }
+  @apply bg-gray-50 theme-dark:bg-gray-800;
 }
 
 @utility bg-container-inset-hover {
-  @apply bg-gray-100;
-
-  @variant theme-dark {
-    @apply bg-gray-700;
-  }
+  @apply bg-gray-100 theme-dark:bg-gray-700;
 }
 
 @utility bg-inverse {
-  @apply bg-gray-800;
-
-  @variant theme-dark {
-    @apply bg-white;
-  }
+  @apply bg-gray-800 theme-dark:bg-white;
 }
 
 @utility bg-inverse-hover {
-  @apply bg-gray-700;
-
-  @variant theme-dark {
-    @apply bg-gray-100;
-  }
+  @apply bg-gray-700 theme-dark:bg-gray-100;
 }
 
 @utility bg-overlay {
@@ -87,16 +47,19 @@
   }
 }
 
-/* Ensure dark theme always overrides */
-@variant theme-dark {
-  @utility bg-overlay {
-    /* Dark mode fallback */
-    background-color: rgba(11, 11, 11, 0.85);
-    @supports (color: color-mix(in srgb, black 50%, white)) {
-      background-color: var(--color-alpha-black-900);
-    }
+/* Dark mode overlay - using regular CSS since @utility can't be nested */
+[data-theme=dark] .bg-overlay {
+  /* Dark mode fallback */
+  background-color: rgba(11, 11, 11, 0.85);
+}
+
+@supports (color: color-mix(in srgb, black 50%, white)) {
+  [data-theme=dark] .bg-overlay {
+    background-color: var(--color-alpha-black-900);
   }
 }
+
+/* Dark mode overlay handled via theme-dark: variant in the main utility */
 
 @utility bg-loader {
   @apply bg-surface-inset animate-pulse;

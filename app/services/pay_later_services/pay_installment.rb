@@ -23,7 +23,7 @@ module PayLaterServices
         if early_payoff
           raise ArgumentError, "Early settlement not allowed" unless ActiveModel::Type::Boolean.new.cast(account.accountable.early_settlement_allowed)
 
-          pending = PayLaterInstallment.for_account(account.id).where(status: 'pending').order(:installment_no)
+          pending = PayLaterInstallment.for_account(account.id).where(status: "pending").order(:installment_no)
           remaining_principal = pending.sum(:principal_amount).to_d
           fee = account.accountable.early_settlement_fee.to_d if account.accountable.early_settlement_fee.present?
           fee ||= 0.to_d
@@ -37,7 +37,7 @@ module PayLaterServices
             amount: amount_due
           ).create
 
-          pending.update_all(status: 'cancelled')
+          pending.update_all(status: "cancelled")
 
           # Update available credit by remaining principal
           if account.accountable.credit_limit.present?

@@ -167,8 +167,8 @@ module PayLaterServices
       def attach_audit!(entry, **data)
         DataEnrichment.create!(
           enrichable: entry,
-          source: 'paylater',
-          attribute_name: 'expense_audit',
+          source: "paylater",
+          attribute_name: "expense_audit",
           value: data
         )
       end

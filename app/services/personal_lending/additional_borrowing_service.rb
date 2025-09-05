@@ -34,7 +34,7 @@ class PersonalLending::AdditionalBorrowingService
       end
 
       raise ArgumentError, "Amount must be positive" if amount.to_d <= 0
-      
+
       unless personal_lending_account.accountable_type == "PersonalLending"
         raise ArgumentError, "Account must be a Personal Lending account"
       end
@@ -46,9 +46,9 @@ class PersonalLending::AdditionalBorrowingService
 
     def create_borrowing_transaction!
       personal_lending = personal_lending_account.accountable
-      
+
       transaction_name = "Additional money borrowed from #{personal_lending.counterparty_name}"
-      
+
       # For borrowing: negative amount (inflow to the account)
       @borrowing_entry = personal_lending_account.entries.create!(
         amount: -amount.to_d,

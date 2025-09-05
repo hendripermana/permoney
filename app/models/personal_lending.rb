@@ -87,7 +87,7 @@ class PersonalLending < ApplicationRecord
   def overdue?
     return false unless expected_return_date
     return false if actual_return_date # Already returned
-    
+
     Date.current > expected_return_date
   end
 
@@ -95,7 +95,7 @@ class PersonalLending < ApplicationRecord
   def days_until_due
     return nil unless expected_return_date
     return 0 if actual_return_date # Already returned
-    
+
     (expected_return_date - Date.current).to_i
   end
 
@@ -104,7 +104,7 @@ class PersonalLending < ApplicationRecord
     return "returned" if actual_return_date
     return "overdue" if overdue?
     return "due_soon" if days_until_due && days_until_due <= 7
-    
+
     "active"
   end
 
@@ -116,11 +116,11 @@ class PersonalLending < ApplicationRecord
 
   private
 
-  def expected_return_date_is_future
-    return unless expected_return_date
-    
-    if expected_return_date <= Date.current
-      errors.add(:expected_return_date, "must be in the future")
+    def expected_return_date_is_future
+      return unless expected_return_date
+
+      if expected_return_date <= Date.current
+        errors.add(:expected_return_date, "must be in the future")
+      end
     end
-  end
 end
