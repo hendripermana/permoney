@@ -79,6 +79,8 @@
 }
 
 @utility bg-overlay {
+  /* Fallback for browsers without color-mix */
+  background-color: rgba(240, 240, 240, 0.5);
   background-color: color-mix(in srgb, var(--color-gray-100) 50%, transparent);
 
   @variant theme-dark {
