@@ -82,7 +82,7 @@
   /* Default fallback */
   background-color: rgba(240, 240, 240, 0.5);
 
-  @supports (background-color: color-mix(in srgb, white 50%, transparent)) {
+  @supports (color: color-mix(in srgb, black 50%, white)) {
     background-color: color-mix(in srgb, var(--color-gray-100) 50%, transparent);
   }
 

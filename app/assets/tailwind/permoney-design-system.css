@@ -254,7 +254,7 @@
 }
 
 @layer base {
-  [data-theme="dark"] { 
+  [data-theme="dark"] {
     --color-success: var(--color-green-500);
     --color-warning: var(--color-yellow-400);
     --color-destructive: var(--color-red-400);
@@ -263,8 +263,6 @@
     /* Dark mode overrides for colors used in Stimulus controllers with SVGs */
     --budget-unused-fill: var(--color-gray-500);
     --budget-unallocated-fill: var(--color-gray-700);
-
-
   }
 
   html {
