@@ -1,0 +1,33 @@
+# Gitpod configuration for Permoney
+# This configures the host network to resolve Docker Compose networking issues
+
+# Configure Docker Compose to use host network
+docker:
+  composeFile: .devcontainer/docker-compose.yml
+  networkMode: host
+
+# Port configuration
+ports:
+  - port: 3000
+    onOpen: open-preview
+    visibility: public
+  - port: 5432
+    visibility: private
+  - port: 6379
+    visibility: private
+
+# Environment variables
+env:
+  - name: GITPOD_HOST
+    value: ${GITPOD_WORKSPACE_URL}
+
+# Automations to run after workspace creation
+automations:
+  - name: setup
+    init: |
+      cp .env.local.example .env.local
+      bundle install
+      npm install
+    command: |
+      bin/rails db:create db:migrate db:seed
+      bin/dev
