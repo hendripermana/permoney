@@ -75,7 +75,7 @@ class Category < ApplicationRecord
           [ "Income", "#e99537", "circle-dollar-sign", "income" ],
           [ "Profit Sharing", "#4da568", "trending-up", "income" ],
           [ "Investment Returns", "#6471eb", "piggy-bank", "income" ],
-          
+
           # Debt and financial categories
           [ "Loan Payments", "#6471eb", "credit-card", "expense" ],
           [ "Margin Payments", "#db5a54", "hand-coins", "expense" ],
@@ -83,12 +83,12 @@ class Category < ApplicationRecord
           [ "P2P Lending", "#6471eb", "users", "expense" ],
           [ "Personal Debt Payment", "#8B5CF6", "handshake", "expense" ],
           [ "Fees", "#6471eb", "credit-card", "expense" ],
-          
+
           # Islamic finance categories
           [ "Zakat", "#4da568", "hand-helping", "expense" ],
           [ "Infaq & Sadaqah", "#61c9ea", "heart", "expense" ],
           [ "Qard Hasan", "#8B5CF6", "handshake", "expense" ],
-          
+
           # Indonesian specific categories
           [ "Arisan", "#df4e92", "users", "expense" ],
           [ "Fintech Services", "#c44fe9", "zap", "expense" ],
@@ -97,7 +97,7 @@ class Category < ApplicationRecord
           [ "Ojek/Transport Apps", "#df4e92", "bike", "expense" ],
           [ "Warung/Local Food", "#eb5429", "coffee", "expense" ],
           [ "Pulsa/Data", "#c44fe9", "phone", "expense" ],
-          
+
           # Standard categories
           [ "Entertainment", "#df4e92", "drama", "expense" ],
           [ "Food & Drink", "#eb5429", "utensils", "expense" ],

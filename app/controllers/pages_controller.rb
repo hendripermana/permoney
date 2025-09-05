@@ -115,7 +115,7 @@ class PagesController < ApplicationController
       # Common locale to currency mappings based on geographical regions
       # This uses knowledge of which currencies are used in which regions
       locale_str = locale.to_s.downcase
-      
+
       case locale_str
       when /^en[-_]?us?$/, /^en$/
         "USD"
@@ -178,63 +178,63 @@ class PagesController < ApplicationController
     def country_from_locale(locale)
       # Use the existing COUNTRY_MAPPING from LanguagesHelper if available
       return nil unless defined?(LanguagesHelper::COUNTRY_MAPPING)
-      
+
       locale_str = locale.to_s.downcase
-      
+
       # Extract country code from locale (e.g., "en-US" -> "US", "fr-CA" -> "CA")
-      if locale_str.include?('-') || locale_str.include?('_')
+      if locale_str.include?("-") || locale_str.include?("_")
         country_code = locale_str.split(/[-_]/).last.upcase
         return country_code if LanguagesHelper::COUNTRY_MAPPING.key?(country_code.to_sym)
       end
-      
+
       # Fallback mappings for language-only locales
       language_to_country = {
-        'en' => 'US', 'fr' => 'FR', 'de' => 'DE', 'es' => 'ES', 'it' => 'IT',
-        'pt' => 'PT', 'ja' => 'JP', 'ko' => 'KR', 'zh' => 'CN', 'ru' => 'RU',
-        'ar' => 'SA', 'hi' => 'IN', 'th' => 'TH', 'vi' => 'VN', 'tr' => 'TR',
-        'pl' => 'PL', 'nl' => 'NL', 'sv' => 'SE', 'no' => 'NO', 'da' => 'DK', 'fi' => 'FI'
+        "en" => "US", "fr" => "FR", "de" => "DE", "es" => "ES", "it" => "IT",
+        "pt" => "PT", "ja" => "JP", "ko" => "KR", "zh" => "CN", "ru" => "RU",
+        "ar" => "SA", "hi" => "IN", "th" => "TH", "vi" => "VN", "tr" => "TR",
+        "pl" => "PL", "nl" => "NL", "sv" => "SE", "no" => "NO", "da" => "DK", "fi" => "FI"
       }
-      
+
       language = locale_str.split(/[-_]/).first
       country_code = language_to_country[language]
       return country_code if country_code && LanguagesHelper::COUNTRY_MAPPING.key?(country_code.to_sym)
-      
+
       nil
     end
 
     # Try to determine currency from browser's Accept-Language header
     def currency_from_browser_locale
       return nil unless request.headers["Accept-Language"]
-      
+
       # Parse Accept-Language header to get preferred locales
       accepted_locales = request.headers["Accept-Language"]
         .split(",")
         .map { |lang| lang.split(";").first.strip.downcase }
         .first(3) # Only check first 3 preferences
-      
+
       accepted_locales.each do |locale|
         currency = currency_from_locale(locale)
         return currency if currency
       end
-      
+
       nil
     end
 
     # Try to determine country from browser's Accept-Language header
     def country_from_browser_locale
       return nil unless request.headers["Accept-Language"]
-      
+
       # Parse Accept-Language header to get preferred locales
       accepted_locales = request.headers["Accept-Language"]
         .split(",")
         .map { |lang| lang.split(";").first.strip.downcase }
         .first(3) # Only check first 3 preferences
-      
+
       accepted_locales.each do |locale|
         country = country_from_locale(locale)
         return country if country
       end
-      
+
       nil
     end
 

@@ -37,14 +37,14 @@ class Loan < ApplicationRecord
   validates :debt_kind, inclusion: { in: %w[institutional personal] }, allow_nil: true
   validates :counterparty_type, inclusion: { in: %w[institution person] }, allow_nil: true
   validates :counterparty_name, length: { maximum: 255 }, allow_nil: true
-  
+
   # Sharia compliance validations
   validates :compliance_type, inclusion: { in: COMPLIANCE_TYPES.keys }, allow_nil: true
   validates :islamic_product_type, inclusion: { in: ISLAMIC_PRODUCT_TYPES.keys }, allow_nil: true
   validates :fintech_type, inclusion: { in: FINTECH_TYPES.keys }, allow_nil: true
   validates :profit_sharing_ratio, numericality: { greater_than: 0, less_than_or_equal_to: 1 }, allow_nil: true
   validates :margin_rate, numericality: { greater_than_or_equal_to: 0 }, allow_nil: true
-  
+
   # Custom validations for Islamic finance
   validate :sharia_compliance_rules
   validate :islamic_product_consistency
@@ -80,12 +80,12 @@ class Loan < ApplicationRecord
   def sharia_monthly_payment
     principal = account.loan.original_balance.amount
     return Money.new(0, account.currency) if principal.nil? || principal.zero?
-    
+
     case islamic_product_type
     when "murabaha"
       # Murabaha: fixed margin spread over term
       return nil unless margin_rate && term_months
-      
+
       total_amount = principal.to_d * (1 + margin_rate.to_d / 100)
       payment = total_amount / term_months
       Money.new(payment.round, account.currency)
@@ -155,7 +155,7 @@ class Loan < ApplicationRecord
   # Get the relationship context for personal loans
   def personal_loan_context
     return nil unless personal_loan?
-    
+
     if counterparty_name.present?
       if sharia_compliant?
         "#{islamic_product_type&.humanize || 'Syariah-compliant'} loan #{debt_kind == 'personal' ? 'from' : 'to'} #{counterparty_name}"
@@ -193,50 +193,50 @@ class Loan < ApplicationRecord
 
   private
 
-  # Validate Sharia compliance rules
-  def sharia_compliance_rules
-    return unless compliance_type == "sharia"
+    # Validate Sharia compliance rules
+    def sharia_compliance_rules
+      return unless compliance_type == "sharia"
 
-    # Sharia loans cannot have conventional interest
-    if interest_rate.present? && interest_rate > 0
-      errors.add(:interest_rate, "cannot be set for Sharia-compliant loans")
-    end
-
-    # Must have Islamic product type if Sharia compliant
-    if islamic_product_type.blank?
-      errors.add(:islamic_product_type, "must be specified for Sharia-compliant loans")
-    end
-
-    # Validate specific Islamic product requirements
-    case islamic_product_type
-    when "murabaha"
-      if margin_rate.blank?
-        errors.add(:margin_rate, "must be specified for Murabaha financing")
+      # Sharia loans cannot have conventional interest
+      if interest_rate.present? && interest_rate > 0
+        errors.add(:interest_rate, "cannot be set for Sharia-compliant loans")
       end
-    when "musyarakah", "mudharabah"
-      if profit_sharing_ratio.blank?
-        errors.add(:profit_sharing_ratio, "must be specified for profit-sharing arrangements")
+
+      # Must have Islamic product type if Sharia compliant
+      if islamic_product_type.blank?
+        errors.add(:islamic_product_type, "must be specified for Sharia-compliant loans")
       end
-    end
-  end
 
-  # Validate consistency between Islamic product types and other fields
-  def islamic_product_consistency
-    return unless islamic_product_type.present?
-
-    # Only Sharia loans can have Islamic product types
-    if compliance_type != "sharia"
-      errors.add(:islamic_product_type, "can only be set for Sharia-compliant loans")
-    end
-
-    # Qard Hasan should not have margin or profit sharing
-    if islamic_product_type == "qard_hasan"
-      if margin_rate.present? && margin_rate > 0
-        errors.add(:margin_rate, "cannot be set for Qard Hasan (benevolent loan)")
-      end
-      if profit_sharing_ratio.present?
-        errors.add(:profit_sharing_ratio, "cannot be set for Qard Hasan")
+      # Validate specific Islamic product requirements
+      case islamic_product_type
+      when "murabaha"
+        if margin_rate.blank?
+          errors.add(:margin_rate, "must be specified for Murabaha financing")
+        end
+      when "musyarakah", "mudharabah"
+        if profit_sharing_ratio.blank?
+          errors.add(:profit_sharing_ratio, "must be specified for profit-sharing arrangements")
+        end
       end
     end
-  end
+
+    # Validate consistency between Islamic product types and other fields
+    def islamic_product_consistency
+      return unless islamic_product_type.present?
+
+      # Only Sharia loans can have Islamic product types
+      if compliance_type != "sharia"
+        errors.add(:islamic_product_type, "can only be set for Sharia-compliant loans")
+      end
+
+      # Qard Hasan should not have margin or profit sharing
+      if islamic_product_type == "qard_hasan"
+        if margin_rate.present? && margin_rate > 0
+          errors.add(:margin_rate, "cannot be set for Qard Hasan (benevolent loan)")
+        end
+        if profit_sharing_ratio.present?
+          errors.add(:profit_sharing_ratio, "cannot be set for Qard Hasan")
+        end
+      end
+    end
 end

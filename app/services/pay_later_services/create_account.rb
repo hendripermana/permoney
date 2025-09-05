@@ -94,7 +94,7 @@ module PayLaterServices
 
       def upcase3(code)
         return nil if code.blank?
-        code.to_s.upcase[0,3]
+        code.to_s.upcase[0, 3]
       end
   end
 end

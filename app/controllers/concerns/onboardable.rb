@@ -48,17 +48,17 @@ module Onboardable
     def redirectable_path?(path)
       # If self-hosted and family present, allow root to pass without interference
       return false if self_hosted? && Current.family.present? && (path == "/" || path.blank?)
-      
+
       # Exclude specific paths from onboarding redirects
       excluded_paths = [
         "/settings",
-        "/subscription", 
+        "/subscription",
         "/onboarding",
         "/users",
         "/api",
         "/redis_configuration_error"
       ]
-      
+
       return false if excluded_paths.any? { |excluded_path| path.starts_with?(excluded_path) }
 
       # Exclude authentication-related paths
@@ -68,7 +68,7 @@ module Onboardable
         new_password_reset_path,
         new_email_confirmation_path
       ]
-      
+
       auth_paths.exclude?(path)
     end
 end

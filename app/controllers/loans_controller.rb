@@ -83,11 +83,11 @@ class LoansController < ApplicationController
 
   private
 
-  def borrowing_params
-    params.require(:borrowing).permit(:loan_account_id, :amount, :transfer_account_id, :date, :notes)
-  end
+    def borrowing_params
+      params.require(:borrowing).permit(:loan_account_id, :amount, :transfer_account_id, :date, :notes)
+    end
 
-  def payment_params
-    params.require(:payment).permit(:loan_account_id, :source_account_id, :amount, :date, :notes)
-  end
+    def payment_params
+      params.require(:payment).permit(:loan_account_id, :source_account_id, :amount, :date, :notes)
+    end
 end

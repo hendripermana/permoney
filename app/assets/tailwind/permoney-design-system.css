@@ -293,7 +293,7 @@
   }
 
   input[type='radio'] {
-    @apply border-gray-300 text-indigo-600 focus:ring-indigo-600 theme-dark:border-gray-600 theme-dark:bg-gray-700 theme-dark:checked:bg-blue-500 theme-dark:focus:ring-blue-500 theme-dark:focus:ring-offset-gray-800;
+    @apply border-gray-300 text-indigo-600 focus:ring-indigo-600 ring-offset-2 theme-dark:border-gray-600 theme-dark:bg-gray-700 theme-dark:checked:bg-blue-500 theme-dark:focus:ring-blue-500 theme-dark:focus:ring-offset-gray-800;
   }
 }
 
@@ -420,7 +420,7 @@
 
   /* Dark mode checkbox styles */
   [data-theme=dark] .checkbox--light[type='checkbox'] {
-    @apply ring-gray-900 checked:text-white;
+    @apply ring-1 ring-gray-900 checked:text-white;
     background-color: var(--color-gray-600);
   }
 

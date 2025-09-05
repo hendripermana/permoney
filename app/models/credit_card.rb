@@ -79,18 +79,18 @@ class CreditCard < ApplicationRecord
 
   private
 
-  # Validate Sharia compliance rules for credit cards
-  def sharia_compliance_rules
-    return unless compliance_type == "sharia"
+    # Validate Sharia compliance rules for credit cards
+    def sharia_compliance_rules
+      return unless compliance_type == "sharia"
 
-    # Sharia credit cards should not have conventional interest
-    if fee_structure == "conventional_interest"
-      errors.add(:fee_structure, "cannot be conventional interest for Sharia-compliant cards")
-    end
+      # Sharia credit cards should not have conventional interest
+      if fee_structure == "conventional_interest"
+        errors.add(:fee_structure, "cannot be conventional interest for Sharia-compliant cards")
+      end
 
-    # Recommend appropriate fee structure for Sharia cards
-    if fee_structure.blank?
-      errors.add(:fee_structure, "must be specified for Sharia-compliant cards (recommend 'fixed_fee' or 'profit_sharing')")
+      # Recommend appropriate fee structure for Sharia cards
+      if fee_structure.blank?
+        errors.add(:fee_structure, "must be specified for Sharia-compliant cards (recommend 'fixed_fee' or 'profit_sharing')")
+      end
     end
-  end
 end
