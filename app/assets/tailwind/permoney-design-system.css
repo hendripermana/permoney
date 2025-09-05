@@ -5,11 +5,11 @@
   One-off styling (3rd party overrides, etc.) should be done in the application.css file.
 */
 
-@import './maybe-design-system/background-utils.css';
-@import './maybe-design-system/foreground-utils.css';
-@import './maybe-design-system/text-utils.css';
-@import './maybe-design-system/border-utils.css';
-@import './maybe-design-system/component-utils.css';
+@import './permoney-design-system/background-utils.css';
+@import './permoney-design-system/foreground-utils.css';
+@import './permoney-design-system/text-utils.css';
+@import './permoney-design-system/border-utils.css';
+@import './permoney-design-system/component-utils.css';
 
 @custom-variant theme-dark (&:where([data-theme=dark], [data-theme=dark] *));
 
@@ -24,7 +24,7 @@
   --color-success: var(--color-green-600);
   --color-warning: var(--color-yellow-600);
   --color-destructive: var(--color-red-600);
-  --color-shadow: --alpha(var(--color-black) / 6%);
+  --color-shadow: var(--color-alpha-black-100);
 
   /* Colors used in Stimulus controllers with SVGs (easier to define light/dark mode here than toggle within the controllers) */
   /* See @layer base block below for dark mode overrides */
@@ -44,33 +44,33 @@
   --color-gray-800: #242424;
   --color-gray-900: #171717;
   --color-gray: var(--color-gray-500);
-  --color-gray-tint-5: --alpha(var(--color-gray-500) / 5%);
-  --color-gray-tint-10: --alpha(var(--color-gray-500) / 10%);
+  --color-gray-tint-5: color-mix(in srgb, var(--color-gray-500) 5%, transparent);
+  --color-gray-tint-10: color-mix(in srgb, var(--color-gray-500) 10%, transparent);
 
   /* Alpha colors */
-  --color-alpha-white-25: --alpha(var(--color-white) / 3%);
-  --color-alpha-white-50: --alpha(var(--color-white) / 5%);
-  --color-alpha-white-100: --alpha(var(--color-white) / 8%);
-  --color-alpha-white-200: --alpha(var(--color-white) / 10%);
-  --color-alpha-white-300: --alpha(var(--color-white) / 15%);
-  --color-alpha-white-400: --alpha(var(--color-white) / 20%);
-  --color-alpha-white-500: --alpha(var(--color-white) / 30%);
-  --color-alpha-white-600: --alpha(var(--color-white) / 40%);
-  --color-alpha-white-700: --alpha(var(--color-white) / 50%);
-  --color-alpha-white-800: --alpha(var(--color-white) / 70%);
-  --color-alpha-white-900: --alpha(var(--color-white) / 85%);
+  --color-alpha-white-25: color-mix(in srgb, var(--color-white) 3%, transparent);
+  --color-alpha-white-50: color-mix(in srgb, var(--color-white) 5%, transparent);
+  --color-alpha-white-100: color-mix(in srgb, var(--color-white) 8%, transparent);
+  --color-alpha-white-200: color-mix(in srgb, var(--color-white) 10%, transparent);
+  --color-alpha-white-300: color-mix(in srgb, var(--color-white) 15%, transparent);
+  --color-alpha-white-400: color-mix(in srgb, var(--color-white) 20%, transparent);
+  --color-alpha-white-500: color-mix(in srgb, var(--color-white) 30%, transparent);
+  --color-alpha-white-600: color-mix(in srgb, var(--color-white) 40%, transparent);
+  --color-alpha-white-700: color-mix(in srgb, var(--color-white) 50%, transparent);
+  --color-alpha-white-800: color-mix(in srgb, var(--color-white) 70%, transparent);
+  --color-alpha-white-900: color-mix(in srgb, var(--color-white) 85%, transparent);
 
-  --color-alpha-black-25: --alpha(var(--color-black) / 3%);
-  --color-alpha-black-50: --alpha(var(--color-black) / 5%);
-  --color-alpha-black-100: --alpha(var(--color-black) / 8%);
-  --color-alpha-black-200: --alpha(var(--color-black) / 10%);
-  --color-alpha-black-300: --alpha(var(--color-black) / 15%);
-  --color-alpha-black-400: --alpha(var(--color-black) / 20%);
-  --color-alpha-black-500: --alpha(var(--color-black) / 30%);
-  --color-alpha-black-600: --alpha(var(--color-black) / 40%);
-  --color-alpha-black-700: --alpha(var(--color-black) / 50%);
-  --color-alpha-black-800: --alpha(var(--color-black) / 70%);
-  --color-alpha-black-900: --alpha(var(--color-black) / 85%);
+  --color-alpha-black-25: color-mix(in srgb, var(--color-black) 3%, transparent);
+  --color-alpha-black-50: color-mix(in srgb, var(--color-black) 5%, transparent);
+  --color-alpha-black-100: color-mix(in srgb, var(--color-black) 8%, transparent);
+  --color-alpha-black-200: color-mix(in srgb, var(--color-black) 10%, transparent);
+  --color-alpha-black-300: color-mix(in srgb, var(--color-black) 15%, transparent);
+  --color-alpha-black-400: color-mix(in srgb, var(--color-black) 20%, transparent);
+  --color-alpha-black-500: color-mix(in srgb, var(--color-black) 30%, transparent);
+  --color-alpha-black-600: color-mix(in srgb, var(--color-black) 40%, transparent);
+  --color-alpha-black-700: color-mix(in srgb, var(--color-black) 50%, transparent);
+  --color-alpha-black-800: color-mix(in srgb, var(--color-black) 70%, transparent);
+  --color-alpha-black-900: color-mix(in srgb, var(--color-black) 85%, transparent);
 
   /* Red scale */
   --color-red-25: #FFFBFB;
@@ -84,8 +84,8 @@
   --color-red-700: #C91313;
   --color-red-800: #A40E0E;
   --color-red-900: #7E0707;
-  --color-red-tint-5: --alpha(var(--color-red-500) / 5%);
-  --color-red-tint-10: --alpha(var(--color-red-500) / 10%);
+  --color-red-tint-5: color-mix(in srgb, var(--color-red-500) 5%, transparent);
+  --color-red-tint-10: color-mix(in srgb, var(--color-red-500) 10%, transparent);
 
   /* Green scale */
   --color-green-25: #F6FEF9;
@@ -99,8 +99,8 @@
   --color-green-700: #078C52;
   --color-green-800: #05603A;
   --color-green-900: #054F31;
-  --color-green-tint-5: --alpha(var(--color-green-500) / 5%);
-  --color-green-tint-10: --alpha(var(--color-green-500) / 10%);
+  --color-green-tint-5: color-mix(in srgb, var(--color-green-500) 5%, transparent);
+  --color-green-tint-10: color-mix(in srgb, var(--color-green-500) 10%, transparent);
 
   /* Yellow scale */
   --color-yellow-25: #FFFCF5;
@@ -114,8 +114,8 @@
   --color-yellow-700: #B54708;
   --color-yellow-800: #93370D;
   --color-yellow-900: #7A2E0E;
-  --color-yellow-tint-5: --alpha(var(--color-yellow-500) / 5%);
-  --color-yellow-tint-10: --alpha(var(--color-yellow-500) / 10%);
+  --color-yellow-tint-5: color-mix(in srgb, var(--color-yellow-500) 5%, transparent);
+  --color-yellow-tint-10: color-mix(in srgb, var(--color-yellow-500) 10%, transparent);
 
   /* Cyan scale */
   --color-cyan-25: #F5FEFF;
@@ -129,8 +129,8 @@
   --color-cyan-700: #0E7090;
   --color-cyan-800: #155B75;
   --color-cyan-900: #155B75;
-  --color-cyan-tint-5: --alpha(var(--color-cyan-500) / 5%);
-  --color-cyan-tint-10: --alpha(var(--color-cyan-500) / 10%);
+  --color-cyan-tint-5: color-mix(in srgb, var(--color-cyan-500) 5%, transparent);
+  --color-cyan-tint-10: color-mix(in srgb, var(--color-cyan-500) 10%, transparent);
 
   /* Blue scale */
   --color-blue-25: #F5FAFF;
@@ -144,8 +144,8 @@
   --color-blue-700: #175CD3;
   --color-blue-800: #1849A9;
   --color-blue-900: #194185;
-  --color-blue-tint-5: --alpha(var(--color-blue-500) / 5%);
-  --color-blue-tint-10: --alpha(var(--color-blue-500) / 10%);
+  --color-blue-tint-5: color-mix(in srgb, var(--color-blue-500) 5%, transparent);
+  --color-blue-tint-10: color-mix(in srgb, var(--color-blue-500) 10%, transparent);
 
   /* Indigo scale */
   --color-indigo-25: #F5F8FF;
@@ -159,8 +159,8 @@
   --color-indigo-700: #3538CD;
   --color-indigo-800: #2D31A6;
   --color-indigo-900: #2D3282;
-  --color-indigo-tint-5: --alpha(var(--color-indigo-500) / 5%);
-  --color-indigo-tint-10: --alpha(var(--color-indigo-500) / 10%);
+  --color-indigo-tint-5: color-mix(in srgb, var(--color-indigo-500) 5%, transparent);
+  --color-indigo-tint-10: color-mix(in srgb, var(--color-indigo-500) 10%, transparent);
 
   /* Violet scale */
   --color-violet-25: #FBFAFF;
@@ -172,8 +172,8 @@
   --color-violet-500: #875BF7;
   --color-violet-600: #7839EE;
   --color-violet-700: #6927DA;
-  --color-violet-tint-5: --alpha(var(--color-violet-500) / 5%);
-  --color-violet-tint-10: --alpha(var(--color-violet-500) / 10%);
+  --color-violet-tint-5: color-mix(in srgb, var(--color-violet-500) 5%, transparent);
+  --color-violet-tint-10: color-mix(in srgb, var(--color-violet-500) 10%, transparent);
 
   /* Fuchsia scale */
   --color-fuchsia-25: #FEFAFF;
@@ -187,8 +187,8 @@
   --color-fuchsia-700: #9F1AB1;
   --color-fuchsia-800: #821890;
   --color-fuchsia-900: #6F1877;
-  --color-fuchsia-tint-5: --alpha(var(--color-fuchsia-500) / 5%);
-  --color-fuchsia-tint-10: --alpha(var(--color-fuchsia-500) / 10%);
+  --color-fuchsia-tint-5: color-mix(in srgb, var(--color-fuchsia-500) 5%, transparent);
+  --color-fuchsia-tint-10: color-mix(in srgb, var(--color-fuchsia-500) 10%, transparent);
 
   /* Pink scale */
   --color-pink-25: #FFFAFC;
@@ -202,8 +202,8 @@
   --color-pink-700: #BA256B;
   --color-pink-800: #9E1958;
   --color-pink-900: #840B45;
-  --color-pink-tint-5: --alpha(var(--color-pink-500) / 5%);
-  --color-pink-tint-10: --alpha(var(--color-pink-500) / 10%);
+  --color-pink-tint-5: color-mix(in srgb, var(--color-pink-500) 5%, transparent);
+  --color-pink-tint-10: color-mix(in srgb, var(--color-pink-500) 10%, transparent);
 
   /* Orange scale */
   --color-orange-25: #FFF9F5;
@@ -217,18 +217,18 @@
   --color-orange-700: #BC1B06;
   --color-orange-800: #97180C;
   --color-orange-900: #771A0D;
-  --color-orange-tint-5: --alpha(var(--color-orange-500) / 5%);
-  --color-orange-tint-10: --alpha(var(--color-orange-500) / 10%);
+  --color-orange-tint-5: color-mix(in srgb, var(--color-orange-500) 5%, transparent);
+  --color-orange-tint-10: color-mix(in srgb, var(--color-orange-500) 10%, transparent);
 
   /* Border radius overrides */
   --border-radius-md: 8px;
   --border-radius-lg: 10px;
 
-  --shadow-xs: 0px 1px 2px 0px --alpha(var(--color-black) / 6%);
-  --shadow-sm: 0px 1px 6px 0px --alpha(var(--color-black) / 6%);
-  --shadow-md: 0px 4px 8px -2px --alpha(var(--color-black) / 6%);
-  --shadow-lg: 0px 12px 16px -4px --alpha(var(--color-black) / 6%);
-  --shadow-xl: 0px 20px 24px -4px --alpha(var(--color-black) / 6%);
+  --shadow-xs: 0px 1px 2px 0px var(--color-alpha-black-100);
+  --shadow-sm: 0px 1px 6px 0px var(--color-alpha-black-100);
+  --shadow-md: 0px 4px 8px -2px var(--color-alpha-black-100);
+  --shadow-lg: 0px 12px 16px -4px var(--color-alpha-black-100);
+  --shadow-xl: 0px 20px 24px -4px var(--color-alpha-black-100);
 
   --animate-stroke-fill: stroke-fill 3s 300ms forwards;
 
@@ -240,12 +240,13 @@
     100% {
       stroke-dashoffset: 0;
     }
-  } 
+  }
 }
 
 /* Specific override for strong tags in prose under dark mode */
-.prose:where([data-theme=dark], [data-theme=dark] *) strong {
-  color: theme(colors.white) !important;
+.prose[data-theme="dark"] strong,
+[data-theme="dark"] .prose strong {
+  color: var(--color-white) !important;
 }
 
 @layer base {
@@ -253,17 +254,17 @@
     --color-success: var(--color-green-500);
     --color-warning: var(--color-yellow-400);
     --color-destructive: var(--color-red-400);
-    --color-shadow: --alpha(var(--color-white) / 8%);
+    --color-shadow: var(--color-alpha-white-100);
 
     /* Dark mode overrides for colors used in Stimulus controllers with SVGs */
     --budget-unused-fill: var(--color-gray-500);
     --budget-unallocated-fill: var(--color-gray-700);
 
-    --shadow-xs: 0px 1px 2px 0px --alpha(var(--color-white) / 8%);
-    --shadow-sm: 0px 1px 6px 0px --alpha(var(--color-white) / 8%);
-    --shadow-md: 0px 4px 8px -2px --alpha(var(--color-white) / 8%);
-    --shadow-lg: 0px 12px 16px -4px --alpha(var(--color-white) / 8%);
-    --shadow-xl: 0px 20px 24px -4px --alpha(var(--color-white) / 8%);
+    --shadow-xs: 0px 1px 2px 0px var(--color-alpha-white-100);
+    --shadow-sm: 0px 1px 6px 0px var(--color-alpha-white-100);
+    --shadow-md: 0px 4px 8px -2px var(--color-alpha-white-100);
+    --shadow-lg: 0px 12px 16px -4px var(--color-alpha-white-100);
+    --shadow-xl: 0px 20px 24px -4px var(--color-alpha-white-100);
   }
 
   html {

@@ -79,7 +79,7 @@
 }
 
 @utility bg-overlay {
-  background-color: --alpha(var(--color-gray-100) / 50%);
+  background-color: color-mix(in srgb, var(--color-gray-100) 50%, transparent);
 
   @variant theme-dark {
     background-color: var(--color-alpha-black-900);
