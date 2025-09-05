@@ -7,4 +7,9 @@
   This shim will be removed in a future version.
 */
 
+/* Shim: If permoney-design-system.css is unavailable, keep minimal base to prevent blank UI */
 @import "./permoney-design-system.css";
+:root {
+  --font-sans: system-ui, sans-serif;
+  --font-mono: ui-monospace, monospace;
+}
