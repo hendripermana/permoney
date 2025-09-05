@@ -1,9 +1,12 @@
 # Gitpod configuration for Permoney
 # This configures the host network to resolve Docker Compose networking issues
 
-# Configure Docker Compose
+# Configure Docker Compose with optional Gitpod overrides
 docker:
-  composeFile: .devcontainer/docker-compose.yml
+  composeFile: 
+    - .devcontainer/docker-compose.yml
+    # Uncomment the line below if Gitpod-specific networking is needed
+    # - .devcontainer/docker-compose.gitpod.yml
 
 # Port configuration
 ports:

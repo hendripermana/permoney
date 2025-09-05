@@ -1,0 +1,33 @@
+# Gitpod-specific Docker Compose overrides
+# This file provides Gitpod-specific networking configuration if needed
+# Use with: docker-compose -f docker-compose.yml -f docker-compose.gitpod.yml
+
+version: '3.8'
+
+x-gitpod-rails-env: &gitpod_rails_env
+  # Override environment variables for Gitpod if needed
+  DB_HOST: db
+  REDIS_URL: redis://redis:6379/1
+  # Add Gitpod-specific environment variables here if needed
+  GITPOD_WORKSPACE_URL: ${GITPOD_WORKSPACE_URL}
+
+services:
+  app:
+    environment:
+      <<: *gitpod_rails_env
+    # Only add network_mode: host here if Gitpod specifically requires it
+    # network_mode: host
+    
+  worker:
+    environment:
+      <<: *gitpod_rails_env
+    # Only add network_mode: host here if Gitpod specifically requires it
+    # network_mode: host
+
+  # Redis and DB services typically don't need host networking in Gitpod
+  # but can be overridden here if needed:
+  # redis:
+  #   network_mode: host
+  # 
+  # db:
+  #   network_mode: host
