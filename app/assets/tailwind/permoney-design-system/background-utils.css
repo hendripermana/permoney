@@ -79,7 +79,7 @@
 }
 
 @utility bg-overlay {
-  /* Default fallback */
+  /* Light mode fallback */
   background-color: rgba(240, 240, 240, 0.5);
 
   @supports (color: color-mix(in srgb, black 50%, white)) {
@@ -90,7 +90,11 @@
 /* Ensure dark theme always overrides */
 @variant theme-dark {
   @utility bg-overlay {
-    background-color: var(--color-alpha-black-900);
+    /* Dark mode fallback */
+    background-color: rgba(11, 11, 11, 0.85);
+    @supports (color: color-mix(in srgb, black 50%, white)) {
+      background-color: var(--color-alpha-black-900);
+    }
   }
 }
 
