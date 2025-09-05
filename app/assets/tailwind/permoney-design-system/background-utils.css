@@ -1,0 +1,103 @@
+@utility bg-surface {
+  @apply bg-gray-50;
+
+  @variant theme-dark {
+    @apply bg-black;
+  }
+}
+
+@utility bg-surface-hover {
+  @apply bg-gray-100;
+
+  @variant theme-dark {
+    @apply bg-gray-900;
+  }
+}
+
+@utility bg-surface-inset {
+  @apply bg-gray-100;
+
+  @variant theme-dark {
+    @apply bg-gray-800;
+  }
+}
+
+@utility bg-surface-inset-hover {
+  @apply bg-gray-200;
+
+  @variant theme-dark {
+    @apply bg-gray-800;
+  }
+}
+
+@utility bg-container {
+  @apply bg-white;
+
+  @variant theme-dark {
+    @apply bg-gray-900;
+  }
+}
+
+@utility bg-container-hover {
+  @apply bg-gray-50;
+
+  @variant theme-dark {
+    @apply bg-gray-800;
+  }
+}
+
+@utility bg-container-inset {
+  @apply bg-gray-50;
+
+  @variant theme-dark {
+    @apply bg-gray-800;
+  }
+}
+
+@utility bg-container-inset-hover {
+  @apply bg-gray-100;
+
+  @variant theme-dark {
+    @apply bg-gray-700;
+  }
+}
+
+@utility bg-inverse {
+  @apply bg-gray-800;
+
+  @variant theme-dark {
+    @apply bg-white;
+  }
+}
+
+@utility bg-inverse-hover {
+  @apply bg-gray-700;
+
+  @variant theme-dark {
+    @apply bg-gray-100;
+  }
+}
+
+@utility bg-overlay {
+  /* Light mode fallback */
+  background-color: rgba(240, 240, 240, 0.5);
+
+  @supports (color: color-mix(in srgb, black 50%, white)) {
+    background-color: color-mix(in srgb, var(--color-gray-100) 50%, transparent);
+  }
+}
+
+/* Ensure dark theme always overrides */
+@variant theme-dark {
+  @utility bg-overlay {
+    /* Dark mode fallback */
+    background-color: rgba(11, 11, 11, 0.85);
+    @supports (color: color-mix(in srgb, black 50%, white)) {
+      background-color: var(--color-alpha-black-900);
+    }
+  }
+}
+
+@utility bg-loader {
+  @apply bg-surface-inset animate-pulse;
+}
