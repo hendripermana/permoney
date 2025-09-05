@@ -85,8 +85,11 @@
   @supports (color: color-mix(in srgb, black 50%, white)) {
     background-color: color-mix(in srgb, var(--color-gray-100) 50%, transparent);
   }
+}
 
-  @variant theme-dark {
+/* Ensure dark theme always overrides */
+@variant theme-dark {
+  @utility bg-overlay {
     background-color: var(--color-alpha-black-900);
   }
 }
