@@ -130,5 +130,5 @@ class PersonalLendingsController < ApplicationController
       )
 
       account.sync_later
-    end
+      end
 end
