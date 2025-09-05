@@ -3,7 +3,7 @@
   "dockerComposeFile": "docker-compose.yml",
   "service": "app",
   "workspaceFolder": "/workspace",
-  "runArgs": ["--network=host"],
+
   "containerEnv": {
     "GIT_EDITOR": "code --wait",
     "GITHUB_TOKEN": "${localEnv:GITHUB_TOKEN}",

@@ -29,7 +29,6 @@ services:
     depends_on:
       - db
       - redis
-    network_mode: host
 
   worker:
     build:
@@ -44,7 +43,6 @@ services:
       <<: *rails_env
     depends_on:
       - redis
-    network_mode: host
 
   redis:
     image: redis:latest
@@ -53,7 +51,6 @@ services:
     ports:
       - "6379:6379"
     restart: unless-stopped
-    network_mode: host
   
   db:
     image: postgres:latest
@@ -64,7 +61,6 @@ services:
     restart: unless-stopped
     environment:
       <<: *db_env
-    network_mode: host
 
 volumes:
   postgres-data:
