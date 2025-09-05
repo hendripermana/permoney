@@ -243,7 +243,12 @@
   }
 }
 
-/* Specific override for strong tags in prose under dark mode */
+/* Specific override for strong tags in dark mode */
+[data-theme="dark"] strong {
+  color: var(--color-white) !important;
+}
+
+/* Keep prose specificity if needed */
 .prose:where([data-theme="dark"], [data-theme="dark"] *) strong {
   color: var(--color-white) !important;
 }
@@ -259,11 +264,7 @@
     --budget-unused-fill: var(--color-gray-500);
     --budget-unallocated-fill: var(--color-gray-700);
 
-    --shadow-xs: 0px 1px 2px 0px var(--color-shadow);
-    --shadow-sm: 0px 1px 6px 0px var(--color-shadow);
-    --shadow-md: 0px 4px 8px -2px var(--color-shadow);
-    --shadow-lg: 0px 12px 16px -4px var(--color-shadow);
-    --shadow-xl: 0px 20px 24px -4px var(--color-shadow);
+
   }
 
   html {
