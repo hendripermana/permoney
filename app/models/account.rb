@@ -218,8 +218,8 @@ class Account < ApplicationRecord
     return effective_classification if respond_to?(:effective_classification) && effective_classification.present?
 
     if accountable_type == "PersonalLending"
-      dir = accountable&.respond_to?(:lending_direction) ? accountable.lending_direction : nil
-      return dir == "borrowing_from" ? "liability" : "asset"
+      # Personal Lending is lending_out only (receivable)
+      return "asset"
     end
     self[:classification]
   end
