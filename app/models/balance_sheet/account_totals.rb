@@ -22,9 +22,8 @@ class BalanceSheet::AccountTotals
       def to_param = account.to_param
       delegate_missing_to :account
 
-      # Direction-aware classification for Personal Lending
       def classification
-        account[:effective_classification] || account[:classification]
+        account[:classification]
       end
     end
 
@@ -71,9 +70,9 @@ class BalanceSheet::AccountTotals
           .select(
             "accounts.*",
             "SUM(COALESCE(latest_balance.balance, accounts.balance) * COALESCE(exchange_rates.rate, 1)) as converted_balance",
-            "COALESCE(accounts.effective_classification, accounts.classification) AS effective_classification"
+            "accounts.classification AS classification"
           )
-          .group("COALESCE(accounts.effective_classification, accounts.classification)", :accountable_type, :id)
+          .group(:classification, :accountable_type, :id)
           .to_a
       end
     end
