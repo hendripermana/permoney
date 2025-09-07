@@ -90,4 +90,3 @@ class AddEffectiveClassificationToAccounts < ActiveRecord::Migration[7.2]
     remove_column :accounts, :effective_classification
   end
 end
-

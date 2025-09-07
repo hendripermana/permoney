@@ -18,4 +18,3 @@ class RemoveEffectiveClassificationFromAccounts < ActiveRecord::Migration[7.2]
     # If needed, reintroduce via the previous migration.
   end
 end
-
