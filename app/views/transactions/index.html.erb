@@ -33,6 +33,22 @@
           ) %>
 
         <%= render DS::Link.new(
+            text: "Lend More Money",
+            icon: "plus",
+            variant: "outline",
+            href: new_global_lending_personal_lendings_path,
+            frame: :modal,
+            class: "hidden md:inline-flex" ) %>
+
+        <%= render DS::Link.new(
+            text: "Record Payment Received",
+            icon: "banknote",
+            variant: "outline",
+            href: new_global_payment_personal_lendings_path,
+            frame: :modal,
+            class: "hidden md:inline-flex" ) %>
+
+        <%= render DS::Link.new(
             icon: "plus",
             variant: "icon-inverse",
             href: new_transaction_path,

@@ -20,8 +20,8 @@ class Account < ApplicationRecord
   enum :classification, { asset: "asset", liability: "liability" }, validate: { allow_nil: true }
 
   scope :visible, -> { where(status: [ "draft", "active" ]) }
-  scope :assets, -> { where(classification: "asset") }
-  scope :liabilities, -> { where(classification: "liability") }
+  scope :assets, -> { where("COALESCE(effective_classification, classification) = 'asset'") }
+  scope :liabilities, -> { where("COALESCE(effective_classification, classification) = 'liability'") }
   scope :alphabetically, -> { order(:name) }
   scope :manual, -> { where(plaid_account_id: nil, simplefin_account_id: nil) }
 
@@ -209,5 +209,18 @@ class Account < ApplicationRecord
     else
       raise "Unknown account type: #{accountable_type}"
     end
+  end
+
+  # Direction-aware classification for Personal Lending accounts.
+  # Falls back to the stored/generated column for all other account types.
+  def classification
+    # Prefer denormalized effective_classification if present (kept in sync by triggers)
+    return effective_classification if respond_to?(:effective_classification) && effective_classification.present?
+
+    if accountable_type == "PersonalLending"
+      dir = accountable&.respond_to?(:lending_direction) ? accountable.lending_direction : nil
+      return dir == "borrowing_from" ? "liability" : "asset"
+    end
+    self[:classification]
   end
 end

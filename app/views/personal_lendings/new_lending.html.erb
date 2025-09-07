@@ -1,0 +1,104 @@
+<%= render DS::Dialog.new do |dialog| %>
+  <% dialog.with_header(title: "Lend More Money") %>
+  <% dialog.with_body do %>
+  <% if @error_message %>
+    <div class="text-destructive flex items-center gap-2 mb-4">
+      <%= icon "circle-alert", size: "sm" %>
+      <p class="text-sm"><%= @error_message %></p>
+    </div>
+  <% end %>
+
+  <%= styled_form_with url: create_lending_personal_lending_path(@account),
+                      scope: :lending,
+                      class: "space-y-4",
+                      data: { turbo_frame: "_top" } do |f| %>
+
+    <%= f.hidden_field :personal_lending_account_id, value: @account.id %>
+
+    <div class="bg-container p-4 rounded-lg mb-4">
+      <h3 class="font-medium text-primary mb-2">Lending Details</h3>
+      <div class="space-y-2 text-sm">
+        <div class="flex justify-between">
+          <span class="text-secondary">Lending to:</span>
+          <span class="text-primary font-medium"><%= @account.accountable.counterparty_name %></span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-secondary">Loan Type:</span>
+          <span class="text-primary"><%= @account.accountable.lending_type.humanize %></span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-secondary">Current Balance:</span>
+          <span class="text-primary font-medium"><%= format_money(@account.balance_money) %></span>
+        </div>
+        <% if @account.accountable.sharia_compliant? %>
+          <div class="flex items-center gap-2 text-success">
+            <%= icon "check-circle", size: "sm" %>
+            <span class="text-sm">Syariah Compliant (Interest-Free)</span>
+          </div>
+        <% end %>
+      </div>
+    </div>
+
+    <section class="space-y-4">
+      <%= f.money_field :amount,
+                        label: "Additional Amount to Lend",
+                        default_currency: @account.currency,
+                        required: true,
+                        placeholder: "500000" %>
+
+      <div class="text-xs text-secondary">
+        <p>
+          Money will be transferred to your Personal Lending account for
+          <span class="text-primary font-medium"><%= @account.accountable.counterparty_name %></span>.
+        </p>
+      </div>
+
+      <%= f.collection_select :source_account_id,
+                             @source_accounts,
+                             :id,
+                             :name,
+                             {
+                               label: "Transfer Money From",
+                               prompt: "Select your funding account"
+                             },
+                             { required: true } %>
+
+      <%= f.date_field :date,
+                      label: "Lending Date",
+                      value: Date.current,
+                      required: true,
+                      max: Date.current %>
+
+      <%= f.text_area :notes,
+                     label: "Notes (Optional)",
+                     placeholder: "Additional details about this lending...",
+                     rows: 3 %>
+    </section>
+
+    <div class="bg-muted p-4 rounded-lg">
+      <div class="flex items-start gap-2">
+        <%= icon "info", size: "sm", class: "text-secondary mt-0.5" %>
+        <div class="text-sm text-secondary">
+          <p class="font-medium mb-1">What will happen:</p>
+          <ul class="list-disc list-inside space-y-1">
+            <li>Your Personal Lending balance will increase by the lent amount</li>
+            <li>Money will be transferred from your selected funding account</li>
+            <li>This follows Syariah principles if the selected type is compliant</li>
+            <li>You can record repayments anytime from this account</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <section class="flex gap-3">
+      <%= f.submit "Record Lending", class: "btn btn-primary" %>
+      <%= render DS::Link.new(
+        text: "Cancel",
+        variant: "ghost",
+        href: account_path(@account),
+        data: { turbo_frame: "_top" }
+      ) %>
+    </section>
+  <% end %>
+  <% end %>
+<% end %>

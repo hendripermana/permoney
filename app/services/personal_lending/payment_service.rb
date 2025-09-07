@@ -7,7 +7,8 @@ class PersonalLending::PaymentService
 
   def initialize(family:, params:)
     @family = family
-    @params = params
+    # Accept symbol or string keys safely
+    @params = params.to_h.with_indifferent_access
   end
 
   def call!
@@ -27,7 +28,7 @@ class PersonalLending::PaymentService
     attr_reader :family, :params
 
     def validate_params!
-      required = %w[personal_lending_account_id source_account_id amount]
+      required = %i[personal_lending_account_id source_account_id amount]
       required.each do |key|
         raise ArgumentError, "Missing required param: #{key}" if params[key].blank?
       end
@@ -37,10 +38,34 @@ class PersonalLending::PaymentService
       unless personal_lending_account.accountable_type == "PersonalLending"
         raise ArgumentError, "Account must be a Personal Lending account"
       end
+
+      # Overpayment validation for lending_out (you are owed money)
+      if lending_out?
+        excess = overpayment_amount
+        if excess.positive? && !treat_excess_as_income?
+          raise ArgumentError, "Payment exceeds outstanding by #{Money.new(excess, personal_lending_account.currency)}. Enable 'Record excess as income' to proceed."
+        end
+      else
+        # For borrowing_from, disallow overpayment entirely
+        excess = overpayment_amount
+        if excess.positive?
+          raise ArgumentError, "Payment exceeds outstanding by #{Money.new(excess, personal_lending_account.currency)}"
+        end
+      end
     end
 
     def create_payment_transfer!
       personal_lending = personal_lending_account.accountable
+
+      outstanding_before = outstanding_amount
+      payment_amount = amount.to_d
+
+      # If overpaying on lending_out and treating excess as income, cap transfer to outstanding
+      excess = 0.to_d
+      if lending_out? && payment_amount > outstanding_before
+        excess = payment_amount - outstanding_before
+        payment_amount = outstanding_before
+      end
 
       # Direction-aware money flow:
       # - lending_out (asset): money comes into bank, PL balance should decrease
@@ -53,7 +78,7 @@ class PersonalLending::PaymentService
           source_account_id: personal_lending_account.id,
           destination_account_id: source_account_id,
           date: date,
-          amount: amount.to_d
+          amount: payment_amount
         ).create
       else # borrowing_from
         @transfer = Transfer::Creator.new(
@@ -61,7 +86,7 @@ class PersonalLending::PaymentService
           source_account_id: source_account_id,
           destination_account_id: personal_lending_account.id,
           date: date,
-          amount: amount.to_d
+          amount: payment_amount
         ).create
       end
 
@@ -74,8 +99,17 @@ class PersonalLending::PaymentService
         @transfer.update!(notes: note)
         @transfer.outflow_transaction&.entry&.update!(notes: note)
         @transfer.inflow_transaction&.entry&.update!(notes: note)
+      end
 
-        update_entry_names!(@transfer)
+      # If there is excess on lending_out and user opted in, record it as income to the destination account
+      if lending_out? && excess.positive? && treat_excess_as_income?
+        record_excess_income!(excess)
+      end
+
+      # Mark as returned if fully paid off after this operation
+      outstanding_after = [ outstanding_before - payment_amount, 0.to_d ].max
+      if lending_out? && outstanding_after <= 0 && personal_lending.actual_return_date.nil?
+        personal_lending.update!(actual_return_date: date)
       end
     end
 
@@ -100,6 +134,50 @@ class PersonalLending::PaymentService
       "funds_movement" # The receiving side is always funds movement
     end
 
+    def record_excess_income!(excess_amount)
+      counterparty = personal_lending_account.accountable.counterparty_name
+      income_entry = source_account.entries.create!(
+        amount: -excess_amount.to_d.abs,
+        currency: source_account.currency,
+        date: date,
+        name: "Excess repayment from #{counterparty}",
+        entryable: Transaction.new(kind: "standard")
+      )
+
+      # Auto-categorize as Gift income
+      income_entry.entryable.update!(category: gift_income_category)
+    end
+
+    def outstanding_amount
+      personal_lending_account.balance.to_d
+    end
+
+    def overpayment_amount
+      [ amount.to_d - outstanding_amount, 0.to_d ].max
+    end
+
+    def lending_out?
+      personal_lending_account.accountable.lending_direction == "lending_out"
+    end
+
+    def treat_excess_as_income?
+      ActiveModel::Type::Boolean.new.cast(params[:treat_excess_as_income])
+    end
+
+    def gift_income_category
+      parent_income = family.categories.find_by(name: "Income")
+
+      # Choose a color: inherit from parent if present, otherwise a default
+      color = parent_income&.color || Category::COLORS.first
+
+      family.categories.find_or_create_by!(name: "Gift") do |category|
+        category.classification = "income"
+        category.parent = parent_income if parent_income
+        category.color = color
+        category.lucide_icon = "ribbon"
+      end
+    end
+
     def payment_notes
       personal_lending = personal_lending_account.accountable
       direction = personal_lending.lending_direction == "borrowing_from" ? "repayment to" : "payment from"
@@ -116,19 +194,7 @@ class PersonalLending::PaymentService
       user_note.present? ? "#{base_note} — #{user_note}" : base_note
     end
 
-    def update_entry_names!(transfer)
-      pl = personal_lending_account.accountable
-      counterparty = pl.counterparty_name
-      if pl.lending_direction == "lending_out"
-        # Money received from borrower into bank
-        transfer.inflow_transaction&.entry&.update!(name: "Payment received from #{counterparty}")
-        transfer.outflow_transaction&.entry&.update!(name: "Payment received")
-      else # borrowing_from
-        # Money paid from bank to reduce liability
-        transfer.outflow_transaction&.entry&.update!(name: "Repayment to #{counterparty}")
-        transfer.inflow_transaction&.entry&.update!(name: "Repayment")
-      end
-    end
+    # Name generation moved to Transfer::Creator for consistency
 
     # Parameter accessors
     def personal_lending_account_id

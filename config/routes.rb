@@ -201,9 +201,17 @@ Rails.application.routes.draw do
     end
   end
   resources :personal_lendings, only: %i[new create edit update] do
+    collection do
+      get :new_global_lending
+      post :create_global_lending
+      get :new_global_payment
+      post :create_global_payment
+    end
     member do
       get :new_borrowing
       post :create_borrowing
+      get :new_lending
+      post :create_lending
       get :new_payment
       post :create_payment
     end

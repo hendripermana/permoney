@@ -1,0 +1,88 @@
+<%= render DS::Dialog.new do |dialog| %>
+  <% dialog.with_header(title: "Record Payment") %>
+  <% dialog.with_body do %>
+  <% if @error_message %>
+    <div class="text-destructive flex items-center gap-2 mb-4">
+      <%= icon "circle-alert", size: "sm" %>
+      <p class="text-sm"><%= @error_message %></p>
+    </div>
+  <% end %>
+
+  <%= styled_form_with url: create_global_payment_personal_lendings_path,
+                      scope: :payment,
+                      class: "space-y-4",
+                      data: { turbo_frame: "_top" } do |f| %>
+
+    <section class="space-y-4">
+      <%= f.collection_select :personal_lending_account_id,
+                             @personal_lending_accounts,
+                             :id,
+                             :name,
+                             { label: "Personal Lending Account", prompt: "Select account" },
+                             { required: true } %>
+
+      <%= f.collection_select :source_account_id,
+                             @source_accounts,
+                             :id,
+                             :name,
+                             {
+                               label: "Cash Account",
+                               prompt: "Select cash/bank account"
+                             },
+                             { required: true } %>
+
+      <%= f.money_field :amount,
+                        label: "Payment Amount",
+                        default_currency: Current.family.currency,
+                        required: true,
+                        placeholder: "100000" %>
+
+      <%= f.date_field :date,
+                      label: "Payment Date",
+                      value: Date.current,
+                      required: true,
+                      max: Date.current %>
+
+      <%= f.text_area :notes,
+                      label: "Notes (optional)",
+                      placeholder: "e.g., Transfer via BCA, reference #...",
+                      rows: 3 %>
+
+      <div class="space-y-1">
+        <p id="excess-income-help-global" class="text-xs text-secondary">
+          If payment exceeds the outstanding balance, you can record the extra as income in the receiving account.
+        </p>
+        <div>
+          <%= f.check_box :treat_excess_as_income,
+                          label: "Record excess as income (e.g., gift)",
+                          aria: { describedby: "excess-income-help-global" } %>
+        </div>
+      </div>
+    </section>
+
+    <div class="bg-muted p-4 rounded-lg">
+      <div class="flex items-start gap-2">
+        <%= icon "info", size: "sm", class: "text-secondary mt-0.5" %>
+        <div class="text-sm text-secondary">
+          <p class="font-medium mb-1">What will happen:</p>
+          <ul class="list-disc list-inside space-y-1">
+            <li>Creates a transfer between the selected accounts</li>
+            <li>Updates your Personal Lending balance appropriately</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <section class="flex gap-3">
+      <%= f.submit "Record Payment", class: "btn btn-primary" %>
+      <%= render DS::Link.new(
+        text: "Cancel",
+        variant: "ghost",
+        href: transactions_path,
+        data: { turbo_frame: "_top" }
+      ) %>
+    </section>
+  <% end %>
+  <% end %>
+<% end %>
+

@@ -6,6 +6,15 @@
       <%= render "account_type", accountable: Crypto.new %>
       <%= render "account_type", accountable: Property.new %>
       <%= render "account_type", accountable: Vehicle.new %>
+      <%# Personal Lending behaves as an asset when lending out %>
+      <% if params[:classification] == "asset" %>
+        <%= render "account_type", accountable: PersonalLending.new %>
+      <% end %>
+    <% end %>
+
+    <%# In the default "All" view (no classification filter), show Personal Lending once %>
+    <% if params[:classification].blank? %>
+      <%= render "account_type", accountable: PersonalLending.new %>
     <% end %>
 
     <% unless params[:classification] == "asset" %>

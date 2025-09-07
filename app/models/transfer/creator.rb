@@ -26,7 +26,7 @@ class Transfer::Creator
     attr_reader :family, :source_account, :destination_account, :date, :amount
 
     def outflow_transaction
-      name = "#{name_prefix} to #{destination_account.name}"
+      name = outflow_name
 
       Transaction.new(
         kind: outflow_transaction_kind,
@@ -40,7 +40,7 @@ class Transfer::Creator
     end
 
     def inflow_transaction
-      name = "#{name_prefix} from #{source_account.name}"
+      name = inflow_name
 
       Transaction.new(
         kind: "funds_movement",
@@ -78,24 +78,110 @@ class Transfer::Creator
       end
     end
 
-    def name_prefix
+    # Build context-aware, user-friendly names for both sides of the transfer.
+    # The wording favors clarity for non-expert users.
+    def outflow_name
+      # Personal Lending cases
+      if personal_lending_context?
+        ctx = personal_lending_context
+        pl = ctx[:pl]
+        counterparty = pl.counterparty_name
+
+        if pl.lending_direction == "lending_out"
+          # Two flows:
+          # 1) Additional lending: source is bank, destination is PL
+          return "Lending to #{counterparty}" if ctx[:role] == :destination
+
+          # 2) Payment received: source is PL, destination is bank
+          return repayment_label(prefix: "Repayment from", amount:, outstanding: source_account.balance, final_word: "Final")
+        else # borrowing_from (legacy support)
+          # Repayment to counterparty: source is bank, destination is PL
+          return "Repayment to #{counterparty}" if ctx[:role] == :destination
+
+          # Additional borrowing disbursement: source is PL, destination is bank
+          return "Borrowed money from #{counterparty}"
+        end
+      end
+
+      # Loan target
       if destination_account.loan?
-        if destination_account.accountable.personal_loan?
-          "Loan repayment"
-        else
-          "Loan payment"
+        return destination_account.accountable.personal_loan? ? "Loan repayment to #{destination_account.name}" : "Loan payment to #{destination_account.name}"
+      end
+
+      # Other liabilities (e.g., credit cards)
+      return "Payment to #{destination_account.name}" if destination_account.liability?
+
+      # Default transfer wording
+      "Transfer to #{destination_account.name}"
+    end
+
+    def inflow_name
+      if personal_lending_context?
+        ctx = personal_lending_context
+        pl = ctx[:pl]
+        counterparty = pl.counterparty_name
+
+        if pl.lending_direction == "lending_out"
+          # Additional lending: destination is PL
+          return "Money lent to #{counterparty}" if ctx[:role] == :destination
+
+          # Payment received: destination is bank
+          return repayment_label(prefix: "Payment received from", amount:, outstanding: source_account.balance, final_word: "Final")
+        else # borrowing_from (legacy)
+          # Repayment you make: destination is PL
+          return "Repayment" if ctx[:role] == :destination
+
+          # Additional borrowing disbursement: destination is bank
+          return "Borrowed money from #{counterparty}"
         end
+      end
+
+      # Loan target
+      if destination_account.loan?
+        return destination_account.accountable.personal_loan? ? "Loan repayment from #{source_account.name}" : "Loan payment from #{source_account.name}"
+      end
+
+      # Other liabilities
+      return "Payment from #{source_account.name}" if destination_account.liability?
+
+      # Default transfer wording
+      "Transfer from #{source_account.name}"
+    end
+
+    def personal_lending_context?
+      source_account.accountable_type == "PersonalLending" || destination_account.accountable_type == "PersonalLending"
+    end
+
+    def personal_lending_context
+      if destination_account.accountable_type == "PersonalLending"
+        { pl: destination_account.accountable, role: :destination }
+      elsif source_account.accountable_type == "PersonalLending"
+        { pl: source_account.accountable, role: :source }
+      end
+    end
+
+    # For repayments, include Partial/Final label for clarity
+    def repayment_label(prefix:, amount:, outstanding:, final_word: "Final")
+      begin
+        amt = amount.to_d
+        out = outstanding.to_d
+        if out > 0 && amt < out
+          "Partial #{prefix.downcase} #{source_personal_lending_counterparty}"
+        else
+          "#{final_word} #{prefix.downcase} #{source_personal_lending_counterparty}"
+        end
+      rescue
+        "#{prefix} #{source_personal_lending_counterparty}"
+      end
+    end
+
+    def source_personal_lending_counterparty
+      if source_account.accountable_type == "PersonalLending"
+        source_account.accountable.counterparty_name
       elsif destination_account.accountable_type == "PersonalLending"
-        personal_lending = destination_account.accountable
-        if personal_lending.lending_direction == "borrowing_from"
-          "Repayment"
-        else
-          "Payment received"
-        end
-      elsif destination_account.liability?
-        "Payment"
+        destination_account.accountable.counterparty_name
       else
-        "Transfer"
+        source_account.name
       end
     end
 end
