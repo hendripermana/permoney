@@ -21,6 +21,15 @@ class BalanceSheet::AccountTotals
       # Allows Rails path helpers to generate URLs from the wrapper
       def to_param = account.to_param
       delegate_missing_to :account
+
+      # Direction-aware classification for Personal Lending
+      def classification
+        if account.accountable_type == "PersonalLending"
+          dir = account[:pl_lending_direction]
+          return dir == "borrowing_from" ? "liability" : "asset"
+        end
+        account[:classification]
+      end
     end
 
     def visible_accounts
@@ -56,6 +65,9 @@ class BalanceSheet::AccountTotals
                 ORDER BY b.date DESC
                 LIMIT 1
               ) latest_balance ON TRUE
+              LEFT JOIN personal_lendings pl
+                ON accounts.accountable_type = 'PersonalLending'
+               AND pl.id = accounts.accountable_id
               LEFT JOIN exchange_rates ON exchange_rates.date = ?
                 AND accounts.currency = exchange_rates.from_currency
                 AND exchange_rates.to_currency = ?
@@ -65,7 +77,8 @@ class BalanceSheet::AccountTotals
           ]))
           .select(
             "accounts.*",
-            "SUM(COALESCE(latest_balance.balance, accounts.balance) * COALESCE(exchange_rates.rate, 1)) as converted_balance"
+            "SUM(COALESCE(latest_balance.balance, accounts.balance) * COALESCE(exchange_rates.rate, 1)) as converted_balance",
+            "pl.lending_direction AS pl_lending_direction"
           )
           .group(:classification, :accountable_type, :id)
           .to_a

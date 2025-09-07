@@ -210,4 +210,14 @@ class Account < ApplicationRecord
       raise "Unknown account type: #{accountable_type}"
     end
   end
+
+  # Direction-aware classification for Personal Lending accounts.
+  # Falls back to the stored/generated column for all other account types.
+  def classification
+    if accountable_type == "PersonalLending"
+      dir = accountable&.respond_to?(:lending_direction) ? accountable.lending_direction : nil
+      return dir == "borrowing_from" ? "liability" : "asset"
+    end
+    self[:classification]
+  end
 end
