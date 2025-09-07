@@ -12,6 +12,8 @@ en:
       term_months_placeholder: '360'
     new:
       title: Enter loan details
+      method_select_hint: Loan accounts track money you borrowed. Use this whether the lender is a person or an institution.
+      dialog_body_hint: Loans cover borrowing from both institutions and people. Choose the counterparty type below and fill in the relevant details.
     overview:
       interest_rate: Interest Rate
       monthly_payment: Monthly Payment
