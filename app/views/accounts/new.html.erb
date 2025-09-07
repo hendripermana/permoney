@@ -1,4 +1,7 @@
 <%= render layout: "accounts/new/container", locals: { title: t(".title") } do %>
+  <div class="text-xs text-secondary mb-3">
+    Tip: Personal Lending is for money you lend to others (asset). If you borrowed money (from a person or institution), create a Loan under Debts.
+  </div>
   <div class="text-sm">
     <% unless params[:classification] == "liability" %>
       <%= render "account_type", accountable: Depository.new %>

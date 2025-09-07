@@ -3,6 +3,7 @@
     (manual only), then render the account form in the dialog container. %>
 
 <% if params[:step] == "method_select" %>
+  <p class="text-xs text-secondary mb-2">Note: If you borrowed money from a person or institution, create a Loan (Debts) account instead. Personal Lending is for money you lent out.</p>
   <%= render "accounts/new/method_selector",
              path: new_personal_lending_path(return_to: params[:return_to]),
              show_us_link: false,
@@ -10,8 +11,8 @@
              accountable_type: "PersonalLending" %>
 <% else %>
   <%= render layout: "accounts/new/container", locals: { title: t("accounts.new.title") } do %>
+    <div class="text-xs text-secondary mb-3">Personal Lending tracks money you lend to others. If you borrowed money, use a Loan (Debts) account instead.</div>
     <% @account ||= Current.family.accounts.build(currency: Current.family.currency, accountable: PersonalLending.new) %>
     <%= render "personal_lendings/form", account: @account, url: personal_lendings_path %>
   <% end %>
 <% end %>
-
