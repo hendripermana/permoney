@@ -29,6 +29,8 @@
     <%= account.accountable.expected_return_date&.strftime("%b %d, %Y") || "Not set" %>
     <% if account.accountable.overdue? %>
       <span class="text-xs text-danger block">Overdue</span>
+    <% elsif account.accountable.days_until_due && account.accountable.days_until_due == 0 %>
+      <span class="text-xs text-warning block">Due Today</span>
     <% elsif account.accountable.days_until_due && account.accountable.days_until_due <= 7 %>
       <span class="text-xs text-warning block">Due Soon</span>
     <% end %>
@@ -49,10 +51,15 @@
         <%= pluralize(account.accountable.days_until_due.abs, "day") %> late
       </span>
     <% when "due_soon" %>
-      <span class="text-warning">Due Soon</span>
-      <span class="text-xs text-secondary block">
-        <%= pluralize(account.accountable.days_until_due, "day") %> left
-      </span>
+      <% if account.accountable.days_until_due == 0 %>
+        <span class="text-warning">Due Today</span>
+        <span class="text-xs text-secondary block">Due today</span>
+      <% else %>
+        <span class="text-warning">Due Soon</span>
+        <span class="text-xs text-secondary block">
+          <%= pluralize(account.accountable.days_until_due, "day") %> left
+        </span>
+      <% end %>
     <% else %>
       <span class="text-secondary">Active</span>
     <% end %>
@@ -106,7 +113,7 @@
           text: "Lend More Money",
           variant: "primary",
           icon: "plus",
-          href: new_borrowing_personal_lending_path(account),
+          href: new_lending_personal_lending_path(account),
           frame: :modal,
           class: "w-full"
         ) %>

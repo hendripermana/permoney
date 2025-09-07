@@ -47,10 +47,14 @@ class PersonalLending < ApplicationRecord
   validates :initial_amount, presence: true, numericality: { greater_than: 0 }
   validates :expected_return_date, presence: true
 
-  # Custom validation to ensure return date is in the future for new loans
+  # Custom validation: disallow past dates (today is allowed)
   validate :expected_return_date_is_future, on: :create
+  before_validation :set_default_lending_direction, on: :create
 
   class << self
+    def display_name
+      "Personal Lending"
+    end
     def color
       "#8B5CF6" # Purple color for personal lending
     end
@@ -60,22 +64,17 @@ class PersonalLending < ApplicationRecord
     end
 
     def classification
-      # Dynamic classification based on lending direction
-      # This will be overridden by the classification method below
-      "liability"
+      # Treated as an asset in account listings since it represents
+      # money you have lent out to someone (receivable).
+      "asset"
     end
   end
 
-  # Override classification based on lending direction
-  def classification
-    case lending_direction
-    when "lending_out"
-      "asset"    # Money you lent out is an asset (someone owes you)
-    when "borrowing_from"
-      "liability" # Money you borrowed is a liability (you owe someone)
-    else
-      "liability" # Default fallback
-    end
+  # For UI consistency in selectors and lists, we keep a stable
+  # label. Account naming and direction-specific labels can be
+  # handled elsewhere.
+  def display_name
+    self.class.display_name
   end
 
   # Check if this is a Sharia-compliant loan
@@ -101,26 +100,27 @@ class PersonalLending < ApplicationRecord
 
   # Human-readable status
   def status
-    return "returned" if actual_return_date
+    # Consider it returned when actual_return_date is set, or when balance is zero
+    return "returned" if actual_return_date || account&.balance.to_d <= 0
     return "overdue" if overdue?
     return "due_soon" if days_until_due && days_until_due <= 7
 
     "active"
   end
 
-  # Display name for the account
-  def display_name
-    direction = lending_direction == "lending_out" ? "Lent to" : "Borrowed from"
-    "#{direction} #{counterparty_name}"
-  end
+  # Direction/counterparty-specific naming can be shown in views if needed,
+  # but `display_name` stays stable for selectors and grouping.
 
   private
+    def set_default_lending_direction
+      self.lending_direction ||= "lending_out"
+    end
 
     def expected_return_date_is_future
       return unless expected_return_date
 
-      if expected_return_date <= Date.current
-        errors.add(:expected_return_date, "must be in the future")
+      if expected_return_date < Date.current
+        errors.add(:expected_return_date, "cannot be in the past")
       end
     end
 end

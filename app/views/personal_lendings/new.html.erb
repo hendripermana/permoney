@@ -1,0 +1,17 @@
+<%# New Personal Lending account flow.
+    Mirrors PayLater/Loan patterns: show a method selector first
+    (manual only), then render the account form in the dialog container. %>
+
+<% if params[:step] == "method_select" %>
+  <%= render "accounts/new/method_selector",
+             path: new_personal_lending_path(return_to: params[:return_to]),
+             show_us_link: false,
+             show_eu_link: false,
+             accountable_type: "PersonalLending" %>
+<% else %>
+  <%= render layout: "accounts/new/container", locals: { title: t("accounts.new.title") } do %>
+    <% @account ||= Current.family.accounts.build(currency: Current.family.currency, accountable: PersonalLending.new) %>
+    <%= render "personal_lendings/form", account: @account, url: personal_lendings_path %>
+  <% end %>
+<% end %>
+

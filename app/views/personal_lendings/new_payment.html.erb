@@ -82,6 +82,19 @@
                       label: "Notes (optional)",
                       placeholder: "e.g., Transfer via BCA, reference #...",
                       rows: 3 %>
+
+      <% if @account.accountable.lending_direction == "lending_out" %>
+        <div class="space-y-1">
+          <p id="excess-income-help" class="text-xs text-secondary">
+            If payment exceeds the outstanding balance, you can record the extra as income in the receiving account.
+          </p>
+          <div>
+            <%= f.check_box :treat_excess_as_income,
+                            label: "Record excess as income (e.g., gift)",
+                            aria: { describedby: "excess-income-help" } %>
+          </div>
+        </div>
+      <% end %>
     </section>
 
     <div class="bg-muted p-4 rounded-lg">

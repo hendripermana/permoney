@@ -1,0 +1,77 @@
+<%= render DS::Dialog.new do |dialog| %>
+  <% dialog.with_header(title: "Lend More Money") %>
+  <% dialog.with_body do %>
+  <% if @error_message %>
+    <div class="text-destructive flex items-center gap-2 mb-4">
+      <%= icon "circle-alert", size: "sm" %>
+      <p class="text-sm"><%= @error_message %></p>
+    </div>
+  <% end %>
+
+  <%= styled_form_with url: create_global_lending_personal_lendings_path,
+                      scope: :lending,
+                      class: "space-y-4",
+                      data: { turbo_frame: "_top" } do |f| %>
+
+    <section class="space-y-4">
+      <%= f.collection_select :personal_lending_account_id,
+                             @personal_lending_accounts,
+                             :id,
+                             :name,
+                             { label: "Personal Lending Account", prompt: "Select account" },
+                             { required: true } %>
+
+      <%= f.money_field :amount,
+                        label: "Additional Amount to Lend",
+                        default_currency: Current.family.currency,
+                        required: true,
+                        placeholder: "500000" %>
+
+      <%= f.collection_select :source_account_id,
+                             @source_accounts,
+                             :id,
+                             :name,
+                             {
+                               label: "Transfer Money From",
+                               prompt: "Select your funding account"
+                             },
+                             { required: true } %>
+
+      <%= f.date_field :date,
+                      label: "Lending Date",
+                      value: Date.current,
+                      required: true,
+                      max: Date.current %>
+
+      <%= f.text_area :notes,
+                     label: "Notes (Optional)",
+                     placeholder: "Additional details about this lending...",
+                     rows: 3 %>
+    </section>
+
+    <div class="bg-muted p-4 rounded-lg">
+      <div class="flex items-start gap-2">
+        <%= icon "info", size: "sm", class: "text-secondary mt-0.5" %>
+        <div class="text-sm text-secondary">
+          <p class="font-medium mb-1">What will happen:</p>
+          <ul class="list-disc list-inside space-y-1">
+            <li>Money will be transferred from your selected account</li>
+            <li>The Personal Lending balance will increase by the lent amount</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <section class="flex gap-3">
+      <%= f.submit "Record Lending", class: "btn btn-primary" %>
+      <%= render DS::Link.new(
+        text: "Cancel",
+        variant: "ghost",
+        href: transactions_path,
+        data: { turbo_frame: "_top" }
+      ) %>
+    </section>
+  <% end %>
+  <% end %>
+<% end %>
+
