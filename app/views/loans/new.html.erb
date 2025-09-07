@@ -1,4 +1,5 @@
 <% if params[:step] == "method_select" %>
+  <p class="text-xs text-secondary mb-2">Loan accounts track money you borrowed. Use this whether the lender is a person or an institution (bank, pinjol, P2P, cooperative).</p>
   <%= render "accounts/new/method_selector",
              path: new_loan_path(return_to: params[:return_to]),
              show_us_link: @show_us_link,
@@ -8,6 +9,7 @@
   <%= render DS::Dialog.new do |dialog| %>
     <% dialog.with_header(title: t(".title")) %>
     <% dialog.with_body do %>
+      <div class="text-xs text-secondary mb-3">Loans cover borrowing from both institutions and people. Choose the counterparty type below and fill in the relevant details.</div>
       <%= render "loans/form", account: @account, url: loans_path %>
     <% end %>
   <% end %>
