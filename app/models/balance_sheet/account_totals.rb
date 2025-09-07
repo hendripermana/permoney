@@ -72,7 +72,7 @@ class BalanceSheet::AccountTotals
             "SUM(COALESCE(latest_balance.balance, accounts.balance) * COALESCE(exchange_rates.rate, 1)) as converted_balance",
             "accounts.classification AS classification"
           )
-          .group(:classification, :accountable_type, :id)
+          .group("accounts.classification", :accountable_type, :id)
           .to_a
       end
     end
