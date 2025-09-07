@@ -39,18 +39,10 @@ class PersonalLending::PaymentService
         raise ArgumentError, "Account must be a Personal Lending account"
       end
 
-      # Overpayment validation for lending_out (you are owed money)
-      if lending_out?
-        excess = overpayment_amount
-        if excess.positive? && !treat_excess_as_income?
-          raise ArgumentError, "Payment exceeds outstanding by #{Money.new(excess, personal_lending_account.currency)}. Enable 'Record excess as income' to proceed."
-        end
-      else
-        # For borrowing_from, disallow overpayment entirely
-        excess = overpayment_amount
-        if excess.positive?
-          raise ArgumentError, "Payment exceeds outstanding by #{Money.new(excess, personal_lending_account.currency)}"
-        end
+      # Overpayment validation (Personal Lending is lending_out only)
+      excess = overpayment_amount
+      if excess.positive? && !treat_excess_as_income?
+        raise ArgumentError, "Payment exceeds outstanding by #{Money.new(excess, personal_lending_account.currency)}. Enable 'Record excess as income' to proceed."
       end
     end
 
@@ -67,28 +59,16 @@ class PersonalLending::PaymentService
         payment_amount = outstanding_before
       end
 
-      # Direction-aware money flow:
-      # - lending_out (asset): money comes into bank, PL balance should decrease
-      #   => source: personal_lending_account, destination: source_account
-      # - borrowing_from (liability): money goes out from bank to reduce what you owe
-      #   => source: source_account, destination: personal_lending_account
-      if personal_lending.lending_direction == "lending_out"
-        @transfer = Transfer::Creator.new(
-          family: family,
-          source_account_id: personal_lending_account.id,
-          destination_account_id: source_account_id,
-          date: date,
-          amount: payment_amount
-        ).create
-      else # borrowing_from
-        @transfer = Transfer::Creator.new(
-          family: family,
-          source_account_id: source_account_id,
-          destination_account_id: personal_lending_account.id,
-          date: date,
-          amount: payment_amount
-        ).create
-      end
+      # Personal Lending is lending_out only:
+      # Money comes into bank (cash), PL balance decreases
+      # => source: personal_lending_account, destination: source_account
+      @transfer = Transfer::Creator.new(
+        family: family,
+        source_account_id: personal_lending_account.id,
+        destination_account_id: source_account_id,
+        date: date,
+        amount: payment_amount
+      ).create
 
       # Update transaction kinds and notes contextually
       if @transfer.persisted?
@@ -119,15 +99,8 @@ class PersonalLending::PaymentService
     end
 
     def outflow_transaction_kind
-      # Based on lending direction, determine the payment type
-      case personal_lending_account.accountable.lending_direction
-      when "borrowing_from"
-        "personal_borrowing" # You're paying back someone you borrowed from
-      when "lending_out"
-        "personal_lending" # Someone is paying you back
-      else
-        "funds_movement"
-      end
+      # For Personal Lending (lending_out), the outflow side is the PL account
+      "personal_lending"
     end
 
     def inflow_transaction_kind
@@ -157,7 +130,7 @@ class PersonalLending::PaymentService
     end
 
     def lending_out?
-      personal_lending_account.accountable.lending_direction == "lending_out"
+      true
     end
 
     def treat_excess_as_income?
@@ -180,10 +153,7 @@ class PersonalLending::PaymentService
 
     def payment_notes
       personal_lending = personal_lending_account.accountable
-      direction = personal_lending.lending_direction == "borrowing_from" ? "repayment to" : "payment from"
-
-      base_note = "#{direction.capitalize} #{personal_lending.counterparty_name}"
-
+      base_note = "Payment from #{personal_lending.counterparty_name}"
       base_note = if personal_lending.sharia_compliant?
         "#{base_note} (Syariah compliant - #{personal_lending.lending_type.humanize})"
       else

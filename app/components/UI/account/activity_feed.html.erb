@@ -8,35 +8,19 @@
           <%= render DS::Menu.new(variant: "button") do |menu| %>
             <% menu.with_button(text: "Quick Actions", variant: "secondary", icon: "plus") %>
 
-            <% if account.accountable.lending_direction == "borrowing_from" %>
-              <% menu.with_item(
-                  variant: "link",
-                  text: "Borrow More Money",
-                  icon: "plus",
-                  href: new_borrowing_personal_lending_path(account),
-                  data: { turbo_frame: :modal }) %>
-              
-              <% menu.with_item(
-                  variant: "link",
-                  text: "Make Payment",
-                  icon: "credit-card",
-                  href: new_payment_personal_lending_path(account),
-                  data: { turbo_frame: :modal }) %>
-            <% else %>
-              <% menu.with_item(
-                  variant: "link",
-                  text: "Lend More Money",
-                  icon: "plus",
-                  href: new_lending_personal_lending_path(account),
-                  data: { turbo_frame: :modal }) %>
-              
-              <% menu.with_item(
-                  variant: "link",
-                  text: "Record Payment Received",
-                  icon: "banknote",
-                  href: new_payment_personal_lending_path(account),
-                  data: { turbo_frame: :modal }) %>
-            <% end %>
+            <% menu.with_item(
+                variant: "link",
+                text: "Lend More Money",
+                icon: "plus",
+                href: new_lending_personal_lending_path(account),
+                data: { turbo_frame: :modal }) %>
+
+            <% menu.with_item(
+                variant: "link",
+                text: "Record Payment Received",
+                icon: "banknote",
+                href: new_payment_personal_lending_path(account),
+                data: { turbo_frame: :modal }) %>
 
             <% menu.with_item(
                 variant: "link",

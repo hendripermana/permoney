@@ -87,20 +87,13 @@ class Transfer::Creator
         pl = ctx[:pl]
         counterparty = pl.counterparty_name
 
-        if pl.lending_direction == "lending_out"
-          # Two flows:
-          # 1) Additional lending: source is bank, destination is PL
-          return "Lending to #{counterparty}" if ctx[:role] == :destination
+        # Personal Lending is lending_out only
+        # Two flows:
+        # 1) Additional lending: source is bank, destination is PL
+        return "Lending to #{counterparty}" if ctx[:role] == :destination
 
-          # 2) Payment received: source is PL, destination is bank
-          return repayment_label(prefix: "Repayment from", amount:, outstanding: source_account.balance, final_word: "Final")
-        else # borrowing_from (legacy support)
-          # Repayment to counterparty: source is bank, destination is PL
-          return "Repayment to #{counterparty}" if ctx[:role] == :destination
-
-          # Additional borrowing disbursement: source is PL, destination is bank
-          return "Borrowed money from #{counterparty}"
-        end
+        # 2) Payment received: source is PL, destination is bank
+        return repayment_label(prefix: "Repayment from", amount:, outstanding: source_account.balance, final_word: "Final")
       end
 
       # Loan target
@@ -121,19 +114,11 @@ class Transfer::Creator
         pl = ctx[:pl]
         counterparty = pl.counterparty_name
 
-        if pl.lending_direction == "lending_out"
-          # Additional lending: destination is PL
-          return "Money lent to #{counterparty}" if ctx[:role] == :destination
+        # Additional lending: destination is PL
+        return "Money lent to #{counterparty}" if ctx[:role] == :destination
 
-          # Payment received: destination is bank
-          return repayment_label(prefix: "Payment received from", amount:, outstanding: source_account.balance, final_word: "Final")
-        else # borrowing_from (legacy)
-          # Repayment you make: destination is PL
-          return "Repayment" if ctx[:role] == :destination
-
-          # Additional borrowing disbursement: destination is bank
-          return "Borrowed money from #{counterparty}"
-        end
+        # Payment received: destination is bank
+        return repayment_label(prefix: "Payment received from", amount:, outstanding: source_account.balance, final_word: "Final")
       end
 
       # Loan target
