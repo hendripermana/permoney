@@ -2,8 +2,7 @@ class PersonalLending < ApplicationRecord
   include Accountable
 
   LENDING_DIRECTIONS = {
-    "lending_out" => { short: "Lending Out", long: "Money Lent to Others" },
-    "borrowing_from" => { short: "Borrowing From", long: "Money Borrowed from Others" }
+    "lending_out" => { short: "Lending Out", long: "Money Lent to Others" }
   }.freeze
 
   LENDING_TYPES = {
@@ -113,7 +112,8 @@ class PersonalLending < ApplicationRecord
 
   private
     def set_default_lending_direction
-      self.lending_direction ||= "lending_out"
+      # Force to lending_out to avoid legacy direction in new records
+      self.lending_direction = "lending_out"
     end
 
     def expected_return_date_is_future
