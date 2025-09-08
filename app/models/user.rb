@@ -166,18 +166,9 @@ class User < ApplicationRecord
 
   # Comprehensive onboarding completion check
   def onboarding_complete?
-    # Check if any onboarding timestamp is present
-    timestamps_complete = onboarded_at.present? || set_onboarding_goals_at.present? || set_onboarding_preferences_at.present?
-    return true if timestamps_complete
-
-    # For self-hosted users with families, consider onboarding complete
-    # This handles legacy users who may not have explicit onboarding timestamps
-    if Rails.application.config.app_mode.self_hosted? && family.present?
-      return true
-    end
-
-    # Only consider onboarding complete if explicitly marked
-    false
+    # Simply check if user has been onboarded
+    # This works for both managed and self-hosted modes
+    onboarded?
   end
 
   # Auto-mark onboarded for self-hosted users with families (used only in specific contexts)
