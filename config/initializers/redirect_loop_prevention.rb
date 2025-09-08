@@ -22,6 +22,7 @@ Rails.application.config.redirect_loop_prevention.tap do |config|
   config.max_redirect_depth = ENV.fetch("MAX_REDIRECT_DEPTH", 5).to_i
 
   # Paths that should be excluded from redirect loop detection
+  # These are critical authentication and system paths
   config.safe_paths = %w[
     /rails
     /assets
@@ -36,7 +37,18 @@ Rails.application.config.redirect_loop_prevention.tap do |config|
     /up
     /manifest
     /service-worker
+    /sessions
+    /onboarding
+    /current_session
+    /impersonation_sessions
+    /mfa
+    /password_resets
+    /registrations
+    /email_confirmations
   ]
+  
+  # Number of failures before opening the circuit breaker
+  config.failure_threshold = ENV.fetch("REDIRECT_FAILURE_THRESHOLD", 3).to_i
 
   # Enable detailed logging for debugging
   config.verbose_logging = ENV.fetch("REDIRECT_LOOP_VERBOSE", Rails.env.development?).to_s == "true"
