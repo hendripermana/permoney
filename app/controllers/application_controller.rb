@@ -10,6 +10,7 @@ class ApplicationController < ActionController::Base
   before_action :set_active_storage_url_options
 
   private
+
     def detect_os
       user_agent = request.user_agent
       @os = case user_agent
