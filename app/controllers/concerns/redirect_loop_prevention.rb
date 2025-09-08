@@ -74,18 +74,36 @@ module RedirectLoopPrevention
 
     def get_or_initialize_circuit
       fingerprint = generate_request_fingerprint
-      session[:redirect_circuit] ||= {}
-      session[:redirect_circuit][fingerprint] ||= {
-        status: CIRCUIT_CLOSED,
-        history: [],
-        failure_count: 0,
-        opened_at: nil,
-        last_loop_at: nil
-      }
+
+      # Ensure session circuit storage is a Hash
+      session[:redirect_circuit] = {} unless session[:redirect_circuit].is_a?(Hash)
+
+      circuit = session[:redirect_circuit][fingerprint]
+
+      # Initialize or fix circuit structure
+      if !circuit.is_a?(Hash)
+        circuit = {
+          status: CIRCUIT_CLOSED,
+          history: [],
+          failure_count: 0,
+          opened_at: nil,
+          last_loop_at: nil
+        }
+      else
+        # Ensure all required keys exist with proper types
+        circuit[:status] ||= CIRCUIT_CLOSED
+        circuit[:history] = Array(circuit[:history] || [])
+        circuit[:failure_count] = (circuit[:failure_count] || 0).to_i
+        circuit[:opened_at] ||= nil
+        circuit[:last_loop_at] ||= nil
+      end
+
+      session[:redirect_circuit][fingerprint] = circuit
+      circuit
     end
 
     def handle_closed_circuit(circuit)
-      current_path = request.fullpath
+      current_path = request.path # Use path without query string
 
       if detect_loop_pattern(circuit[:history], current_path)
         handle_loop_detected(circuit, current_path)
@@ -95,7 +113,7 @@ module RedirectLoopPrevention
     end
 
     def handle_half_open_circuit(circuit)
-      current_path = request.fullpath
+      current_path = request.path # Use path without query string
 
       if detect_loop_pattern(circuit[:history], current_path)
         # Loop still occurring, reopen circuit
@@ -125,7 +143,7 @@ module RedirectLoopPrevention
         Rails.logger.warn "[REDIRECT_LOOP_ERROR] Circuit open but no opened_at timestamp, resetting"
         circuit[:status] = CIRCUIT_CLOSED
         circuit[:opened_at] = nil
-        update_circuit_history(circuit, request.fullpath)
+        update_circuit_history(circuit, request.path)
         return
       end
 
@@ -138,7 +156,7 @@ module RedirectLoopPrevention
           Rails.logger.info "[REDIRECT_LOOP_RECOVERY] Circuit transitioning to half-open state" if verbose_logging?
 
           # Allow the request to proceed
-          update_circuit_history(circuit, request.fullpath)
+          update_circuit_history(circuit, request.path)
         else
           # Circuit still open, redirect to safe path
           redirect_to_safe_path("Circuit breaker is open, redirecting to safe path")
@@ -148,7 +166,7 @@ module RedirectLoopPrevention
         # Reset circuit on invalid timestamp
         circuit[:status] = CIRCUIT_CLOSED
         circuit[:opened_at] = nil
-        update_circuit_history(circuit, request.fullpath)
+        update_circuit_history(circuit, request.path)
       end
     end
 
@@ -175,8 +193,9 @@ module RedirectLoopPrevention
         recent_history = history.last(max_redirect_depth)
         occurrences = recent_history.count(current_path)
 
-        # If current path appears 3+ times in recent history, it's likely a loop
-        if occurrences >= 3
+        # Use configured threshold instead of hardcoded value
+        threshold = loop_threshold
+        if occurrences >= threshold
           return true
         end
 
@@ -191,7 +210,8 @@ module RedirectLoopPrevention
               pattern_count += 1
             end
           end
-          return true if pattern_count >= 2
+          # Use threshold minus 1 for pattern detection
+          return true if pattern_count >= (loop_threshold - 1)
         end
       end
 
@@ -251,6 +271,8 @@ module RedirectLoopPrevention
       respond_to do |format|
         format.html do
           # Use 503 Service Unavailable or 409 Conflict instead of 500
+          # Render error page with proper escaping
+          safe_url = ERB::Util.html_escape(root_path)
           render html: <<~HTML.html_safe, layout: false, status: :service_unavailable
           <!DOCTYPE html>
           <html>
@@ -293,7 +315,7 @@ module RedirectLoopPrevention
               <div class="container">
                 <h1>Redirect Error Detected</h1>
                 <p>We've detected an issue with page redirects. This has been automatically resolved.</p>
-                <a href="#{root_path}">Go to Dashboard</a>
+                <a href="#{safe_url}">Go to Dashboard</a>
               </div>
             </body>
           </html>
@@ -366,13 +388,17 @@ module RedirectLoopPrevention
       end
     end
 
-    # Configuration methods
+    # Configuration methods - aligned with initializer keys
     def max_redirect_depth
-      Rails.application.config.redirect_loop_prevention&.max_depth || 5
+      Rails.application.config.redirect_loop_prevention&.max_redirect_depth || 5
     end
 
     def max_history_size
       Rails.application.config.redirect_loop_prevention&.history_size || 10
+    end
+
+    def loop_threshold
+      Rails.application.config.redirect_loop_prevention&.loop_threshold || 3
     end
 
     def failure_threshold
@@ -388,6 +414,8 @@ module RedirectLoopPrevention
     end
 
     def monitoring_enabled?
-      Rails.application.config.redirect_loop_prevention&.monitoring_enabled != false
+      # Use report_to_sentry flag from config
+      cfg = Rails.application.config.redirect_loop_prevention
+      cfg.nil? ? false : (cfg.report_to_sentry != false)
     end
 end
