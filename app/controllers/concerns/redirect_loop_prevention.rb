@@ -38,6 +38,9 @@ module RedirectLoopPrevention
     end
 
     def should_check_for_loops?
+      # Check if feature is enabled
+      return false unless Rails.application.config.redirect_loop_prevention&.enabled
+      
       return false unless request.get?
       return false unless request.format.html?
       return false if request.format.turbo_stream?
@@ -61,9 +64,10 @@ module RedirectLoopPrevention
     end
 
     def generate_request_fingerprint
-      # Create a fingerprint based on user session and request characteristics
+      # Create a fingerprint based on user identity and request characteristics
       # This helps isolate circuit breakers per user/session
       components = [
+        Current.user&.id&.to_s || "guest",
         request.ip,
         request.user_agent.to_s[0, 120],
         session.id&.to_s&.first(8)
@@ -373,9 +377,10 @@ module RedirectLoopPrevention
     end
 
     def report_to_monitoring(current_path, circuit)
+      return unless monitoring_enabled?
       return unless defined?(Sentry) && Sentry.initialized?
 
-      Sentry.capture_message("Redirect loop detected", level: :warning) do |scope|
+      Sentry.with_scope do |scope|
         scope.set_context("redirect_loop", {
           path: current_path,
           history: circuit[:history].last(10),
@@ -385,6 +390,7 @@ module RedirectLoopPrevention
           ip_address: request.ip,
           user_agent: request.user_agent
         })
+        Sentry.capture_message("Redirect loop detected", level: :warning)
       end
     end
 

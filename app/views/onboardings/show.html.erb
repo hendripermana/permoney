@@ -19,8 +19,8 @@
 
     <%= styled_form_with model: @user do |form| %>
       <%= form.hidden_field :redirect_to, value: @invitation ? "home" : "onboarding_preferences" %>
-      <%# Only set onboarded_at for invited users who should skip the full onboarding flow %>
-      <%= form.hidden_field :onboarded_at, value: Time.current if @invitation %>
+      <%# Timestamps are now set server-side in the controller for security %>
+      <%= form.hidden_field :is_invited, value: "true" if @invitation %>
 
       <div class="mb-6">
         <%= render "settings/user_avatar_field", form: form, user: @user %>

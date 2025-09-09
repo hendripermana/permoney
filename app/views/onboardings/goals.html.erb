@@ -21,9 +21,7 @@
 
     <%= form_with model: @user do |form| %>
       <%= form.hidden_field :redirect_to, value: self_hosted? ? "home" : "trial" %>
-      <%= form.hidden_field :set_onboarding_goals_at, value: Time.current %>
-      <%# Only set onboarded_at for self-hosted users. Managed users get it set after trial page %>
-      <%= form.hidden_field :onboarded_at, value: Time.current if self_hosted? %>
+      <%# Timestamps are now set server-side in the controller for security %>
 
       <div class="space-y-3">
         <% [

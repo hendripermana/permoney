@@ -18,7 +18,33 @@ class UsersController < ApplicationController
       end
     else
       was_ai_enabled = @user.ai_enabled
-      @user.update!(user_params.except(:redirect_to, :delete_profile_image))
+      
+      # Set onboarding timestamps server-side based on redirect context
+      update_params = user_params.except(:redirect_to, :delete_profile_image, :onboarded_at, :set_onboarding_preferences_at, :set_onboarding_goals_at)
+      
+      # Set timestamps based on the onboarding step
+      case user_params[:redirect_to]
+      when "preferences"
+        # User just completed profile setup
+        # No timestamp to set here
+      when "goals"
+        # User just completed preferences
+        update_params[:set_onboarding_preferences_at] = Time.current
+      when "trial"
+        # User just completed goals (managed mode)
+        update_params[:set_onboarding_goals_at] = Time.current
+      when "home"
+        # User completed goals (self-hosted mode) or coming from invitation
+        if user_params[:is_invited] == "true"
+          # Invited users skip full onboarding
+          update_params[:onboarded_at] = Time.current
+        elsif self_hosted? && !@user.onboarded?
+          update_params[:set_onboarding_goals_at] = Time.current
+          update_params[:onboarded_at] = Time.current
+        end
+      end
+      
+      @user.update!(update_params)
       @user.profile_image.purge if should_purge_profile_image?
 
       # Add a special notice if AI was just enabled
@@ -89,6 +115,7 @@ class UsersController < ApplicationController
       params.require(:user).permit(
         :first_name, :last_name, :email, :profile_image, :redirect_to, :delete_profile_image, :onboarded_at,
         :show_sidebar, :default_period, :default_account_order, :show_ai_sidebar, :ai_enabled, :theme, :set_onboarding_preferences_at, :set_onboarding_goals_at,
+        :is_invited,
         family_attributes: [ :name, :currency, :country, :locale, :date_format, :timezone, :id ],
         goals: []
       )

@@ -43,7 +43,7 @@ class OnboardingsController < ApplicationController
         # Allow them to see the trial page to complete onboarding
         if Current.user.onboarded_at.present?
           log_onboarding_decision("User fully onboarded, redirecting to root")
-          redirect_to root_path
+          redirect_to root_path and return
         else
           log_onboarding_decision("User on trial page, needs to complete trial setup")
         end
@@ -51,7 +51,7 @@ class OnboardingsController < ApplicationController
         # Use the comprehensive onboarding completion check for other pages
         if Current.user.onboarding_complete?
           log_onboarding_decision("Onboarding already complete, redirecting to root")
-          redirect_to root_path
+          redirect_to root_path and return
         else
           log_onboarding_decision("Onboarding not complete, showing onboarding page")
         end
