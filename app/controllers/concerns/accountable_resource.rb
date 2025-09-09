@@ -1,3 +1,5 @@
+require "cgi"
+
 module AccountableResource
   extend ActiveSupport::Concern
 
@@ -37,7 +39,7 @@ module AccountableResource
     @account = Current.family.accounts.create_and_sync(account_params.except(:return_to))
     @account.lock_saved_attributes!
 
-    redirect_to(account_params[:return_to].presence || @account, allow_other_host: false, notice: t("accounts.create.success", type: accountable_type.name.underscore.humanize))
+    redirect_to(safe_return_path(account_params[:return_to]) || @account, allow_other_host: false, notice: t("accounts.create.success", type: accountable_type.name.underscore.humanize))
   end
 
   def update
@@ -65,6 +67,48 @@ module AccountableResource
   end
 
   private
+    # Only allow internal, recognized paths to be used for redirects.
+    # Prevents open redirects and unexpected external navigation even within same host.
+    def safe_return_path(candidate)
+      return nil if candidate.blank?
+      return nil unless candidate.is_a?(String)
+
+      # Only allow absolute application paths (no protocol-relative or external URLs)
+      return nil unless candidate.start_with?("/")
+      return nil if candidate.start_with?("//")
+
+      # Block control chars and encoded CR/LF to prevent header-splitting
+      return nil if candidate.match?(/[[:cntrl:]]/)
+      return nil if candidate.match?(/%0d|%0a/i)
+
+      # Decode once and re-check for protocol-relative or dangerous dot-segments
+      decoded = begin
+        CGI.unescape(candidate)
+      rescue StandardError
+        candidate
+      end
+
+      # Reject protocol-relative after decoding and any obvious scheme prefixes
+      return nil if decoded.start_with?("//")
+      return nil if decoded.match?(/\A[a-z][a-z0-9+.-]*:/i)
+
+      # Basic dot-segment hardening to avoid odd traversal behaviors
+      return nil if decoded.start_with?("/..") || decoded.end_with?("/..")
+      return nil if decoded.include?("/../") || decoded.include?("/./")
+
+      begin
+        # Recognize only navigable GET routes and prefer request-aware env when present
+        if defined?(request) && request
+          env = request.env.merge("REQUEST_METHOD" => "GET")
+          Rails.application.routes.recognize_path(candidate, env)
+        else
+          Rails.application.routes.recognize_path(candidate, method: :get)
+        end
+        candidate
+      rescue ActionController::RoutingError, ArgumentError
+        nil
+      end
+    end
     def set_link_options
       @show_us_link = Current.family.can_connect_plaid_us?
       @show_eu_link = Current.family.can_connect_plaid_eu?
