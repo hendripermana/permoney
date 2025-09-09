@@ -3,7 +3,7 @@
 <p>
   <%= t(".body",
     inviter: @invitation.inviter.display_name,
-    family: @invitation.family.name).html_safe %>
+    family: @invitation.family.name) %>
 </p>
 
 <%= link_to t(".accept_button"), @accept_url, class: "button" %>

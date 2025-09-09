@@ -1,4 +1,4 @@
-# CodeQL Analysis workflow for Maybe
+# CodeQL Analysis workflow for Permoney
 # This workflow performs CodeQL analysis to identify vulnerabilities and coding errors
 
 name: "CodeQL Analysis"
@@ -28,7 +28,7 @@ jobs:
       matrix:
         include:
           - language: 'ruby'
-            ruby-version: '3.3'
+            ruby-version: '.ruby-version'
           - language: 'javascript'
             node-version: '20'
         # CodeQL supports [ 'cpp', 'csharp', 'go', 'java', 'javascript', 'python', 'ruby' ]
@@ -51,7 +51,7 @@ jobs:
               echo "analyze_needed=false" >> $GITHUB_OUTPUT
             fi
           elif [ "${{ matrix.language }}" = "javascript" ]; then
-            if echo "$CHANGED_FILES" | grep -E '\.(js|jsx|ts|tsx|vue|json)$|package\.json|yarn\.lock'; then
+            if echo "$CHANGED_FILES" | grep -E '\.(js|jsx|ts|tsx|vue|json)$|package\.json|package-lock\.json|yarn\.lock'; then
               echo "analyze_needed=true" >> $GITHUB_OUTPUT
             else
               echo "analyze_needed=false" >> $GITHUB_OUTPUT
@@ -66,19 +66,8 @@ jobs:
       uses: github/codeql-action/init@v3
       with:
         languages: ${{ matrix.language }}
-        # Enhanced queries for better security coverage
-        queries: +security-extended,security-and-quality
-        config: |
-          name: "CodeQL Config"
-          disable-default-queries: false
-          queries:
-            - uses: security-extended
-            - uses: security-and-quality
-          paths-ignore:
-            - "**/node_modules"
-            - "**/vendor"
-            - "**/tmp"
-            - "**/log"
+        # Enhanced queries and ignore paths via config file
+        config-file: .github/codeql/codeql-config.yml
 
     # For Ruby, we need to set up the environment
     - name: Set up Ruby
@@ -94,20 +83,19 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: ${{ matrix.node-version }}
-        cache: 'yarn'
+        cache: 'npm'
 
-    - name: Cache Yarn dependencies
+    - name: Cache JS dependencies
       if: matrix.language == 'javascript' && steps.changes.outputs.analyze_needed == 'true'
       uses: actions/cache@v4
       with:
         path: |
           node_modules
-          ~/.cache/yarn
-          .yarn/cache
-        key: ${{ runner.os }}-yarn-${{ matrix.node-version }}-${{ hashFiles('**/yarn.lock') }}
+          ~/.npm
+        key: ${{ runner.os }}-npm-${{ matrix.node-version }}-${{ hashFiles('**/package-lock.json') }}
         restore-keys: |
-          ${{ runner.os }}-yarn-${{ matrix.node-version }}-
-          ${{ runner.os }}-yarn-
+          ${{ runner.os }}-npm-${{ matrix.node-version }}-
+          ${{ runner.os }}-npm-
 
     - name: Install JavaScript dependencies
       if: matrix.language == 'javascript' && steps.changes.outputs.analyze_needed == 'true'

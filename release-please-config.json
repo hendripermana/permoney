@@ -1,0 +1,15 @@
+{
+  "bootstrap-sha": "",
+  "include-v-in-tag": true,
+  "plugins": [
+    "node-workspace"
+  ],
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "draft": false,
+      "prerelease": false
+    }
+  }
+}
+

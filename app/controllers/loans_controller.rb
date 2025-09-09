@@ -70,7 +70,7 @@ class LoansController < ApplicationController
     )
 
     if result.success?
-      redirect_to account_params[:return_to].presence || result.account, notice: t("accounts.create.success", type: "Loan")
+      redirect_to(account_params[:return_to].presence || result.account, allow_other_host: false, notice: t("accounts.create.success", type: "Loan"))
     else
       @account = Current.family.accounts.build(
         currency: Current.family.currency,

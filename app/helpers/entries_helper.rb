@@ -18,15 +18,17 @@ module EntriesHelper
       end
     end
 
-    deduped_entries.group_by(&:date).sort.reverse_each.map do |date, grouped_entries|
-      content = capture do
-        yield grouped_entries
+    blocks = deduped_entries
+      .group_by(&:date)
+      .sort
+      .reverse_each
+      .filter_map do |date, grouped_entries|
+        content = capture { yield grouped_entries }
+        next if content.blank?
+        render(partial: "entries/entry_group", locals: { date:, entries: grouped_entries, content:, totals: }).to_s
       end
 
-      next if content.blank?
-
-      render partial: "entries/entry_group", locals: { date:, entries: grouped_entries, content:, totals: }
-    end.compact.join.html_safe
+    safe_join(blocks)
   end
 
   def entry_name_detailed(entry)
