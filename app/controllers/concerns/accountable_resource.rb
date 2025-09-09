@@ -37,7 +37,7 @@ module AccountableResource
     @account = Current.family.accounts.create_and_sync(account_params.except(:return_to))
     @account.lock_saved_attributes!
 
-    redirect_to(account_params[:return_to].presence || @account, allow_other_host: false, notice: t("accounts.create.success", type: accountable_type.name.underscore.humanize))
+    redirect_to(safe_return_path(account_params[:return_to]) || @account, allow_other_host: false, notice: t("accounts.create.success", type: accountable_type.name.underscore.humanize))
   end
 
   def update
@@ -65,6 +65,24 @@ module AccountableResource
   end
 
   private
+    # Only allow internal, recognized paths to be used for redirects.
+    # Prevents open redirects and unexpected external navigation even within same host.
+    def safe_return_path(candidate)
+      return nil if candidate.blank?
+      return nil unless candidate.is_a?(String)
+
+      # Only allow absolute application paths (no protocol-relative or external URLs)
+      return nil unless candidate.start_with?("/")
+      return nil if candidate.start_with?("//")
+      return nil if candidate.match?(/[\r\n]/)
+
+      begin
+        Rails.application.routes.recognize_path(candidate)
+        candidate
+      rescue ActionController::RoutingError, ArgumentError
+        nil
+      end
+    end
     def set_link_options
       @show_us_link = Current.family.can_connect_plaid_us?
       @show_eu_link = Current.family.can_connect_plaid_eu?

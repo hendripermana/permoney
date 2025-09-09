@@ -18,7 +18,7 @@ class PayLatersController < ApplicationController
     ).call
 
     if result.success?
-      redirect_to(account_params[:return_to].presence || result.account, allow_other_host: false, notice: t("accounts.create.success", type: "PayLater"))
+      redirect_to(safe_return_path(account_params[:return_to]) || result.account, allow_other_host: false, notice: t("accounts.create.success", type: "PayLater"))
     else
       @account = Current.family.accounts.build(currency: Current.family.currency, accountable: PayLater.new)
       @error_message = result.error
