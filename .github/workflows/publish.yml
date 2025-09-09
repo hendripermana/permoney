@@ -80,7 +80,7 @@ jobs:
         platform: [amd64, arm64]
 
     timeout-minutes: 60
-    runs-on: ${{ matrix.platform == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-latest
 
     outputs:
       tags: ${{ steps.meta.outputs.tags }}
@@ -96,6 +96,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Set up QEMU (cross-arch emulation)
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -122,6 +125,8 @@ jobs:
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             BASE_CONFIG="type=semver,pattern={{version}}"
             BASE_CONFIG+=$'\n'"type=raw,value=stable"
+          elif [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
+            BASE_CONFIG+=$'\n'"type=raw,value=latest"
           fi
           {
             echo 'TAGS_SPEC<<EOF'
@@ -246,6 +251,8 @@ jobs:
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             BASE_CONFIG="type=semver,pattern={{version}}"
             BASE_CONFIG+=$'\n'"type=raw,value=stable"
+          elif [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
+            BASE_CONFIG+=$'\n'"type=raw,value=latest"
           fi
           {
             echo 'TAGS_SPEC<<EOF'
