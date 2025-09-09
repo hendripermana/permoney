@@ -81,7 +81,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }})
-            if echo "$CHANGED_FILES" | grep -E '\.(js|jsx|ts|tsx|vue|json)$|package\.json|yarn\.lock'; then
+            if echo "$CHANGED_FILES" | grep -E '\.(js|jsx|ts|tsx|vue|json)$|package\.json|package-lock\.json|yarn\.lock'; then
               echo "js_changed=true" >> $GITHUB_OUTPUT
             else
               echo "js_changed=false" >> $GITHUB_OUTPUT
@@ -150,9 +150,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/rubocop_cache
-          key: rubocop-${{ runner.os }}-${{ matrix.ruby-version }}-${{ hashFiles('Gemfile.lock') }}
+          key: rubocop-${{ runner.os }}-${{ hashFiles('Gemfile.lock') }}
           restore-keys: |
-            rubocop-${{ runner.os }}-${{ matrix.ruby-version }}-
+            rubocop-${{ runner.os }}-
 
       - name: Lint code for consistent style
         if: steps.ruby_changes.outputs.ruby_changed == 'true'
@@ -184,7 +184,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }})
-            if echo "$CHANGED_FILES" | grep -E '\.(js|jsx|ts|tsx|vue|json)$|package\.json|yarn\.lock'; then
+            if echo "$CHANGED_FILES" | grep -E '\.(js|jsx|ts|tsx|vue|json)$|package\.json|package-lock\.json|yarn\.lock'; then
               echo "js_changed=true" >> $GITHUB_OUTPUT
             else
               echo "js_changed=false" >> $GITHUB_OUTPUT
@@ -285,7 +285,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }})
-            if echo "$CHANGED_FILES" | grep -E '\.(rb|rake|gemspec|js|jsx|ts|tsx)$|Gemfile|Rakefile|package\.json|yarn\.lock|test/|spec/|app/|config/|db/'; then
+            if echo "$CHANGED_FILES" | grep -E '\.(rb|rake|gemspec|js|jsx|ts|tsx)$|Gemfile|Rakefile|package\.json|package-lock\.json|yarn\.lock|test/|spec/|app/|config/|db/'; then
               echo "test_needed=true" >> $GITHUB_OUTPUT
             else
               echo "test_needed=false" >> $GITHUB_OUTPUT
@@ -311,9 +311,8 @@ jobs:
             tmp/cache/bootsnap
             public/packs
             public/vite
-          key: assets-${{ runner.os }}-${{ matrix.ruby-version }}-${{ hashFiles('**/Gemfile.lock', 'app/assets/**/*', 'app/javascript/**/*', 'config/**/*', 'yarn.lock') }}
+          key: assets-${{ runner.os }}-${{ hashFiles('**/Gemfile.lock', 'app/assets/**/*', 'app/javascript/**/*', 'config/**/*', 'package-lock.json') }}
           restore-keys: |
-            assets-${{ runner.os }}-${{ matrix.ruby-version }}-
             assets-${{ runner.os }}-
 
       - name: Setup database
@@ -347,7 +346,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: failure() && matrix.test-type == 'system' && steps.test_changes.outputs.test_needed == 'true'
         with:
-          name: screenshots-ruby-${{ matrix.ruby-version }}
+          name: screenshots-system-tests
           path: ${{ github.workspace }}/tmp/screenshots
           if-no-files-found: ignore
           retention-days: 7

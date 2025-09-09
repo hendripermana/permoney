@@ -51,7 +51,7 @@ jobs:
               echo "analyze_needed=false" >> $GITHUB_OUTPUT
             fi
           elif [ "${{ matrix.language }}" = "javascript" ]; then
-            if echo "$CHANGED_FILES" | grep -E '\.(js|jsx|ts|tsx|vue|json)$|package\.json|yarn\.lock'; then
+            if echo "$CHANGED_FILES" | grep -E '\.(js|jsx|ts|tsx|vue|json)$|package\.json|package-lock\.json|yarn\.lock'; then
               echo "analyze_needed=true" >> $GITHUB_OUTPUT
             else
               echo "analyze_needed=false" >> $GITHUB_OUTPUT

@@ -117,7 +117,15 @@ module ApplicationHelper
       footnotes: true
     )
 
-    sanitize(markdown.render(text))
+    allowed_tags = %w[
+      a p br ul ol li strong em b i code pre blockquote hr
+      h1 h2 h3 h4 h5 h6
+      table thead tbody tfoot tr th td
+      dl dt dd sup sub mark kbd samp var
+    ]
+    allowed_attributes = %w[href title target rel class]
+
+    sanitize(markdown.render(text), tags: allowed_tags, attributes: allowed_attributes)
   end
 
   private
