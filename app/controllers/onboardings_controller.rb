@@ -37,12 +37,24 @@ class OnboardingsController < ApplicationController
     def redirect_if_already_complete
       return unless Current.user
 
-      # Use the comprehensive onboarding completion check
-      if Current.user.onboarding_complete?
-        log_onboarding_decision("Onboarding already complete, redirecting to root")
-        redirect_to root_path
+      # For trial page, don't redirect if user hasn't started trial yet (managed mode only)
+      if action_name == "trial" && !self_hosted?
+        # User might have set_onboarding_goals_at but not onboarded_at yet
+        # Allow them to see the trial page to complete onboarding
+        if Current.user.onboarded_at.present?
+          log_onboarding_decision("User fully onboarded, redirecting to root")
+          redirect_to root_path and return
+        else
+          log_onboarding_decision("User on trial page, needs to complete trial setup")
+        end
       else
-        log_onboarding_decision("Onboarding not complete, showing onboarding page")
+        # Use the comprehensive onboarding completion check for other pages
+        if Current.user.onboarding_complete?
+          log_onboarding_decision("Onboarding already complete, redirecting to root")
+          redirect_to root_path and return
+        else
+          log_onboarding_decision("Onboarding not complete, showing onboarding page")
+        end
       end
     end
 end

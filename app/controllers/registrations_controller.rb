@@ -26,7 +26,13 @@ class RegistrationsController < ApplicationController
     if @user.save
       @invitation&.update!(accepted_at: Time.current)
       @session = create_session_for(@user)
-      redirect_to root_path, notice: t(".success")
+      # For new users, redirect to onboarding instead of root
+      # This ensures they go through the onboarding flow
+      if @user.needs_onboarding? && !@invitation
+        redirect_to onboarding_path, notice: t(".success")
+      else
+        redirect_to root_path, notice: t(".success")
+      end
     else
       render :new, status: :unprocessable_entity, alert: t(".failure")
     end

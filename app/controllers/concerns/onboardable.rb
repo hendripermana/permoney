@@ -11,18 +11,18 @@ module Onboardable
       return unless Current.user
       return unless redirectable_path?(request.path)
 
-      # In self-hosted environments, do not enforce onboarding/trial gating via this concern.
-      # Self-hosted installs manage their own first-run experience and do not require subscription checks.
-      return if self_hosted?
-
       # Prevent redirect loops by checking if we're already on onboarding pages
       return if request.path.starts_with?("/onboarding")
 
-      # Determine onboarding completeness in a robust way
-      if onboarding_incomplete?
+      # Check if user needs onboarding (both managed and self-hosted)
+      if Current.user.needs_onboarding?
         redirect_to onboarding_path and return
       end
 
+      # Skip subscription checks for self-hosted
+      return if self_hosted?
+
+      # Subscription checks for managed mode only
       if Current.family&.needs_subscription?
         redirect_to trial_onboarding_path
       elsif Current.family&.upgrade_required?
