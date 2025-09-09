@@ -275,6 +275,18 @@ jobs:
       - name: Setup Chrome
         uses: browser-actions/setup-chrome@v1
 
+      - name: Verify Chrome is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHROME_PATH="$(command -v google-chrome || command -v chrome || command -v chromium-browser || command -v chromium || true)"
+          if [[ -z "$CHROME_PATH" ]]; then
+            echo "Chrome not found in PATH" >&2
+            exit 1
+          fi
+          echo "CHROME_BIN=$CHROME_PATH" >> "$GITHUB_ENV"
+          "$CHROME_PATH" --version
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:
