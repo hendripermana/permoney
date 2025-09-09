@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/hendripermana/permoney/compare/v0.2.0...v0.2.1) (2025-09-09)
+
+
+### Bug Fixes
+
+* correct Rails route recognition parameter ([ad68c14](https://github.com/hendripermana/permoney/commit/ad68c14ffb320d338f8bd000e19a37b3b9656650))
+* enhance security measures ([9dc9ad9](https://github.com/hendripermana/permoney/commit/9dc9ad91c1349a9776b24693f39680b18273d304))
+
 ## [0.2.0](https://github.com/hendripermana/permoney/compare/v0.1.0...v0.2.0) (2025-09-09)
 
 
