@@ -18,7 +18,7 @@ module EntriesHelper
       end
     end
 
-    deduped_entries.group_by(&:date).sort.reverse_each.map do |date, grouped_entries|
+    blocks = deduped_entries.group_by(&:date).sort.reverse_each.map do |date, grouped_entries|
       content = capture do
         yield grouped_entries
       end
@@ -26,7 +26,9 @@ module EntriesHelper
       next if content.blank?
 
       render partial: "entries/entry_group", locals: { date:, entries: grouped_entries, content:, totals: }
-    end.compact.join.html_safe
+    end.compact
+
+    safe_join(blocks)
   end
 
   def entry_name_detailed(entry)

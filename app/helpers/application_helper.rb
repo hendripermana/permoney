@@ -93,12 +93,14 @@ module ApplicationHelper
     cookies[:admin] == "true"
   end
 
-  # Renders Markdown text using Redcarpet
+  # Renders Markdown text using Redcarpet and sanitizes the output
   def markdown(text)
     return "" if text.blank?
 
     renderer = Redcarpet::Render::HTML.new(
       hard_wrap: true,
+      filter_html: true,
+      safe_links_only: true,
       link_attributes: { target: "_blank", rel: "noopener noreferrer" }
     )
 
@@ -115,7 +117,7 @@ module ApplicationHelper
       footnotes: true
     )
 
-    markdown.render(text).html_safe
+    sanitize(markdown.render(text))
   end
 
   private

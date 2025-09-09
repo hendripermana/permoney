@@ -1,4 +1,4 @@
-# Security Scanning workflow for Maybe
+# Security Scanning workflow for Permoney
 # This workflow performs additional security checks beyond CodeQL
 
 name: "Security Scanning"
@@ -48,7 +48,7 @@ jobs:
       if: steps.changes.outputs.scan_needed == 'true'
       uses: ruby/setup-ruby@v1
       with:
-        ruby-version: '3.3'
+        ruby-version: .ruby-version
         bundler-cache: true
 
     - name: Set up Node.js
@@ -56,26 +56,25 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '20'
-        cache: 'yarn'
+        cache: 'npm'
 
-    - name: Cache Yarn dependencies
+    - name: Cache npm dependencies
       if: steps.changes.outputs.scan_needed == 'true'
       uses: actions/cache@v4
       with:
         path: |
           node_modules
-          ~/.cache/yarn
-          .yarn/cache
-        key: ${{ runner.os }}-yarn-20-${{ hashFiles('**/yarn.lock') }}
+          ~/.npm
+        key: ${{ runner.os }}-npm-20-${{ hashFiles('**/package-lock.json') }}
         restore-keys: |
-          ${{ runner.os }}-yarn-20-
-          ${{ runner.os }}-yarn-
+          ${{ runner.os }}-npm-20-
+          ${{ runner.os }}-npm-
 
     - name: Install dependencies
       if: steps.changes.outputs.scan_needed == 'true'
       run: |
         bundle install --jobs 4 --retry 3
-        yarn install --frozen-lockfile
+        npm ci
 
     # Ruby security scanning with Brakeman
     - name: Cache Brakeman

@@ -1,4 +1,4 @@
-# Test Coverage and Quality Gates workflow for Maybe
+# Test Coverage and Quality Gates workflow for Permoney
 # This workflow collects test coverage reports and enforces quality gates
 
 name: "Test Coverage & Quality Gates"
@@ -21,16 +21,16 @@ jobs:
       checks: write
       statuses: write
     
+    # Use the project's pinned Ruby version for coverage
     strategy:
-      matrix:
-        ruby: ['3.3']
+      matrix: {}
     
     services:
       postgres:
         image: postgres:16
         env:
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: maybe_test
+          POSTGRES_DB: permoney_test
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -57,14 +57,14 @@ jobs:
     - name: Set up Ruby
       uses: ruby/setup-ruby@v1
       with:
-        ruby-version: ${{ matrix.ruby }}
+        ruby-version: .ruby-version
         bundler-cache: true
     
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '20'
-        cache: 'yarn'
+        cache: 'npm'
     
     - name: Cache Rails assets
       uses: actions/cache@v4
@@ -75,9 +75,9 @@ jobs:
           public/assets
           public/packs
           public/vite
-        key: ${{ runner.os }}-rails-${{ matrix.ruby }}-assets-${{ hashFiles('app/assets/**/*', 'app/javascript/**/*', 'config/**/*', 'Gemfile.lock', 'yarn.lock') }}
+        key: ${{ runner.os }}-rails-assets-${{ hashFiles('app/assets/**/*', 'app/javascript/**/*', 'config/**/*', 'Gemfile.lock', 'package-lock.json') }}
         restore-keys: |
-          ${{ runner.os }}-rails-${{ matrix.ruby }}-assets-
+          ${{ runner.os }}-rails-assets-
           ${{ runner.os }}-rails-assets-
     
     - name: Install dependencies
@@ -88,7 +88,7 @@ jobs:
     - name: Setup database
       env:
         RAILS_ENV: test
-        DATABASE_URL: postgres://postgres:postgres@localhost:5432/maybe_test
+        DATABASE_URL: postgres://postgres:postgres@localhost:5432/permoney_test
       run: |
         bin/rails db:create
         bin/rails db:schema:load
@@ -96,7 +96,7 @@ jobs:
     - name: Run tests with coverage
       env:
         RAILS_ENV: test
-        DATABASE_URL: postgres://postgres:postgres@localhost:5432/maybe_test
+        DATABASE_URL: postgres://postgres:postgres@localhost:5432/permoney_test
         REDIS_URL: redis://localhost:6379/0
         COVERAGE: true
       run: |
