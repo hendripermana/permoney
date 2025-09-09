@@ -100,7 +100,7 @@ module AccountableResource
         # Recognize only navigable GET routes and prefer request-aware env when present
         if defined?(request) && request
           env = request.env.merge("REQUEST_METHOD" => "GET")
-          Rails.application.routes.recognize_path(candidate, environment: env)
+          Rails.application.routes.recognize_path(candidate, env)
         else
           Rails.application.routes.recognize_path(candidate, method: :get)
         end
