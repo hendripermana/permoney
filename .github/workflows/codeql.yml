@@ -66,19 +66,8 @@ jobs:
       uses: github/codeql-action/init@v3
       with:
         languages: ${{ matrix.language }}
-        # Enhanced queries for better security coverage
-        queries: +security-extended,security-and-quality
-        config: |
-          name: "CodeQL Config"
-          disable-default-queries: false
-          queries:
-            - uses: security-extended
-            - uses: security-and-quality
-          paths-ignore:
-            - "**/node_modules"
-            - "**/vendor"
-            - "**/tmp"
-            - "**/log"
+        # Enhanced queries and ignore paths via config file
+        config-file: .github/codeql/codeql-config.yml
 
     # For Ruby, we need to set up the environment
     - name: Set up Ruby
