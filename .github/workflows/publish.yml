@@ -125,8 +125,12 @@ jobs:
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             BASE_CONFIG="type=semver,pattern={{version}}"
             BASE_CONFIG+=$'\n'"type=raw,value=stable"
-          elif [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
+          elif [[ "$GITHUB_REF" == "refs/heads/main" && "$GITHUB_EVENT_NAME" == "push" ]]; then
+            BASE_CONFIG=${BASE_CONFIG:-}
             BASE_CONFIG+=$'\n'"type=raw,value=latest"
+          elif [[ "$GITHUB_REF" == "refs/heads/develop" && "$GITHUB_EVENT_NAME" == "push" ]]; then
+            BASE_CONFIG=${BASE_CONFIG:-}
+            BASE_CONFIG+=$'\n'"type=raw,value=edge"
           fi
           {
             echo 'TAGS_SPEC<<EOF'
@@ -251,8 +255,12 @@ jobs:
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             BASE_CONFIG="type=semver,pattern={{version}}"
             BASE_CONFIG+=$'\n'"type=raw,value=stable"
-          elif [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
+          elif [[ "$GITHUB_REF" == "refs/heads/main" && "$GITHUB_EVENT_NAME" == "push" ]]; then
+            BASE_CONFIG=${BASE_CONFIG:-}
             BASE_CONFIG+=$'\n'"type=raw,value=latest"
+          elif [[ "$GITHUB_REF" == "refs/heads/develop" && "$GITHUB_EVENT_NAME" == "push" ]]; then
+            BASE_CONFIG=${BASE_CONFIG:-}
+            BASE_CONFIG+=$'\n'"type=raw,value=edge"
           fi
           {
             echo 'TAGS_SPEC<<EOF'
