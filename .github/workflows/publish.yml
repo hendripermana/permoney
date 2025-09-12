@@ -130,7 +130,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Preflight: require PAT for cross-namespace push
+      - name: "Preflight: require PAT for cross-namespace push"
         if: ${{ env.DO_PUSH == 'true' && env.PUBLISH_IMAGE != github.repository && !secrets.GHCR_PAT }}
         run: |
           echo "Cross-namespace publish to ghcr.io/${{ env.PUBLISH_IMAGE }} requires GHCR_PAT (write:packages) and optional GHCR_USERNAME." >&2
