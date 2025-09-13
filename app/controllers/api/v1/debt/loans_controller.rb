@@ -4,7 +4,9 @@ class Api::V1::Debt::LoansController < Api::V1::BaseController
 
   # POST /api/v1/debt/loans/plan/preview
   def preview
-    account = Current.family.accounts.find(params.require(:account_id))
+    # Scoped to current family to prevent unauthorized access
+    account_id = params.require(:account_id)
+    account = Current.family.accounts.find(account_id)
 
     principal = params[:principal_amount].to_d
     tenor = params[:tenor_months].to_i
@@ -22,36 +24,34 @@ class Api::V1::Debt::LoansController < Api::V1::BaseController
       return render json: { error: "Unsupported day_count. Allowed: #{allowed.join(', ')}" }, status: :unprocessable_entity unless allowed.include?(day_count)
     end
 
-    rows = Loan::ScheduleGenerator.new(
-      principal_amount: principal,
-      rate_or_profit: rate,
-      tenor_months: tenor,
-      payment_frequency: freq,
-      schedule_method: method,
-      start_date: start,
-      balloon_amount: params[:balloon_amount],
-      loan_id: account.accountable_id
-    ).generate
-  rescue ArgumentError => e
-    Rails.logger.error({ at: "API::Loans.preview.error", account_id: account&.id, error: e.message }.to_json)
-    return render json: { error: e.message }, status: :unprocessable_entity
-    ).generate
+    begin
+      rows = Loan::ScheduleGenerator.new(
+        principal_amount: principal,
+        rate_or_profit: rate,
+        tenor_months: tenor,
+        payment_frequency: freq,
+        schedule_method: method,
+        start_date: start,
+        balloon_amount: params[:balloon_amount],
+        loan_id: account.accountable_id
+      ).generate
 
-    sum_p = rows.sum { |r| r.principal.to_d }
-    sum_i = rows.sum { |r| r.interest.to_d }
-    sum_t = rows.sum { |r| r.total.to_d }
-    rounding_note = (principal - sum_p).abs <= 0.01 ? nil : "Rounding adjustments applied to last row"
+      sum_p = rows.sum { |r| r.principal.to_d }
+      sum_i = rows.sum { |r| r.interest.to_d }
+      sum_t = rows.sum { |r| r.total.to_d }
+      rounding_note = (principal - sum_p).abs <= 0.01 ? nil : "Rounding adjustments applied to last row"
 
-    render json: {
-      count: rows.size,
-      rows: rows.map { |r| { due_date: r.due_date, principal: r.principal.to_s, interest: r.interest.to_s, total: r.total.to_s } },
-      totals: { principal: sum_p.to_s, interest: sum_i.to_s, total: sum_t.to_s },
-      rounding_note: rounding_note,
-      day_count: day_count
-    }
-  rescue ArgumentError => e
-    Rails.logger.error({ at: "API::Loans.preview.error", account_id: account.id, error: e.message }.to_json)
-    render json: { error: e.message }, status: :unprocessable_entity
+      render json: {
+        count: rows.size,
+        rows: rows.map { |r| { due_date: r.due_date, principal: r.principal.to_s, interest: r.interest.to_s, total: r.total.to_s } },
+        totals: { principal: sum_p.to_s, interest: sum_i.to_s, total: sum_t.to_s },
+        rounding_note: rounding_note,
+        day_count: day_count
+      }
+    rescue ArgumentError => e
+      Rails.logger.error({ at: "API::Loans.preview.error", account_id: account&.id, error: e.message }.to_json)
+      render json: { error: e.message }, status: :unprocessable_entity
+    end
   end
   def post_installment
     result = Loan::PostInstallment.new(
@@ -72,7 +72,9 @@ class Api::V1::Debt::LoansController < Api::V1::BaseController
 
   # POST /api/v1/debt/loans/plan/regenerate
   def regenerate
-    account = Current.family.accounts.find(params.require(:account_id))
+    # Scoped to current family to prevent unauthorized access
+    account_id = params.require(:account_id)
+    account = Current.family.accounts.find(account_id)
 
     principal = (params[:principal_amount] || account.accountable.principal_amount || account.accountable.initial_balance || account.balance).to_d
     tenor = (params[:tenor_months] || account.accountable.tenor_months).to_i

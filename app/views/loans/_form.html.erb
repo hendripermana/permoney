@@ -52,7 +52,7 @@
         <%= loan_form.text_field :counterparty_name, label: "Counterparty Name", placeholder: "e.g., BCA, Dana, John Doe" %>
       </div>
       <%# Personal loan contact section %>
-      <div class="flex items-center gap-2" data-conditional-fields-target="field" data-show-when="personal">
+      <div class="flex items-center gap-2" data-conditional-fields-target="field" data-show-when="loan_personal">
         <%= loan_form.text_field :linked_contact_id, label: "Contact (optional)", placeholder: "UUID or leave blank" %>
         <%= loan_form.text_field :lender_name, label: "Lender Name (fallback)", placeholder: "Person or entity name" %>
       </div>
@@ -113,7 +113,7 @@
         <div class="flex items-center gap-2">
           <% if params[:inline_preview].present? %>
             <% href_params = {
-              principal_amount: loan_form.object.principal_amount,
+              principal_amount: loan_form.object.principal_amount&.to_d,
               rate_or_profit: loan_form.object.rate_or_profit,
               tenor_months: loan_form.object.tenor_months,
               payment_frequency: loan_form.object.payment_frequency,
@@ -132,7 +132,7 @@
               text: "Preview Schedule",
               variant: "secondary",
               icon: "table",
-              href: schedule_preview_loan_path(form.object, principal_amount: loan_form.object.principal_amount,
+              href: schedule_preview_loan_path(form.object, principal_amount: loan_form.object.principal_amount&.to_d,
                 rate_or_profit: loan_form.object.rate_or_profit,
                 tenor_months: loan_form.object.tenor_months,
                 payment_frequency: loan_form.object.payment_frequency,
@@ -145,7 +145,7 @@
               text: "Preview Schedule",
               variant: "secondary",
               icon: "table",
-              href: schedule_preview_loans_path(principal_amount: loan_form.object.principal_amount,
+              href: schedule_preview_loans_path(principal_amount: loan_form.object.principal_amount&.to_d,
                 rate_or_profit: loan_form.object.rate_or_profit,
                 tenor_months: loan_form.object.tenor_months,
                 payment_frequency: loan_form.object.payment_frequency,
