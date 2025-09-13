@@ -11,13 +11,14 @@
       </tr>
     </thead>
     <tbody>
+      <% currency_unit = (@account&.currency || Current.family.currency) %>
       <% rows.each_with_index do |r, idx| %>
         <tr class="border-t border-primary">
           <td class="py-2"><%= idx + 1 %></td>
           <td class="py-2"><%= r.due_date %></td>
-          <td class="py-2 text-right"><%= number_to_currency(r.principal, unit: (@account&.currency || Current.family.currency)) %></td>
-          <td class="py-2 text-right"><%= number_to_currency(r.interest, unit: (@account&.currency || Current.family.currency)) %></td>
-          <td class="py-2 text-right"><%= number_to_currency(r.total, unit: (@account&.currency || Current.family.currency)) %></td>
+          <td class="py-2 text-right"><%= number_to_currency(r.principal || 0, unit: currency_unit) %></td>
+          <td class="py-2 text-right"><%= number_to_currency(r.interest || 0, unit: currency_unit) %></td>
+          <td class="py-2 text-right"><%= number_to_currency(r.total || 0, unit: currency_unit) %></td>
         </tr>
       <% end %>
     </tbody>
