@@ -4,7 +4,6 @@ class LoanNotificationsTest < ActiveSupport::TestCase
   setup do
     @loan_account = accounts(:loan)
   end
-
   test "schedule generator emits notification" do
     events = []
     sub = ActiveSupport::Notifications.subscribe("permoney.loan.schedule.generate") { |*args| events << ActiveSupport::Notifications::Event.new(*args) }
@@ -44,4 +43,3 @@ class LoanNotificationsTest < ActiveSupport::TestCase
     ActiveSupport::Notifications.unsubscribe(sub) if sub
   end
 end
-

@@ -54,7 +54,9 @@ class Loan::ScheduleGenerator
     if defined?(Sentry)
       begin
         tx = Sentry.get_current_scope.get_transaction
-        tx&.set_measurement("loan.schedule.ms", ms, "millisecond")
+        if tx&.respond_to?(:set_measurement)
+          tx.set_measurement("loan.schedule.ms", ms, "millisecond")
+        end
       rescue NoMethodError; end
     end
     Rails.logger.info({ at: "Loan::ScheduleGenerator.generate", ms: ms, principal: principal.to_s, rate: annual_rate.to_s, tenor: tenor_months, frequency: frequency, method: method }.to_json) rescue nil
@@ -193,10 +195,10 @@ class Loan::ScheduleGenerator
         end
       end
     end
-end
 
-def log_error(kind)
-  Rails.logger.error({ at: "Loan::ScheduleGenerator.error", kind: kind, principal: principal.to_s, balloon: balloon.to_s, tenor: tenor_months, frequency: frequency, method: method }.to_json)
-rescue
-  # no-op
+    def log_error(kind)
+      Rails.logger.error({ at: "Loan::ScheduleGenerator.error", kind: kind, principal: principal.to_s, balloon: balloon.to_s, tenor: tenor_months, frequency: frequency, method: method }.to_json)
+    rescue
+      # no-op
+    end
 end

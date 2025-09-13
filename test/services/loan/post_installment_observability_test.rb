@@ -15,7 +15,6 @@ class LoanPostInstallmentObservabilityTest < ActiveSupport::TestCase
       total_amount: 1000
     )
   end
-
   test "fires notifications and Sentry spans when available" do
     events = []
     sub = ActiveSupport::Notifications.subscribe("permoney.loan.installment.posted") { |*args| events << ActiveSupport::Notifications::Event.new(*args) }
@@ -26,7 +25,7 @@ class LoanPostInstallmentObservabilityTest < ActiveSupport::TestCase
     end
     ::Sentry.singleton_class.class_eval do
       attr_accessor :span_called
-      def with_child_span(op:, description:)
+      def with_child_span(op:, description: nil)
         self.span_called = true
         span = Struct.new(:set_data).new(proc { |_k, _v| })
         yield span
@@ -55,4 +54,3 @@ class LoanPostInstallmentObservabilityTest < ActiveSupport::TestCase
     ActiveSupport::Notifications.unsubscribe(sub) if sub
   end
 end
-

@@ -66,7 +66,7 @@
         <%= loan_form.number_field :tenor_months, label: "Tenor (months)", placeholder: 12 %>
       </div>
       <div class="flex items-center gap-2">
-        <%= loan_form.date_field :start_date, label: "Start Date", value: Date.current >> 1 %>
+        <%= loan_form.date_field :start_date, label: "Start Date", value: (loan_form.object.start_date || (Date.current >> 1)) %>
         <%= loan_form.select :payment_frequency,
                               [["Monthly","MONTHLY"],["Weekly","WEEKLY"],["Biweekly","BIWEEKLY"]],
                               { label: "Payment Frequency" } %>

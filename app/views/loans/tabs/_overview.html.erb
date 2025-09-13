@@ -83,7 +83,7 @@
         frame: :modal,
         class: "w-full"
       ) %>
-      <% if Rails.application.config.features.loans.extra_payment %>
+      <% if Rails.application.config.respond_to?(:features) && Rails.application.config.features.dig(:loans, :extra_payment) %>
         <%= render DS::Link.new(
           text: "Extra Payment",
           variant: "ghost",

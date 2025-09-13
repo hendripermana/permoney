@@ -15,9 +15,9 @@ if defined?(Sentry)
   end
 
   [
-    ["permoney.loan.schedule.generate", "loan.schedule.generate", %i[loan_id principal tenor_months rate_or_profit ms]],
-    ["permoney.loan.plan.regenerate", "loan.plan.regenerate", %i[loan_id replaced_count ms]],
-    ["permoney.loan.extra_payment.applied", "loan.extra_payment.applied", %i[loan_id amount mode ms]]
+    [ "permoney.loan.schedule.generate", "loan.schedule.generate", %i[loan_id principal tenor_months rate_or_profit ms] ],
+    [ "permoney.loan.plan.regenerate", "loan.plan.regenerate", %i[loan_id replaced_count ms] ],
+    [ "permoney.loan.extra_payment.applied", "loan.extra_payment.applied", %i[loan_id amount mode ms] ]
   ].each do |event_name, op, keys|
     ActiveSupport::Notifications.subscribe(event_name) do |*args|
       event = ActiveSupport::Notifications::Event.new(*args)

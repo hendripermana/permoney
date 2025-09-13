@@ -1,5 +1,6 @@
 class Api::V1::Debt::LoansController < Api::V1::BaseController
-  before_action -> { authorize_scope!("write") }, only: [ :post_installment, :build_plan ]
+  # Preview is read-only; write scope required for mutation endpoints
+  before_action -> { authorize_scope!("write") }, only: [ :post_installment, :regenerate ]
 
   # POST /api/v1/debt/loans/plan/preview
   def preview
@@ -8,12 +9,8 @@ class Api::V1::Debt::LoansController < Api::V1::BaseController
     principal = params[:principal_amount].to_d
     tenor = params[:tenor_months].to_i
 
-    if principal <= 0
-      return render json: { error: "principal_amount must be > 0" }, status: :unprocessable_entity
-    end
-    if tenor <= 0
-      return render json: { error: "tenor_months must be > 0" }, status: :unprocessable_entity
-    end
+    return render json: { error: "principal_amount must be > 0" }, status: :unprocessable_entity if principal <= 0
+    return render json: { error: "tenor_months must be > 0" }, status: :unprocessable_entity if tenor <= 0
 
     rate = (params[:rate_or_profit] || account.accountable.interest_rate || account.accountable.margin_rate || 0).to_d
     freq = (params[:payment_frequency] || account.accountable.payment_frequency || "MONTHLY").to_s
@@ -22,9 +19,7 @@ class Api::V1::Debt::LoansController < Api::V1::BaseController
     day_count = params[:day_count].presence
     if day_count.present?
       allowed = [ "30E/360", "ACT/365", "ACT/ACT" ]
-      unless allowed.include?(day_count)
-        return render json: { error: "Unsupported day_count. Allowed: #{allowed.join(', ')}" }, status: :unprocessable_entity
-      end
+      return render json: { error: "Unsupported day_count. Allowed: #{allowed.join(', ')}" }, status: :unprocessable_entity unless allowed.include?(day_count)
     end
 
     rows = Loan::ScheduleGenerator.new(
@@ -34,7 +29,8 @@ class Api::V1::Debt::LoansController < Api::V1::BaseController
       payment_frequency: freq,
       schedule_method: method,
       start_date: start,
-      balloon_amount: params[:balloon_amount]
+      balloon_amount: params[:balloon_amount],
+      loan_id: account.accountable_id
     ).generate
   rescue ArgumentError => e
     Rails.logger.error({ at: "API::Loans.preview.error", account_id: account&.id, error: e.message }.to_json)
@@ -51,6 +47,9 @@ class Api::V1::Debt::LoansController < Api::V1::BaseController
       rounding_note: rounding_note,
       day_count: day_count
     }
+  rescue ArgumentError => e
+    Rails.logger.error({ at: "API::Loans.preview.error", account_id: (account&.id rescue nil), error: e.message }.to_json)
+    render json: { error: e.message }, status: :unprocessable_entity
   end
   # POST /api/v1/debt/loans/installment/post
   def post_installment

@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.2].define(version: 2025_09_14_114500) do
+ActiveRecord::Schema[7.2].define(version: 2025_09_14_130000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pgcrypto"
   enable_extension "plpgsql"
@@ -463,7 +463,6 @@ ActiveRecord::Schema[7.2].define(version: 2025_09_14_114500) do
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.index ["account_id", "due_date"], name: "idx_loan_installments_planned_due", where: "((status)::text = 'planned'::text)"
-    t.index ["account_id", "installment_no"], name: "idx_loan_installments_acct_no", unique: true
     t.index ["account_id", "installment_no"], name: "idx_loan_installments_posted_once", unique: true, where: "((status)::text = 'posted'::text)"
     t.index ["account_id", "status"], name: "idx_loan_installments_posted_by_account", where: "((status)::text = 'posted'::text)"
     t.index ["account_id"], name: "index_loan_installments_on_account_id"

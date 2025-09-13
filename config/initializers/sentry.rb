@@ -24,4 +24,3 @@ if defined?(Sentry)
     end
   end
 end
-

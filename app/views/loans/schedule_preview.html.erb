@@ -15,9 +15,9 @@
         <tr class="border-t border-primary">
           <td class="py-2"><%= idx + 1 %></td>
           <td class="py-2"><%= r.due_date %></td>
-          <td class="py-2 text-right"><%= number_to_currency(r.principal, unit: Current.family.currency) %></td>
-          <td class="py-2 text-right"><%= number_to_currency(r.interest, unit: Current.family.currency) %></td>
-          <td class="py-2 text-right"><%= number_to_currency(r.total, unit: Current.family.currency) %></td>
+          <td class="py-2 text-right"><%= number_to_currency(r.principal, unit: (@account&.currency || Current.family.currency)) %></td>
+          <td class="py-2 text-right"><%= number_to_currency(r.interest, unit: (@account&.currency || Current.family.currency)) %></td>
+          <td class="py-2 text-right"><%= number_to_currency(r.total, unit: (@account&.currency || Current.family.currency)) %></td>
         </tr>
       <% end %>
     </tbody>

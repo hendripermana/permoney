@@ -47,4 +47,15 @@ class Api::V1::Debt::LoansControllerTest < ActionDispatch::IntegrationTest
     }
     assert_response :unprocessable_entity
   end
+
+  test "preview with invalid day_count returns 422" do
+    post "/api/v1/debt/loans/plan/preview", params: {
+      account_id: @loan.id,
+      principal_amount: 1_000,
+      rate_or_profit: 0.1,
+      tenor_months: 12,
+      day_count: "30/360" # invalid token
+    }
+    assert_response :unprocessable_entity
+  end
 end
