@@ -90,8 +90,23 @@ class Loan::AdditionalBorrowingService
     end
 
     def sync_account!
-      loan_account.sync_later
-      transfer_account.sync_later if transfer_account.present?
+      # Perform synchronous sync to ensure balance is updated immediately
+      sync = loan_account.syncs.create!(
+        window_start_date: date,
+        window_end_date: date
+      )
+      loan_account.perform_sync(sync)
+      loan_account.perform_post_sync
+
+      # Also sync transfer account if present
+      if transfer_account.present?
+        transfer_sync = transfer_account.syncs.create!(
+          window_start_date: date,
+          window_end_date: date
+        )
+        transfer_account.perform_sync(transfer_sync)
+        transfer_account.perform_post_sync
+      end
     end
 
     # Parameter accessors
