@@ -36,6 +36,9 @@ class Api::V1::Debt::LoansController < Api::V1::BaseController
         loan_id: account.accountable_id
       ).generate
 
+      # Ensure rows is properly initialized before processing
+      return render json: { error: "Failed to generate schedule" }, status: :unprocessable_entity if rows.nil? || rows.empty?
+
       sum_p = rows.sum { |r| r.principal.to_d }
       sum_i = rows.sum { |r| r.interest.to_d }
       sum_t = rows.sum { |r| r.total.to_d }
