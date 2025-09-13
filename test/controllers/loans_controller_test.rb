@@ -23,7 +23,8 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
             interest_rate: 5.5,
             term_months: 60,
             rate_type: "fixed",
-            initial_balance: 50000
+            initial_balance: 50000,
+            imported: true
           }
         }
       }
@@ -40,7 +41,7 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_equal 50000, created_account.accountable.initial_balance
 
     assert_redirected_to created_account
-    assert_equal "Loan account created", flash[:notice]
+    assert_equal "Loan account created — Opening balance anchored successfully.", flash[:notice]
     assert_enqueued_with(job: SyncJob)
   end
 

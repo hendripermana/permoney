@@ -193,6 +193,9 @@ Rails.application.routes.draw do
   resources :credit_cards, only: %i[new create edit update]
   resources :pay_laters, only: %i[new create edit update]
   resources :loans, only: %i[new create edit update] do
+    collection do
+      get :schedule_preview
+    end
     member do
       get :schedule_preview
       get :new_borrowing
