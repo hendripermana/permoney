@@ -37,7 +37,7 @@ class Api::V1::Debt::LoansController < Api::V1::BaseController
       balloon_amount: params[:balloon_amount]
     ).generate
   rescue ArgumentError => e
-    Rails.logger.error({ at: "API::Loans.preview.error", account_id: account.id, error: e.message }.to_json)
+    Rails.logger.error({ at: "API::Loans.preview.error", account_id: account&.id, error: e.message }.to_json)
     return render json: { error: e.message }, status: :unprocessable_entity
     sum_p = rows.sum { |r| r.principal.to_d }
     sum_i = rows.sum { |r| r.interest.to_d }
