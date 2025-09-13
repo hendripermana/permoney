@@ -41,7 +41,7 @@ module RedirectLoopPrevention
       # Check if feature is enabled
       return false unless Rails.application.config.redirect_loop_prevention&.enabled
 
-      return false unless request.get?
+      return false unless request.get? || request.head?
       return false unless request.format.html?
       return false if request.format.turbo_stream?
       return false if request.xhr?
