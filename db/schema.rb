@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.2].define(version: 2025_09_08_085811) do
+ActiveRecord::Schema[7.2].define(version: 2025_09_14_114500) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pgcrypto"
   enable_extension "plpgsql"
@@ -29,7 +29,7 @@ ActiveRecord::Schema[7.2].define(version: 2025_09_08_085811) do
     t.uuid "accountable_id"
     t.decimal "balance", precision: 19, scale: 4
     t.string "currency"
-    t.virtual "classification", type: :string, as: "\nCASE\n    WHEN ((accountable_type)::text = ANY ((ARRAY['Loan'::character varying, 'CreditCard'::character varying, 'OtherLiability'::character varying])::text[])) THEN 'liability'::text\n    ELSE 'asset'::text\nEND", stored: true
+    t.virtual "classification", type: :string, as: "\nCASE\n    WHEN ((accountable_type)::text = ANY (ARRAY[('Loan'::character varying)::text, ('CreditCard'::character varying)::text, ('OtherLiability'::character varying)::text])) THEN 'liability'::text\n    ELSE 'asset'::text\nEND", stored: true
     t.uuid "import_id"
     t.uuid "plaid_account_id"
     t.decimal "cash_balance", precision: 19, scale: 4, default: "0.0"
@@ -111,6 +111,19 @@ ActiveRecord::Schema[7.2].define(version: 2025_09_08_085811) do
     t.index ["user_id"], name: "index_api_keys_on_user_id"
   end
 
+  create_table "audit_logs", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.string "auditable_type", null: false
+    t.uuid "auditable_id", null: false
+    t.string "event", default: "update", null: false
+    t.jsonb "changeset", default: {}, null: false
+    t.uuid "user_id"
+    t.string "ip_address"
+    t.datetime "created_at", default: -> { "CURRENT_TIMESTAMP" }, null: false
+    t.index ["auditable_type", "auditable_id"], name: "index_audit_logs_on_auditable_type_and_auditable_id"
+    t.index ["event"], name: "index_audit_logs_on_event"
+    t.index ["user_id"], name: "index_audit_logs_on_user_id"
+  end
+
   create_table "balances", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.uuid "account_id", null: false
     t.date "date", null: false
@@ -172,6 +185,8 @@ ActiveRecord::Schema[7.2].define(version: 2025_09_08_085811) do
     t.uuid "parent_id"
     t.string "classification", default: "expense", null: false
     t.string "lucide_icon", default: "shapes", null: false
+    t.string "key"
+    t.index ["family_id", "key"], name: "idx_categories_family_key", unique: true, where: "(key IS NOT NULL)"
     t.index ["family_id"], name: "index_categories_on_family_id"
   end
 
@@ -435,6 +450,25 @@ ActiveRecord::Schema[7.2].define(version: 2025_09_08_085811) do
     t.index ["token"], name: "index_invite_codes_on_token", unique: true
   end
 
+  create_table "loan_installments", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "account_id", null: false
+    t.integer "installment_no", null: false
+    t.date "due_date", null: false
+    t.string "status", default: "planned", null: false
+    t.decimal "principal_amount", precision: 19, scale: 4, null: false
+    t.decimal "interest_amount", precision: 19, scale: 4, null: false
+    t.decimal "total_amount", precision: 19, scale: 4, null: false
+    t.date "posted_on"
+    t.uuid "transfer_id"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["account_id", "due_date"], name: "idx_loan_installments_planned_due", where: "((status)::text = 'planned'::text)"
+    t.index ["account_id", "installment_no"], name: "idx_loan_installments_acct_no", unique: true
+    t.index ["account_id", "installment_no"], name: "idx_loan_installments_posted_once", unique: true, where: "((status)::text = 'posted'::text)"
+    t.index ["account_id", "status"], name: "idx_loan_installments_posted_by_account", where: "((status)::text = 'posted'::text)"
+    t.index ["account_id"], name: "index_loan_installments_on_account_id"
+  end
+
   create_table "loans", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
@@ -457,12 +491,35 @@ ActiveRecord::Schema[7.2].define(version: 2025_09_08_085811) do
     t.string "fintech_type"
     t.text "agreement_notes"
     t.string "witness_name"
+    t.decimal "principal_amount", precision: 19, scale: 4
+    t.date "start_date"
+    t.integer "tenor_months"
+    t.string "payment_frequency", default: "MONTHLY"
+    t.string "schedule_method", default: "ANNUITY"
+    t.decimal "rate_or_profit", precision: 10, scale: 4
+    t.decimal "installment_amount", precision: 19, scale: 4
+    t.text "early_repayment_policy"
+    t.jsonb "late_fee_rule"
+    t.text "collateral_desc"
+    t.decimal "initial_balance_override", precision: 19, scale: 4
+    t.date "initial_balance_date"
+    t.uuid "linked_contact_id"
+    t.string "lender_name"
+    t.string "institution_name"
+    t.string "institution_type"
+    t.string "product_type"
+    t.text "notes"
+    t.jsonb "extra"
+    t.string "day_count"
+    t.boolean "eir_enabled", default: false
     t.index ["compliance_type"], name: "index_loans_on_compliance_type"
     t.index ["counterparty_type"], name: "index_loans_on_counterparty_type"
     t.index ["debt_kind"], name: "index_loans_on_debt_kind"
     t.index ["disbursement_account_id"], name: "index_loans_on_disbursement_account_id"
     t.index ["fintech_type"], name: "index_loans_on_fintech_type"
+    t.index ["institution_type"], name: "index_loans_on_institution_type"
     t.index ["islamic_product_type"], name: "index_loans_on_islamic_product_type"
+    t.index ["lender_name"], name: "index_loans_on_lender_name"
   end
 
   create_table "merchants", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -1018,6 +1075,8 @@ ActiveRecord::Schema[7.2].define(version: 2025_09_08_085811) do
   add_foreign_key "imports", "families"
   add_foreign_key "invitations", "families"
   add_foreign_key "invitations", "users", column: "inviter_id"
+  add_foreign_key "loan_installments", "accounts", on_delete: :cascade
+  add_foreign_key "loan_installments", "transfers", on_delete: :nullify
   add_foreign_key "loans", "accounts", column: "disbursement_account_id"
   add_foreign_key "merchants", "families"
   add_foreign_key "messages", "chats"

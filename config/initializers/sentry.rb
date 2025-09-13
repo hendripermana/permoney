@@ -1,20 +1,27 @@
-if ENV["SENTRY_DSN"].present?
+# Sentry setup for production/staging with tracing and optional profiling.
+if defined?(Sentry)
   Sentry.init do |config|
-    config.dsn = ENV["SENTRY_DSN"]
-    config.environment = ENV["RAILS_ENV"]
-    config.breadcrumbs_logger = [ :active_support_logger, :http_logger ]
-    config.enabled_environments = %w[production]
+    config.enabled_environments = %w[production staging]
 
-    # Set traces_sample_rate to 1.0 to capture 100%
-    # of transactions for performance monitoring.
-    # We recommend adjusting this value in production.
-    config.traces_sample_rate = 0.25
+    # Tracing and profiling (values can be tuned via env)
+    config.traces_sample_rate = ENV.fetch("SENTRY_TRACES_SAMPLE_RATE", "0.2").to_f
+    config.profiles_sample_rate = ENV.fetch("SENTRY_PROFILES_SAMPLE_RATE", "0.0").to_f
 
-    # Set profiles_sample_rate to profile 100%
-    # of sampled transactions.
-    # We recommend adjusting this value in production.
-    config.profiles_sample_rate = 0.25
+    # Adaptive sampling: capture all debt/loan API traces
+    config.traces_sampler = lambda do |ctx|
+      path = ctx.dig(:rack_env, "PATH_INFO").to_s
+      next 1.0 if path.start_with?("/api/v1/debt/loans")
+      config.traces_sample_rate
+    end
+  end
 
-    config.profiler_class = Sentry::Vernier::Profiler
+  # Optional: OpenTelemetry bridge (tracing only) when gems are present
+  if ENV["SENTRY_USE_OTEL"] == "true"
+    begin
+      require "sentry/opentelemetry"
+    rescue LoadError
+      Rails.logger.warn("Sentry OTEL requested but not available; skipping") if defined?(Rails)
+    end
   end
 end
+

@@ -1,7 +1,10 @@
 class Loan < ApplicationRecord
   include Accountable
+  include AuditableChanges
 
   SUBTYPES = {
+    "loan_personal" => { short: "Borrowed (Person)", long: "Loan Borrowed from Person" },
+    "loan_institution" => { short: "Borrowed (Institution)", long: "Loan Borrowed from Institution" },
     "mortgage" => { short: "Mortgage", long: "Mortgage" },
     "student" => { short: "Student", long: "Student Loan" },
     "auto" => { short: "Auto", long: "Auto Loan" },
@@ -38,6 +41,16 @@ class Loan < ApplicationRecord
   validates :counterparty_type, inclusion: { in: %w[institution person] }, allow_nil: true
   validates :counterparty_name, length: { maximum: 255 }, allow_nil: true
 
+  # New metadata validations (permissive; all nullable, enums validated if present)
+  PAYMENT_FREQUENCIES = %w[MONTHLY WEEKLY BIWEEKLY].freeze
+  SCHEDULE_METHODS = %w[ANNUITY FLAT EFFECTIVE].freeze
+  INSTITUTION_TYPES = %w[BANK COOPERATIVE CREDIT_UNION FINTECH OTHER].freeze
+  PRODUCT_TYPES = %w[MULTIGUNA UNSECURED SECURED OTHER].freeze
+  validates :payment_frequency, inclusion: { in: PAYMENT_FREQUENCIES }, allow_nil: true
+  validates :schedule_method, inclusion: { in: SCHEDULE_METHODS }, allow_nil: true
+  validates :institution_type, inclusion: { in: INSTITUTION_TYPES }, allow_nil: true
+  validates :product_type, inclusion: { in: PRODUCT_TYPES }, allow_nil: true
+
   # Sharia compliance validations
   validates :compliance_type, inclusion: { in: COMPLIANCE_TYPES.keys }, allow_nil: true
   validates :islamic_product_type, inclusion: { in: ISLAMIC_PRODUCT_TYPES.keys }, allow_nil: true
@@ -48,6 +61,9 @@ class Loan < ApplicationRecord
   # Custom validations for Islamic finance
   validate :sharia_compliance_rules
   validate :islamic_product_consistency
+  validate :personal_lender_presence
+
+  track_changes_for :principal_amount, :rate_or_profit, :tenor_months, :institution_type, :lender_name, :schedule_method, :payment_frequency, :start_date
 
   def monthly_payment
     return nil if term_months.blank? || term_months.to_i <= 0
@@ -237,6 +253,13 @@ class Loan < ApplicationRecord
         if profit_sharing_ratio.present?
           errors.add(:profit_sharing_ratio, "cannot be set for Qard Hasan")
         end
+      end
+    end
+
+    def personal_lender_presence
+      return unless personal_loan?
+      if linked_contact_id.blank? && (counterparty_name.blank? && lender_name.blank?)
+        errors.add(:base, "Provide a contact or lender name for personal loans")
       end
     end
 end

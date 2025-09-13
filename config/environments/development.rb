@@ -88,4 +88,14 @@ Rails.application.configure do
 
   # Allow connection from any host in development
   config.hosts = nil
+
+  # Enable Borrowed Loans Extra Payment UI in development for QA
+  # Use after_initialize so the features initializer is loaded first
+  config.after_initialize do
+    if Rails.application.config.respond_to?(:features) &&
+       Rails.application.config.features.respond_to?(:loans) &&
+       Rails.application.config.features.loans.respond_to?(:extra_payment)
+      Rails.application.config.features.loans.extra_payment = true
+    end
+  end
 end

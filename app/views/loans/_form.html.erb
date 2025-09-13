@@ -4,6 +4,13 @@
   <%= render "shared/ruler", classes: "my-4" %>
 
   <div class="space-y-2" data-controller="conditional-fields">
+    <!-- Loan subtype selector: Borrowed from Person vs Institution -->
+    <div class="flex items-center gap-2">
+      <%= form.select :subtype,
+                      [["Borrowed (Person)", "loan_personal"], ["Borrowed (Institution)", "loan_institution"]] + Loan::SUBTYPES.except("loan_personal","loan_institution").map { |k,v| [v[:long], k] },
+                      { label: "Subtype" },
+                      { } %>
+    </div>
     <%= form.fields_for :accountable do |loan_form| %>
       <div class="flex items-center gap-2">
         <%= loan_form.select :compliance_type,
@@ -44,6 +51,44 @@
                               { label: "Counterparty Type" } %>
         <%= loan_form.text_field :counterparty_name, label: "Counterparty Name", placeholder: "e.g., BCA, Dana, John Doe" %>
       </div>
+      <%# Personal loan contact section %>
+      <div class="flex items-center gap-2" data-conditional-fields-target="field" data-show-when="personal">
+        <%= loan_form.text_field :linked_contact_id, label: "Contact (optional)", placeholder: "UUID or leave blank" %>
+        <%= loan_form.text_field :lender_name, label: "Lender Name (fallback)", placeholder: "Person or entity name" %>
+      </div>
+
+      <!-- Borrowed Loan shared fields -->
+      <div class="flex items-center gap-2">
+        <%= loan_form.money_field :principal_amount,
+                                 label: "Principal Amount",
+                                 default_currency: Current.family.currency,
+                                 placeholder: "500000" %>
+        <%= loan_form.number_field :tenor_months, label: "Tenor (months)", placeholder: 12 %>
+      </div>
+      <div class="flex items-center gap-2">
+        <%= loan_form.date_field :start_date, label: "Start Date", value: Date.current >> 1 %>
+        <%= loan_form.select :payment_frequency,
+                              [["Monthly","MONTHLY"],["Weekly","WEEKLY"],["Biweekly","BIWEEKLY"]],
+                              { label: "Payment Frequency" } %>
+        <%= loan_form.select :schedule_method,
+                              [["Annuity","ANNUITY"],["Flat","FLAT"],["Effective","EFFECTIVE"]],
+                              { label: "Schedule Method" } %>
+      </div>
+      <div class="flex items-center gap-2">
+        <%= loan_form.number_field :rate_or_profit, label: "Rate / Profit (%)", step: 0.001, min: 0, placeholder: 10 %>
+        <%= loan_form.money_field :installment_amount,
+                                  label: "Installment Amount (optional)",
+                                  default_currency: Current.family.currency %>
+      </div>
+      <div class="text-xs text-secondary" id="rate_help">
+        Rate/Profit is annual. If Installment Amount is provided, it may be used by future features to optimize the schedule.
+      </div>
+      <div class="flex items-center gap-2">
+        <%= loan_form.money_field :balloon_amount, label: "Balloon (optional)", default_currency: Current.family.currency, aria: { describedby: "balloon_help" } %>
+      </div>
+      <div class="text-xs text-secondary" id="balloon_help">
+        Balloon (optional) will be added to the final installment. Month-end adjustment keeps a "same-day" behavior (30→30, 31→end of month).
+      </div>
 
       <%# Disbursement account only when not imported. `form.object` is the Account; `loan_form.object` is the Loan. %>
       <% unless form.object.import&.present? || loan_form.object.imported %>
@@ -62,6 +107,62 @@
                                  default_currency: Current.family.currency,
                                  required: true %>
       </div>
+
+      <%# Schedule preview (feature flag protected) %>
+      <% if Rails.application.config.respond_to?(:features) && Rails.application.config.features.dig(:loans, :borrowed, :enabled) %>
+        <div class="flex items-center gap-2">
+          <% if params[:inline_preview].present? %>
+            <% href_params = {
+              principal_amount: loan_form.object.principal_amount,
+              rate_or_profit: loan_form.object.rate_or_profit,
+              tenor_months: loan_form.object.tenor_months,
+              payment_frequency: loan_form.object.payment_frequency,
+              schedule_method: loan_form.object.schedule_method,
+              start_date: loan_form.object.start_date
+            } %>
+            <%= render DS::Link.new(
+              text: "Preview Schedule (inline)",
+              variant: "secondary",
+              icon: "table",
+              href: (form.object.persisted? ? schedule_preview_loan_path(form.object, **href_params) : schedule_preview_loans_path(**href_params)),
+              data: { turbo_frame: "loan-schedule-preview" }
+            ) %>
+          <% elsif form.object.persisted? %>
+            <%= render DS::Link.new(
+              text: "Preview Schedule",
+              variant: "secondary",
+              icon: "table",
+              href: schedule_preview_loan_path(form.object, principal_amount: loan_form.object.principal_amount,
+                rate_or_profit: loan_form.object.rate_or_profit,
+                tenor_months: loan_form.object.tenor_months,
+                payment_frequency: loan_form.object.payment_frequency,
+                schedule_method: loan_form.object.schedule_method,
+                start_date: loan_form.object.start_date),
+              frame: :modal
+            ) %>
+          <% else %>
+            <%= render DS::Link.new(
+              text: "Preview Schedule",
+              variant: "secondary",
+              icon: "table",
+              href: schedule_preview_loans_path(principal_amount: loan_form.object.principal_amount,
+                rate_or_profit: loan_form.object.rate_or_profit,
+                tenor_months: loan_form.object.tenor_months,
+                payment_frequency: loan_form.object.payment_frequency,
+                schedule_method: loan_form.object.schedule_method,
+                start_date: loan_form.object.start_date),
+              frame: :modal
+            ) %>
+          <% end %>
+        </div>
+      <% end %>
+
+      <%# Inline preview frame (optional) %>
+      <% if params[:inline_preview].present? %>
+        <turbo-frame id="loan-schedule-preview" aria-live="polite">
+          <%# Consumers can trigger this via the Preview links by setting data-turbo-frame %>
+        </turbo-frame>
+      <% end %>
 
       <div class="flex items-center gap-2">
         <!-- Conventional Interest Rate -->

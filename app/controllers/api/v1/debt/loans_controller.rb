@@ -1,0 +1,103 @@
+class Api::V1::Debt::LoansController < Api::V1::BaseController
+  before_action -> { authorize_scope!("write") }, only: [ :post_installment, :build_plan ]
+
+  # POST /api/v1/debt/loans/plan/preview
+  def preview
+    account = Current.family.accounts.find(params.require(:account_id))
+
+    principal = params[:principal_amount].to_d
+    tenor = params[:tenor_months].to_i
+
+    if principal <= 0
+      return render json: { error: "principal_amount must be > 0" }, status: :unprocessable_entity
+    end
+    if tenor <= 0
+      return render json: { error: "tenor_months must be > 0" }, status: :unprocessable_entity
+    end
+
+    rate = (params[:rate_or_profit] || account.accountable.interest_rate || account.accountable.margin_rate || 0).to_d
+    freq = (params[:payment_frequency] || account.accountable.payment_frequency || "MONTHLY").to_s
+    method = (params[:schedule_method] || account.accountable.schedule_method || "ANNUITY").to_s
+    start = params[:start_date].presence || account.accountable.origination_date || Date.current
+    day_count = params[:day_count].presence
+    if day_count.present?
+      allowed = [ "30E/360", "ACT/365", "ACT/ACT" ]
+      unless allowed.include?(day_count)
+        return render json: { error: "Unsupported day_count. Allowed: #{allowed.join(', ')}" }, status: :unprocessable_entity
+      end
+    end
+
+    rows = Loan::ScheduleGenerator.new(
+      principal_amount: principal,
+      rate_or_profit: rate,
+      tenor_months: tenor,
+      payment_frequency: freq,
+      schedule_method: method,
+      start_date: start,
+      balloon_amount: params[:balloon_amount]
+    ).generate
+  rescue ArgumentError => e
+    Rails.logger.error({ at: "API::Loans.preview.error", account_id: account.id, error: e.message }.to_json)
+    return render json: { error: e.message }, status: :unprocessable_entity
+    sum_p = rows.sum { |r| r.principal.to_d }
+    sum_i = rows.sum { |r| r.interest.to_d }
+    sum_t = rows.sum { |r| r.total.to_d }
+    rounding_note = (principal - sum_p).abs <= 0.01 ? nil : "Rounding adjustments applied to last row"
+
+    render json: {
+      count: rows.size,
+      rows: rows.map { |r| { due_date: r.due_date, principal: r.principal.to_s, interest: r.interest.to_s, total: r.total.to_s } },
+      totals: { principal: sum_p.to_s, interest: sum_i.to_s, total: sum_t.to_s },
+      rounding_note: rounding_note,
+      day_count: day_count
+    }
+  end
+  # POST /api/v1/debt/loans/installment/post
+  def post_installment
+    result = Loan::PostInstallment.new(
+      family: Current.family,
+      account_id: params.require(:account_id),
+      source_account_id: params.require(:source_account_id),
+      installment_no: params[:installment_no],
+      date: params[:date],
+      late_fee: params[:late_fee]
+    ).call!
+
+    if result.success?
+      render json: { transfer_id: result.transfer.id, installment_no: result.installment.installment_no, posted_on: result.installment.posted_on }, status: :ok
+    else
+      render json: { error: result.error }, status: :unprocessable_entity
+    end
+  end
+
+  # POST /api/v1/debt/loans/plan/regenerate
+  def regenerate
+    account = Current.family.accounts.find(params.require(:account_id))
+
+    principal = (params[:principal_amount] || account.accountable.principal_amount || account.accountable.initial_balance || account.balance).to_d
+    tenor = (params[:tenor_months] || account.accountable.tenor_months).to_i
+    rate = (params[:rate_or_profit] || account.accountable.rate_or_profit || account.accountable.interest_rate || account.accountable.margin_rate || 0).to_d
+    freq = (params[:payment_frequency] || account.accountable.payment_frequency || "MONTHLY").to_s
+    method = (params[:schedule_method] || account.accountable.schedule_method || "ANNUITY").to_s
+    start = params[:start_date].presence || account.accountable.start_date || Date.current
+
+    return render json: { error: "principal_amount must be > 0" }, status: :unprocessable_entity if principal <= 0
+    return render json: { error: "tenor_months must be > 0" }, status: :unprocessable_entity if tenor <= 0
+
+    res = Loan::PlanBuilder.call!(
+      account: account,
+      principal_amount: principal,
+      rate_or_profit: rate,
+      tenor_months: tenor,
+      payment_frequency: freq,
+      schedule_method: method,
+      start_date: start
+    )
+    if res.success?
+      next_due = account.loan_installments.pending.order(:due_date).first&.due_date
+      render json: { regenerated_count: res.installments.size, next_due_date: next_due }, status: :ok
+    else
+      render json: { error: res.error }, status: :unprocessable_entity
+    end
+  end
+end

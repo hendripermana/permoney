@@ -27,8 +27,8 @@
             <% end %>
           </span>
           <span class="text-primary font-medium">
-            <% if @account.accountable.counterparty_name.present? %>
-              <%= @account.accountable.counterparty_name %>
+            <% if (label = personal_lender_label(@account.accountable)) %>
+              <%= label %>
             <% else %>
               Personal Loan
             <% end %>
@@ -61,6 +61,7 @@
       <%= f.money_field :amount,
                         label: "Payment Amount",
                         default_currency: @account.currency,
+                        value: (params.dig(:payment, :amount) || params[:amount]),
                         required: true,
                         placeholder: "100000" %>
 

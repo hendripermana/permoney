@@ -1,0 +1,25 @@
+<%# locals: (rows:) %>
+<div class="overflow-auto max-h-80">
+  <table class="w-full text-sm">
+    <thead class="text-secondary">
+      <tr>
+        <th class="text-left py-2">#</th>
+        <th class="text-left py-2">Due Date</th>
+        <th class="text-right py-2">Principal</th>
+        <th class="text-right py-2">Interest/Profit</th>
+        <th class="text-right py-2">Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% rows.each_with_index do |r, idx| %>
+        <tr class="border-t border-primary">
+          <td class="py-2"><%= idx + 1 %></td>
+          <td class="py-2"><%= r.due_date %></td>
+          <td class="py-2 text-right"><%= number_to_currency(r.principal, unit: Current.family.currency) %></td>
+          <td class="py-2 text-right"><%= number_to_currency(r.interest, unit: Current.family.currency) %></td>
+          <td class="py-2 text-right"><%= number_to_currency(r.total, unit: Current.family.currency) %></td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+</div>
