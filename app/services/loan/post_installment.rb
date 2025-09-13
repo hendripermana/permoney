@@ -104,11 +104,11 @@ class Loan::PostInstallment
 
   private
     def find_installment!
-      scope = LoanInstallment.for_account(@account.id).planned.order(:installment_no)
       if @installment_no.present?
-        scope.find_by!(installment_no: @installment_no)
+        # Allow idempotent behavior by returning posted rows too
+        LoanInstallment.for_account(@account.id).order(:installment_no).find_by!(installment_no: @installment_no)
       else
-        scope.first || raise(ActiveRecord::RecordNotFound, "No planned installments available")
+        LoanInstallment.for_account(@account.id).planned.order(:installment_no).first || raise(ActiveRecord::RecordNotFound, "No planned installments available")
       end
     end
 

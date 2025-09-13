@@ -109,7 +109,7 @@
       </div>
 
       <%# Schedule preview (feature flag protected) %>
-      <% if Rails.application.config.respond_to?(:features) && Rails.application.config.features.dig(:loans, :borrowed, :enabled) %>
+      <% if Rails.application.config.respond_to?(:features) && Rails.application.config.features&.dig(:loans, :borrowed, :enabled) %>
         <div class="flex items-center gap-2">
           <% if params[:inline_preview].present? %>
             <% href_params = {

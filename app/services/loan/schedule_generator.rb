@@ -157,7 +157,7 @@ class Loan::ScheduleGenerator
     end
 
     def zero_rate_schedule
-      n = [ tenor_months, 1 ].max
+      n = [ periods, 1 ].max
       amort = [ amortizing_principal, 0 ].max
       princ_per = (amort / n)
       rows = []

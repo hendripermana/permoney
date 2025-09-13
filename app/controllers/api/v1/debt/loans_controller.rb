@@ -7,9 +7,14 @@ class Api::V1::Debt::LoansController < Api::V1::BaseController
     # Scoped to current family to prevent unauthorized access
     account_id = params.require(:account_id)
     account = Current.family.accounts.find(account_id)
+    unless account.accountable_type == "Loan"
+      return render json: { error: "account_id must reference a Loan account" }, status: :unprocessable_entity
+    end
 
-    principal = params[:principal_amount].to_d
-    tenor = params[:tenor_months].to_i
+    principal_param = params.require(:principal_amount)
+    tenor_param = params.require(:tenor_months)
+    principal = BigDecimal(principal_param.to_s)
+    tenor = tenor_param.to_i
 
     return render json: { error: "principal_amount must be > 0" }, status: :unprocessable_entity if principal <= 0
     return render json: { error: "tenor_months must be > 0" }, status: :unprocessable_entity if tenor <= 0
@@ -78,6 +83,9 @@ class Api::V1::Debt::LoansController < Api::V1::BaseController
     # Scoped to current family to prevent unauthorized access
     account_id = params.require(:account_id)
     account = Current.family.accounts.find(account_id)
+    unless account.accountable_type == "Loan"
+      return render json: { error: "account_id must reference a Loan account" }, status: :unprocessable_entity
+    end
 
     principal = (params[:principal_amount] || account.accountable.principal_amount || account.accountable.initial_balance || account.balance).to_d
     tenor = (params[:tenor_months] || account.accountable.tenor_months).to_i
