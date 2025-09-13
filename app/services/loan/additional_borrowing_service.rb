@@ -51,9 +51,10 @@ class Loan::AdditionalBorrowingService
       counterparty = loan.counterparty_name.present? ? loan.counterparty_name : "lender"
       transaction_name = "Additional money borrowed from #{counterparty}"
 
-      # For borrowing: negative amount (inflow to the liability account, increases debt)
+      # For borrowing: positive amount increases debt balance for liability accounts
+      # The balance calculation for liability accounts adds entry amounts directly
       @borrowing_entry = loan_account.entries.create!(
-        amount: -amount.to_d,
+        amount: amount.to_d,
         currency: loan_account.currency,
         date: date,
         name: transaction_name,
@@ -90,23 +91,10 @@ class Loan::AdditionalBorrowingService
     end
 
     def sync_account!
-      # Perform synchronous sync to ensure balance is updated immediately
-      sync = loan_account.syncs.create!(
-        window_start_date: date,
-        window_end_date: date
-      )
-      loan_account.perform_sync(sync)
-      loan_account.perform_post_sync
-
-      # Also sync transfer account if present
-      if transfer_account.present?
-        transfer_sync = transfer_account.syncs.create!(
-          window_start_date: date,
-          window_end_date: date
-        )
-        transfer_account.perform_sync(transfer_sync)
-        transfer_account.perform_post_sync
-      end
+      # Schedule async sync for balance recalculation
+      # The balance will be recalculated from entries by the sync process
+      loan_account.sync_later
+      transfer_account.sync_later if transfer_account.present?
     end
 
     # Parameter accessors
