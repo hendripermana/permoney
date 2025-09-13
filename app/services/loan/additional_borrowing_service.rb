@@ -16,6 +16,7 @@ class Loan::AdditionalBorrowingService
     ActiveRecord::Base.transaction do
       create_borrowing_transaction!
       create_disbursement_transfer! if transfer_account_id.present?
+      update_loan_principal!
       sync_account!
     end
 
@@ -75,6 +76,17 @@ class Loan::AdditionalBorrowingService
         date: date,
         amount: amount.to_d
       ).create
+    end
+
+    def update_loan_principal!
+      loan = loan_account.accountable
+      current_principal = loan.initial_balance || 0
+      new_principal = current_principal + amount.to_d
+
+      loan.update!(
+        initial_balance: new_principal,
+        principal_amount: new_principal
+      )
     end
 
     def sync_account!
