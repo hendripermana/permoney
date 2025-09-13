@@ -13,6 +13,19 @@ class Import::MappingsController < ApplicationController
   end
 
   private
+    # Only permit these class names for mapping_class and mappable_class.
+    ALLOWED_MAPPING_CLASSES = {
+      "AllowedTypeA" => AllowedTypeA,
+      "AllowedTypeB" => AllowedTypeB,
+      # add more allowed classes here
+    }.freeze
+
+    ALLOWED_MAPPABLE_CLASSES = {
+      "AllowedMappableA" => AllowedMappableA,
+      "AllowedMappableB" => AllowedMappableB,
+      # add more allowed mappable classes here
+    }.freeze
+
     def mapping_params
       params.require(:import_mapping).permit(:type, :key, :mappable_id, :mappable_type, :value)
     end
@@ -34,10 +47,10 @@ class Import::MappingsController < ApplicationController
     end
 
     def mappable_class
-      mapping_params[:mappable_type]&.constantize
+      ALLOWED_MAPPABLE_CLASSES[mapping_params[:mappable_type]]
     end
 
     def mapping_class
-      mapping_params[:type]&.constantize
+      ALLOWED_MAPPING_CLASSES[mapping_params[:type]]
     end
 end
