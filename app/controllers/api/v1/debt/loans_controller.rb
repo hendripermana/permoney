@@ -35,6 +35,8 @@ class Api::V1::Debt::LoansController < Api::V1::BaseController
   rescue ArgumentError => e
     Rails.logger.error({ at: "API::Loans.preview.error", account_id: account&.id, error: e.message }.to_json)
     return render json: { error: e.message }, status: :unprocessable_entity
+    ).generate
+
     sum_p = rows.sum { |r| r.principal.to_d }
     sum_i = rows.sum { |r| r.interest.to_d }
     sum_t = rows.sum { |r| r.total.to_d }
@@ -48,10 +50,9 @@ class Api::V1::Debt::LoansController < Api::V1::BaseController
       day_count: day_count
     }
   rescue ArgumentError => e
-    Rails.logger.error({ at: "API::Loans.preview.error", account_id: (account&.id rescue nil), error: e.message }.to_json)
+    Rails.logger.error({ at: "API::Loans.preview.error", account_id: account.id, error: e.message }.to_json)
     render json: { error: e.message }, status: :unprocessable_entity
   end
-  # POST /api/v1/debt/loans/installment/post
   def post_installment
     result = Loan::PostInstallment.new(
       family: Current.family,
