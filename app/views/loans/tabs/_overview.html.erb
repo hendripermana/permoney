@@ -117,7 +117,7 @@
 <% end %>
 
 <%# CTA to create first payment based on next planned installment %>
-<% if (next_installment = account.loan_installments.pending.order(:installment_no).first) %>
+<% if (next_installment = account.loan_installments.where(status: 'planned').order(:installment_no).first) %>
   <div class="flex justify-center mt-4">
     <%= render DS::Link.new(
       text: "Create first payment",

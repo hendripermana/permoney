@@ -11,6 +11,7 @@
       </tr>
     </thead>
     <tbody>
+      <% rows = Array(rows) %>
       <% currency_unit = (@account&.currency || Current.family&.currency || "$") %>
       <% rows.each_with_index do |r, idx| %>
         <tr class="border-t border-primary">

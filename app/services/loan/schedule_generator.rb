@@ -67,8 +67,8 @@ class Loan::ScheduleGenerator
 
     def periods
       case frequency
-      when "WEEKLY" then tenor_months * 4
-      when "BIWEEKLY" then (tenor_months * 2)
+      when "WEEKLY" then (tenor_months * 52.0 / 12).round
+      when "BIWEEKLY" then (tenor_months * 26.0 / 12).round
       else
         tenor_months
       end
@@ -157,8 +157,10 @@ class Loan::ScheduleGenerator
     end
 
     def zero_rate_schedule
-      n = [ periods, 1 ].max
       amort = [ amortizing_principal, 0 ].max
+      return [] if amort.zero? && balloon.zero?
+
+      n = [ periods, 1 ].max
       princ_per = (amort / n)
       rows = []
       n.times do |i|
