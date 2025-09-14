@@ -7,14 +7,30 @@ class Loan::PaymentService
 
   def initialize(family:, params:)
     @family = family
-    @params = params
+    # Accept both string and symbol keys reliably
+    @params = params.deep_dup.with_indifferent_access
   end
 
   def call!
     validate_params!
 
     ActiveRecord::Base.transaction do
-      create_payment_transfer!
+      # If a planned installment exists and the requested amount is blank or
+      # matches the planned total, post via Loan::PostInstallment to split
+      # principal and interest correctly.
+      pending = loan_account.loan_installments.pending.order(:installment_no).first
+      if pending.present? && (amount.blank? || amounts_match?(pending.total_amount, amount))
+        result = Loan::PostInstallment.new(
+          family: family,
+          account_id: loan_account.id,
+          source_account_id: source_account_id,
+          date: date
+        ).call!
+        raise result.error unless result.success?
+        @transfer = result.transfer
+      else
+        create_payment_transfer!
+      end
       sync_accounts!
     end
 
@@ -59,6 +75,10 @@ class Loan::PaymentService
         @transfer.outflow_transaction.entry.update!(notes: note)
         @transfer.inflow_transaction.entry.update!(notes: note)
       end
+    end
+
+    def amounts_match?(planned_total, provided)
+      (planned_total.to_d - provided.to_d).abs < 0.01
     end
 
     def sync_accounts!

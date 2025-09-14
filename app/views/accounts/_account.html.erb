@@ -40,9 +40,11 @@
       <% elsif account.syncing? %>
         <div class="w-16 h-6 bg-loader rounded-full animate-pulse"></div>
       <% else %>
-        <p class="text-sm font-medium <%= account.active? ? "text-primary" : "text-subdued" %>">
-          <%= format_money account.balance_money %>
-        </p>
+        <div class="text-sm font-medium <%= account.active? ? "text-primary" : "text-subdued" %>">
+          <%= turbo_frame_tag dom_id(account, :value), src: value_account_path(account), loading: "lazy" do %>
+            <div class="w-16 h-4 bg-loader rounded animate-pulse"></div>
+          <% end %>
+        </div>
       <% end %>
 
       <% if account.draft? %>

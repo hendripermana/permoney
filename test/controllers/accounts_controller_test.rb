@@ -16,6 +16,12 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
   end
 
+  test "should get show for loan without referencing missing columns" do
+    loan = accounts(:loan)
+    get account_url(loan)
+    assert_response :success
+  end
+
   test "should sync account" do
     post sync_account_url(@account)
     assert_redirected_to account_url(@account)

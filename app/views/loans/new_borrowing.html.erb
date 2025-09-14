@@ -14,6 +14,7 @@
                       data: { turbo_frame: "_top" } do |f| %>
     
     <%= f.hidden_field :loan_account_id, value: @account.id %>
+    <%= hidden_field_tag 'borrowing[loan_account_id]', @account.id %>
     
     <div class="bg-container p-4 rounded-lg mb-4">
       <h3 class="font-medium text-primary mb-2">Loan Details</h3>
@@ -35,8 +36,8 @@
           </span>
         </div>
         <div class="flex justify-between">
-          <span class="text-secondary">Current Balance:</span>
-          <span class="text-primary font-medium"><%= format_money(@account.balance_money) %></span>
+          <span class="text-secondary"><%= t("loans.overview.remaining_principal", default: "Remaining Principal") %>:</span>
+          <span class="text-primary font-medium"><%= format_money(@account.loan.remaining_principal_money) %></span>
         </div>
         <% if @account.accountable.sharia_compliant? %>
           <div class="flex items-center gap-2 text-success">

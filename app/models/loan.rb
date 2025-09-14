@@ -193,6 +193,15 @@ class Loan < ApplicationRecord
     Money.new(base_amount, account.currency)
   end
 
+  # Compute remaining principal from ledger postings
+  def remaining_principal
+    Loan::RemainingPrincipalCalculator.new(account).remaining_principal
+  end
+
+  def remaining_principal_money
+    Loan::RemainingPrincipalCalculator.new(account).remaining_principal_money
+  end
+
   class << self
     def color
       "#D444F1"

@@ -1,5 +1,5 @@
 class AccountsController < ApplicationController
-  before_action :set_account, only: %i[sync sparkline toggle_active show destroy]
+  before_action :set_account, only: %i[sync sparkline toggle_active show destroy value]
   include Periodable
 
   def index
@@ -39,6 +39,13 @@ class AccountsController < ApplicationController
     # We still leverage server-side caching in Account::Chartable#sparkline_series.
     @sparkline_series = @account.sparkline_series
     render layout: false
+  end
+
+  # GET /accounts/:id/value
+  # Returns a small HTML fragment with the up-to-date display value for an account.
+  # For loans, this is the remaining principal; otherwise, current balance.
+  def value
+    render partial: "accounts/value", locals: { account: @account }
   end
 
   def toggle_active

@@ -1,0 +1,28 @@
+<%# locals: (rows:, account: nil) %>
+<div class="space-y-3">
+  <h3 class="text-primary font-medium"><%= t("loans.schedule_preview.title") %></h3>
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead>
+        <tr class="text-secondary">
+          <th class="text-left py-2 pr-4"><%= t("loans.schedule_preview.columns.due_date") %></th>
+          <th class="text-right py-2 pr-4"><%= t("loans.schedule_preview.columns.principal") %></th>
+          <th class="text-right py-2 pr-4"><%= t("loans.schedule_preview.columns.interest") %></th>
+          <th class="text-right py-2"><%= t("loans.schedule_preview.columns.total") %></th>
+        </tr>
+      </thead>
+      <tbody>
+        <% rows.each do |r| %>
+          <tr class="border-t border-primary">
+            <td class="py-2 pr-4"><%= l(r.due_date) %></td>
+            <td class="py-2 pr-4 text-right"><%= number_to_currency(r.principal, unit: (account&.currency || Current.family.currency)) %></td>
+            <td class="py-2 pr-4 text-right"><%= number_to_currency(r.interest, unit: (account&.currency || Current.family.currency)) %></td>
+            <td class="py-2 text-right font-medium"><%= number_to_currency(r.total, unit: (account&.currency || Current.family.currency)) %></td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  </div>
+  <p class="text-xs text-secondary"><%= t("loans.schedule_preview.notes") %></p>
+</div>
+

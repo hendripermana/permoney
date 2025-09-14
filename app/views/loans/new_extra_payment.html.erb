@@ -13,6 +13,9 @@
       <%= f.money_field :amount, label: "Extra Amount", default_currency: @account.currency, required: true %>
       <%= f.date_field :date, label: "Effective Date", value: Date.current, required: true %>
       <%= f.select :allocation_mode, [["Reduce Term", "reduce_term"], ["Reduce Installment", "reduce_installment"]], label: "Allocation Mode" %>
+      <div class="text-xs text-secondary">
+        <%= t("loans.form.help.extra_payment") %>
+      </div>
 
       <div class="bg-muted p-3 rounded text-xs text-secondary">
         Recomputes future installments only. Past and posted rows remain intact.
@@ -25,4 +28,3 @@
     <% end %>
   <% end %>
 <% end %>
-

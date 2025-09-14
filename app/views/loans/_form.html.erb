@@ -3,13 +3,13 @@
 <%= render "accounts/form", account: account, url: url do |form| %>
   <%= render "shared/ruler", classes: "my-4" %>
 
-  <div class="space-y-2" data-controller="conditional-fields">
+  <div class="space-y-2" data-controller="conditional-fields loan-form">
     <!-- Loan subtype selector: Borrowed from Person vs Institution -->
     <div class="flex items-center gap-2">
       <%= form.select :subtype,
                       [["Borrowed (Person)", "loan_personal"], ["Borrowed (Institution)", "loan_institution"]] + Loan::SUBTYPES.except("loan_personal","loan_institution").map { |k,v| [v[:long], k] },
                       { label: "Subtype" },
-                      { } %>
+                      { "data-loan-form-target": "subtype", "data-action": "change->loan-form#onSubtypeChange" } %>
     </div>
     <%= form.fields_for :accountable do |loan_form| %>
       <div class="flex items-center gap-2">
@@ -62,23 +62,30 @@
         <%= loan_form.money_field :principal_amount,
                                  label: "Principal Amount",
                                  default_currency: Current.family.currency,
-                                 placeholder: "500000" %>
-        <%= loan_form.number_field :tenor_months, label: "Tenor (months)", placeholder: 12 %>
+                                 placeholder: "500000",
+                                 "data-loan-form-target": "principal",
+                                 "data-action": "input->loan-form#termsChanged change->loan-form#termsChanged" %>
+        <%= loan_form.number_field :tenor_months, label: "Tenor (months)", placeholder: 12, "data-loan-form-target": "tenor", "data-action": "input->loan-form#termsChanged change->loan-form#termsChanged" %>
       </div>
       <div class="flex items-center gap-2">
         <%= loan_form.date_field :start_date, label: "Start Date", value: (loan_form.object.start_date || (Date.current >> 1)) %>
         <%= loan_form.select :payment_frequency,
                               [["Monthly","MONTHLY"],["Weekly","WEEKLY"],["Biweekly","BIWEEKLY"]],
-                              { label: "Payment Frequency" } %>
+                              { label: "Payment Frequency" },
+                              { "data-loan-form-target": "frequency", "data-action": "change->loan-form#termsChanged" } %>
         <%= loan_form.select :schedule_method,
                               [["Annuity","ANNUITY"],["Flat","FLAT"],["Effective","EFFECTIVE"]],
-                              { label: "Schedule Method" } %>
+                              { label: "Schedule Method" },
+                              { "data-loan-form-target": "method", "data-action": "change->loan-form#termsChanged" } %>
       </div>
       <div class="flex items-center gap-2">
-        <%= loan_form.number_field :rate_or_profit, label: "Rate / Profit (%)", step: 0.001, min: 0, placeholder: 10 %>
+        <%= loan_form.number_field :rate_or_profit, label: "Rate / Profit (%)", step: 0.001, min: 0, placeholder: 10, "data-loan-form-target": "rateOrProfit", "data-action": "input->loan-form#termsChanged change->loan-form#termsChanged" %>
         <%= loan_form.money_field :installment_amount,
                                   label: "Installment Amount (optional)",
                                   default_currency: Current.family.currency %>
+      </div>
+      <div class="text-xs text-secondary">
+        <%= t("loans.form.help.person_simple") %>
       </div>
       <div class="text-xs text-secondary" id="rate_help">
         Rate/Profit is annual. If Installment Amount is provided, it may be used by future features to optimize the schedule.
@@ -126,7 +133,7 @@
               variant: "secondary",
               icon: "table",
               href: (form.object.persisted? ? schedule_preview_loan_path(form.object, **href_params) : schedule_preview_loans_path(**href_params)),
-              data: { turbo_frame: "loan-schedule-preview" }
+              data: { turbo_frame: "loan-schedule-preview", loan_preview_link: true }
             ) %>
           <% elsif form.object.persisted? %>
             <%= render DS::Link.new(
@@ -158,12 +165,10 @@
         </div>
       <% end %>
 
-      <%# Inline preview frame (optional) %>
-      <% if params[:inline_preview].present? %>
-        <turbo-frame id="loan-schedule-preview" aria-live="polite">
-          <%# Consumers can trigger this via the Preview links by setting data-turbo-frame %>
-        </turbo-frame>
-      <% end %>
+      <%# Inline preview frame for schedule preview updates %>
+      <turbo-frame id="loan-schedule-preview" aria-live="polite">
+        <%# Links or auto-submits can target this frame to render the preview %>
+      </turbo-frame>
 
       <div class="flex items-center gap-2">
         <!-- Conventional Interest Rate -->

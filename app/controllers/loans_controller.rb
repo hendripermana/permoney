@@ -21,13 +21,23 @@ class LoansController < ApplicationController
   end
 
   def create_borrowing
-    result = Loan::AdditionalBorrowingService.call!(
-      family: Current.family,
-      params: borrowing_params
-    )
+    if borrowing_params[:loan_account_id].blank?
+      @account = Current.family.accounts.find(params[:id])
+      @available_accounts = Current.family.accounts.manual.active.where.not(id: @account.id).alphabetically
+      @error_message = "Loan account must be selected"
+      return render :new_borrowing, status: :unprocessable_entity
+    end
+
+    account = Current.family.accounts.find(borrowing_params[:loan_account_id])
+    cash_id = borrowing_params[:transfer_account_id].presence || borrowing_params[:cash_account_id].presence
+    cash = Current.family.accounts.find(cash_id) if cash_id.present?
+    result = Loan::DisburseMore.call(account: account, amount: borrowing_params[:amount], date: borrowing_params[:date], cash_account: cash)
 
     if result.success?
-      flash[:notice] = "Additional borrowing recorded successfully"
+      flash[:notice] = "Borrowed amount posted."
+      # Synchronously materialize balances so UI reflects changes immediately after redirect
+      Account::QuickSync.call(account) rescue nil
+      Account::QuickSync.call(cash) rescue nil
       respond_to do |format|
         format.html { redirect_back_or_to account_path(result.entry.account) }
         format.turbo_stream { stream_redirect_back_or_to(account_path(result.entry.account)) }
@@ -53,7 +63,11 @@ class LoansController < ApplicationController
     )
 
     if result.success?
-      flash[:notice] = "Payment recorded successfully"
+      flash[:notice] = "Payment posted."
+      loan = Current.family.accounts.find(payment_params[:loan_account_id])
+      src  = Current.family.accounts.find(payment_params[:source_account_id])
+      Account::QuickSync.call(loan) rescue nil
+      Account::QuickSync.call(src) rescue nil
       respond_to do |format|
         format.html { redirect_back_or_to account_path(Current.family.accounts.find(payment_params[:loan_account_id])) }
         format.turbo_stream { stream_redirect_back_or_to(account_path(Current.family.accounts.find(payment_params[:loan_account_id]))) }
@@ -125,7 +139,10 @@ class LoansController < ApplicationController
       start_date: start
     )
     rows = generator.generate
-    render partial: "loans/schedule_preview", locals: { rows: rows }
+    respond_to do |format|
+      format.turbo_stream { render partial: "loans/schedule_preview", locals: { rows: rows, account: @account } }
+      format.html        { render partial: "loans/schedule_preview", locals: { rows: rows, account: @account } }
+    end
   end
 
   # POST /loans/:id/post_installment
@@ -177,7 +194,7 @@ class LoansController < ApplicationController
   private
 
     def borrowing_params
-      params.require(:borrowing).permit(:loan_account_id, :amount, :transfer_account_id, :date, :notes)
+      params.require(:borrowing).permit(:loan_account_id, :amount, :transfer_account_id, :cash_account_id, :date, :notes)
     end
 
     def payment_params

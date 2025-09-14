@@ -7,7 +7,8 @@ class Loan::AdditionalBorrowingService
 
   def initialize(family:, params:)
     @family = family
-    @params = params
+    # Accept both string and symbol keys reliably
+    @params = params.deep_dup.with_indifferent_access
   end
 
   def call!
