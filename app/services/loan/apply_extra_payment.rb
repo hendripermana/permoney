@@ -14,30 +14,43 @@ class Loan::ApplyExtraPayment
 
     loan = @account.accountable
 
-    # Remaining principal from planned installments
     pending = @account.loan_installments.pending.order(:installment_no)
-    remaining_principal = pending.sum(:principal_amount).to_d - @amount
-    remaining_principal = [ remaining_principal, 0.to_d ].max
+    pending_principal_total = pending.sum(:principal_amount).to_d
 
-    # Compute remaining tenor in months
+    ledger_remaining = Loan::RemainingPrincipalCalculator.new(@account).remaining_principal
+    base_principal = ledger_remaining.positive? ? ledger_remaining : pending_principal_total
+    remaining_principal = [ base_principal - @amount, 0.to_d ].max
+
     remaining_no = pending.count
-    tenor_months = [ remaining_no, 1 ].max
+    tenor_months = if @allocation_mode == "reduce_installment"
+      [ remaining_no, 1 ].max
+    else
+      [ remaining_no, 1 ].max
+    end
 
-    # If reduce_term, shorten tenor by a rough estimate
-    if @allocation_mode == "reduce_term" && remaining_principal.positive?
-      # Keep payment frequency/method, let tenor shrink proportional to principal reduction
-      ratio = remaining_principal / [ pending.sum(:principal_amount).to_d, 1.to_d ].max
-      tenor_months = [ (tenor_months * ratio).ceil, 1 ].max
+    if remaining_principal.positive?
+      case @allocation_mode
+      when "reduce_term"
+        if pending_principal_total.positive?
+          ratio = remaining_principal / pending_principal_total
+          tenor_months = [ (remaining_no * ratio).ceil, 1 ].max
+        end
+      when "reduce_installment"
+        tenor_months = [ (remaining_principal / average_principal_per_period(pending_principal_total, remaining_no)).ceil, 1 ].max
+      end
+    else
+      tenor_months = 1
     end
 
     t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
     rows = Loan::ScheduleGenerator.new(
       principal_amount: remaining_principal,
-      rate_or_profit: loan.rate_or_profit || loan.interest_rate || loan.margin_rate || 0,
+      rate_or_profit: Loan.normalize_rate(loan.rate_or_profit || loan.interest_rate || loan.margin_rate || 0),
       tenor_months: tenor_months,
       payment_frequency: loan.payment_frequency || "MONTHLY",
       schedule_method: loan.schedule_method || "ANNUITY",
       start_date: @date,
+      balloon_amount: loan.balloon_amount || 0,
       loan_id: @account.accountable_id
     ).generate
 
@@ -96,4 +109,14 @@ class Loan::ApplyExtraPayment
     Rails.logger.error({ at: "Loan::ApplyExtraPayment.error", account_id: @account.id, amount: @amount.to_s, error: e.message }.to_json)
     Result.new(success?: false, error: e.message)
   end
+
+  private
+
+    def average_principal_per_period(total_principal, period_count)
+      count = [ period_count, 1 ].max
+      total = total_principal.positive? ? total_principal : @account.loan_installments.pending.sum(:principal_amount).to_d
+      return total / count if total.positive?
+
+      1.to_d
+    end
 end

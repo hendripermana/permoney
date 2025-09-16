@@ -27,7 +27,8 @@ class LoanPostInstallmentObservabilityTest < ActiveSupport::TestCase
       attr_accessor :span_called
       def with_child_span(op:, description: nil)
         self.span_called = true
-        span = Struct.new(:set_data).new(proc { |_k, _v| })
+        span = Object.new
+        span.define_singleton_method(:set_data) { |_k, _v| }
         yield span
       end
       def add_breadcrumb(*)
@@ -36,10 +37,15 @@ class LoanPostInstallmentObservabilityTest < ActiveSupport::TestCase
         yield Object.new
       end
       def get_current_scope
-        Struct.new(:get_transaction).new(Struct.new(:set_measurement).new(proc { |_n, _v, _u| }))
+        scope = Object.new
+        tx = Object.new
+        tx.define_singleton_method(:set_measurement) { |_name, _value, _unit| }
+        scope.define_singleton_method(:get_transaction) { tx }
+        scope
       end
     end
 
+    ::Sentry.span_called = false
     result = Loan::PostInstallment.new(
       family: @family,
       account_id: @loan.id,

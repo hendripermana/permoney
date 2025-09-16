@@ -101,4 +101,26 @@ class LoanPostInstallmentTest < ActiveSupport::TestCase
     assert res.success?
     assert_equal "posted", @installment.reload.status
   end
+
+  test "interest portion is recorded in source currency" do
+    idr_cash = Account.create!(
+      family: @family,
+      name: "IDR Cash",
+      balance: 1_000_000,
+      currency: "IDR",
+      accountable: Depository.create!,
+      status: "active"
+    )
+
+    result = Loan::PostInstallment.new(
+      family: @family,
+      account_id: @loan.id,
+      source_account_id: idr_cash.id,
+      date: Date.current
+    ).call!
+
+    assert result.success?
+    assert_equal "IDR", result.interest_entry.currency
+    assert_in_delta 100, result.interest_entry.amount.to_f, 0.01
+  end
 end

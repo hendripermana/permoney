@@ -28,4 +28,10 @@ class LoanApplyExtraPaymentTest < ActiveSupport::TestCase
     assert result.success?
     assert @loan.loan_installments.pending.count > 0
   end
+
+  test "remaining principal comes from ledger calculator" do
+    Loan::RemainingPrincipalCalculator.any_instance.expects(:remaining_principal).returns(900).once
+    result = Loan::ApplyExtraPayment.new(account: @loan, amount: 100, date: Date.current, allocation_mode: "reduce_term").call!
+    assert result.success?
+  end
 end

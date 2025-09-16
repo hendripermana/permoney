@@ -11,7 +11,7 @@ class LoansController < ApplicationController
     :principal_amount, :start_date, :tenor_months, :payment_frequency, :schedule_method,
     :rate_or_profit, :installment_amount, :early_repayment_policy, :collateral_desc,
     :initial_balance_override, :initial_balance_date, :linked_contact_id, :lender_name,
-    :institution_name, :institution_type, :product_type, :notes
+    :institution_name, :institution_type, :product_type, :notes, :balloon_amount
   )
 
   # Additional actions for personal loan functionality
@@ -116,18 +116,25 @@ class LoansController < ApplicationController
       @account = Current.family.accounts.find(params[:id])
       authorize_account!(@account)
       principal = (params[:principal_amount] || @account.accountable.initial_balance || @account.balance).to_d
-      rate = params[:rate_or_profit].presence || @account.accountable.interest_rate || @account.accountable.margin_rate || 0
+      raw_rate = params[:rate_or_profit].presence || @account.accountable.interest_rate || @account.accountable.margin_rate || 0
+      rate = Loan.normalize_rate(raw_rate)
       tenor = (params[:tenor_months] || @account.accountable.term_months || 12).to_i
       freq = params[:payment_frequency].presence || @account.accountable.payment_frequency || "MONTHLY"
       method = params[:schedule_method].presence || @account.accountable.schedule_method || "ANNUITY"
       start = params[:start_date].presence || @account.accountable.origination_date || Date.current
+      balloon = if params.key?(:balloon_amount)
+        params[:balloon_amount].presence&.to_d || 0.to_d
+      else
+        @account.accountable.balloon_amount || 0.to_d
+      end
     else
       principal = params[:principal_amount].to_d
-      rate = params[:rate_or_profit].to_d
+      rate = Loan.normalize_rate(params[:rate_or_profit])
       tenor = params[:tenor_months].to_i
       freq = (params[:payment_frequency] || "MONTHLY").to_s
       method = (params[:schedule_method] || "ANNUITY").to_s
       start = params[:start_date].presence || Date.current
+      balloon = params[:balloon_amount].presence&.to_d || 0.to_d
     end
 
     generator = Loan::ScheduleGenerator.new(
@@ -136,7 +143,8 @@ class LoansController < ApplicationController
       tenor_months: tenor,
       payment_frequency: freq,
       schedule_method: method,
-      start_date: start
+      start_date: start,
+      balloon_amount: balloon
     )
     rows = generator.generate
     respond_to do |format|

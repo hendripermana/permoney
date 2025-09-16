@@ -33,6 +33,8 @@ class Loan < ApplicationRecord
     "cooperative" => { short: "Cooperative", long: "Credit Cooperative" }
   }.freeze
 
+  store_accessor :extra, :balloon_amount
+
   # Virtual attribute used only during origination flow
   attr_accessor :imported
 
@@ -50,6 +52,7 @@ class Loan < ApplicationRecord
   validates :schedule_method, inclusion: { in: SCHEDULE_METHODS }, allow_nil: true
   validates :institution_type, inclusion: { in: INSTITUTION_TYPES }, allow_nil: true
   validates :product_type, inclusion: { in: PRODUCT_TYPES }, allow_nil: true
+  validates :balloon_amount, numericality: { greater_than_or_equal_to: 0 }, allow_nil: true
 
   # Sharia compliance validations
   validates :compliance_type, inclusion: { in: COMPLIANCE_TYPES.keys }, allow_nil: true
@@ -63,7 +66,9 @@ class Loan < ApplicationRecord
   validate :islamic_product_consistency
   validate :personal_lender_presence
 
-  track_changes_for :principal_amount, :rate_or_profit, :tenor_months, :institution_type, :lender_name, :schedule_method, :payment_frequency, :start_date
+  track_changes_for :principal_amount, :rate_or_profit, :tenor_months, :institution_type, :lender_name, :schedule_method, :payment_frequency, :start_date, :balloon_amount
+
+  before_validation :synchronize_term_and_tenor
 
   def monthly_payment
     return nil if term_months.blank? || term_months.to_i <= 0
@@ -202,7 +207,33 @@ class Loan < ApplicationRecord
     Loan::RemainingPrincipalCalculator.new(account).remaining_principal_money
   end
 
+  def balloon_amount
+    raw = super()
+    return if raw.blank?
+
+    BigDecimal(raw.to_s)
+  rescue ArgumentError
+    nil
+  end
+
+  def balloon_amount=(value)
+    return super(nil) if value.blank?
+
+    decimal = BigDecimal(value.to_s)
+    super(decimal.to_s)
+  rescue ArgumentError
+    super(nil)
+    errors.add(:balloon_amount, "is not a number")
+  end
+
   class << self
+    def normalize_rate(value)
+      return 0.to_d if value.blank?
+
+      decimal = value.to_d
+      decimal <= 1 ? decimal : (decimal / 100)
+    end
+
     def color
       "#D444F1"
     end
@@ -269,6 +300,14 @@ class Loan < ApplicationRecord
       return unless personal_loan?
       if linked_contact_id.blank? && (counterparty_name.blank? && lender_name.blank?)
         errors.add(:base, "Provide a contact or lender name for personal loans")
+      end
+    end
+
+    def synchronize_term_and_tenor
+      if term_months.blank? && tenor_months.present?
+        self.term_months = tenor_months
+      elsif tenor_months.blank? && term_months.present?
+        self.tenor_months = term_months
       end
     end
 end

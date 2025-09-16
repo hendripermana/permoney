@@ -42,4 +42,18 @@ class LoanScheduleGeneratorTest < ActiveSupport::TestCase
     # Month-end handling: due dates should roll to end-of-month for short months
     assert_equal Date.new(2025, 2, 28), rows.first.due_date
   end
+
+  test "flat schedule uses period rate for interest across frequencies" do
+    gen = Loan::ScheduleGenerator.new(
+      principal_amount: 52_000,
+      rate_or_profit: 0.104,
+      tenor_months: 12,
+      payment_frequency: "WEEKLY",
+      schedule_method: "FLAT",
+      start_date: Date.current
+    )
+    rows = gen.generate
+    assert_equal 52, rows.size
+    assert_in_delta 104, rows.first.interest.to_f, 0.01
+  end
 end

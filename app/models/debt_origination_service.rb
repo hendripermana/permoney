@@ -122,7 +122,14 @@ class DebtOriginationService
         rate_type: params[:rate_type] || params.dig(:accountable_attributes, :rate_type),
         interest_rate: params[:interest_rate] || params.dig(:accountable_attributes, :interest_rate),
         term_months: params[:term_months] || params.dig(:accountable_attributes, :term_months),
-        initial_balance: initial_principal
+        initial_balance: initial_principal,
+        principal_amount: params[:principal_amount] || params.dig(:accountable_attributes, :principal_amount),
+        start_date: params[:start_date] || params.dig(:accountable_attributes, :start_date),
+        tenor_months: params[:tenor_months] || params.dig(:accountable_attributes, :tenor_months),
+        payment_frequency: params[:payment_frequency] || params.dig(:accountable_attributes, :payment_frequency),
+        schedule_method: params[:schedule_method] || params.dig(:accountable_attributes, :schedule_method),
+        rate_or_profit: params[:rate_or_profit] || params.dig(:accountable_attributes, :rate_or_profit),
+        balloon_amount: params[:balloon_amount] || params.dig(:accountable_attributes, :balloon_amount)
       }.compact
     end
 

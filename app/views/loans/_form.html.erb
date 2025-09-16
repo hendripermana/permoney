@@ -7,14 +7,14 @@
     <!-- Loan subtype selector: Borrowed from Person vs Institution -->
     <div class="flex items-center gap-2">
       <%= form.select :subtype,
-                      [["Borrowed (Person)", "loan_personal"], ["Borrowed (Institution)", "loan_institution"]] + Loan::SUBTYPES.except("loan_personal","loan_institution").map { |k,v| [v[:long], k] },
+                      Loan::SUBTYPES.map { |key, meta| [meta[:long], key] },
                       { label: "Subtype" },
                       { "data-loan-form-target": "subtype", "data-action": "change->loan-form#onSubtypeChange" } %>
     </div>
     <%= form.fields_for :accountable do |loan_form| %>
       <div class="flex items-center gap-2">
         <%= loan_form.select :compliance_type,
-                              [["Conventional Banking", "conventional"], ["Islamic Banking (Sharia)", "sharia"]],
+                              Loan::COMPLIANCE_TYPES.map { |key, meta| [meta[:long], key] },
                               { label: "Banking Type", include_blank: "Select banking type..." },
                               { "data-action": "change->conditional-fields#triggerChanged" } %>
         <%= loan_form.select :debt_kind,
@@ -36,12 +36,7 @@
       
       <div class="flex items-center gap-2">
         <%= loan_form.select :fintech_type,
-                              [
-                                ["Traditional Bank", "bank"],
-                                ["Pinjol (Online Lending)", "pinjol"],
-                                ["P2P Lending Platform", "p2p_lending"],
-                                ["Credit Cooperative", "cooperative"]
-                              ],
+                              Loan::FINTECH_TYPES.map { |key, meta| [meta[:long], key] },
                               { label: "Institution Type", include_blank: "Select institution type..." } %>
       </div>
 
@@ -70,11 +65,11 @@
       <div class="flex items-center gap-2">
         <%= loan_form.date_field :start_date, label: "Start Date", value: (loan_form.object.start_date || (Date.current >> 1)) %>
         <%= loan_form.select :payment_frequency,
-                              [["Monthly","MONTHLY"],["Weekly","WEEKLY"],["Biweekly","BIWEEKLY"]],
+                              Loan::PAYMENT_FREQUENCIES.map { |freq| [freq.titleize, freq] },
                               { label: "Payment Frequency" },
                               { "data-loan-form-target": "frequency", "data-action": "change->loan-form#termsChanged" } %>
         <%= loan_form.select :schedule_method,
-                              [["Annuity","ANNUITY"],["Flat","FLAT"],["Effective","EFFECTIVE"]],
+                              Loan::SCHEDULE_METHODS.map { |method_option| [method_option.titleize, method_option] },
                               { label: "Schedule Method" },
                               { "data-loan-form-target": "method", "data-action": "change->loan-form#termsChanged" } %>
       </div>
@@ -215,11 +210,6 @@
                                rows: 3 %>
       </div>
 
-      <div class="flex items-center gap-2">
-        <%= loan_form.number_field :term_months,
-                                 label: t("loans.form.term_months"),
-                                 placeholder: t("loans.form.term_months_placeholder") %>
-      </div>
     <% end %>
   </div>
 <% end %>

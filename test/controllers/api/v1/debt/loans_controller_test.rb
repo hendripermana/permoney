@@ -4,6 +4,12 @@ class Api::V1::Debt::LoansControllerTest < ActionDispatch::IntegrationTest
   setup do
     sign_in users(:family_admin)
     @loan = accounts(:loan)
+    @api_key = api_keys(:active_key)
+    @api_key.update!(source: "web") if @api_key.source.blank?
+    @api_headers = {
+      "X-Api-Key" => @api_key.display_key,
+      "ACCEPT" => "application/json"
+    }
   end
 
   test "preview returns schedule rows" do
@@ -12,7 +18,7 @@ class Api::V1::Debt::LoansControllerTest < ActionDispatch::IntegrationTest
       principal_amount: 1_000_000,
       rate_or_profit: 0.1,
       tenor_months: 12
-    }
+    }, headers: @api_headers, as: :json
     assert_response :success
     body = JSON.parse(@response.body)
     assert_equal 12, body["count"]
@@ -30,7 +36,7 @@ class Api::V1::Debt::LoansControllerTest < ActionDispatch::IntegrationTest
       principal_amount: 1_000_000,
       rate_or_profit: 0.1,
       tenor_months: 6
-    }
+    }, headers: @api_headers, as: :json
     assert_response :success
     body = JSON.parse(@response.body)
     assert body["regenerated_count"].to_i > 0
@@ -44,7 +50,7 @@ class Api::V1::Debt::LoansControllerTest < ActionDispatch::IntegrationTest
       rate_or_profit: 0.1,
       tenor_months: 12,
       balloon_amount: 2000
-    }
+    }, headers: @api_headers, as: :json
     assert_response :unprocessable_entity
   end
 
@@ -55,7 +61,7 @@ class Api::V1::Debt::LoansControllerTest < ActionDispatch::IntegrationTest
       rate_or_profit: 0.1,
       tenor_months: 12,
       day_count: "30/360" # invalid token
-    }
+    }, headers: @api_headers, as: :json
     assert_response :unprocessable_entity
   end
 end

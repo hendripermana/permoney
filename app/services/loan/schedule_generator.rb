@@ -54,9 +54,7 @@ class Loan::ScheduleGenerator
     if defined?(Sentry)
       begin
         tx = Sentry.get_current_scope.get_transaction
-        if tx&.respond_to?(:set_measurement)
-          tx.set_measurement("loan.schedule.ms", ms, "millisecond")
-        end
+        record_measurement(tx, "loan.schedule.ms", ms, "millisecond")
       rescue NoMethodError; end
     end
     Rails.logger.info({ at: "Loan::ScheduleGenerator.generate", ms: ms, principal: principal.to_s, rate: annual_rate.to_s, tenor: tenor_months, frequency: frequency, method: method }.to_json) rescue nil
@@ -128,18 +126,11 @@ class Loan::ScheduleGenerator
     def flat_schedule
       n = periods
       princ_per = (amortizing_principal / n)
-      int_per = (principal * annual_rate / 12) # treat as monthly rate baseline; simple flat approx
+      interest_per_period = principal * period_rate
       rows = []
       n.times do |i|
         princ = princ_per
-        int = case frequency
-        when "WEEKLY"
-          int_per / 4
-        when "BIWEEKLY"
-          int_per / 2
-        else
-          int_per
-        end
+        int = interest_per_period
         total = princ + int
         rows << Row.new(due_date: next_due_date(i + 1), principal: princ.round(4), interest: int.round(4), total: total.round(4))
       end
@@ -202,5 +193,23 @@ class Loan::ScheduleGenerator
       Rails.logger.error({ at: "Loan::ScheduleGenerator.error", kind: kind, principal: principal.to_s, balloon: balloon.to_s, tenor: tenor_months, frequency: frequency, method: method }.to_json)
     rescue
       # no-op
+    end
+
+    def record_measurement(tx, name, value, unit)
+      return unless tx
+
+      callable = if tx.respond_to?(:set_measurement)
+        method = tx.method(:set_measurement) rescue nil
+        if method && (method.arity.zero? || method.arity == -1)
+          handler = method.call rescue nil
+          handler if handler.respond_to?(:call)
+        else
+          method
+        end
+      end
+
+      callable&.call(name, value, unit)
+    rescue StandardError
+      nil
     end
 end

@@ -12,6 +12,13 @@ class Loan::PostInstallment
   def call!
     raise ArgumentError, "Account is not Loan" unless @account.accountable_type == "Loan"
 
+    if @installment_no.blank?
+      last_posted = LoanInstallment.for_account(@account.id).order(:installment_no).where(status: "posted").last
+      if last_posted && last_posted.transfer_id.present? && LoanInstallment.for_account(@account.id).planned.none?
+        return already_posted_result(last_posted)
+      end
+    end
+
     installment = find_installment!
     return already_posted_result(installment) if installment.status == "posted" && installment.transfer_id.present?
     principal = installment.principal_amount.to_d
@@ -42,10 +49,16 @@ class Loan::PostInstallment
 
       # 2) Interest: expense from cash only, categorized
       if interest.positive?
+        interest_money = Money.new(interest, @account.currency)
+        converted_interest = interest_money.exchange_to(
+          @source.currency,
+          date: @date,
+          fallback_rate: 1.0
+        )
         interest_entry = @source.entries.create!(
           date: @date,
           name: interest_name,
-          amount: interest,
+          amount: converted_interest.amount,
           currency: @source.currency,
           entryable: Transaction.new(kind: interest_kind)
         )
@@ -83,8 +96,8 @@ class Loan::PostInstallment
           span.set_data(:transfer_id, transfer.id) rescue nil
         end
         tx = Sentry.get_current_scope.get_transaction
-        tx&.set_measurement("loan.installment.total_amount", (installment.total_amount || 0).to_f, "none")
-        tx&.set_measurement("loan.installment.ms", ms, "millisecond")
+        record_measurement(tx, "loan.installment.total_amount", (installment.total_amount || 0).to_f, "none")
+        record_measurement(tx, "loan.installment.ms", ms, "millisecond")
       rescue NoMethodError; end
     end
     Rails.logger.info({ at: "Loan::PostInstallment", account_id: @account.id, installment_no: installment.installment_no, transfer_id: transfer.id, ms: ms }.to_json)
@@ -116,10 +129,6 @@ class Loan::PostInstallment
       @account.accountable.sharia_compliant? ? "margin_payment" : "loan_payment"
     end
 
-    def interest_category_name
-      @account.accountable.sharia_compliant? ? "Profit Expense" : "Interest Expense"
-    end
-
     def interest_name
       base = @account.accountable.sharia_compliant? ? "Profit portion of installment" : "Interest portion of installment"
       "#{base} — #{@account.name}"
@@ -132,5 +141,21 @@ class Loan::PostInstallment
 
     def already_posted_result(installment)
       Result.new(success?: true, transfer: (Transfer.find_by(id: installment.transfer_id) if installment.transfer_id), interest_entry: nil, installment: installment)
+    end
+
+    def record_measurement(tx, name, value, unit)
+      return unless tx
+      return unless tx.respond_to?(:set_measurement)
+
+      method = tx.method(:set_measurement) rescue nil
+
+      if method && method.arity != 0
+        method.call(name, value, unit)
+      else
+        handler = (tx.set_measurement rescue nil)
+        handler.call(name, value, unit) if handler.respond_to?(:call)
+      end
+    rescue StandardError
+      nil
     end
 end

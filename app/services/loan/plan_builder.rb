@@ -1,10 +1,11 @@
 class Loan::PlanBuilder
   Result = Struct.new(:success?, :installments, :error, keyword_init: true)
 
-  def self.call!(account:, principal_amount:, rate_or_profit:, tenor_months:, payment_frequency:, schedule_method:, start_date:)
-    new(account:, principal_amount:, rate_or_profit:, tenor_months:, payment_frequency:, schedule_method:, start_date:).call!
-end
-  def initialize(account:, principal_amount:, rate_or_profit:, tenor_months:, payment_frequency:, schedule_method:, start_date:)
+  def self.call!(account:, principal_amount:, rate_or_profit:, tenor_months:, payment_frequency:, schedule_method:, start_date:, balloon_amount: 0)
+    new(account:, principal_amount:, rate_or_profit:, tenor_months:, payment_frequency:, schedule_method:, start_date:, balloon_amount:).call!
+  end
+
+  def initialize(account:, principal_amount:, rate_or_profit:, tenor_months:, payment_frequency:, schedule_method:, start_date:, balloon_amount: 0)
     @account = account
     @principal_amount = principal_amount
     @rate_or_profit = rate_or_profit
@@ -12,17 +13,19 @@ end
     @payment_frequency = payment_frequency
     @schedule_method = schedule_method
     @start_date = start_date
+    @balloon_amount = balloon_amount.present? ? balloon_amount.to_d : 0.to_d
   end
 
   def call!
     t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
     rows = Loan::ScheduleGenerator.new(
       principal_amount: @principal_amount,
-      rate_or_profit: @rate_or_profit || 0,
+      rate_or_profit: Loan.normalize_rate(@rate_or_profit || 0),
       tenor_months: @tenor_months,
       payment_frequency: @payment_frequency,
       schedule_method: @schedule_method,
       start_date: @start_date,
+      balloon_amount: @balloon_amount,
       loan_id: account.accountable_id
     ).generate
 
