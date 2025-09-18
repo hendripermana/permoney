@@ -36,4 +36,25 @@ class LoanTest < ActiveSupport::TestCase
     loan = Loan.create!(interest_rate: 1, term_months: 12, rate_type: "fixed", balloon_amount: "15000")
     assert_equal 15_000.to_d, loan.reload.balloon_amount
   end
+
+  test "interest free loans clear rate fields" do
+    loan = Loan.create!(
+      interest_rate: 6.5,
+      margin_rate: 3.5,
+      profit_sharing_ratio: 0.4,
+      rate_type: "fixed",
+      term_months: 12,
+      interest_free: true
+    )
+
+    assert_nil loan.interest_rate
+    assert_nil loan.margin_rate
+    assert_nil loan.profit_sharing_ratio
+    assert loan.interest_free?
+  end
+
+  test "relationship is stored inside extra payload" do
+    loan = Loan.create!(term_months: 6, rate_type: "fixed", relationship: "friend")
+    assert_equal "friend", loan.reload.relationship
+  end
 end

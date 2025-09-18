@@ -19,7 +19,11 @@ class Api::V1::Debt::LoansController < Api::V1::BaseController
     return render json: { error: "principal_amount must be > 0" }, status: :unprocessable_entity if principal <= 0
     return render json: { error: "tenor_months must be > 0" }, status: :unprocessable_entity if tenor <= 0
 
-    rate = Loan.normalize_rate(params[:rate_or_profit].presence || account.accountable.interest_rate || account.accountable.margin_rate || 0)
+    boolean = ActiveModel::Type::Boolean.new
+    interest_free_flag = params.key?(:interest_free) ? boolean.cast(params[:interest_free]) : nil
+    interest_free = interest_free_flag.nil? ? account.accountable.interest_free? : interest_free_flag
+    raw_rate = params[:rate_or_profit].presence || account.accountable.interest_rate || account.accountable.margin_rate || 0
+    rate = interest_free ? 0.to_d : Loan.normalize_rate(raw_rate)
     freq = (params[:payment_frequency] || account.accountable.payment_frequency || "MONTHLY").to_s
     method = (params[:schedule_method] || account.accountable.schedule_method || "ANNUITY").to_s
     start = params[:start_date].presence || account.accountable.origination_date || Date.current
@@ -89,7 +93,11 @@ class Api::V1::Debt::LoansController < Api::V1::BaseController
 
     principal = (params[:principal_amount] || account.accountable.principal_amount || account.accountable.initial_balance || account.balance).to_d
     tenor = (params[:tenor_months] || account.accountable.tenor_months).to_i
-    rate = Loan.normalize_rate(params[:rate_or_profit].presence || account.accountable.rate_or_profit || account.accountable.interest_rate || account.accountable.margin_rate || 0)
+    boolean = ActiveModel::Type::Boolean.new
+    interest_free_flag = params.key?(:interest_free) ? boolean.cast(params[:interest_free]) : nil
+    interest_free = interest_free_flag.nil? ? account.accountable.interest_free? : interest_free_flag
+    raw_rate = params[:rate_or_profit].presence || account.accountable.rate_or_profit || account.accountable.interest_rate || account.accountable.margin_rate || 0
+    rate = interest_free ? 0.to_d : Loan.normalize_rate(raw_rate)
     freq = (params[:payment_frequency] || account.accountable.payment_frequency || "MONTHLY").to_s
     method = (params[:schedule_method] || account.accountable.schedule_method || "ANNUITY").to_s
     start = params[:start_date].presence || account.accountable.start_date || Date.current

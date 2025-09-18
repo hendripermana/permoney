@@ -1,215 +1,266 @@
 <%# locals: (account:, url:) %>
 
-<%= render "accounts/form", account: account, url: url do |form| %>
+<% loan_form_prefix = lambda do |f|
+     current_subtype = f.object.subtype.presence || "loan_personal"
+     f.object.subtype ||= current_subtype
+     capture do
+       f.fields_for :accountable do |loan_form|
+         debt_kind = loan_form.object.debt_kind.presence || (current_subtype == "loan_personal" ? "personal" : "institutional")
+         personal_mode = debt_kind == "personal"
+         concat(render(partial: "loans/overview_section", locals: { form: f, loan_form:, personal_mode: personal_mode }))
+       end
+     end
+   end %>
+
+<% borrowed_enabled = Rails.application.config.respond_to?(:features) && ActiveModel::Type::Boolean.new.cast(Rails.application.config.features&.dig(:loans, :borrowed, :enabled)) %>
+<% preview_base_href = account.persisted? ? schedule_preview_loan_path(account) : schedule_preview_loans_path %>
+<% preview_form_data = {
+  controller: "loan-form",
+  "loan-form-preview-base-href-value": preview_base_href,
+  "loan-form-preview-frame-value": "loan-schedule-preview",
+  "loan-form-preview-auto-value": false
+} %>
+
+<%= render "accounts/form", account: account, url: url, form_prefix: loan_form_prefix, form_data: preview_form_data do |form| %>
   <%= render "shared/ruler", classes: "my-4" %>
 
-  <div class="space-y-2" data-controller="conditional-fields loan-form">
-    <!-- Loan subtype selector: Borrowed from Person vs Institution -->
-    <div class="flex items-center gap-2">
-      <%= form.select :subtype,
-                      Loan::SUBTYPES.map { |key, meta| [meta[:long], key] },
-                      { label: "Subtype" },
-                      { "data-loan-form-target": "subtype", "data-action": "change->loan-form#onSubtypeChange" } %>
-    </div>
+  <div class="space-y-6">
     <%= form.fields_for :accountable do |loan_form| %>
-      <div class="flex items-center gap-2">
-        <%= loan_form.select :compliance_type,
-                              Loan::COMPLIANCE_TYPES.map { |key, meta| [meta[:long], key] },
-                              { label: "Banking Type", include_blank: "Select banking type..." },
-                              { "data-action": "change->conditional-fields#triggerChanged" } %>
-        <%= loan_form.select :debt_kind,
-                              [["Institutional", "institutional"], ["Personal", "personal"]],
-                              { label: "Debt Type" } %>
-      </div>
+      <% current_subtype = form.object.subtype.presence || "loan_personal" %>
+      <% debt_kind = loan_form.object.debt_kind.presence || (current_subtype == "loan_personal" ? "personal" : "institutional") %>
+      <% personal_mode = debt_kind == "personal" %>
 
-      <div class="flex items-center gap-2" data-conditional-fields-target="field" data-show-when="sharia" style="display: none;">
-        <%= loan_form.select :islamic_product_type,
-                              [
-                                ["Murabaha (Cost-Plus Financing)", "murabaha"],
-                                ["Musyarakah (Partnership)", "musyarakah"],
-                                ["Mudharabah (Profit-Sharing)", "mudharabah"],
-                                ["Ijarah (Islamic Leasing)", "ijarah"],
-                                ["Qard Hasan (Interest-Free)", "qard_hasan"]
-                              ],
-                              { label: "Islamic Product Type", include_blank: "Select Islamic product..." } %>
-      </div>
-      
-      <div class="flex items-center gap-2">
-        <%= loan_form.select :fintech_type,
-                              Loan::FINTECH_TYPES.map { |key, meta| [meta[:long], key] },
-                              { label: "Institution Type", include_blank: "Select institution type..." } %>
-      </div>
+      <% loan_form.object.debt_kind ||= debt_kind %>
+      <% loan_form.object.counterparty_type ||= (personal_mode ? "person" : "institution") %>
 
-      <div class="flex items-center gap-2">
-        <%= loan_form.select :counterparty_type,
-                              [["Institution", "institution"], ["Person", "person"]],
-                              { label: "Counterparty Type" } %>
-        <%= loan_form.text_field :counterparty_name, label: "Counterparty Name", placeholder: "e.g., BCA, Dana, John Doe" %>
-      </div>
-      <%# Personal loan contact section %>
-      <div class="flex items-center gap-2" data-conditional-fields-target="field" data-show-when="loan_personal">
-        <%= loan_form.text_field :linked_contact_id, label: "Contact (optional)", placeholder: "UUID or leave blank" %>
-        <%= loan_form.text_field :lender_name, label: "Lender Name (fallback)", placeholder: "Person or entity name" %>
-      </div>
+      <%= loan_form.hidden_field :debt_kind,
+                                 value: loan_form.object.debt_kind,
+                                 data: { "loan-form-target": "debtKindField" } %>
+      <%= loan_form.hidden_field :counterparty_type,
+                                 value: loan_form.object.counterparty_type,
+                                 data: { "loan-form-target": "counterpartyTypeField" } %>
 
-      <!-- Borrowed Loan shared fields -->
-      <div class="flex items-center gap-2">
-        <%= loan_form.money_field :principal_amount,
-                                 label: "Principal Amount",
-                                 default_currency: Current.family.currency,
-                                 placeholder: "500000",
-                                 "data-loan-form-target": "principal",
-                                 "data-action": "input->loan-form#termsChanged change->loan-form#termsChanged" %>
-        <%= loan_form.number_field :tenor_months, label: "Tenor (months)", placeholder: 12, "data-loan-form-target": "tenor", "data-action": "input->loan-form#termsChanged change->loan-form#termsChanged" %>
-      </div>
-      <div class="flex items-center gap-2">
-        <%= loan_form.date_field :start_date, label: "Start Date", value: (loan_form.object.start_date || (Date.current >> 1)) %>
-        <%= loan_form.select :payment_frequency,
-                              Loan::PAYMENT_FREQUENCIES.map { |freq| [freq.titleize, freq] },
-                              { label: "Payment Frequency" },
-                              { "data-loan-form-target": "frequency", "data-action": "change->loan-form#termsChanged" } %>
-        <%= loan_form.select :schedule_method,
-                              Loan::SCHEDULE_METHODS.map { |method_option| [method_option.titleize, method_option] },
-                              { label: "Schedule Method" },
-                              { "data-loan-form-target": "method", "data-action": "change->loan-form#termsChanged" } %>
-      </div>
-      <div class="flex items-center gap-2">
-        <%= loan_form.number_field :rate_or_profit, label: "Rate / Profit (%)", step: 0.001, min: 0, placeholder: 10, "data-loan-form-target": "rateOrProfit", "data-action": "input->loan-form#termsChanged change->loan-form#termsChanged" %>
-        <%= loan_form.money_field :installment_amount,
-                                  label: "Installment Amount (optional)",
-                                  default_currency: Current.family.currency %>
-      </div>
-      <div class="text-xs text-secondary">
-        <%= t("loans.form.help.person_simple") %>
-      </div>
-      <div class="text-xs text-secondary" id="rate_help">
-        Rate/Profit is annual. If Installment Amount is provided, it may be used by future features to optimize the schedule.
-      </div>
-      <div class="flex items-center gap-2">
-        <%= loan_form.money_field :balloon_amount, label: "Balloon (optional)", default_currency: Current.family.currency, aria: { describedby: "balloon_help" } %>
-      </div>
-      <div class="text-xs text-secondary" id="balloon_help">
-        Balloon (optional) will be added to the final installment. Month-end adjustment keeps a "same-day" behavior (30→30, 31→end of month).
-      </div>
-
-      <%# Disbursement account only when not imported. `form.object` is the Account; `loan_form.object` is the Loan. %>
-      <% unless form.object.import&.present? || loan_form.object.imported %>
-        <div class="flex items-center gap-2">
-          <%= loan_form.collection_select :disbursement_account_id,
-                                          Current.family.accounts.assets.alphabetically,
-                                          :id, :name,
-                                          { label: "Disbursement Account" } %>
-          <%= loan_form.date_field :origination_date, label: "Origination Date", value: Date.current %>
+      <section class="space-y-3">
+        <h3 class="text-primary font-medium">Lender details</h3>
+        <%= loan_form.text_field :counterparty_name, label: "Lender name", placeholder: "e.g., Ana, Bank Mandiri" %>
+        <div data-loan-form-target="visibility" data-loan-form-visibility-value="personal" class="space-y-3 <%= personal_mode ? '' : 'hidden' %>">
+          <div class="grid gap-2 md:grid-cols-2">
+            <%= loan_form.text_field :relationship,
+                                     label: "Relationship",
+                                     placeholder: "Friend, family, colleague" %>
+            <%= loan_form.text_field :linked_contact_id,
+                                     label: "Contact number (optional)",
+                                     placeholder: "+62-812-1234-5678" %>
+          </div>
+          <p class="text-xs text-secondary">Optional: add a phone number so you can follow up or set reminders.</p>
         </div>
-      <% end %>
+        <div data-loan-form-target="visibility" data-loan-form-visibility-value="institution" class="space-y-3 <%= personal_mode ? 'hidden' : '' %>">
+          <div class="grid gap-2 md:grid-cols-2">
+            <%= loan_form.text_field :institution_name, label: "Institution", placeholder: "e.g., BCA, HSBC" %>
+            <%= loan_form.select :fintech_type,
+                                 Loan::FINTECH_TYPES.map { |key, meta| [meta[:long], key] },
+                                 { label: "Channel", include_blank: "Select type..." } %>
+          </div>
+          <div class="grid gap-2 md:grid-cols-2">
+            <%= loan_form.select :institution_type,
+                                 Loan::INSTITUTION_TYPES.map { |kind| [kind.titleize, kind] },
+                                 { label: "Classification", include_blank: "Select classification..." } %>
+            <%= loan_form.select :product_type,
+                                 Loan::PRODUCT_TYPES.map { |kind| [kind.titleize, kind] },
+                                 { label: "Product type", include_blank: "Select product type..." } %>
+          </div>
+        </div>
+      </section>
 
-      <div class="flex items-center gap-2">
-        <%= loan_form.money_field :initial_balance,
-                                 label: t("loans.form.initial_balance"),
-                                 default_currency: Current.family.currency,
-                                 required: true %>
-      </div>
+      <section class="space-y-3">
+        <h3 class="text-primary font-medium">Loan terms</h3>
+        <p class="text-xs text-secondary">We use these numbers to build your repayment schedule.</p>
+        <div class="grid gap-2 md:grid-cols-2">
+          <%= loan_form.money_field :initial_balance,
+                                   label: t("loans.form.initial_balance"),
+                                   default_currency: Current.family.currency,
+                                   value: loan_form.object.initial_balance || loan_form.object.principal_amount,
+                                   required: true,
+                                   label_tooltip: "Use the amount you first received when this loan started.",
+                                   "data-loan-form-target": "principal",
+                                   "data-action": "input->loan-form#termsChanged change->loan-form#termsChanged" %>
+          <%= loan_form.date_field :start_date,
+                                   label: "Start date",
+                                   value: (loan_form.object.start_date || (Date.current >> 1)),
+                                   data: { "loan-form-target": "startDate", action: "change->loan-form#termsChanged" } %>
+        </div>
+        <p class="text-xs text-secondary">The original principal amount you received when the loan started.</p>
+        <div class="grid gap-2 md:grid-cols-2">
+          <%= loan_form.number_field :tenor_months,
+                                     label: "Number of installments",
+                                     placeholder: 12,
+                                     "data-loan-form-target": "tenor",
+                                     "data-action": "input->loan-form#termsChanged change->loan-form#termsChanged" %>
+          <%= loan_form.select :payment_frequency,
+                                Loan::PAYMENT_FREQUENCIES.map { |freq| [freq.titleize, freq] },
+                                { label: "Payment frequency" },
+                                { "data-loan-form-target": "frequency", "data-action": "change->loan-form#termsChanged" } %>
+        </div>
+        <% unless form.object.import&.present? || loan_form.object.imported %>
+          <div class="grid gap-2 md:grid-cols-2">
+            <%= loan_form.collection_select :disbursement_account_id,
+                                            Current.family.accounts.assets.alphabetically,
+                                            :id, :name,
+                                            { label: "Destination account", required: true },
+                                            { required: true } %>
+            <%= loan_form.date_field :origination_date, label: "Transfer date", value: (loan_form.object.origination_date || Date.current) %>
+          </div>
+          <p class="text-xs text-secondary">Select the cash or bank account where the loan amount was deposited. This increases that account to mirror the real transaction.</p>
+        <% end %>
+      </section>
 
-      <%# Schedule preview (feature flag protected) %>
-      <% borrowed_enabled = Rails.application.config.respond_to?(:features) && ActiveModel::Type::Boolean.new.cast(Rails.application.config.features&.dig(:loans, :borrowed, :enabled)) %>
+      <section class="space-y-3">
+        <h3 class="text-primary font-medium">Interest &amp; profit</h3>
+        <div data-loan-form-target="interestToggle visibility" data-loan-form-visibility-value="institution,personal" class="<%= loan_form.object.compliance_type == 'sharia' ? 'hidden' : '' %>">
+          <div class="flex items-center justify-between gap-3 rounded-lg border border-dashed border-primary/40 bg-container p-3">
+            <div>
+              <p class="text-sm font-medium text-primary">Track as interest-free</p>
+              <p class="text-xs text-secondary">Enable for informal loans or promotions where only principal is repaid.</p>
+            </div>
+            <%= loan_form.toggle :interest_free,
+                                 { data: { "loan-form-target": "interestFree", action: "change->loan-form#onInterestFreeChange" } } %>
+          </div>
+        </div>
+
+        <% interest_hidden = loan_form.object.compliance_type == 'sharia' || loan_form.object.interest_free? %>
+        <div data-loan-form-target="interestSection" class="space-y-2 <%= interest_hidden ? 'hidden' : '' %>">
+          <div class="grid gap-2 md:grid-cols-2">
+            <%= loan_form.number_field :interest_rate,
+                                     label: "Interest rate (%)",
+                                     placeholder: "5.25",
+                                     min: 0,
+                                     step: 0.005 %>
+            <%= loan_form.select :rate_type,
+                                 [["Fixed", "fixed"], ["Variable", "variable"], ["Adjustable", "adjustable"]],
+                                 { label: t("loans.form.rate_type") } %>
+          </div>
+          <%= loan_form.number_field :rate_or_profit,
+                                     label: "Effective annual rate (%)",
+                                     step: 0.001,
+                                     min: 0,
+                                     placeholder: 10,
+                                     "data-loan-form-target": "rateOrProfit",
+                                     "data-action": "input->loan-form#termsChanged change->loan-form#termsChanged" %>
+        </div>
+
+        <% profit_hidden = loan_form.object.compliance_type != 'sharia' %>
+        <div data-loan-form-target="profitSection" class="space-y-2 <%= profit_hidden ? 'hidden' : '' %>">
+          <%= loan_form.select :islamic_product_type,
+                                [
+                                  ["Murabaha (Cost-plus)", "murabaha"],
+                                  ["Musyarakah (Partnership)", "musyarakah"],
+                                  ["Mudharabah (Profit-sharing)", "mudharabah"],
+                                  ["Ijarah (Leasing)", "ijarah"],
+                                  ["Qard Hasan (Interest-free)", "qard_hasan"]
+                                ],
+                                { label: "Islamic product", include_blank: "Select Islamic product..." },
+                                { "data-loan-form-target": "islamicProduct", "data-action": "change->loan-form#onIslamicProductChange" } %>
+          <div class="grid gap-2 md:grid-cols-2">
+            <% show_margin = loan_form.object.islamic_product_type == 'murabaha' %>
+            <div data-loan-form-target="marginField" class="<%= show_margin ? '' : 'hidden' %>">
+              <%= loan_form.number_field :margin_rate,
+                                       label: "Margin rate (%)",
+                                       placeholder: "3.50",
+                                       min: 0,
+                                       step: 0.005 %>
+            </div>
+            <% show_profit = %w[musyarakah mudharabah].include?(loan_form.object.islamic_product_type) %>
+            <div data-loan-form-target="profitShareField" class="<%= show_profit ? '' : 'hidden' %>">
+              <%= loan_form.number_field :profit_sharing_ratio,
+                                       label: "Profit sharing ratio",
+                                       placeholder: "0.60",
+                                       min: 0,
+                                       max: 1,
+                                       step: 0.01 %>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <% if borrowed_enabled %>
-        <div class="flex items-center gap-2">
-          <% if params[:inline_preview].present? %>
-            <% href_params = {
-              principal_amount: loan_form.object.principal_amount&.to_d,
-              rate_or_profit: loan_form.object.rate_or_profit,
-              tenor_months: loan_form.object.tenor_months,
-              payment_frequency: loan_form.object.payment_frequency,
-              schedule_method: loan_form.object.schedule_method,
-              start_date: loan_form.object.start_date
-            } %>
+        <section class="space-y-2">
+          <h3 class="text-primary font-medium">Schedule preview</h3>
+          <p class="text-xs text-secondary">Preview the installment plan with your current inputs.</p>
+          <div class="flex items-center gap-2">
             <%= render DS::Link.new(
-              text: "Preview Schedule (inline)",
+              text: "Preview schedule",
               variant: "secondary",
               icon: "table",
-              href: (form.object.persisted? ? schedule_preview_loan_path(form.object, **href_params) : schedule_preview_loans_path(**href_params)),
-              data: { turbo_frame: "loan-schedule-preview", loan_preview_link: true }
+              href: preview_base_href,
+              data: { loan_form_target: "previewLink", action: "click->loan-form#preparePreview" }
             ) %>
-          <% elsif form.object.persisted? %>
-            <%= render DS::Link.new(
-              text: "Preview Schedule",
-              variant: "secondary",
-              icon: "table",
-              href: schedule_preview_loan_path(form.object, principal_amount: loan_form.object.principal_amount&.to_d,
-                rate_or_profit: loan_form.object.rate_or_profit,
-                tenor_months: loan_form.object.tenor_months,
-                payment_frequency: loan_form.object.payment_frequency,
-                schedule_method: loan_form.object.schedule_method,
-                start_date: loan_form.object.start_date),
-              frame: :modal
-            ) %>
-          <% else %>
-            <%= render DS::Link.new(
-              text: "Preview Schedule",
-              variant: "secondary",
-              icon: "table",
-              href: schedule_preview_loans_path(principal_amount: loan_form.object.principal_amount&.to_d,
-                rate_or_profit: loan_form.object.rate_or_profit,
-                tenor_months: loan_form.object.tenor_months,
-                payment_frequency: loan_form.object.payment_frequency,
-                schedule_method: loan_form.object.schedule_method,
-                start_date: loan_form.object.start_date),
-              frame: :modal
-            ) %>
-          <% end %>
-        </div>
+          </div>
+          <div data-loan-form-target="previewOverlay" class="fixed inset-0 z-40 hidden items-center justify-center opacity-0 transition-opacity duration-200">
+            <div class="absolute inset-0 bg-black/40" data-action="click->loan-form#closePreview"></div>
+            <div class="relative z-10 w-[min(90vw,48rem)] max-h-[80vh] overflow-hidden rounded-2xl border border-primary/30 bg-container shadow-2xl transition duration-200 ease-out scale-95 opacity-0"
+                 data-loan-form-target="previewPanel">
+              <div class="flex items-center justify-between border-b border-primary/20 bg-surface px-4 py-3">
+                <h3 class="text-base font-semibold text-primary">Installment schedule</h3>
+                <button type="button"
+                        class="text-sm text-secondary hover:text-primary"
+                        data-action="loan-form#closePreview">
+                  <%= icon "x", size: "sm" %>
+                </button>
+              </div>
+              <turbo-frame id="loan-schedule-preview" loading="lazy"></turbo-frame>
+            </div>
+          </div>
+        </section>
       <% end %>
 
-      <%# Inline preview frame for schedule preview updates %>
-      <turbo-frame id="loan-schedule-preview" aria-live="polite">
-        <%# Links or auto-submits can target this frame to render the preview %>
-      </turbo-frame>
-
-      <div class="flex items-center gap-2">
-        <!-- Conventional Interest Rate -->
-        <%= loan_form.number_field :interest_rate,
-                                 label: "Interest Rate (%)",
-                                 placeholder: "5.25",
-                                 min: 0,
-                                 step: 0.005,
-                                 "data-conditional-fields-target": "field",
-                                 "data-show-when": "conventional" %>
-        
-        <!-- Islamic Margin Rate -->
-        <%= loan_form.number_field :margin_rate,
-                                 label: "Margin Rate (%)",
-                                 placeholder: "3.50",
-                                 min: 0,
-                                 step: 0.005,
-                                 "data-conditional-fields-target": "field",
-                                 "data-show-when": "sharia" %>
-        
-        <!-- Profit Sharing Ratio -->
-        <%= loan_form.number_field :profit_sharing_ratio,
-                                 label: "Profit Sharing Ratio",
-                                 placeholder: "0.60",
-                                 min: 0,
-                                 max: 1,
-                                 step: 0.01,
-                                 "data-conditional-fields-target": "field",
-                                 "data-show-when": "sharia" %>
-        
-        <%= loan_form.select :rate_type,
-                           [["Fixed", "fixed"], ["Variable", "variable"], ["Adjustable", "adjustable"]],
-                           { label: t("loans.form.rate_type") } %>
-      </div>
-
-      <!-- Islamic Finance Additional Fields -->
-      <div class="flex items-center gap-2" data-conditional-fields-target="field" data-show-when="sharia">
-        <%= loan_form.text_field :witness_name, 
-                                label: "Witness Name", 
-                                placeholder: "Name of witness for Islamic agreement" %>
-        <%= loan_form.text_area :agreement_notes,
-                               label: "Agreement Notes",
-                               placeholder: "Details about Islamic compliance and agreement terms",
-                               rows: 3 %>
-      </div>
-
+      <details class="space-y-3" data-loan-form-target="advancedSection">
+        <summary class="cursor-pointer text-primary font-medium">Additional details</summary>
+        <div class="mt-2 space-y-3">
+          <div class="grid gap-2 md:grid-cols-2">
+            <%= loan_form.money_field :installment_amount,
+                                      label: "Preferred installment amount (optional)",
+                                      default_currency: Current.family.currency,
+                                      data: { action: "input->loan-form#termsChanged change->loan-form#termsChanged" } %>
+          </div>
+          <% calculation_options = [
+            ["Equal installments", "ANNUITY"],
+            ["Flat", "FLAT"],
+            ["Effective", "EFFECTIVE"]
+          ] %>
+          <div class="grid gap-2 md:grid-cols-2">
+            <%= loan_form.select :schedule_method,
+                                  calculation_options,
+                                  { label: "Payment calculation method", label_tooltip: "Equal installments keeps each payment the same throughout the term." },
+                                  { "data-loan-form-target": "method", "data-action": "change->loan-form#termsChanged" } %>
+            <%= loan_form.money_field :balloon_amount,
+                                     label: "Balloon payment (optional)",
+                                     default_currency: Current.family.currency,
+                                     aria: { describedby: "balloon_help" },
+                                     data: { action: "input->loan-form#termsChanged change->loan-form#termsChanged" } %>
+          </div>
+          <p class="text-xs text-secondary" id="balloon_help">Add a larger final payment if your agreement ends with a lump sum.</p>
+          <div class="grid gap-2 md:grid-cols-2">
+            <%= loan_form.text_area :collateral_desc,
+                                     label: "Collateral description (optional)",
+                                     rows: 3 %>
+            <%= loan_form.text_area :early_repayment_policy,
+                                     label: "Early repayment notes",
+                                     rows: 3 %>
+          </div>
+          <div class="grid gap-2 md:grid-cols-2">
+            <%= loan_form.text_field :witness_name,
+                                     label: "Witness name (optional)",
+                                     placeholder: "Name of witness for the agreement" %>
+            <%= loan_form.text_area :agreement_notes,
+                                     label: "Agreement notes",
+                                     placeholder: "Additional context or Syariah compliance notes",
+                                     rows: 3 %>
+          </div>
+          <%= loan_form.text_area :notes,
+                                   label: "Private notes (optional)",
+                                   rows: 3 %>
+        </div>
+      </details>
     <% end %>
   </div>
 <% end %>

@@ -33,7 +33,7 @@ class Loan < ApplicationRecord
     "cooperative" => { short: "Cooperative", long: "Credit Cooperative" }
   }.freeze
 
-  store_accessor :extra, :balloon_amount
+  store_accessor :extra, :balloon_amount, :interest_free, :relationship
 
   # Virtual attribute used only during origination flow
   attr_accessor :imported
@@ -66,9 +66,11 @@ class Loan < ApplicationRecord
   validate :islamic_product_consistency
   validate :personal_lender_presence
 
-  track_changes_for :principal_amount, :rate_or_profit, :tenor_months, :institution_type, :lender_name, :schedule_method, :payment_frequency, :start_date, :balloon_amount
+  track_changes_for :principal_amount, :rate_or_profit, :tenor_months, :institution_type, :lender_name, :schedule_method, :payment_frequency, :start_date, :balloon_amount, :interest_free, :relationship
 
   before_validation :synchronize_term_and_tenor
+  before_validation :apply_interest_preferences
+  before_validation :default_principal_amount
 
   def monthly_payment
     return nil if term_months.blank? || term_months.to_i <= 0
@@ -207,6 +209,26 @@ class Loan < ApplicationRecord
     Loan::RemainingPrincipalCalculator.new(account).remaining_principal_money
   end
 
+  def interest_free
+    ActiveModel::Type::Boolean.new.cast(extra_value_for("interest_free"))
+  end
+
+  def interest_free=(value)
+    assign_extra_value("interest_free", ActiveModel::Type::Boolean.new.cast(value))
+  end
+
+  def interest_free?
+    ActiveModel::Type::Boolean.new.cast(extra_value_for("interest_free"))
+  end
+
+  def relationship
+    extra_value_for("relationship")
+  end
+
+  def relationship=(value)
+    assign_extra_value("relationship", value)
+  end
+
   def balloon_amount
     raw = super()
     return if raw.blank?
@@ -309,5 +331,37 @@ class Loan < ApplicationRecord
       elsif tenor_months.blank? && term_months.present?
         self.tenor_months = term_months
       end
+    end
+
+    def apply_interest_preferences
+      if ActiveModel::Type::Boolean.new.cast(extra_value_for("interest_free"))
+        self.interest_rate = nil
+        self.rate_or_profit = nil
+        self.margin_rate = nil
+        self.profit_sharing_ratio = nil
+      end
+    end
+
+    def default_principal_amount
+      return if principal_amount.present?
+      return if initial_balance.blank?
+
+      self.principal_amount = BigDecimal(initial_balance.to_s)
+    rescue ArgumentError
+      self.principal_amount = nil
+    end
+
+    def extra_value_for(key)
+      (self.extra || {})[key]
+    end
+
+    def assign_extra_value(key, value)
+      payload = (self.extra || {}).dup
+      if value.nil? || (value.respond_to?(:empty?) && value.empty?)
+        payload.delete(key)
+      else
+        payload[key] = value
+      end
+      self.extra = payload
     end
 end

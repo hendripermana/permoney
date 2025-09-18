@@ -72,6 +72,7 @@ class DebtOriginationService
         debt_kind: params[:debt_kind] || params.dig(:accountable_attributes, :debt_kind),
         counterparty_type: params[:counterparty_type] || params.dig(:accountable_attributes, :counterparty_type),
         counterparty_name: params[:counterparty_name] || params.dig(:accountable_attributes, :counterparty_name),
+        relationship: params[:relationship] || params.dig(:accountable_attributes, :relationship),
         disbursement_account_id: disbursement_account_id,
         origination_date: origination_date,
         initial_balance: initial_principal.to_d
@@ -123,13 +124,14 @@ class DebtOriginationService
         interest_rate: params[:interest_rate] || params.dig(:accountable_attributes, :interest_rate),
         term_months: params[:term_months] || params.dig(:accountable_attributes, :term_months),
         initial_balance: initial_principal,
-        principal_amount: params[:principal_amount] || params.dig(:accountable_attributes, :principal_amount),
+        principal_amount: params[:principal_amount] || params.dig(:accountable_attributes, :principal_amount) || initial_principal,
         start_date: params[:start_date] || params.dig(:accountable_attributes, :start_date),
         tenor_months: params[:tenor_months] || params.dig(:accountable_attributes, :tenor_months),
         payment_frequency: params[:payment_frequency] || params.dig(:accountable_attributes, :payment_frequency),
         schedule_method: params[:schedule_method] || params.dig(:accountable_attributes, :schedule_method),
         rate_or_profit: params[:rate_or_profit] || params.dig(:accountable_attributes, :rate_or_profit),
-        balloon_amount: params[:balloon_amount] || params.dig(:accountable_attributes, :balloon_amount)
+        balloon_amount: params[:balloon_amount] || params.dig(:accountable_attributes, :balloon_amount),
+        interest_free: params[:interest_free] || params.dig(:accountable_attributes, :interest_free)
       }.compact
     end
 

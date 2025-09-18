@@ -11,7 +11,8 @@ class LoansController < ApplicationController
     :principal_amount, :start_date, :tenor_months, :payment_frequency, :schedule_method,
     :rate_or_profit, :installment_amount, :early_repayment_policy, :collateral_desc,
     :initial_balance_override, :initial_balance_date, :linked_contact_id, :lender_name,
-    :institution_name, :institution_type, :product_type, :notes, :balloon_amount
+    :institution_name, :institution_type, :product_type, :notes, :balloon_amount, :interest_free,
+    :relationship
   )
 
   # Additional actions for personal loan functionality
@@ -116,8 +117,15 @@ class LoansController < ApplicationController
       @account = Current.family.accounts.find(params[:id])
       authorize_account!(@account)
       principal = (params[:principal_amount] || @account.accountable.initial_balance || @account.balance).to_d
+      boolean = ActiveModel::Type::Boolean.new
+      interest_free_flag = if params.key?(:interest_free)
+        boolean.cast(params[:interest_free])
+      else
+        nil
+      end
+      interest_free = interest_free_flag.nil? ? @account.accountable.interest_free? : interest_free_flag
       raw_rate = params[:rate_or_profit].presence || @account.accountable.interest_rate || @account.accountable.margin_rate || 0
-      rate = Loan.normalize_rate(raw_rate)
+      rate = interest_free ? 0.to_d : Loan.normalize_rate(raw_rate)
       tenor = (params[:tenor_months] || @account.accountable.term_months || 12).to_i
       freq = params[:payment_frequency].presence || @account.accountable.payment_frequency || "MONTHLY"
       method = params[:schedule_method].presence || @account.accountable.schedule_method || "ANNUITY"
@@ -129,7 +137,10 @@ class LoansController < ApplicationController
       end
     else
       principal = params[:principal_amount].to_d
-      rate = Loan.normalize_rate(params[:rate_or_profit])
+      boolean = ActiveModel::Type::Boolean.new
+      interest_free = boolean.cast(params[:interest_free])
+      raw_rate = params[:rate_or_profit]
+      rate = interest_free ? 0.to_d : Loan.normalize_rate(raw_rate)
       tenor = params[:tenor_months].to_i
       freq = (params[:payment_frequency] || "MONTHLY").to_s
       method = (params[:schedule_method] || "ANNUITY").to_s
@@ -148,8 +159,18 @@ class LoansController < ApplicationController
     )
     rows = generator.generate
     respond_to do |format|
-      format.turbo_stream { render partial: "loans/schedule_preview", locals: { rows: rows, account: @account } }
-      format.html        { render partial: "loans/schedule_preview", locals: { rows: rows, account: @account } }
+      format.turbo_stream do
+        render partial: "loans/schedule_preview", locals: { rows: rows, account: @account }
+      end
+      format.html do
+        content = render_to_string(partial: "loans/schedule_preview", locals: { rows: rows, account: @account })
+
+        if turbo_frame_request?
+          render html: view_context.tag.turbo_frame(id: "loan-schedule-preview") { content.html_safe }
+        else
+          render html: content.html_safe
+        end
+      end
     end
   end
 

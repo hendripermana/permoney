@@ -45,7 +45,7 @@ class Loan::ApplyExtraPayment
     t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
     rows = Loan::ScheduleGenerator.new(
       principal_amount: remaining_principal,
-      rate_or_profit: Loan.normalize_rate(loan.rate_or_profit || loan.interest_rate || loan.margin_rate || 0),
+      rate_or_profit: loan.interest_free? ? 0.to_d : Loan.normalize_rate(loan.rate_or_profit || loan.interest_rate || loan.margin_rate || 0),
       tenor_months: tenor_months,
       payment_frequency: loan.payment_frequency || "MONTHLY",
       schedule_method: loan.schedule_method || "ANNUITY",

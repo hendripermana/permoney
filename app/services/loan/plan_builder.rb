@@ -18,9 +18,15 @@ class Loan::PlanBuilder
 
   def call!
     t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    normalized_rate = if account.accountable.interest_free?
+      0.to_d
+    else
+      Loan.normalize_rate(@rate_or_profit || 0)
+    end
+
     rows = Loan::ScheduleGenerator.new(
       principal_amount: @principal_amount,
-      rate_or_profit: Loan.normalize_rate(@rate_or_profit || 0),
+      rate_or_profit: normalized_rate,
       tenor_months: @tenor_months,
       payment_frequency: @payment_frequency,
       schedule_method: @schedule_method,

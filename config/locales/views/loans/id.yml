@@ -9,6 +9,9 @@ id:
         interest: Bunga / Margin
         total: Total
       notes: Ini adalah perkiraan berdasarkan ketentuan yang diberikan.
+      context:
+        amount_borrowed: Jumlah Pinjaman
+        remaining_balance: Sisa Saldo
     form:
       help:
         person_simple: "Pinjaman pribadi sering 0% dengan syarat fleksibel. Anda bisa kosongkan Suku Bunga."

@@ -1,0 +1,19 @@
+<%# locals: (form:, loan_form:, personal_mode:) %>
+<section class="space-y-2">
+  <h3 class="text-primary font-medium">Loan overview</h3>
+  <div class="grid gap-2 md:grid-cols-2">
+    <%= form.select :subtype,
+                    Loan::SUBTYPES.map { |key, meta| [meta[:long], key] },
+                    { label: "Loan type" },
+                    { "data-loan-form-target": "subtype", "data-action": "change->loan-form#onSubtypeChange" } %>
+    <div class="<%= personal_mode ? 'hidden' : '' %>"
+         data-loan-form-target="visibility"
+         data-loan-form-visibility-value="institution">
+      <%= loan_form.select :compliance_type,
+                            Loan::COMPLIANCE_TYPES.map { |key, meta| [meta[:long], key] },
+                            { label: "Banking type", include_blank: "Select banking type..." },
+                            { "data-loan-form-target": "compliance", "data-action": "change->loan-form#onComplianceChange" } %>
+    </div>
+  </div>
+  <p class="text-xs text-secondary">Select who you are borrowing from so we can tailor the fields and defaults.</p>
+</section>
