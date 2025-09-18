@@ -102,6 +102,21 @@ class LoanPostInstallmentTest < ActiveSupport::TestCase
     assert_equal "posted", @installment.reload.status
   end
 
+  test "interest-only installment skips principal transfer" do
+    @installment.update!(principal_amount: 0, interest_amount: 250, total_amount: 250)
+
+    result = Loan::PostInstallment.new(
+      family: @family,
+      account_id: @loan.id,
+      source_account_id: @cash.id,
+      date: Date.current
+    ).call!
+
+    assert result.success?, result.error
+    assert_nil result.transfer
+    assert_equal "posted", @installment.reload.status
+  end
+
   test "interest portion is recorded in source currency" do
     idr_cash = Account.create!(
       family: @family,

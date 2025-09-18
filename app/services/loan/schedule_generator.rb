@@ -64,12 +64,19 @@ class Loan::ScheduleGenerator
     attr_reader :principal, :annual_rate, :tenor_months, :frequency, :method, :start_date, :balloon
 
     def periods
-      case frequency
-      when "WEEKLY" then (tenor_months * 52.0 / 12).round
-      when "BIWEEKLY" then (tenor_months * 26.0 / 12).round
-      else
-        tenor_months
+      count =
+        case frequency
+        when "WEEKLY" then (tenor_months * 52.0 / 12).round
+        when "BIWEEKLY" then (tenor_months * 26.0 / 12).round
+        else
+          tenor_months
+        end
+
+      if count <= 0
+        raise ArgumentError, "Tenor months must be positive"
       end
+
+      count
     end
 
     def period_rate

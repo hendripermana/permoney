@@ -76,7 +76,11 @@ class Api::V1::Debt::LoansController < Api::V1::BaseController
     ).call!
 
     if result.success?
-      render json: { transfer_id: result.transfer.id, installment_no: result.installment.installment_no, posted_on: result.installment.posted_on }, status: :ok
+      render json: {
+        transfer_id: result.transfer&.id,
+        installment_no: result.installment&.installment_no,
+        posted_on: result.installment&.posted_on
+      }, status: :ok
     else
       render json: { error: result.error }, status: :unprocessable_entity
     end

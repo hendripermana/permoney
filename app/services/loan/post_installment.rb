@@ -20,10 +20,7 @@ class Loan::PostInstallment
     end
 
     installment = find_installment!
-    return already_posted_result(installment) if installment.status == "posted" && installment.transfer_id.present?
-    principal = installment.principal_amount.to_d
-    interest = installment.interest_amount.to_d
-
+    return already_posted_result(installment) if installment.status == "posted"
     transfer = nil
     interest_entry = nil
     t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -37,15 +34,27 @@ class Loan::PostInstallment
         end
       rescue NoMethodError; end
     end
+    already_locked_posted = false
     ActiveRecord::Base.transaction do
-      # 1) Principal: transfer from cash -> loan
-      transfer = ::Transfer::Creator.new(
-        family: @family,
-        source_account_id: @source.id,
-        destination_account_id: @account.id,
-        date: @date,
-        amount: principal
-      ).create
+      installment.lock!
+      if installment.status == "posted"
+        already_locked_posted = true
+        raise ActiveRecord::Rollback
+      end
+
+      principal = installment.principal_amount.to_d
+      interest = installment.interest_amount.to_d
+
+      # 1) Principal: transfer from cash -> loan (skipped if no principal due)
+      transfer = if principal.positive?
+        ::Transfer::Creator.new(
+          family: @family,
+          source_account_id: @source.id,
+          destination_account_id: @account.id,
+          date: @date,
+          amount: principal
+        ).create
+      end
 
       # 2) Interest: expense from cash only, categorized
       if interest.positive?
@@ -81,26 +90,27 @@ class Loan::PostInstallment
         late_entry.entryable.set_category!(late_cat)
       end
 
-      installment.update!(status: "posted", posted_on: @date, transfer_id: transfer.id)
+      installment.update!(status: "posted", posted_on: @date, transfer_id: transfer&.id)
       ActiveSupport::Notifications.instrument("permoney.loan.installment.posted", loan_id: @account.accountable_id, installment_no: installment.installment_no, idempotent: false) rescue nil
 
       @account.sync_later
       @source.sync_later
     end
+    return already_posted_result(installment) if already_locked_posted
     ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000).round(1)
     if defined?(Sentry)
       begin
         Sentry.with_child_span(op: "loan.installment.post", description: "Loan #{@account.accountable_id}") do |span|
           span.set_data(:loan_id, @account.accountable_id) rescue nil
           span.set_data(:installment_no, installment.installment_no) rescue nil
-          span.set_data(:transfer_id, transfer.id) rescue nil
+          span.set_data(:transfer_id, transfer&.id) rescue nil
         end
         tx = Sentry.get_current_scope.get_transaction
         record_measurement(tx, "loan.installment.total_amount", (installment.total_amount || 0).to_f, "none")
         record_measurement(tx, "loan.installment.ms", ms, "millisecond")
       rescue NoMethodError; end
     end
-    Rails.logger.info({ at: "Loan::PostInstallment", account_id: @account.id, installment_no: installment.installment_no, transfer_id: transfer.id, ms: ms }.to_json)
+    Rails.logger.info({ at: "Loan::PostInstallment", account_id: @account.id, installment_no: installment.installment_no, transfer_id: transfer&.id, ms: ms }.to_json)
     Result.new(success?: true, transfer: transfer, interest_entry: interest_entry, installment: installment)
   rescue => e
     Rails.logger.error({ at: "Loan::PostInstallment.error", account_id: @account.id, installment_no: @installment_no, error: e.message }.to_json)

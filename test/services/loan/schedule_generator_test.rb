@@ -56,4 +56,19 @@ class LoanScheduleGeneratorTest < ActiveSupport::TestCase
     assert_equal 52, rows.size
     assert_in_delta 104, rows.first.interest.to_f, 0.01
   end
+
+  test "raises when tenor months not positive" do
+    gen = Loan::ScheduleGenerator.new(
+      principal_amount: 100_000,
+      rate_or_profit: 0.1,
+      tenor_months: 0,
+      payment_frequency: "MONTHLY",
+      schedule_method: "ANNUITY",
+      start_date: Date.current
+    )
+
+    assert_raises ArgumentError do
+      gen.generate
+    end
+  end
 end

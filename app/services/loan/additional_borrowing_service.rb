@@ -82,12 +82,13 @@ class Loan::AdditionalBorrowingService
 
     def update_loan_principal!
       loan = loan_account.accountable
-      base = loan.principal_amount || loan.initial_balance || 0
-      new_principal = base.to_d + amount.to_d
 
-      loan.update!(
-        principal_amount: new_principal
-      )
+      loan.with_lock do
+        base = loan.principal_amount || loan.initial_balance || 0
+        new_principal = base.to_d + amount.to_d
+
+        loan.update!(principal_amount: new_principal)
+      end
     end
 
     def sync_account!
