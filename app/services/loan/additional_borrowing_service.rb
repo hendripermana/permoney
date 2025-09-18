@@ -15,8 +15,13 @@ class Loan::AdditionalBorrowingService
     validate_params!
 
     ActiveRecord::Base.transaction do
-      create_borrowing_transaction!
-      create_disbursement_transfer! if transfer_account_id.present?
+      if transfer_account_id.present?
+        # When there's a transfer account, the transfer itself creates the necessary entries
+        create_disbursement_transfer!
+      else
+        # Only create a direct entry when there's no transfer
+        create_borrowing_transaction!
+      end
       update_loan_principal!
       sync_account!
     end
@@ -71,6 +76,9 @@ class Loan::AdditionalBorrowingService
     def create_disbursement_transfer!
       return unless transfer_account_id.present?
 
+      # Transfer FROM loan TO destination account
+      # This creates a positive entry in the loan (increasing debt)
+      # and a negative entry in the destination (increasing assets)
       @transfer = Transfer::Creator.new(
         family: family,
         source_account_id: loan_account.id,
@@ -78,6 +86,15 @@ class Loan::AdditionalBorrowingService
         date: date,
         amount: amount.to_d
       ).create
+      
+      if @transfer.persisted?
+        # Update the outflow transaction to be marked as loan_disbursement
+        # so the RemainingPrincipalCalculator can track it properly
+        @transfer.outflow_transaction.update!(kind: "loan_disbursement")
+        
+        # Set the borrowing entry reference for consistency
+        @borrowing_entry = @transfer.outflow_transaction.entry
+      end
     end
 
     def update_loan_principal!
