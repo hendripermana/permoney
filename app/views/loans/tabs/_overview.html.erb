@@ -6,7 +6,7 @@
   <% end %>
 
   <%= summary_card title: t(".remaining_principal") do %>
-    <%= format_money account.balance_money %>
+    <%= format_money account.loan.remaining_principal_money %>
   <% end %>
 
   <%= summary_card title: account.loan.rate_label do %>
@@ -60,9 +60,12 @@
 
 <% if account.accountable.personal_loan? %>
   <div class="bg-container p-4 rounded-lg mt-6">
-    <h4 class="font-medium text-primary mb-4">Personal Loan Actions</h4>
+    <h4 class="font-medium text-primary mb-1">Personal Loan Actions</h4>
+    <% if (label = personal_lender_label(account.accountable)) %>
+      <p class="text-sm text-secondary mb-4">Counterparty: <%= label %></p>
+    <% end %>
     
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
       <%= render DS::Link.new(
         text: "Borrow More Money",
         variant: "primary",
@@ -80,6 +83,17 @@
         frame: :modal,
         class: "w-full"
       ) %>
+      <% extra_payment_enabled = Rails.application.config.respond_to?(:features) && ActiveModel::Type::Boolean.new.cast(Rails.application.config.features&.dig(:loans, :extra_payment)) %>
+      <% if extra_payment_enabled %>
+        <%= render DS::Link.new(
+          text: "Extra Payment",
+          variant: "ghost",
+          icon: "circle-plus",
+          href: new_extra_payment_loan_path(account),
+          frame: :modal,
+          class: "w-full"
+        ) %>
+      <% end %>
     </div>
 
     <div class="mt-4 pt-4 border-t border-primary">
@@ -90,15 +104,28 @@
             <span>Syariah Compliant - No Interest Charges</span>
           </div>
         <% end %>
-        <% if account.accountable.counterparty_name.present? %>
-          <p>• Use "Borrow More" if you need additional funds from <%= account.accountable.counterparty_name %></p>
-          <p>• Use "Make Payment" for partial or full repayments to <%= account.accountable.counterparty_name %></p>
+        <% if (label = personal_lender_label(account.accountable)) %>
+          <p>• Use "Borrow More" if you need additional funds from <%= label %></p>
+          <p>• Use "Make Payment" for partial or full repayments to <%= label %></p>
         <% else %>
           <p>• Use "Borrow More" to record additional loan disbursements</p>
           <p>• Use "Make Payment" for loan repayments</p>
         <% end %>
       </div>
     </div>
+  </div>
+<% end %>
+
+<%# CTA to create first payment based on next planned installment %>
+<% if (next_installment = account.loan_installments.where(status: 'planned').order(:installment_no).first) %>
+  <div class="flex justify-center mt-4">
+    <%= render DS::Link.new(
+      text: "Create first payment",
+      variant: "secondary",
+      icon: "calendar-check",
+      href: new_payment_loan_path(account, amount: next_installment.total_amount),
+      frame: :modal
+    ) %>
   </div>
 <% end %>
 

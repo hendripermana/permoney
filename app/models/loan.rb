@@ -1,7 +1,10 @@
 class Loan < ApplicationRecord
   include Accountable
+  include AuditableChanges
 
   SUBTYPES = {
+    "loan_personal" => { short: "Borrowed (Person)", long: "Loan Borrowed from Person" },
+    "loan_institution" => { short: "Borrowed (Institution)", long: "Loan Borrowed from Institution" },
     "mortgage" => { short: "Mortgage", long: "Mortgage" },
     "student" => { short: "Student", long: "Student Loan" },
     "auto" => { short: "Auto", long: "Auto Loan" },
@@ -30,6 +33,8 @@ class Loan < ApplicationRecord
     "cooperative" => { short: "Cooperative", long: "Credit Cooperative" }
   }.freeze
 
+  store_accessor :extra, :balloon_amount, :interest_free, :relationship
+
   # Virtual attribute used only during origination flow
   attr_accessor :imported
 
@@ -37,6 +42,17 @@ class Loan < ApplicationRecord
   validates :debt_kind, inclusion: { in: %w[institutional personal] }, allow_nil: true
   validates :counterparty_type, inclusion: { in: %w[institution person] }, allow_nil: true
   validates :counterparty_name, length: { maximum: 255 }, allow_nil: true
+
+  # New metadata validations (permissive; all nullable, enums validated if present)
+  PAYMENT_FREQUENCIES = %w[MONTHLY WEEKLY BIWEEKLY].freeze
+  SCHEDULE_METHODS = %w[ANNUITY FLAT EFFECTIVE].freeze
+  INSTITUTION_TYPES = %w[BANK COOPERATIVE CREDIT_UNION FINTECH OTHER].freeze
+  PRODUCT_TYPES = %w[MULTIGUNA UNSECURED SECURED OTHER].freeze
+  validates :payment_frequency, inclusion: { in: PAYMENT_FREQUENCIES }, allow_nil: true
+  validates :schedule_method, inclusion: { in: SCHEDULE_METHODS }, allow_nil: true
+  validates :institution_type, inclusion: { in: INSTITUTION_TYPES }, allow_nil: true
+  validates :product_type, inclusion: { in: PRODUCT_TYPES }, allow_nil: true
+  validates :balloon_amount, numericality: { greater_than_or_equal_to: 0 }, allow_nil: true
 
   # Sharia compliance validations
   validates :compliance_type, inclusion: { in: COMPLIANCE_TYPES.keys }, allow_nil: true
@@ -48,6 +64,13 @@ class Loan < ApplicationRecord
   # Custom validations for Islamic finance
   validate :sharia_compliance_rules
   validate :islamic_product_consistency
+  validate :personal_lender_presence
+
+  track_changes_for :principal_amount, :rate_or_profit, :tenor_months, :institution_type, :lender_name, :schedule_method, :payment_frequency, :start_date, :balloon_amount, :interest_free, :relationship
+
+  before_validation :synchronize_term_and_tenor
+  before_validation :apply_interest_preferences
+  before_validation :default_principal_amount
 
   def monthly_payment
     return nil if term_months.blank? || term_months.to_i <= 0
@@ -177,7 +200,62 @@ class Loan < ApplicationRecord
     Money.new(base_amount, account.currency)
   end
 
+  # Compute remaining principal from ledger postings
+  def remaining_principal
+    Loan::RemainingPrincipalCalculator.new(account).remaining_principal
+  end
+
+  def remaining_principal_money
+    Loan::RemainingPrincipalCalculator.new(account).remaining_principal_money
+  end
+
+  def interest_free
+    ActiveModel::Type::Boolean.new.cast(extra_value_for("interest_free"))
+  end
+
+  def interest_free=(value)
+    assign_extra_value("interest_free", ActiveModel::Type::Boolean.new.cast(value))
+  end
+
+  def interest_free?
+    ActiveModel::Type::Boolean.new.cast(extra_value_for("interest_free"))
+  end
+
+  def relationship
+    extra_value_for("relationship")
+  end
+
+  def relationship=(value)
+    assign_extra_value("relationship", value)
+  end
+
+  def balloon_amount
+    raw = super()
+    return if raw.blank?
+
+    BigDecimal(raw.to_s)
+  rescue ArgumentError
+    nil
+  end
+
+  def balloon_amount=(value)
+    return super(nil) if value.blank?
+
+    decimal = BigDecimal(value.to_s)
+    super(decimal.to_s)
+  rescue ArgumentError
+    super(nil)
+    errors.add(:balloon_amount, "is not a number")
+  end
+
   class << self
+    def normalize_rate(value)
+      return 0.to_d if value.blank?
+
+      decimal = value.to_d
+      decimal <= 1 ? decimal : (decimal / 100)
+    end
+
     def color
       "#D444F1"
     end
@@ -238,5 +316,52 @@ class Loan < ApplicationRecord
           errors.add(:profit_sharing_ratio, "cannot be set for Qard Hasan")
         end
       end
+    end
+
+    def personal_lender_presence
+      return unless personal_loan?
+      if linked_contact_id.blank? && (counterparty_name.blank? && lender_name.blank?)
+        errors.add(:base, "Provide a contact or lender name for personal loans")
+      end
+    end
+
+    def synchronize_term_and_tenor
+      if term_months.blank? && tenor_months.present?
+        self.term_months = tenor_months
+      elsif tenor_months.blank? && term_months.present?
+        self.tenor_months = term_months
+      end
+    end
+
+    def apply_interest_preferences
+      if ActiveModel::Type::Boolean.new.cast(extra_value_for("interest_free"))
+        self.interest_rate = nil
+        self.rate_or_profit = nil
+        self.margin_rate = nil
+        self.profit_sharing_ratio = nil
+      end
+    end
+
+    def default_principal_amount
+      return if principal_amount.present?
+      return if initial_balance.blank?
+
+      self.principal_amount = BigDecimal(initial_balance.to_s)
+    rescue ArgumentError
+      self.principal_amount = nil
+    end
+
+    def extra_value_for(key)
+      (self.extra || {})[key]
+    end
+
+    def assign_extra_value(key, value)
+      payload = (self.extra || {}).dup
+      if value.nil? || (value.respond_to?(:empty?) && value.empty?)
+        payload.delete(key)
+      else
+        payload[key] = value
+      end
+      self.extra = payload
     end
 end

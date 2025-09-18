@@ -1,0 +1,45 @@
+<%# locals: (rows:) %>
+<div class="overflow-auto max-h-80">
+  <table class="w-full text-sm">
+    <thead class="text-secondary">
+      <tr>
+        <th class="text-left py-2">#</th>
+        <th class="text-left py-2">Due Date</th>
+        <th class="text-right py-2">Principal</th>
+        <th class="text-right py-2">Interest/Profit</th>
+        <th class="text-right py-2">Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% rows = Array(rows) %>
+      <% currency_unit = (@account&.currency || Current.family&.currency || "$") %>
+      <% value_for = lambda do |row, *candidates|
+           candidates.each do |name|
+             if row.respond_to?(name)
+               val = row.public_send(name)
+               return val unless val.nil?
+             end
+             next unless row.respond_to?(:[])
+             val = row[name]
+             return val unless val.nil?
+             val = row[name.to_s]
+             return val unless val.nil?
+           end
+           nil
+         end %>
+      <% rows.each_with_index do |r, idx| %>
+        <% due_date = value_for.call(r, :due_date) %>
+        <% principal = value_for.call(r, :principal, :principal_amount) || 0 %>
+        <% interest = value_for.call(r, :interest, :interest_amount) || 0 %>
+        <% total = value_for.call(r, :total, :total_amount) || (principal.to_d + interest.to_d) %>
+        <tr class="border-t border-primary">
+          <td class="py-2"><%= idx + 1 %></td>
+          <td class="py-2"><%= due_date %></td>
+          <td class="py-2 text-right"><%= number_to_currency(principal, unit: currency_unit) %></td>
+          <td class="py-2 text-right"><%= number_to_currency(interest, unit: currency_unit) %></td>
+          <td class="py-2 text-right"><%= number_to_currency(total, unit: currency_unit) %></td>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+</div>

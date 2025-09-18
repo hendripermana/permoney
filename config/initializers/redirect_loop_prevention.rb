@@ -46,7 +46,7 @@ Rails.application.config.redirect_loop_prevention.tap do |config|
     /registrations
     /email_confirmations
   ]
-  
+
   # Number of failures before opening the circuit breaker
   config.failure_threshold = ENV.fetch("REDIRECT_FAILURE_THRESHOLD", 3).to_i
 

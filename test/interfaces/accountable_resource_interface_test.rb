@@ -29,7 +29,11 @@ module AccountableResourceInterfaceTest
           return_to: accounts_path,
           # Provide accountable attributes if needed by concrete controller
           accountable_attributes: {
-            id: @account.accountable_id
+            interest_rate: 5.0,
+            term_months: 12,
+            rate_type: "fixed",
+            initial_balance: 123.45,
+            imported: true
           }
         }
       }

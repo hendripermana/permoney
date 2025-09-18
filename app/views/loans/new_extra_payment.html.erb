@@ -1,0 +1,30 @@
+<%# Extra Payment modal (feature-flagged via features.loans.extra_payment) %>
+<%= render DS::Dialog.new do |dialog| %>
+  <% dialog.with_header(title: "Apply Extra Payment") %>
+  <% dialog.with_body do %>
+    <% if @error_message %>
+      <div class="text-destructive flex items-center gap-2 mb-4">
+        <%= icon "circle-alert", size: "sm" %>
+        <p class="text-sm"><%= @error_message %></p>
+      </div>
+    <% end %>
+
+    <%= styled_form_with url: create_extra_payment_loan_path(@account), scope: :extra, class: "space-y-4", data: { turbo_frame: "_top" } do |f| %>
+      <%= f.money_field :amount, label: "Extra Amount", default_currency: @account.currency, required: true %>
+      <%= f.date_field :date, label: "Effective Date", value: Date.current, required: true %>
+      <%= f.select :allocation_mode, [["Reduce Term", "reduce_term"], ["Reduce Installment", "reduce_installment"]], label: "Allocation Mode" %>
+      <div class="text-xs text-secondary">
+        <%= t("loans.form.help.extra_payment") %>
+      </div>
+
+      <div class="bg-muted p-3 rounded text-xs text-secondary">
+        Recomputes future installments only. Past and posted rows remain intact.
+      </div>
+
+      <div class="flex gap-3">
+        <%= f.submit "Apply", class: "btn btn-primary" %>
+        <%= render DS::Link.new(text: "Cancel", variant: "ghost", href: account_path(@account), data: { turbo_frame: "_top" }) %>
+      </div>
+    <% end %>
+  <% end %>
+<% end %>

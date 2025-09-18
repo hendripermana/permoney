@@ -23,3 +23,18 @@ en:
       term: Term
       type: Type
       unknown: Unknown
+    schedule_preview:
+      title: Installment Schedule
+      columns:
+        due_date: Due Date
+        principal: Principal
+        interest: Interest / Profit
+        total: Total
+      notes: This is an estimate based on the provided terms.
+      context:
+        amount_borrowed: Amount Borrowed
+        remaining_balance: Current Balance
+    form:
+      help:
+        person_simple: "Personal loans are often 0% with flexible terms. You can leave Rate empty."
+        extra_payment: "Extra Payment reduces principal beyond the scheduled amount."

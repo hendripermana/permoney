@@ -18,10 +18,10 @@ class UsersController < ApplicationController
       end
     else
       was_ai_enabled = @user.ai_enabled
-      
+
       # Set onboarding timestamps server-side based on redirect context
       update_params = user_params.except(:redirect_to, :delete_profile_image, :onboarded_at, :set_onboarding_preferences_at, :set_onboarding_goals_at)
-      
+
       # Set timestamps based on the onboarding step
       case user_params[:redirect_to]
       when "preferences"
@@ -43,7 +43,7 @@ class UsersController < ApplicationController
           update_params[:onboarded_at] = Time.current
         end
       end
-      
+
       @user.update!(update_params)
       @user.profile_image.purge if should_purge_profile_image?
 

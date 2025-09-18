@@ -1,0 +1,18 @@
+---
+id:
+  loans:
+    schedule_preview:
+      title: Pratinjau Jadwal Angsuran
+      columns:
+        due_date: Tanggal Jatuh Tempo
+        principal: Pokok
+        interest: Bunga / Margin
+        total: Total
+      notes: Ini adalah perkiraan berdasarkan ketentuan yang diberikan.
+      context:
+        amount_borrowed: Jumlah Pinjaman
+        remaining_balance: Sisa Saldo
+    form:
+      help:
+        person_simple: "Pinjaman pribadi sering 0% dengan syarat fleksibel. Anda bisa kosongkan Suku Bunga."
+        extra_payment: "Pembayaran Tambahan mengurangi pokok di luar jumlah terjadwal."

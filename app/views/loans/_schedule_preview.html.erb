@@ -1,0 +1,49 @@
+<%# locals: (rows:, account: nil) %>
+<% currency = account&.currency || Current.family.currency %>
+<div class="space-y-4">
+  <div class="rounded-xl border border-primary/20 bg-container px-4 py-3 shadow-sm">
+    <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+      <div class="space-y-1">
+        <p class="text-xs font-semibold uppercase tracking-wide text-secondary">Projection preview</p>
+        <p class="text-sm font-medium leading-5 text-primary">Installment schedule preview</p>
+        <p class="text-xs text-secondary">This estimate updates as you adjust the loan terms.</p>
+      </div>
+
+      <% if account.present? %>
+        <dl class="grid gap-2 text-xs text-right text-secondary">
+          <div>
+            <dt class="font-semibold text-primary">Original amount</dt>
+            <dd><%= number_to_currency(account.accountable.initial_balance, unit: currency) %></dd>
+          </div>
+          <div>
+            <dt class="font-semibold text-primary">Current principal</dt>
+            <dd><%= number_to_currency(account.accountable.principal_amount || account.accountable.initial_balance, unit: currency) %></dd>
+          </div>
+        </dl>
+      <% end %>
+    </div>
+  </div>
+
+  <div class="overflow-auto rounded-xl border border-primary/20 bg-surface shadow-lg">
+    <table class="min-w-full text-sm">
+      <thead>
+        <tr class="text-secondary bg-container-subtle">
+          <th class="text-left py-3 pl-4 pr-4"><%= t("loans.schedule_preview.columns.due_date") %></th>
+          <th class="text-right py-3 pr-4"><%= t("loans.schedule_preview.columns.principal") %></th>
+          <th class="text-right py-3 pr-4"><%= t("loans.schedule_preview.columns.interest") %></th>
+          <th class="text-right py-3 pr-4"><%= t("loans.schedule_preview.columns.total") %></th>
+        </tr>
+      </thead>
+      <tbody>
+        <% rows.each do |r| %>
+          <tr class="border-t border-primary/10 hover:bg-container-subtle transition">
+            <td class="py-3 pl-4 pr-4 text-sm"><%= l(r.due_date) %></td>
+            <td class="py-3 pr-4 text-right tabular-nums"><%= number_to_currency(r.principal, unit: currency) %></td>
+            <td class="py-3 pr-4 text-right tabular-nums"><%= number_to_currency(r.interest, unit: currency) %></td>
+            <td class="py-3 pr-4 text-right font-medium tabular-nums text-primary"><%= number_to_currency(r.total, unit: currency) %></td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  </div>
+</div>

@@ -29,4 +29,3 @@ class ApplicationHelperTest < ActionView::TestCase
     refute_includes html, "<script>"
   end
 end
-

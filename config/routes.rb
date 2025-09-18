@@ -165,6 +165,7 @@ Rails.application.routes.draw do
       post :sync
       get :sparkline
       patch :toggle_active
+      get :value
     end
 
     collection do
@@ -193,11 +194,18 @@ Rails.application.routes.draw do
   resources :credit_cards, only: %i[new create edit update]
   resources :pay_laters, only: %i[new create edit update]
   resources :loans, only: %i[new create edit update] do
+    collection do
+      get :schedule_preview
+    end
     member do
+      get :schedule_preview
       get :new_borrowing
       post :create_borrowing
       get :new_payment
       post :create_payment
+      post :post_installment
+      get :new_extra_payment
+      post :create_extra_payment
     end
   end
   resources :personal_lendings, only: %i[new create edit update] do
@@ -242,6 +250,9 @@ Rails.application.routes.draw do
         post "paylater", to: "pay_later#create"
         post "paylater/expense", to: "pay_later#expense"
         post "paylater/installment/pay", to: "pay_later#pay_installment"
+        post "loans/plan/preview", to: "loans#preview"
+        post "loans/installment/post", to: "loans#post_installment"
+        post "loans/plan/regenerate", to: "loans#regenerate"
       end
       resource :usage, only: [ :show ], controller: "usage"
 
