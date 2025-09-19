@@ -29,9 +29,9 @@ class RegistrationsController < ApplicationController
       # For new users, redirect to onboarding instead of root
       # This ensures they go through the onboarding flow
       if @user.needs_onboarding? && !@invitation
-        redirect_to onboarding_path, notice: t(".success")
+        redirect_to onboarding_path, notice: t(".success") and return
       else
-        redirect_to root_path, notice: t(".success")
+        redirect_to root_path, notice: t(".success") and return
       end
     else
       render :new, status: :unprocessable_entity, alert: t(".failure")

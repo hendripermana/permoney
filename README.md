@@ -231,3 +231,13 @@ Environment variables:
 - `SENTRY_TRACES_SAMPLE_RATE` (default `0.2`) — traces_sampler takes precedence over sample rate.
 - `SENTRY_PROFILES_SAMPLE_RATE` (default `0.0`) — profiling requires tracing.
 - `SENTRY_USE_OTEL` (default `false`) — enables OpenTelemetry bridge when gems are present.
+
+## Redirect Loop Prevention
+
+This application uses simple Rails best practices to prevent redirect loops:
+
+1. Path checking: Controllers check current path before redirecting
+2. Proper returns: All redirects use `and return` to prevent code continuation
+3. Route constraints: Strategic use of route constraints where needed
+
+This approach is simple, maintainable, and follows Rails conventions. See docs/redirect-handling.md for details.

@@ -4,5 +4,7 @@
 else
   account.balance_money
 end %>
-<%= format_money value_money %>
+<%= turbo_frame_tag "value_account_#{account.id}" do %>
+  <%= format_money value_money %>
+<% end %>
 

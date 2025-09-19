@@ -27,4 +27,17 @@ class OnboardableTest < ActionDispatch::IntegrationTest
     get root_path
     assert_response :success
   end
+
+  test "prevents redirect loops in onboarding flow" do
+    # Ensure user needs onboarding
+    @user.update!(onboarded_at: nil)
+
+    # When already on onboarding, should render successfully (no redirect)
+    get onboarding_path
+    assert_response :success
+
+    # From root, should redirect to onboarding when onboarding is needed
+    get root_path
+    assert_redirected_to onboarding_path
+  end
 end
