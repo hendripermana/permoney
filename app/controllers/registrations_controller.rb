@@ -13,13 +13,6 @@ class RegistrationsController < ApplicationController
   end
 
   def create
-    # Prevent redirect loops - Rails best practice
-    if request.path == new_registration_path
-      flash.now[:alert] = t(".failure")
-      render :new, status: :unprocessable_entity
-      return
-    end
-
     if @invitation
       @user.family = @invitation.family
       @user.role = @invitation.role
