@@ -12,7 +12,12 @@ module Onboardable
       return unless redirectable_path?(request.path)
 
       # Prevent redirect loops by checking if we're already on onboarding pages
+      # This is the Rails best practice way to prevent redirect loops
       return if request.path.starts_with?("/onboarding")
+      return if request.path.starts_with?("/sessions")
+      return if request.path.starts_with?("/password_reset")
+      return if request.path.starts_with?("/registration")
+      return if request.path.starts_with?("/email_confirmation")
 
       # Check if user needs onboarding (both managed and self-hosted)
       if Current.user.needs_onboarding?
@@ -24,9 +29,9 @@ module Onboardable
 
       # Subscription checks for managed mode only
       if Current.family&.needs_subscription?
-        redirect_to trial_onboarding_path
+        redirect_to trial_onboarding_path and return
       elsif Current.family&.upgrade_required?
-        redirect_to upgrade_subscription_path
+        redirect_to upgrade_subscription_path and return
       end
     end
 

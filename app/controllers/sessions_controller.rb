@@ -8,13 +8,20 @@ class SessionsController < ApplicationController
   end
 
   def create
+    # Prevent redirect loops - Rails best practice
+    if request.path == new_session_path
+      flash.now[:alert] = t(".invalid_credentials")
+      render :new, status: :unprocessable_entity
+      return
+    end
+
     if user = User.authenticate_by(email: params[:email], password: params[:password])
       if user.otp_required?
         session[:mfa_user_id] = user.id
-        redirect_to verify_mfa_path
+        redirect_to verify_mfa_path and return
       else
         @session = create_session_for(user)
-        redirect_to root_path
+        redirect_to root_path and return
       end
     else
       flash.now[:alert] = t(".invalid_credentials")

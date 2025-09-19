@@ -13,6 +13,13 @@ class RegistrationsController < ApplicationController
   end
 
   def create
+    # Prevent redirect loops - Rails best practice
+    if request.path == new_registration_path
+      flash.now[:alert] = t(".failure")
+      render :new, status: :unprocessable_entity
+      return
+    end
+
     if @invitation
       @user.family = @invitation.family
       @user.role = @invitation.role
@@ -29,9 +36,9 @@ class RegistrationsController < ApplicationController
       # For new users, redirect to onboarding instead of root
       # This ensures they go through the onboarding flow
       if @user.needs_onboarding? && !@invitation
-        redirect_to onboarding_path, notice: t(".success")
+        redirect_to onboarding_path, notice: t(".success") and return
       else
-        redirect_to root_path, notice: t(".success")
+        redirect_to root_path, notice: t(".success") and return
       end
     else
       render :new, status: :unprocessable_entity, alert: t(".failure")
