@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.1](https://github.com/hendripermana/permoney/compare/v0.3.0...v0.3.1) (2025-09-19)
+
+
+### Bug Fixes
+
+* **auth:** remove redundant redirect-loop checks in auth controllers ([6045193](https://github.com/hendripermana/permoney/commit/60451935d542925d36cbc0db06dc002b67a1298f))
+* **onboarding:** prevent redirect loops and tidy ([ba47c90](https://github.com/hendripermana/permoney/commit/ba47c90be7c3bc1534e48bbd311bed0e706cdc95))
+* **onboarding:** prevent redirect loops and tidy ([daced15](https://github.com/hendripermana/permoney/commit/daced1526399d86af3cf0ddf8d5aed278a9f5266))
+
 ## [0.3.0](https://github.com/hendripermana/permoney/compare/v0.2.1...v0.3.0) (2025-09-18)
 
 
