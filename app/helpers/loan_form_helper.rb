@@ -273,11 +273,10 @@ module LoanFormHelper
   end
 
   def loan_schedule_method_options
-    [
-      [t("loans.form.schedule_methods.annuity"), "ANNUITY"],
-      [t("loans.form.schedule_methods.flat"), "FLAT"],
-      [t("loans.form.schedule_methods.effective"), "EFFECTIVE"]
-    ]
+    LoanConfigurationService.schedule_methods.map do |key, config|
+      label = t("loans.form.schedule_methods.#{key.downcase}", default: config['label'] || key.to_s.titleize)
+      [label, key]
+    end
   end
 
   # Dynamic options with fallback
@@ -508,7 +507,7 @@ module LoanFormHelper
   private
 
   def build_field_configurations
-    {
+    base = {
       counterparty_name: {
         label: t("loans.form.counterparty_name.label"),
         placeholder: t("loans.form.counterparty_name.placeholder")
@@ -624,6 +623,27 @@ module LoanFormHelper
         rows: 3
       }
     }
+
+    # Overlay YAML-driven configuration (no hardcode)
+    base.keys.each do |field_name|
+      yml = LoanConfigurationService.field_config(field_name)
+      next if yml.blank?
+
+      cfg = base[field_name].dup
+      cfg[:required] = yml['required'] unless yml['required'].nil?
+      cfg[:min] = yml['min_value'] if yml['min_value']
+      cfg[:max] = yml['max_value'] if yml['max_value']
+      cfg[:step] = yml['step'] if yml['step']
+      cfg[:precision] = yml['precision'] if yml['precision']
+
+      if yml['placeholder_key']
+        cfg[:placeholder] = t(yml['placeholder_key'], default: cfg[:placeholder])
+      end
+
+      base[field_name] = cfg
+    end
+
+    base
   end
 
   def field_value_for(field_name, loan, account)
@@ -929,11 +949,9 @@ module LoanFormHelper
     end
 
     def schedule_method_options
-      [
-        [t("loans.form.schedule_methods.annuity"), "ANNUITY"],
-        [t("loans.form.schedule_methods.flat"), "FLAT"],
-        [t("loans.form.schedule_methods.effective"), "EFFECTIVE"]
-      ]
+      LoanConfigurationService.schedule_methods.map do |key, config|
+        [t("loans.form.schedule_methods.#{key.downcase}", default: config['label'] || key.to_s.titleize), key]
+      end
     end
   end
 

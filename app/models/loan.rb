@@ -46,8 +46,8 @@ class Loan < ApplicationRecord
   validates :counterparty_name, length: { maximum: 255 }, allow_nil: true
 
   # New metadata validations (permissive; all nullable, enums validated if present)
-  PAYMENT_FREQUENCIES = %w[MONTHLY WEEKLY BIWEEKLY].freeze
-  SCHEDULE_METHODS = %w[ANNUITY FLAT EFFECTIVE].freeze
+  PAYMENT_FREQUENCIES = %w[WEEKLY BIWEEKLY MONTHLY QUARTERLY SEMI_ANNUALLY ANNUALLY].freeze
+  SCHEDULE_METHODS = %w[ANNUITY FLAT EFFECTIVE BULLET BALLOON].freeze
   INSTITUTION_TYPES = %w[BANK COOPERATIVE CREDIT_UNION FINTECH OTHER].freeze
   PRODUCT_TYPES = %w[MULTIGUNA UNSECURED SECURED OTHER].freeze
   validates :payment_frequency, inclusion: { in: PAYMENT_FREQUENCIES }, allow_nil: true

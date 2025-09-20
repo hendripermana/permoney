@@ -112,7 +112,7 @@
                                      "data-loan-form-target": "tenor",
                                      "data-action": "input->loan-form#termsChanged change->loan-form#termsChanged" %>
           <%= loan_form.select :payment_frequency,
-                                Loan::PAYMENT_FREQUENCIES.map { |freq| [freq.titleize, freq] },
+                                loan_payment_frequency_options,
                                 { label: "Payment frequency" },
                                 { "data-loan-form-target": "frequency", "data-action": "change->loan-form#termsChanged" } %>
         </div>
@@ -237,11 +237,7 @@
                                       default_currency: Current.family.currency,
                                       data: { action: "input->loan-form#termsChanged change->loan-form#termsChanged" } %>
           </div>
-          <% calculation_options = [
-            ["Equal installments", "ANNUITY"],
-            ["Flat", "FLAT"],
-            ["Effective", "EFFECTIVE"]
-          ] %>
+          <% calculation_options = loan_schedule_method_options %>
           <div class="grid gap-2 md:grid-cols-2">
             <%= loan_form.select :schedule_method,
                                   calculation_options,
