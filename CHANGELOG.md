@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.0](https://github.com/hendripermana/permoney/compare/v0.3.1...v0.4.0) (2025-09-20)
+
+
+### Features
+
+* adding IDR demo data ([47e4c40](https://github.com/hendripermana/permoney/commit/47e4c40af994caa8ba67b99294b0d5796893ccab))
+* adding IDR demo data ([a26b1b9](https://github.com/hendripermana/permoney/commit/a26b1b9b3e3149355a771c12fa9e00a96059e315))
+* **demo:** add loan proceeds, use transfers for investments, ([2eed0b2](https://github.com/hendripermana/permoney/commit/2eed0b276f23448ad46029e546d09c579e13265a))
+* **demo:** generate realistic IDR demo data and fix amounts ([dcc81d5](https://github.com/hendripermana/permoney/commit/dcc81d50e3eb559ce9f106b754b9a373c876460d))
+
+
+### Bug Fixes
+
+* **demo:** use transfers for loan originations and improve data cleanup ([12a6693](https://github.com/hendripermana/permoney/commit/12a6693f1f3190a322442bda8b57ca35be9cec59))
+
 ## [0.3.1](https://github.com/hendripermana/permoney/compare/v0.3.0...v0.3.1) (2025-09-19)
 
 
