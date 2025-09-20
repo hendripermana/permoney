@@ -339,30 +339,60 @@ class Loan::FormComponent < ViewComponent::Base
     end
 
     def render_select(field_name, options, config)
-      return select(field_name, config) if respond_to?(:select)
-      return form.select(field_name, options, **config) if form.respond_to?(:select)
+      # Prefer form builder when available
+      if form && form.respond_to?(:select)
+        opts_cfg, html_cfg = split_select_config(config)
+        return form.select(field_name, options || [], opts_cfg, html_cfg)
+      end
 
-      options ||= []
-      options = options.presence || [ "Option 1", "Option 2", "Option 3" ] # Fallback for testing
+      opts = Array(options).compact
+      cfg = (config || {})
+      include_blank = cfg[:include_blank]
+      html_attrs = cfg.except(:label, :value, :options, :include_blank, :label_tooltip)
 
-      "<select name=\"#{field_name}\" class=\"w-full px-3 py-2 border border-secondary rounded-lg\" #{config.except(:label, :value, :options).map { |k, v| "#{k}=\"#{v}\"" }.join(' ')}>" +
-        options.map do |opt|
-          selected = opt == config[:value] ? "selected" : ""
-          "<option value=\"#{opt}\" #{selected}>#{opt}</option>"
-        end.join +
-        "</select>"
+      select_html = "<select name=\"#{field_name}\" class=\"w-full px-3 py-2 border border-secondary rounded-lg\" #{html_attrs.map { |k, v| "#{k}=\"#{v}\"" }.join(' ')}>"
+      if include_blank
+        blank_label = include_blank == true ? "" : include_blank
+        select_html << "<option value=\"\">#{blank_label}</option>"
+      end
+
+      select_html << opts.map do |opt|
+        if opt.is_a?(Array)
+          label, value = opt[0], opt[1]
+        else
+          label = value = opt
+        end
+        selected = (value.to_s == cfg[:value].to_s) ? "selected" : ""
+        "<option value=\"#{value}\" #{selected}>#{label}</option>"
+      end.join
+
+      select_html << "</select>"
+      select_html
+    end
+
+    def split_select_config(config)
+      cfg = (config || {})
+      option_keys = [:label, :label_tooltip, :include_blank, :prompt, :selected, :required]
+      [ cfg.slice(*option_keys), cfg.except(*option_keys) ]
     end
 
     def render_collection_select(field_name, collection, config)
-      return collection_select(field_name, collection, :id, :name, config[:options], config[:html_options]) if respond_to?(:collection_select)
-      return form.collection_select(field_name, collection, :id, :name, **config) if form.respond_to?(:collection_select)
+      # Prefer form builder when available
+      if form && form.respond_to?(:collection_select)
+        opts_cfg, html_cfg = split_select_config(config)
+        return form.collection_select(field_name, collection || [], :id, :name, opts_cfg, html_cfg)
+      end
 
-      collection ||= []
-      "<select name=\"#{field_name}\" class=\"w-full px-3 py-2 border border-secondary rounded-lg\" #{config[:html_options]&.map { |k, v| "#{k}=\"#{v}\"" }&.join(' ') || ''}>" +
-        collection.map do |item|
+      col = Array(collection).compact
+      cfg = (config || {})
+      html_options = cfg[:html_options] || {}
+      options_cfg = cfg[:options] || {}
+
+      "<select name=\"#{field_name}\" class=\"w-full px-3 py-2 border border-secondary rounded-lg\" #{html_options.map { |k, v| "#{k}=\"#{v}\"" }.join(' ')}>" +
+        col.map do |item|
           value = item.respond_to?(:id) ? item.id : item.to_s
           text = item.respond_to?(:name) ? item.name : item.to_s
-          selected = value == config[:options]&.dig(:selected) ? "selected" : ""
+          selected = value.to_s == options_cfg[:selected].to_s ? "selected" : ""
           "<option value=\"#{value}\" #{selected}>#{text}</option>"
         end.join +
         "</select>"
