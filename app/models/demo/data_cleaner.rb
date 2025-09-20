@@ -9,22 +9,32 @@ class Demo::DataCleaner
   # Main entry point for destroying all demo data
   def destroy_everything!
     ActiveRecord::Base.transaction do
-      # Proactively remove syncs tied to accounts and families to prevent callbacks from touching deleted parents
-      Sync.where(syncable_type: "Account").delete_all
-      Sync.where(syncable_type: "Family").delete_all
-      # Remove any remaining syncs (e.g., for other syncable types)
+      # Remove syncs first to prevent callbacks from touching deleted parents
       Sync.delete_all
 
-      # Destroy all accounts, which will cascade and destroy all accountable records (Loans, Vehicles, etc.)
-      Account.destroy_all
+      # Child/entry-like tables first to avoid FK/callback issues
+      Entry.delete_all if defined?(Entry)
+      Valuation.delete_all if defined?(Valuation)
+      Security::Price.delete_all if defined?(Security::Price)
+      BudgetCategory.delete_all if defined?(BudgetCategory)
+      Budget.delete_all if defined?(Budget)
+      Category.delete_all if defined?(Category)
+      Subscription.delete_all if defined?(Subscription)
+      User.delete_all if defined?(User)
 
-      # Finally destroy families and other top-level records
-      Family.destroy_all
-      Setting.destroy_all
-      InviteCode.destroy_all
-      ExchangeRate.destroy_all
-      Security::Price.destroy_all
-      Security.destroy_all
+      # Accounts and their polymorphic dependents
+      Account.delete_all
+
+      # Securities after prices/entries removed
+      Security.delete_all
+
+      # Other top-levels
+      ExchangeRate.delete_all
+      InviteCode.delete_all
+      Setting.delete_all
+
+      # Families last
+      Family.delete_all
     end
 
     puts "Data cleared"

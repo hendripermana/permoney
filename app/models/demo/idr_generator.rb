@@ -326,8 +326,8 @@ class Demo::IdrGenerator < Demo::Generator
       kpr_principal = 300_000_000 # 300 million IDR KPR (realistic for small house)
 
       create_transaction!(@bca_checking, down_payment, "DP KPR", @housing_cat, kpr_date)
-      create_transaction!(@bca_checking, kpr_principal, "KPR Proceeds", @housing_cat, kpr_date) # Cash received from KPR
-      create_transaction!(@kpr_loan, kpr_principal, "KPR Principal", nil, kpr_date)
+      # Origination: move proceeds from loan liability to checking as a single transfer
+      create_transfer!(@kpr_loan, @bca_checking, kpr_principal, "KPR Proceeds", kpr_date)
 
       # Monthly housing expenses
       date_cursor = 36.months.ago.beginning_of_month
@@ -609,8 +609,8 @@ class Demo::IdrGenerator < Demo::Generator
       motor_loan = 8_000_000 # 8 million IDR motor loan
 
       create_transaction!(@bca_checking, down_payment, "DP Motor", @transportation_cat, motor_date)
-      create_transaction!(@bca_checking, motor_loan, "Motor Loan Proceeds", @transportation_cat, motor_date) # Cash received from loan
-      create_transaction!(@motor_loan, motor_loan, "Kredit Motor", nil, motor_date)
+      # Origination: move proceeds from loan liability to checking as a single transfer
+      create_transfer!(@motor_loan, @bca_checking, motor_loan, "Motor Loan Proceeds", motor_date)
 
       # Personal loans (pinjam dari orang) - initial borrowing
       family_loan_date = 3.years.ago.to_date
@@ -664,7 +664,7 @@ class Demo::IdrGenerator < Demo::Generator
     def generate_indonesian_legacy_transactions!
       # Historical transactions for better balance reconciliation
       legacy_date = 5.years.ago.to_date
-      create_transaction!(@bca_checking, -10_000_000, "Setoran Awal", @salary_cat, legacy_date)
+      create_transaction!(@bca_checking, 10_000_000, "Setoran Awal", @salary_cat, legacy_date)
     end
 
     def generate_indonesian_crypto_and_misc_assets!
