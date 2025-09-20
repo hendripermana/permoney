@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/hendripermana/permoney/compare/v0.4.0...v0.4.1) (2025-09-20)
+
+
+### Bug Fixes
+
+* **data_cleaner:** remove when cleaning demo data ([1213da1](https://github.com/hendripermana/permoney/commit/1213da1c16f70b5efad825dc5d067f84805012bc))
+* **data_cleaner:** remove when cleaning demo data ([6286ff0](https://github.com/hendripermana/permoney/commit/6286ff04d3229763a3aa44e558da72acdeeb10ab))
+
 ## [0.4.0](https://github.com/hendripermana/permoney/compare/v0.3.1...v0.4.0) (2025-09-20)
 
 
