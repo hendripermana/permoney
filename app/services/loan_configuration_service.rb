@@ -179,15 +179,16 @@ class LoanConfigurationService
 
     def load_config
       if File.exist?(CONFIG_PATH)
-        YAML.safe_load(File.read(CONFIG_PATH)).deep_symbolize_keys
+        # Keep keys as strings so all config.dig('...') calls remain consistent
+        YAML.safe_load(File.read(CONFIG_PATH)).deep_stringify_keys
       else
         # Return default configuration if file doesn't exist
         Rails.logger.warn("Loan configuration file not found at #{CONFIG_PATH}. Using defaults.")
-        generate_default_config.deep_symbolize_keys
+        generate_default_config.deep_stringify_keys
       end
     rescue => e
       Rails.logger.error("Error loading loan configuration: #{e.message}. Using defaults.")
-      generate_default_config.deep_symbolize_keys
+      generate_default_config.deep_stringify_keys
     end
 
     def save_config
