@@ -1194,29 +1194,32 @@ class NotificationService
     end
 end
 
-def notification_service
-  @notification_service ||= NotificationService.new(self)
-end
+# Ensure notification helpers are available as instance methods on Loan
+class Loan
+  def notification_service
+    @notification_service ||= NotificationService.new(self)
+  end
 
-# Check and send reminder notifications
-def check_and_send_reminders
-  notifications = []
+  # Check and send reminder notifications
+  def check_and_send_reminders
+    notifications = []
 
-  # Check for upcoming payments
-  upcoming_notification = notification_service.upcoming_payment_reminder
-  notifications << upcoming_notification if upcoming_notification
+    # Check for upcoming payments
+    upcoming_notification = notification_service.upcoming_payment_reminder
+    notifications << upcoming_notification if upcoming_notification
 
-  # Check for overdue payments
-  overdue_notification = notification_service.overdue_payment_reminder
-  notifications << overdue_notification if overdue_notification
+    # Check for overdue payments
+    overdue_notification = notification_service.overdue_payment_reminder
+    notifications << overdue_notification if overdue_notification
 
-  notifications.compact
-end
+    notifications.compact
+  end
 
-# Send notification when loan is fully paid
-def check_fully_paid_status
-  if fully_paid? && !@was_fully_paid
-    notification_service.loan_fully_paid
-    @was_fully_paid = true
+  # Send notification when loan is fully paid
+  def check_fully_paid_status
+    if fully_paid? && !@was_fully_paid
+      notification_service.loan_fully_paid
+      @was_fully_paid = true
+    end
   end
 end
