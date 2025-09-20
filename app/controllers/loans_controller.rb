@@ -1,5 +1,6 @@
 class LoansController < ApplicationController
   include AccountableResource, StreamExtensions
+  include LoanFormHelper
 
   permitted_accountable_attributes(
     :id, :rate_type, :interest_rate, :term_months, :initial_balance,
@@ -15,98 +16,108 @@ class LoansController < ApplicationController
     :relationship
   )
 
-  # Additional actions for personal loan functionality
+  # Additional borrowing from existing loan
   def new_borrowing
     @account = Current.family.accounts.find(params[:id])
-    @available_accounts = Current.family.accounts.manual.active.where.not(id: @account.id).alphabetically
+    @available_accounts = available_payment_source_accounts(Current.family)
   end
 
   def create_borrowing
-    if borrowing_params[:loan_account_id].blank?
-      @account = Current.family.accounts.find(params[:id])
-      @available_accounts = Current.family.accounts.manual.active.where.not(id: @account.id).alphabetically
-      @error_message = "Loan account must be selected"
-      return render :new_borrowing, status: :unprocessable_entity
-    end
+    @account = Current.family.accounts.find(params[:id])
+    loan = @account.accountable
 
-    account = Current.family.accounts.find(borrowing_params[:loan_account_id])
-    cash_id = borrowing_params[:transfer_account_id].presence || borrowing_params[:cash_account_id].presence
-    cash = Current.family.accounts.find(cash_id) if cash_id.present?
-    result = Loan::DisburseMore.call(account: account, amount: borrowing_params[:amount], date: borrowing_params[:date], cash_account: cash)
+    begin
+      transfer = loan.borrow_more(
+        amount: borrowing_params[:amount],
+        to_account: find_transfer_account,
+        date: borrowing_params[:date] || Date.current,
+        notes: borrowing_params[:notes]
+      )
 
-    if result.success?
-      flash[:notice] = "Borrowed amount posted."
-      # Synchronously materialize balances so UI reflects changes immediately after redirect
-      Account::QuickSync.call(account) rescue nil
-      Account::QuickSync.call(cash) rescue nil
-      respond_to do |format|
-        format.html { redirect_back_or_to account_path(result.entry.account) }
-        format.turbo_stream { stream_redirect_back_or_to(account_path(result.entry.account)) }
+      if transfer.persisted?
+        flash[:notice] = t("loans.borrowing.success")
+        respond_to do |format|
+          format.html { redirect_back_or_to account_path(@account) }
+          format.turbo_stream { stream_redirect_back_or_to(account_path(@account)) }
+        end
+      else
+        raise StandardError, "Failed to create transfer"
       end
-    else
-      @account = Current.family.accounts.find(borrowing_params[:loan_account_id])
-      @available_accounts = Current.family.accounts.manual.active.where.not(id: @account.id).alphabetically
-      @error_message = result.error
+    rescue => e
+      @available_accounts = available_payment_source_accounts(Current.family)
+      @error_message = e.message
       render :new_borrowing, status: :unprocessable_entity
     end
   end
 
   def new_payment
     @account = Current.family.accounts.find(params[:id])
-    @source_accounts = Current.family.accounts.manual.active.where.not(id: @account.id)
-                                  .where(classification: "asset").alphabetically
+    @source_accounts = available_payment_source_accounts(Current.family, loan_account: @account)
   end
 
   def create_payment
-    result = Loan::PaymentService.call!(
-      family: Current.family,
-      params: payment_params
-    )
+    @account = Current.family.accounts.find(payment_params[:loan_account_id])
+    loan = @account.accountable
+    source_account = Current.family.accounts.find(payment_params[:source_account_id])
 
-    if result.success?
-      flash[:notice] = "Payment posted."
-      loan = Current.family.accounts.find(payment_params[:loan_account_id])
-      src  = Current.family.accounts.find(payment_params[:source_account_id])
-      Account::QuickSync.call(loan) rescue nil
-      Account::QuickSync.call(src) rescue nil
-      respond_to do |format|
-        format.html { redirect_back_or_to account_path(Current.family.accounts.find(payment_params[:loan_account_id])) }
-        format.turbo_stream { stream_redirect_back_or_to(account_path(Current.family.accounts.find(payment_params[:loan_account_id]))) }
+    begin
+      transfer = loan.make_payment(
+        amount: payment_params[:amount],
+        from_account: source_account,
+        date: payment_params[:date] || Date.current,
+        notes: payment_params[:notes]
+      )
+
+      if transfer
+        flash[:notice] = t("loans.payment.success")
+        respond_to do |format|
+          format.html { redirect_back_or_to account_path(@account) }
+          format.turbo_stream { stream_redirect_back_or_to(account_path(@account)) }
+        end
+      else
+        raise StandardError, "Failed to process payment"
       end
-    else
-      @account = Current.family.accounts.find(payment_params[:loan_account_id])
-      @source_accounts = Current.family.accounts.manual.active.where.not(id: @account.id)
-                                    .where(classification: "asset").alphabetically
-      @error_message = result.error
+    rescue => e
+      @source_accounts = available_payment_source_accounts(Current.family, loan_account: @account)
+      @error_message = e.message
       render :new_payment, status: :unprocessable_entity
     end
   end
 
   def new_extra_payment
-    raise ActionController::RoutingError, "Not Found" unless Rails.application.config.features.loans.extra_payment
+    raise ActionController::RoutingError, "Not Found" unless loan_extra_payment_enabled?
     @account = Current.family.accounts.find(params[:id])
+    @source_accounts = available_payment_source_accounts(Current.family, loan_account: @account)
   end
 
   def create_extra_payment
-    raise ActionController::RoutingError, "Not Found" unless Rails.application.config.features.loans.extra_payment
+    raise ActionController::RoutingError, "Not Found" unless loan_extra_payment_enabled?
     @account = Current.family.accounts.find(params[:id])
+    loan = @account.accountable
 
-    service = Loan::ApplyExtraPayment.new(
-      account: @account,
-      amount: params.require(:extra)[:amount],
-      date: params.require(:extra)[:date],
-      allocation_mode: params.require(:extra)[:allocation_mode]
-    )
-    result = service.call!
+    begin
+      extra_params = params.require(:extra)
+      source_account = Current.family.accounts.find(extra_params[:source_account_id])
 
-    if result.success?
-      flash[:notice] = "Extra payment applied and future schedule updated"
-      respond_to do |format|
-        format.html { redirect_back_or_to account_path(@account) }
-        format.turbo_stream { stream_redirect_back_or_to(account_path(@account)) }
+      transfer = loan.apply_extra_payment(
+        amount: extra_params[:amount],
+        from_account: source_account,
+        date: extra_params[:date] || Date.current,
+        allocation_mode: extra_params[:allocation_mode] || "principal_first"
+      )
+
+      if transfer
+        flash[:notice] = t("loans.extra_payment.success")
+        respond_to do |format|
+          format.html { redirect_back_or_to account_path(@account) }
+          format.turbo_stream { stream_redirect_back_or_to(account_path(@account)) }
+        end
+      else
+        raise StandardError, "Failed to process extra payment"
       end
-    else
-      @error_message = result.error
+    rescue => e
+      @source_accounts = available_payment_source_accounts(Current.family, loan_account: @account)
+      @error_message = e.message
       render :new_extra_payment, status: :unprocessable_entity
     end
   end
@@ -176,23 +187,30 @@ class LoansController < ApplicationController
 
   # POST /loans/:id/post_installment
   def post_installment
-    account = Current.family.accounts.find(params[:id])
-    result = Loan::PostInstallment.new(
-      family: Current.family,
-      account_id: account.id,
-      source_account_id: params.require(:source_account_id),
-      installment_no: params[:installment_no],
-      date: params[:date]
-    ).call!
+    @account = Current.family.accounts.find(params[:id])
+    loan = @account.accountable
+    source_account = Current.family.accounts.find(params.require(:source_account_id))
 
-    if result.success?
-      flash[:notice] = "Installment posted"
-      respond_to do |format|
-        format.html { redirect_back_or_to account_path(account) }
-        format.turbo_stream { stream_redirect_back_or_to(account_path(account)) }
+    begin
+      installment = if params[:installment_no].present?
+        loan.loan_installments.find_by!(installment_no: params[:installment_no])
+      else
+        nil # Will use next pending installment
       end
-    else
-      @error_message = result.error
+
+      transfer = loan.post_installment(
+        installment: installment,
+        from_account: source_account,
+        date: params[:date] || Date.current
+      )
+
+      flash[:notice] = t("loans.installment.posted")
+      respond_to do |format|
+        format.html { redirect_back_or_to account_path(@account) }
+        format.turbo_stream { stream_redirect_back_or_to(account_path(@account)) }
+      end
+    rescue => e
+      @error_message = e.message
       render status: :unprocessable_entity
     end
   end
@@ -228,6 +246,13 @@ class LoansController < ApplicationController
 
     def payment_params
       params.require(:payment).permit(:loan_account_id, :source_account_id, :amount, :date, :notes)
+    end
+
+    def find_transfer_account
+      cash_id = borrowing_params[:transfer_account_id].presence || borrowing_params[:cash_account_id].presence
+      raise ArgumentError, "Transfer account must be selected" if cash_id.blank?
+
+      Current.family.accounts.find(cash_id)
     end
 
     def authorize_account!(account)

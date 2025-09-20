@@ -42,7 +42,11 @@ class DebtOriginationService
       end
 
       unless imported?
-        raise ArgumentError, "Missing disbursement_account_id" if disbursement_account_id.blank?
+        # Only require disbursement_account_id for institutional loans or when explicitly needed
+        debt_kind = params[:debt_kind] || params.dig(:accountable_attributes, :debt_kind) || "personal"
+        if debt_kind == "institutional" || disbursement_account_id.present?
+          raise ArgumentError, "Missing disbursement_account_id" if disbursement_account_id.blank?
+        end
       end
       raise ArgumentError, "Missing initial principal" if initial_principal.blank? || initial_principal.to_d <= 0
     end
