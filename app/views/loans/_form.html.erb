@@ -21,6 +21,9 @@
   "loan-form-preview-auto-value": false
 } %>
 
+<% # Use wizard for new loans, traditional form for existing loans %>
+<% use_wizard = account.new_record? %>
+
 <%= render "accounts/form", account: account, url: url, form_prefix: loan_form_prefix, form_data: preview_form_data do |form| %>
   <%= render "shared/ruler", classes: "my-4" %>
 
@@ -40,37 +43,49 @@
                                  value: loan_form.object.counterparty_type,
                                  data: { "loan-form-target": "counterpartyTypeField" } %>
 
-      <section class="space-y-3">
-        <h3 class="text-primary font-medium">Lender details</h3>
-        <%= loan_form.text_field :counterparty_name, label: "Lender name", placeholder: "e.g., Ana, Bank Mandiri" %>
-        <div data-loan-form-target="visibility" data-loan-form-visibility-value="personal" class="space-y-3 <%= personal_mode ? '' : 'hidden' %>">
-          <div class="grid gap-2 md:grid-cols-2">
-            <%= loan_form.text_field :relationship,
-                                     label: "Relationship",
-                                     placeholder: "Friend, family, colleague" %>
-            <%= loan_form.text_field :linked_contact_id,
-                                     label: "Contact number (optional)",
-                                     placeholder: "+62-812-1234-5678" %>
+      <% # Use wizard component for new loans %>
+      <% if use_wizard %>
+        <%= render Loan::FormComponent.new(
+          loan: loan_form.object,
+          account: account,
+          form: loan_form,
+          wizard: true,
+          current_step: params[:step] || :type,
+          loan_type: debt_kind,
+          show_preview: borrowed_enabled
+        ) %>
+      <% else %>
+        <section class="space-y-3">
+          <h3 class="text-primary font-medium">Lender details</h3>
+          <%= loan_form.text_field :counterparty_name, label: "Lender name", placeholder: "e.g., Ana, Bank Mandiri" %>
+          <div data-loan-form-target="visibility" data-loan-form-visibility-value="personal" class="space-y-3 <%= personal_mode ? '' : 'hidden' %>">
+            <div class="grid gap-2 md:grid-cols-2">
+              <%= loan_form.text_field :relationship,
+                                       label: "Relationship",
+                                       placeholder: "Friend, family, colleague" %>
+              <%= loan_form.text_field :linked_contact_id,
+                                       label: "Contact number (optional)",
+                                       placeholder: "+62-812-1234-5678" %>
+            </div>
+            <p class="text-xs text-secondary">Optional: add a phone number so you can follow up or set reminders.</p>
           </div>
-          <p class="text-xs text-secondary">Optional: add a phone number so you can follow up or set reminders.</p>
-        </div>
-        <div data-loan-form-target="visibility" data-loan-form-visibility-value="institution" class="space-y-3 <%= personal_mode ? 'hidden' : '' %>">
-          <div class="grid gap-2 md:grid-cols-2">
-            <%= loan_form.text_field :institution_name, label: "Institution", placeholder: "e.g., BCA, HSBC" %>
-            <%= loan_form.select :fintech_type,
-                                 Loan::FINTECH_TYPES.map { |key, meta| [meta[:long], key] },
-                                 { label: "Channel", include_blank: "Select type..." } %>
+          <div data-loan-form-target="visibility" data-loan-form-visibility-value="institution" class="space-y-3 <%= personal_mode ? 'hidden' : '' %>">
+            <div class="grid gap-2 md:grid-cols-2">
+              <%= loan_form.text_field :institution_name, label: "Institution", placeholder: "e.g., BCA, HSBC" %>
+              <%= loan_form.select :fintech_type,
+                                   Loan::FINTECH_TYPES.map { |key, meta| [meta[:long], key] },
+                                   { label: "Channel", include_blank: "Select type..." } %>
+            </div>
+            <div class="grid gap-2 md:grid-cols-2">
+              <%= loan_form.select :institution_type,
+                                   Loan::INSTITUTION_TYPES.map { |kind| [kind.titleize, kind] },
+                                   { label: "Classification", include_blank: "Select classification..." } %>
+              <%= loan_form.select :product_type,
+                                   Loan::PRODUCT_TYPES.map { |kind| [kind.titleize, kind] },
+                                   { label: "Product type", include_blank: "Select product type..." } %>
+            </div>
           </div>
-          <div class="grid gap-2 md:grid-cols-2">
-            <%= loan_form.select :institution_type,
-                                 Loan::INSTITUTION_TYPES.map { |kind| [kind.titleize, kind] },
-                                 { label: "Classification", include_blank: "Select classification..." } %>
-            <%= loan_form.select :product_type,
-                                 Loan::PRODUCT_TYPES.map { |kind| [kind.titleize, kind] },
-                                 { label: "Product type", include_blank: "Select product type..." } %>
-          </div>
-        </div>
-      </section>
+        </section>
 
       <section class="space-y-3">
         <h3 class="text-primary font-medium">Loan terms</h3>
@@ -261,6 +276,7 @@
                                    rows: 3 %>
         </div>
       </details>
+      <% end %>
     <% end %>
   </div>
 <% end %>

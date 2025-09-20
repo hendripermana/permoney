@@ -4,16 +4,214 @@ en:
     edit:
       edit: Edit %{account}
     form:
-      interest_rate: Interest rate
-      interest_rate_placeholder: '5.25'
-      initial_balance: Original loan balance
-      rate_type: Rate type
-      term_months: Term (months)
-      term_months_placeholder: '360'
+      # Field labels
+      counterparty_name:
+        label: Lender name
+        placeholder: "e.g., Ana, Bank Mandiri"
+      relationship:
+        label: Relationship
+        placeholder: "Friend, family, colleague"
+      linked_contact_id:
+        label: Contact number (optional)
+        placeholder: "+62-812-1234-5678"
+      institution_name:
+        label: Institution
+        placeholder: "e.g., BCA, HSBC"
+      fintech_type:
+        label: Channel
+        blank: Select type...
+      institution_type:
+        label: Classification
+        blank: Select classification...
+      product_type:
+        label: Product type
+        blank: Select product type...
+      initial_balance:
+        label: Principal amount
+        tooltip: Use the amount you first received when this loan started.
+      start_date:
+        label: Start date
+      tenor_months:
+        label: Number of installments
+      payment_frequency:
+        label: Payment frequency
+      disbursement_account_id:
+        label: Destination account
+      origination_date:
+        label: Transfer date
+      interest_rate:
+        label: Interest rate (%)
+      rate_type:
+        label: Rate type
+      rate_or_profit:
+        label: Effective annual rate (%)
+      islamic_product_type:
+        label: Islamic product
+        blank: Select Islamic product...
+      margin_rate:
+        label: Margin rate (%)
+      profit_sharing_ratio:
+        label: Profit sharing ratio
+      installment_amount:
+        label: Preferred installment amount (optional)
+      schedule_method:
+        label: Payment calculation method
+        tooltip: Equal installments keeps each payment the same throughout the term.
+      balloon_amount:
+        label: Balloon payment (optional)
+      collateral_desc:
+        label: Collateral description (optional)
+      early_repayment_policy:
+        label: Early repayment notes
+      witness_name:
+        label: Witness name (optional)
+        placeholder: Name of witness for the agreement
+      agreement_notes:
+        label: Agreement notes
+        placeholder: Additional context or Syariah compliance notes
+      notes:
+        label: Private notes (optional)
+
+      # Rate type options
+      rate_types:
+        fixed: Fixed
+        variable: Variable
+        adjustable: Adjustable
+
+      # Islamic product options
+      islamic_products:
+        murabaha: Murabaha (Cost-plus)
+        musyarakah: Musyarakah (Partnership)
+        mudharabah: Mudharabah (Profit-sharing)
+        ijarah: Ijarah (Leasing)
+        qard_hasan: Qard Hasan (Interest-free)
+
+      # Schedule method options
+      schedule_methods:
+        annuity: Equal installments
+        flat: Flat
+        effective: Effective
+
+      # Help texts
+      help:
+        person_simple: "Personal loans are often 0% with flexible terms. You can leave Rate empty."
+        extra_payment: "Extra Payment reduces principal beyond the scheduled amount."
+
+      # Field groups
+      lender_details:
+        title: Lender details
+      loan_terms:
+        title: Loan terms
+        subtitle: We use these numbers to build your repayment schedule.
+        principal_help: The original principal amount you received when the loan started.
+      interest:
+        title: Interest & profit
+      interest_free:
+        title: Track as interest-free
+        description: Enable for informal loans or promotions where only principal is repaid.
+      schedule_preview:
+        title: Schedule preview
+        subtitle: Preview the installment plan with your current inputs.
+      advanced_details:
+        title: Additional details
+
+      # Personal loan specific
+      personal_fields:
+        title: Personal details
+      institutional_fields:
+        title: Institutional details
+
+      # Help messages
+      personal_fields:
+        help: "Optional: add a phone number so you can follow up or set reminders."
+      disbursement:
+        help: Select the cash or bank account where the loan amount was deposited.
+      balloon:
+        help: Add a larger final payment if your agreement ends with a lump sum.
+
+      # Preview
+      preview:
+        button_text: Preview schedule
+        title: Installment schedule
+
+    # Action messages
+    borrowing:
+      success: Borrowed amount posted.
+    payment:
+      success: Payment posted.
+    extra_payment:
+      success: Extra payment applied and future schedule updated.
+    installment:
+      posted: Installment posted.
+
+    # Rate comparison
+    rate_comparison:
+      significantly_below: Significantly below market
+      below: Below market
+      at_market: At market rate
+      above: Above market
+      significantly_above: Significantly above market
+
+    # Term formatting
+    term:
+      years:
+        one: "%{count} year"
+        other: "%{count} years"
+      months:
+        one: "%{count} month"
+        other: "%{count} months"
+
+    # Wizard translations
+    wizard:
+      steps:
+        type: "Choose loan type"
+        basic: "Basic information"
+        terms: "Loan terms"
+        review: "Review & confirm"
+      type:
+        personal:
+          title: "Personal loan"
+          description: "Borrowing from family, friends, or colleagues"
+        institutional:
+          title: "Institutional loan"
+          description: "Borrowing from banks, fintech, or other institutions"
+      smart_suggestion:
+        personal: "Quick setup for personal loans (0% interest, flexible terms)"
+      basic:
+        title: "Basic information"
+        description: "Enter the basic details about your loan"
+      terms:
+        title: "Loan terms"
+        description: "Set the principal amount, duration, and payment schedule"
+      review:
+        title: "Review & confirm"
+        description: "Review your loan details before creating"
+      title: "Create loan"
+      subtitle: "Enter your loan details step by step"
+
+    # Actions
+    actions:
+      back: "Back"
+      next: "Next"
+      create: "Create loan"
+
     new:
       title: Enter loan details
       method_select_hint: Loan accounts track money you borrowed. Use this whether the lender is a person or an institution.
       dialog_body_hint: Loans cover borrowing from both institutions and people. Choose the counterparty type below and fill in the relevant details.
+
+    # Missing translations for various sections
+    title: Title
+    subtitle: Subtitle
+    overview:
+      interest_rate: Interest Rate
+      monthly_payment: Monthly Payment
+      not_applicable: N/A
+      original_principal: Original Principal
+      remaining_principal: Remaining Principal
+      term: Term
+      type: Type
+      unknown: Unknown
     overview:
       interest_rate: Interest Rate
       monthly_payment: Monthly Payment
@@ -34,7 +232,3 @@ en:
       context:
         amount_borrowed: Amount Borrowed
         remaining_balance: Current Balance
-    form:
-      help:
-        person_simple: "Personal loans are often 0% with flexible terms. You can leave Rate empty."
-        extra_payment: "Extra Payment reduces principal beyond the scheduled amount."

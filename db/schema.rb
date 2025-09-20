@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.2].define(version: 2025_09_14_130000) do
+ActiveRecord::Schema[7.2].define(version: 2025_09_20_084228) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pgcrypto"
   enable_extension "plpgsql"
@@ -29,7 +29,7 @@ ActiveRecord::Schema[7.2].define(version: 2025_09_14_130000) do
     t.uuid "accountable_id"
     t.decimal "balance", precision: 19, scale: 4
     t.string "currency"
-    t.virtual "classification", type: :string, as: "\nCASE\n    WHEN ((accountable_type)::text = ANY ((ARRAY['Loan'::character varying, 'CreditCard'::character varying, 'OtherLiability'::character varying])::text[])) THEN 'liability'::text\n    ELSE 'asset'::text\nEND", stored: true
+    t.virtual "classification", type: :string, as: "\nCASE\n    WHEN ((accountable_type)::text = ANY (ARRAY[('Loan'::character varying)::text, ('CreditCard'::character varying)::text, ('OtherLiability'::character varying)::text])) THEN 'liability'::text\n    ELSE 'asset'::text\nEND", stored: true
     t.uuid "import_id"
     t.uuid "plaid_account_id"
     t.decimal "cash_balance", precision: 19, scale: 4, default: "0.0"
@@ -462,10 +462,16 @@ ActiveRecord::Schema[7.2].define(version: 2025_09_14_130000) do
     t.uuid "transfer_id"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.decimal "paid_principal", precision: 15, scale: 2, default: "0.0", null: false
+    t.decimal "paid_interest", precision: 15, scale: 2, default: "0.0", null: false
+    t.date "last_payment_date"
+    t.decimal "actual_amount", precision: 15, scale: 2
     t.index ["account_id", "due_date"], name: "idx_loan_installments_planned_due", where: "((status)::text = 'planned'::text)"
     t.index ["account_id", "installment_no"], name: "idx_loan_installments_posted_once", unique: true, where: "((status)::text = 'posted'::text)"
     t.index ["account_id", "status"], name: "idx_loan_installments_posted_by_account", where: "((status)::text = 'posted'::text)"
+    t.index ["account_id", "status"], name: "index_loan_installments_on_account_id_and_status"
     t.index ["account_id"], name: "index_loan_installments_on_account_id"
+    t.index ["last_payment_date"], name: "index_loan_installments_on_last_payment_date"
   end
 
   create_table "loans", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|

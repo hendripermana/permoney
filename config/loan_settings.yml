@@ -1,0 +1,225 @@
+# Loan System Configuration
+# This file contains all configurable settings for the loan system
+# to ensure flexibility and maintainability
+
+defaults:
+  # Default values for loan calculations
+  tenor_months: 12
+  payment_frequency: "MONTHLY"
+  schedule_method: "ANNUITY"
+
+  # Validation bounds
+  min_tenor_months: 1
+  max_tenor_months: 480  # 40 years
+
+  min_rate: 0
+  max_rate: 100
+
+  min_profit_sharing_ratio: 0
+  max_profit_sharing_ratio: 1
+
+  # UI Configuration
+  field_precision:
+    interest_rate: 3
+    margin_rate: 3
+    profit_sharing_ratio: 2
+    money_fields: 2
+
+  # Notification settings
+  reminder_days:
+    urgent: 0
+    high: 1..3
+    medium: 4..7
+
+# Payment frequencies configuration
+# Format: key => { months_interval: float, label: string }
+payment_frequencies:
+  MONTHLY:
+    months_interval: 1
+    label: "Monthly"
+    description: "Monthly payments"
+  QUARTERLY:
+    months_interval: 3
+    label: "Quarterly"
+    description: "Every 3 months"
+  SEMI_ANNUALLY:
+    months_interval: 6
+    label: "Semi-annually"
+    description: "Every 6 months"
+  ANNUALLY:
+    months_interval: 12
+    label: "Annually"
+    description: "Once per year"
+  WEEKLY:
+    months_interval: 0.23  # 1/4.33 approximately
+    label: "Weekly"
+    description: "Weekly payments"
+  BIWEEKLY:
+    months_interval: 0.46  # 1/2.17 approximately
+    label: "Bi-weekly"
+    description: "Every two weeks"
+
+# Schedule methods configuration
+# Format: key => { calculation_type: symbol, label: string, description: string }
+schedule_methods:
+  ANNUITY:
+    calculation_type: :annuity
+    label: "Equal Installments"
+    description: "Equal monthly payments throughout the loan term"
+  FLAT:
+    calculation_type: :flat
+    label: "Equal Principal"
+    description: "Equal principal payments with decreasing interest"
+  EFFECTIVE:
+    calculation_type: :effective
+    label: "Effective Rate"
+    description: "Compound interest calculation"
+  BULLET:
+    calculation_type: :bullet
+    label: "Bullet Payment"
+    description: "Interest-only payments with full principal at end"
+  BALLOON:
+    calculation_type: :balloon
+    label: "Balloon Payment"
+    description: "Small regular payments with large final payment"
+
+# Field configurations for form builder
+# This allows customization of form fields without code changes
+form_fields:
+  counterparty_name:
+    required: true
+    max_length: 255
+    placeholder_key: "loans.form.counterparty_name.placeholder"
+  relationship:
+    required: false
+    max_length: 100
+    placeholder_key: "loans.form.relationship.placeholder"
+  initial_balance:
+    required: true
+    min_value: 0
+    currency_field: true
+  tenor_months:
+    required: true
+    min_value: 1
+    max_value: 480
+  payment_frequency:
+    required: false
+    options_source: :payment_frequencies
+  schedule_method:
+    required: false
+    options_source: :schedule_methods
+  interest_rate:
+    required: false
+    min_value: 0
+    max_value: 100
+    step: 0.005
+    precision: 3
+  margin_rate:
+    required: false
+    min_value: 0
+    max_value: 100
+    step: 0.005
+    precision: 3
+  profit_sharing_ratio:
+    required: false
+    min_value: 0
+    max_value: 1
+    step: 0.01
+    precision: 2
+
+# Validation rules - extensible validation system
+validation_rules:
+  counterparty_name:
+    - rule: :presence
+      message: "Counterparty name is required"
+    - rule: :length
+      max: 255
+      message: "Counterparty name must be less than 255 characters"
+  initial_balance:
+    - rule: :presence
+      message: "Initial balance is required"
+    - rule: :numericality
+      greater_than: 0
+      message: "Initial balance must be positive"
+  tenor_months:
+    - rule: :presence
+      message: "Tenor is required"
+    - rule: :numericality
+      greater_than_or_equal_to: 1
+      message: "Tenor must be at least 1 month"
+    - rule: :numericality
+      less_than_or_equal_to: 480
+      message: "Tenor cannot exceed 40 years"
+
+# Notification templates - for internationalization
+notification_templates:
+  upcoming_payment:
+    due_today:
+      title: "Loan Payment Due Today"
+      message: "Your loan payment of %{amount} is due today."
+    due_soon:
+      title: "Loan Payment Due Soon"
+      message: "Your loan payment of %{amount} is due in %{days} days."
+    reminder:
+      title: "Loan Payment Reminder"
+      message: "Your loan payment of %{amount} is due in %{days} days."
+  overdue_payment:
+    title: "Overdue Loan Payment"
+    message: "You have %{count} overdue loan payment(s) totaling %{total}. %{days} days overdue."
+  payment_confirmation:
+    title: "Payment Recorded"
+    message: "Your loan payment of %{amount} has been recorded successfully."
+  loan_fully_paid:
+    title: "Loan Fully Paid!"
+    message: "Congratulations! You have successfully paid off your %{loan_name} loan."
+
+# Feature flags - for gradual rollout and A/B testing
+features:
+  wizard_form:
+    enabled: true
+    description: "Use step-by-step wizard form instead of single page form"
+  sharia_compliance:
+    enabled: true
+    description: "Enable Islamic finance features"
+  extra_payments:
+    enabled: true
+    description: "Allow extra payments beyond scheduled installments"
+  partial_payments:
+    enabled: true
+    description: "Allow partial payments of installments"
+  advanced_calculations:
+    enabled: true
+    description: "Enable advanced payment calculation methods"
+  notifications:
+    enabled: true
+    description: "Enable loan payment notifications and reminders"
+
+# Integration settings - for extensibility
+integrations:
+  rate_providers:
+    enabled: false
+    providers: []
+    cache_ttl: 3600  # 1 hour
+  notification_channels:
+    email:
+      enabled: true
+    sms:
+      enabled: false
+    push:
+      enabled: false
+  export_formats:
+    pdf:
+      enabled: true
+    csv:
+      enabled: true
+    json:
+      enabled: true
+
+# Performance settings
+performance:
+  max_installments_preview: 100
+  calculation_timeout: 30  # seconds
+  cache_ttl:
+    installment_schedules: 300  # 5 minutes
+    payment_calculations: 60    # 1 minute
+    form_configurations: 3600   # 1 hour
