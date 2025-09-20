@@ -132,7 +132,7 @@
                                      label_tooltip: t("loans.tooltips.tenor_months", default: "Total number of payments. Example: 12 means 12 installments."),
                                      placeholder: 12,
                                      "data-loan-form-target": "tenor",
-                                     "data-action": "input->loan-form#termsChanged change->loan-form#termsChanged_code>
+                                     "data-action": "input->loan-form#termsChanged change->loan-form#termsChanged" %>
           <%= loan_form.select :payment_frequency,
                                 loan_payment_frequency_options,
                                 { label: "Payment frequency", label_tooltip: t("loans.tooltips.payment_frequency", default: "How often you make payments (monthly, weekly, etc.).") },
