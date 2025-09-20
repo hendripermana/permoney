@@ -1,7 +1,9 @@
-<%# locals: (account:, url:, form_prefix: nil, form_data: nil) %>
+<%# locals: (account:, url:, form_prefix: nil, form_data: nil, hide_account_fields: false, hide_submit: false) %>
 
 <% form_prefix = local_assigns[:form_prefix] %>
 <% custom_form_data = local_assigns[:form_data] %>
+<% hide_account_fields = local_assigns.fetch(:hide_account_fields, false) %>
+<% hide_submit = local_assigns.fetch(:hide_submit, false) %>
 
 <% if @error_message.present? %>
   <%= render DS::Alert.new(message: @error_message, variant: :error) %>
@@ -16,14 +18,23 @@
 
     <%= form_prefix.call(form) if form_prefix.respond_to?(:call) %>
 
-    <%= form.text_field :name, placeholder: t(".name_placeholder"), required: "required", label: t(".name_label") %>
+    <% unless hide_account_fields %>
+      <%= form.text_field :name, placeholder: t(".name_placeholder"), required: "required", label: t(".name_label") %>
 
-    <% unless account.linked? %>
-      <%= form.money_field :balance, label: t(".balance"), required: true, default_currency: Current.family.currency %>
+      <% unless account.linked? %>
+        <%= form.money_field :balance,
+                             label: t(".balance"),
+                             required: true,
+                             default_currency: Current.family.currency,
+                             label_tooltip: (account.accountable_type == "Loan" ? t("loans.form.current_balance.tooltip", default: "Sisa pokok pinjaman saat ini. Gunakan ini jika Anda mulai mencatat pinjaman yang sudah berjalan.") : nil),
+                             data: (account.accountable_type == "Loan" ? { "loan-form-target": "currentBalance" } : {}) %>
+      <% end %>
     <% end %>
 
     <%= yield form %>
   </div>
 
-  <%= form.submit %>
+  <% unless hide_submit %>
+    <%= form.submit %>
+  <% end %>
 <% end %>

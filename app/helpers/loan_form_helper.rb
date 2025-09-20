@@ -624,6 +624,30 @@ module LoanFormHelper
       }
     }
 
+    # Inject default tooltips for technical fields
+    tooltips = {
+      start_date: t("loans.tooltips.start_date", default: "Tanggal mulai jadwal cicilan dihitung."),
+      tenor_months: t("loans.tooltips.tenor_months", default: "Jumlah periode cicilan. Contoh: 12 berarti 12 kali pembayaran."),
+      payment_frequency: t("loans.tooltips.payment_frequency", default: "Frekuensi pembayaran cicilan (bulanan, mingguan, dll)."),
+      disbursement_account_id: t("loans.tooltips.disbursement_account", default: "Akun tujuan pencairan dana pinjaman."),
+      origination_date: t("loans.tooltips.origination_date", default: "Tanggal pencairan/transfer dana pinjaman."),
+      interest_rate: t("loans.tooltips.interest_rate", default: "Suku bunga nominal per tahun (%)."),
+      rate_type: t("loans.tooltips.rate_type", default: "Jenis suku bunga: Fixed/Variable/Adjustable."),
+      rate_or_profit: t("loans.tooltips.rate_or_profit", default: "Suku/tingkat efektif per tahun (% APR) untuk perhitungan jadwal."),
+      islamic_product_type: t("loans.tooltips.islamic_product_type", default: "Pilih jenis akad Syariah yang sesuai."),
+      margin_rate: t("loans.tooltips.margin_rate", default: "Margin (markup) pada akad Murabaha (% per tahun)."),
+      profit_sharing_ratio: t("loans.tooltips.profit_sharing_ratio", default: "Rasio bagi hasil 0–1 pada Musyarakah/Mudharabah."),
+      installment_amount: t("loans.tooltips.installment_amount", default: "Preferensi nominal cicilan; opsional, tidak selalu diikuti oleh kalkulator."),
+      schedule_method: t("loans.tooltips.schedule_method", default: "Metode perhitungan cicilan: Anuitas/Flat/Efektif/Bullet/Balloon."),
+      balloon_amount: t("loans.tooltips.balloon_amount", default: "Nominal pelunasan besar (lump sum) di akhir masa pinjaman.")
+    }
+    tooltips.each do |field, tip|
+      next unless base[field]
+      cfg = base[field].dup
+      cfg[:label_tooltip] ||= tip
+      base[field] = cfg
+    end
+
     # Overlay YAML-driven configuration (no hardcode)
     base.keys.each do |field_name|
       yml = LoanConfigurationService.field_config(field_name)

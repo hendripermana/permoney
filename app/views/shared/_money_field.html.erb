@@ -60,7 +60,7 @@
           data: {
             "money-field-target": "amount",
             "auto-submit-form-target": ("auto" if options[:auto_submit])
-          }.compact,
+          }.compact.merge(options[:data] || {}),
           required: options[:required] %>
       </div>
 

@@ -92,12 +92,25 @@ class Loan::FormComponent < ViewComponent::Base
     def loan_terms_section
       section_wrapper(title: t(".loan_terms.title"), subtitle: t(".loan_terms.subtitle")) do
         safe_join([
+          existing_loan_toggle,
           principal_and_date_fields,
           help_text(t(".loan_terms.principal_help")),
           tenor_and_frequency_fields,
           (disbursement_fields unless imported?)
         ].compact)
       end
+    end
+
+    # Inform the user about current vs initial balance distinction.
+    # Current balance is edited in the account section above (outside the wizard component),
+    # while Initial balance lives in this step and represents the original principal at start.
+    def existing_loan_toggle
+      help_text(
+        t(
+          ".existing_loan.help",
+          default: "Jika Anda sudah punya pinjaman yang sedang berjalan, isi Current balance (sisa hutang saat ini) pada bagian atas. Initial balance adalah jumlah saat pinjaman dimulai."
+        )
+      )
     end
 
     def principal_and_date_fields
