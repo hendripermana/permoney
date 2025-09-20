@@ -20,6 +20,7 @@ class Demo::DataCleaner
       Budget.delete_all if defined?(Budget)
       Category.delete_all if defined?(Category)
       Subscription.delete_all if defined?(Subscription)
+      Session.delete_all if defined?(Session)
       User.delete_all if defined?(User)
 
       # Accounts and their polymorphic dependents
