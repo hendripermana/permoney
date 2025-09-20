@@ -1,7 +1,4 @@
 class Demo::IdrGenerator < Demo::Generator
-  # IDR to USD conversion rate (approximate) - using realistic multiplier for Indonesian context
-  IDR_TO_USD_RATE = 1.5
-
   # Generate comprehensive realistic demo data with IDR currency and Indonesian features
   def generate_idr_data!(skip_clear: false, email: "user@permoney.id")
     if skip_clear
@@ -89,9 +86,6 @@ class Demo::IdrGenerator < Demo::Generator
     end
 
     # Convert USD amounts to realistic IDR amounts
-    def to_idr(usd_amount)
-      (usd_amount * IDR_TO_USD_RATE).round
-    end
 
     # Create Indonesian-specific categories
     def create_indonesian_categories!(family)
@@ -187,7 +181,7 @@ class Demo::IdrGenerator < Demo::Generator
           lending_direction: "lending_out",
           lending_type: "qard_hasan",
           relationship: "family",
-          initial_amount: to_idr(5000),
+          initial_amount: 5_000_000,
           expected_return_date: 6.months.from_now,
           reminder_frequency: "monthly"
         ),
@@ -202,7 +196,7 @@ class Demo::IdrGenerator < Demo::Generator
           lending_direction: "lending_out",
           lending_type: "informal_with_agreement",
           relationship: "friend",
-          initial_amount: to_idr(3000),
+          initial_amount: 3_000_000,
           expected_return_date: 3.months.from_now,
           reminder_frequency: "before_due"
         ),
@@ -217,7 +211,7 @@ class Demo::IdrGenerator < Demo::Generator
           lending_direction: "lending_out",
           lending_type: "interest_free",
           relationship: "colleague",
-          initial_amount: to_idr(2000),
+          initial_amount: 2_000_000,
           expected_return_date: 2.months.from_now,
           reminder_frequency: "weekly"
         ),
@@ -313,12 +307,12 @@ class Demo::IdrGenerator < Demo::Generator
         # Monthly salary payments
         (0..11).each do |month|
           payment_date = year_date + month.months + rand(1..5).days
-          create_transaction!(@bca_checking, -salary_amount, "Gaji Bulanan", @salary_cat, payment_date)
+          create_transaction!(@bca_checking, salary_amount, "Gaji Bulanan", @salary_cat, payment_date)
 
           # THR (Tunjangan Hari Raya) in June and December
           if [ 5, 11 ].include?(month)
             thr_amount = salary_amount * 0.5 # Half month salary
-            create_transaction!(@bca_checking, -thr_amount, "THR", @bonus_cat, payment_date)
+            create_transaction!(@bca_checking, thr_amount, "THR", @bonus_cat, payment_date)
           end
         end
       end
@@ -423,8 +417,8 @@ class Demo::IdrGenerator < Demo::Generator
         # Motor loan
         make_loan_payment!(
           principal_account: @motor_loan,
-          principal_amount: 400_000,
-          interest_amount: 100_000,
+          principal_amount: 400_000, # 400k IDR
+          interest_amount: 100_000, # 100k IDR
           interest_category: @transportation_cat,
           date: payment_date,
           memo: "Cicilan Motor"
@@ -433,8 +427,8 @@ class Demo::IdrGenerator < Demo::Generator
         # Education loan
         make_loan_payment!(
           principal_account: @education_loan,
-          principal_amount: 600_000,
-          interest_amount: 150_000,
+          principal_amount: 600_000, # 600k IDR
+          interest_amount: 150_000, # 150k IDR
           interest_category: @education_cat,
           date: payment_date,
           memo: "Cicilan Pendidikan"
@@ -444,7 +438,7 @@ class Demo::IdrGenerator < Demo::Generator
         if rand > 0.3 # Not every month
           make_loan_payment!(
             principal_account: @loan_from_family,
-            principal_amount: 200_000,
+            principal_amount: 200_000, # 200k IDR
             interest_amount: 0, # Interest-free from family
             interest_category: @family_support_cat,
             date: payment_date,
@@ -455,7 +449,7 @@ class Demo::IdrGenerator < Demo::Generator
         if rand > 0.4 # Not every month
           make_loan_payment!(
             principal_account: @loan_from_friend,
-            principal_amount: 150_000,
+            principal_amount: 150_000, # 150k IDR
             interest_amount: 0, # Interest-free from friend
             interest_category: @family_support_cat,
             date: payment_date,
@@ -467,8 +461,8 @@ class Demo::IdrGenerator < Demo::Generator
         if rand > 0.3 # Not every month
           make_loan_payment!(
             principal_account: @kredivo_loan,
-            principal_amount: 500_000,
-            interest_amount: 150_000,
+            principal_amount: 500_000, # 500k IDR
+            interest_amount: 150_000, # 150k IDR
             interest_category: @interest_cat,
             date: payment_date,
             memo: "Cicilan Kredivo"
@@ -478,8 +472,8 @@ class Demo::IdrGenerator < Demo::Generator
         if rand > 0.4 # Not every month
           make_loan_payment!(
             principal_account: @akulaku_loan,
-            principal_amount: 300_000,
-            interest_amount: 100_000,
+            principal_amount: 300_000, # 300k IDR
+            interest_amount: 100_000, # 100k IDR
             interest_category: @interest_cat,
             date: payment_date,
             memo: "Cicilan Akulaku"
@@ -496,24 +490,20 @@ class Demo::IdrGenerator < Demo::Generator
       lending_date = 6.months.ago.to_date
 
       # Lend money to family member (Qard Hasan)
-      create_transaction!(@bca_checking, to_idr(5_000_000), "Pinjaman ke Ahmad", @family_support_cat, lending_date)
-      create_transfer!(@bca_checking, @lending_to_family, to_idr(5_000_000), "Pinjaman Qard Hasan", lending_date)
+      create_transfer!(@bca_checking, @lending_to_family, 5_000_000, "Pinjaman Qard Hasan", lending_date)
 
       # Lend money to friend
       friend_lending_date = 3.months.ago.to_date
-      create_transaction!(@bca_checking, to_idr(3_000_000), "Pinjaman ke Budi", @family_support_cat, friend_lending_date)
-      create_transfer!(@bca_checking, @lending_to_friend, to_idr(3_000_000), "Pinjaman ke Teman", friend_lending_date)
+      create_transfer!(@bca_checking, @lending_to_friend, 3_000_000, "Pinjaman ke Teman", friend_lending_date)
 
       # Lend money to colleague
       colleague_lending_date = 2.months.ago.to_date
-      create_transaction!(@bca_checking, to_idr(2_000_000), "Pinjaman ke Siti", @family_support_cat, colleague_lending_date)
-      create_transfer!(@bca_checking, @lending_to_colleague, to_idr(2_000_000), "Pinjaman ke Rekan", colleague_lending_date)
+      create_transfer!(@bca_checking, @lending_to_colleague, 2_000_000, "Pinjaman ke Rekan", colleague_lending_date)
 
       # Some partial repayments
       if rand > 0.5
         repayment_date = 1.month.ago.to_date
-        create_transfer!(@lending_to_friend, @bca_checking, to_idr(1_000_000), "Pengembalian dari Budi", repayment_date)
-        create_transaction!(@bca_checking, -to_idr(1_000_000), "Pengembalian Pinjaman", @family_support_cat, repayment_date)
+        create_transfer!(@lending_to_friend, @bca_checking, 1_000_000, "Pengembalian dari Budi", repayment_date)
       end
     end
 
@@ -525,11 +515,11 @@ class Demo::IdrGenerator < Demo::Generator
         entertainment_date = first_business_day(date_cursor)
 
         # Netflix/streaming
-        create_transaction!(@bca_checking, to_idr(150_000), "Netflix", @entertainment_cat, entertainment_date)
+        create_transaction!(@bca_checking, 150_000, "Netflix", @entertainment_cat, entertainment_date)
 
         # Cinema
         if rand > 0.5
-          create_transaction!(@bca_checking, to_idr(100_000), "Bioskop", @entertainment_cat, entertainment_date)
+          create_transaction!(@bca_checking, 100_000, "Bioskop", @entertainment_cat, entertainment_date)
         end
 
         date_cursor = date_cursor.next_month.beginning_of_month
@@ -544,7 +534,7 @@ class Demo::IdrGenerator < Demo::Generator
 
         # Online shopping (Tokopedia, Shopee)
         if rand > 0.3
-          create_transaction!(@bca_checking, to_idr(500_000), "Belanja Online", @shopping_cat, shopping_date)
+          create_transaction!(@bca_checking, 500_000, "Belanja Online", @shopping_cat, shopping_date)
         end
 
         date_cursor = date_cursor.next_month.beginning_of_month
@@ -558,11 +548,11 @@ class Demo::IdrGenerator < Demo::Generator
         healthcare_date = first_business_day(date_cursor)
 
         # BPJS Kesehatan
-        create_transaction!(@bca_checking, to_idr(100_000), "BPJS Kesehatan", @healthcare_cat, healthcare_date)
+        create_transaction!(@bca_checking, 100_000, "BPJS Kesehatan", @healthcare_cat, healthcare_date)
 
         # Doctor visits
         if rand > 0.7
-          create_transaction!(@bca_checking, to_idr(200_000), "Kunjungan Dokter", @healthcare_cat, healthcare_date)
+          create_transaction!(@bca_checking, 200_000, "Kunjungan Dokter", @healthcare_cat, healthcare_date)
         end
 
         date_cursor = date_cursor.next_month.beginning_of_month
@@ -574,7 +564,7 @@ class Demo::IdrGenerator < Demo::Generator
       travel_dates = [ 6.months.ago, 3.months.ago, 1.month.ago ].select { rand > 0.3 }
 
       travel_dates.each do |travel_date|
-        create_transaction!(@bca_checking, to_idr(2_000_000), "Liburan Domestik", @travel_cat, travel_date)
+        create_transaction!(@bca_checking, 2_000_000, "Liburan Domestik", @travel_cat, travel_date)
       end
     end
 
@@ -586,7 +576,7 @@ class Demo::IdrGenerator < Demo::Generator
 
         # Haircut
         if rand > 0.5
-          create_transaction!(@bca_checking, to_idr(50_000), "Potong Rambut", @personal_care_cat, care_date)
+          create_transaction!(@bca_checking, 50_000, "Potong Rambut", @personal_care_cat, care_date)
         end
 
         date_cursor = date_cursor.next_month.beginning_of_month
@@ -601,8 +591,8 @@ class Demo::IdrGenerator < Demo::Generator
 
         # Reksadana investment
         if rand > 0.4
-          create_transaction!(@bca_checking, to_idr(1_000_000), "Investasi Reksadana", @investment_income_cat, investment_date)
-          create_transfer!(@bca_checking, @bibit_investment, to_idr(1_000_000), "Investasi Reksadana", investment_date)
+          create_transaction!(@bca_checking, 1_000_000, "Investasi Reksadana", @investment_income_cat, investment_date)
+          create_transfer!(@bca_checking, @bibit_investment, 1_000_000, "Investasi Reksadana", investment_date)
         end
 
         date_cursor = date_cursor.next_month.beginning_of_month
@@ -612,8 +602,8 @@ class Demo::IdrGenerator < Demo::Generator
     def generate_indonesian_major_purchases!
       # Motor purchase
       motor_date = 2.years.ago.to_date
-      down_payment = 2_000_000 # More realistic down payment
-      motor_loan = 8_000_000 # More realistic motor loan
+      down_payment = 2_000_000 # 2 million IDR down payment
+      motor_loan = 8_000_000 # 8 million IDR motor loan
 
       create_transaction!(@bca_checking, down_payment, "DP Motor", @transportation_cat, motor_date)
       create_transaction!(@motor_loan, motor_loan, "Kredit Motor", nil, motor_date)
@@ -641,7 +631,7 @@ class Demo::IdrGenerator < Demo::Generator
 
         # Credit card payments
         if rand > 0.2
-          cc_amount = to_idr(2_000_000)
+          cc_amount = 2_000_000
           create_transfer!(@bca_checking, @bca_credit, cc_amount, "Pembayaran Credit Card", payment_date)
         end
 
@@ -655,12 +645,12 @@ class Demo::IdrGenerator < Demo::Generator
       while date_cursor <= Date.current
         # Zakat Fitrah (during Ramadan)
         if date_cursor.month == 4 # April (approximate Ramadan)
-          create_transaction!(@bca_checking, to_idr(50_000), "Zakat Fitrah", @zakat_cat, date_cursor)
+          create_transaction!(@bca_checking, 50_000, "Zakat Fitrah", @zakat_cat, date_cursor)
         end
 
         # Monthly infaq
         if rand > 0.3
-          create_transaction!(@bca_checking, to_idr(100_000), "Infaq Masjid", @infaq_cat, date_cursor)
+          create_transaction!(@bca_checking, 100_000, "Infaq Masjid", @infaq_cat, date_cursor)
         end
 
         date_cursor = date_cursor.next_month.beginning_of_month
@@ -670,41 +660,25 @@ class Demo::IdrGenerator < Demo::Generator
     def generate_indonesian_legacy_transactions!
       # Historical transactions for better balance reconciliation
       legacy_date = 5.years.ago.to_date
-      create_transaction!(@bca_checking, -to_idr(10_000_000), "Setoran Awal", @salary_cat, legacy_date)
+      create_transaction!(@bca_checking, -10_000_000, "Setoran Awal", @salary_cat, legacy_date)
     end
 
     def generate_indonesian_crypto_and_misc_assets!
       # Bitcoin investment
       crypto_date = 2.years.ago.to_date
-      create_transaction!(@bca_checking, to_idr(5_000_000), "Beli Bitcoin", @investment_income_cat, crypto_date)
-      create_transfer!(@bca_checking, @indodax_btc, to_idr(5_000_000), "Investasi Bitcoin", crypto_date)
-    end
-
-    # Helper method to create transactions with IDR amounts
-    def create_transaction!(account, amount, description, category, date)
-      # Convert amount to IDR if it's a USD amount
-      idr_amount = amount.is_a?(Numeric) ? to_idr(amount) : amount
-      super(account, idr_amount, description, category, date)
-    end
-
-    # Helper method to create transfers with IDR amounts
-    def create_transfer!(from_account, to_account, amount, description, date)
-      # Convert amount to IDR if it's a USD amount
-      idr_amount = amount.is_a?(Numeric) ? to_idr(amount) : amount
-      super(from_account, to_account, idr_amount, description, date)
+      create_transaction!(@bca_checking, 5_000_000, "Beli Bitcoin", @investment_income_cat, crypto_date)
+      create_transfer!(@bca_checking, @indodax_btc, 5_000_000, "Investasi Bitcoin", crypto_date)
     end
 
     # Helper method to make loan payments with IDR amounts
     def make_loan_payment!(principal_account:, principal_amount:, interest_amount:, interest_category:, date:, memo:)
-      # Convert amounts to IDR if they're USD amounts
-      idr_principal = principal_amount.is_a?(Numeric) ? to_idr(principal_amount) : principal_amount
-      idr_interest = interest_amount.is_a?(Numeric) ? to_idr(interest_amount) : interest_amount
-
       # Principal portion – transfer from BCA checking to loan account
-      create_transfer!(@bca_checking, principal_account, idr_principal, memo, date)
+      create_transfer!(@bca_checking, principal_account, principal_amount, memo, date)
 
       # Interest portion – expense from BCA checking
-      create_transaction!(@bca_checking, idr_interest, "#{memo} Interest", interest_category, date)
+      if interest_amount.positive?
+        create_transaction!(@bca_checking, interest_amount, "#{memo} Interest", interest_category, date)
+      end
     end
 
     # Override reconcile_balances! to use Indonesian accounts
