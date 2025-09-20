@@ -326,6 +326,7 @@ class Demo::IdrGenerator < Demo::Generator
       kpr_principal = 300_000_000 # 300 million IDR KPR (realistic for small house)
 
       create_transaction!(@bca_checking, down_payment, "DP KPR", @housing_cat, kpr_date)
+      create_transaction!(@bca_checking, kpr_principal, "KPR Proceeds", @housing_cat, kpr_date) # Cash received from KPR
       create_transaction!(@kpr_loan, kpr_principal, "KPR Principal", nil, kpr_date)
 
       # Monthly housing expenses
@@ -586,13 +587,15 @@ class Demo::IdrGenerator < Demo::Generator
     def generate_indonesian_investment_transactions!
       date_cursor = 12.months.ago.beginning_of_month
       while date_cursor <= Date.current
-        # Monthly investments
         investment_date = first_business_day(date_cursor)
 
         # Reksadana investment
         if rand > 0.4
-          create_transaction!(@bca_checking, 1_000_000, "Investasi Reksadana", @investment_income_cat, investment_date)
+          # Single transfer to represent the investment cash movement
           create_transfer!(@bca_checking, @bibit_investment, 1_000_000, "Investasi Reksadana", investment_date)
+          # Optionally categorize the outflow side after creation if supported:
+          # outflow = @bca_checking.entries.where(date: investment_date, name: "Investasi Reksadana").last
+          # outflow.entryable.update!(category: @investment_income_cat) if outflow&.transaction?
         end
 
         date_cursor = date_cursor.next_month.beginning_of_month
@@ -606,16 +609,17 @@ class Demo::IdrGenerator < Demo::Generator
       motor_loan = 8_000_000 # 8 million IDR motor loan
 
       create_transaction!(@bca_checking, down_payment, "DP Motor", @transportation_cat, motor_date)
+      create_transaction!(@bca_checking, motor_loan, "Motor Loan Proceeds", @transportation_cat, motor_date) # Cash received from loan
       create_transaction!(@motor_loan, motor_loan, "Kredit Motor", nil, motor_date)
 
-      # Personal loans (pinjam ke orang) - initial borrowing
+      # Personal loans (pinjam dari orang) - initial borrowing
       family_loan_date = 3.years.ago.to_date
       create_transaction!(@bca_checking, 5_000_000, "Pinjaman dari Ibu", @family_support_cat, family_loan_date)
-      create_transfer!(@bca_checking, @loan_from_family, 5_000_000, "Pinjaman dari Ibu", family_loan_date)
+      create_transaction!(@loan_from_family, 5_000_000, "Pinjaman dari Ibu", @family_support_cat, family_loan_date)
 
       friend_loan_date = 2.years.ago.to_date
       create_transaction!(@bca_checking, 3_000_000, "Pinjaman dari Teman", @family_support_cat, friend_loan_date)
-      create_transfer!(@bca_checking, @loan_from_friend, 3_000_000, "Pinjaman dari Teman", friend_loan_date)
+      create_transaction!(@loan_from_friend, 3_000_000, "Pinjaman dari Teman", @family_support_cat, friend_loan_date)
 
       # Gold investment
       gold_date = 1.year.ago.to_date
@@ -683,42 +687,26 @@ class Demo::IdrGenerator < Demo::Generator
 
     # Override reconcile_balances! to use Indonesian accounts
     def reconcile_balances!(family)
-      # Use valuations only for property/vehicle accounts that should have specific values
-      # All other accounts should reach target balances through natural transaction flow
+      set_current_anchor!(@honda_civic, 120_000_000)
+      set_current_anchor!(@yamaha_motor, 15_000_000)
+      set_current_anchor!(@gold_investment, 4_500_000)
+      set_current_anchor!(@indodax_btc, 2_000_000)
+    end
 
-      # Vehicle valuations (these depreciate over time)
-      @honda_civic.entries.create!(
-        entryable: Valuation.new(kind: "current_anchor"),
-        amount: 120_000_000, # 120 million IDR (realistic for used Honda Civic)
-        name: Valuation.build_current_anchor_name(@honda_civic.accountable_type),
-        currency: "IDR",
-        date: Date.current
-      )
+    def set_current_anchor!(account, amount)
+      date = Date.current
+      name = Valuation.build_current_anchor_name(account.accountable_type)
 
-      @yamaha_motor.entries.create!(
-        entryable: Valuation.new(kind: "current_anchor"),
-        amount: 15_000_000, # 15 million IDR (realistic for used NMAX)
-        name: Valuation.build_current_anchor_name(@yamaha_motor.accountable_type),
-        currency: "IDR",
-        date: Date.current
-      )
+      # Remove any existing valuation on the same date to satisfy uniqueness
+      existing = account.entries.where(entryable_type: "Valuation", date: date)
+      existing.destroy_all if existing.exists?
 
-      # Gold investment valuation
-      @gold_investment.entries.create!(
+      account.entries.create!(
         entryable: Valuation.new(kind: "current_anchor"),
-        amount: 4_500_000, # 4.5 million IDR (realistic gold investment)
-        name: Valuation.build_current_anchor_name(@gold_investment.accountable_type),
-        currency: "IDR",
-        date: Date.current
-      )
-
-      # Crypto valuation
-      @indodax_btc.entries.create!(
-        entryable: Valuation.new(kind: "current_anchor"),
-        amount: 2_000_000, # 2 million IDR (realistic crypto investment)
-        name: Valuation.build_current_anchor_name(@indodax_btc.accountable_type),
-        currency: "IDR",
-        date: Date.current
+        amount: amount,
+        name: name,
+        currency: account.currency,
+        date: date
       )
     end
 end
