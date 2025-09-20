@@ -624,22 +624,22 @@ module LoanFormHelper
       }
     }
 
-    # Inject default tooltips for technical fields
+    # Inject default tooltips for technical fields (English defaults; i18n-ready)
     tooltips = {
-      start_date: t("loans.tooltips.start_date", default: "Tanggal mulai jadwal cicilan dihitung."),
-      tenor_months: t("loans.tooltips.tenor_months", default: "Jumlah periode cicilan. Contoh: 12 berarti 12 kali pembayaran."),
-      payment_frequency: t("loans.tooltips.payment_frequency", default: "Frekuensi pembayaran cicilan (bulanan, mingguan, dll)."),
-      disbursement_account_id: t("loans.tooltips.disbursement_account", default: "Akun tujuan pencairan dana pinjaman."),
-      origination_date: t("loans.tooltips.origination_date", default: "Tanggal pencairan/transfer dana pinjaman."),
-      interest_rate: t("loans.tooltips.interest_rate", default: "Suku bunga nominal per tahun (%)."),
-      rate_type: t("loans.tooltips.rate_type", default: "Jenis suku bunga: Fixed/Variable/Adjustable."),
-      rate_or_profit: t("loans.tooltips.rate_or_profit", default: "Suku/tingkat efektif per tahun (% APR) untuk perhitungan jadwal."),
-      islamic_product_type: t("loans.tooltips.islamic_product_type", default: "Pilih jenis akad Syariah yang sesuai."),
-      margin_rate: t("loans.tooltips.margin_rate", default: "Margin (markup) pada akad Murabaha (% per tahun)."),
-      profit_sharing_ratio: t("loans.tooltips.profit_sharing_ratio", default: "Rasio bagi hasil 0–1 pada Musyarakah/Mudharabah."),
-      installment_amount: t("loans.tooltips.installment_amount", default: "Preferensi nominal cicilan; opsional, tidak selalu diikuti oleh kalkulator."),
-      schedule_method: t("loans.tooltips.schedule_method", default: "Metode perhitungan cicilan: Anuitas/Flat/Efektif/Bullet/Balloon."),
-      balloon_amount: t("loans.tooltips.balloon_amount", default: "Nominal pelunasan besar (lump sum) di akhir masa pinjaman.")
+      start_date: t("loans.tooltips.start_date", default: "The start date used to calculate your repayment schedule."),
+      tenor_months: t("loans.tooltips.tenor_months", default: "Total number of payments. Example: 12 means 12 installments."),
+      payment_frequency: t("loans.tooltips.payment_frequency", default: "How often you make payments (monthly, weekly, etc.)."),
+      disbursement_account_id: t("loans.tooltips.disbursement_account", default: "The cash/bank account where the loan was disbursed."),
+      origination_date: t("loans.tooltips.origination_date", default: "The date when the funds were disbursed/transferred."),
+      interest_rate: t("loans.tooltips.interest_rate", default: "Nominal annual interest rate (%)."),
+      rate_type: t("loans.tooltips.rate_type", default: "Choose whether the rate is Fixed, Variable, or Adjustable."),
+      rate_or_profit: t("loans.tooltips.rate_or_profit", default: "APR used for schedule calculations (effective annual percentage rate)."),
+      islamic_product_type: t("loans.tooltips.islamic_product_type", default: "Choose the Sharia contract type that applies."),
+      margin_rate: t("loans.tooltips.margin_rate", default: "Markup (margin) for Murabaha contracts (% per year)."),
+      profit_sharing_ratio: t("loans.tooltips.profit_sharing_ratio", default: "Sharing ratio 0–1 for Musyarakah/Mudharabah."),
+      installment_amount: t("loans.tooltips.installment_amount", default: "Your preferred payment amount; optional and not always enforced by the calculator."),
+      schedule_method: t("loans.tooltips.schedule_method", default: "How each installment is calculated: Annuity/Flat/Effective/Bullet/Balloon."),
+      balloon_amount: t("loans.tooltips.balloon_amount", default: "A larger final lump-sum payment at the end of the term.")
     }
     tooltips.each do |field, tip|
       next unless base[field]

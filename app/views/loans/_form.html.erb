@@ -24,7 +24,7 @@
 <% # Use wizard for new loans, traditional form for existing loans %>
 <% use_wizard = account.new_record? %>
 
-<%= render "accounts/form", account: account, url: url, form_prefix: (use_wizard ? nil : loan_form_prefix), form_data: preview_form_data, hide_submit: use_wizard do |form| %>
+<%= render "accounts/form", account: account, url: url, form_prefix: (use_wizard ? nil : loan_form_prefix), form_data: preview_form_data, hide_submit: use_wizard, hide_account_fields: use_wizard do |form| %>
   <%= render "shared/ruler", classes: "my-4" %>
 
   <div class="space-y-6">
@@ -54,6 +54,26 @@
           loan_type: debt_kind,
           show_preview: borrowed_enabled
         ) %>
+
+        <%= render "shared/ruler", classes: "my-4" %>
+
+        <section class="space-y-3">
+          <h3 class="text-primary font-medium">Account details</h3>
+          <p class="text-xs text-secondary">Tell us how you want this loan account to appear on your dashboard.</p>
+          <div class="space-y-2">
+            <%= form.text_field :name,
+                                label: t("accounts.form.name_label", default: "Account name"),
+                                placeholder: t("accounts.form.name_placeholder", default: "e.g., Personal loan, Mortgage, BCA Loan") %>
+            <% unless account.linked? %>
+              <%= form.money_field :balance,
+                                   label: t("accounts.form.balance", default: "Current balance"),
+                                   required: true,
+                                   default_currency: Current.family.currency,
+                                   label_tooltip: t("loans.form.current_balance.tooltip", default: "Outstanding principal right now. Use this when you start tracking a loan that already existed."),
+                                   data: { "loan-form-target": "currentBalance" } %>
+            <% end %>
+          </div>
+        </section>
       <% else %>
         <section class="space-y-3">
           <h3 class="text-primary font-medium">Lender details</h3>
@@ -101,7 +121,7 @@
                                    "data-action": "input->loan-form#termsChanged change->loan-form#termsChanged" %>
           <%= loan_form.date_field :start_date,
                                    label: "Start date",
-                                   label_tooltip: t("loans.tooltips.start_date", default: "Tanggal mulai jadwal cicilan dihitung."),
+                                   label_tooltip: t("loans.tooltips.start_date", default: "The start date used to calculate your repayment schedule."),
                                    value: (loan_form.object.start_date || (Date.current >> 1)),
                                    data: { "loan-form-target": "startDate", action: "change->loan-form#termsChanged" } %>
         </div>
@@ -109,13 +129,13 @@
         <div class="grid gap-2 md:grid-cols-2">
           <%= loan_form.number_field :tenor_months,
                                      label: "Number of installments",
-                                     label_tooltip: t("loans.tooltips.tenor_months", default: "Jumlah periode cicilan. Contoh: 12 berarti 12 kali pembayaran."),
+                                     label_tooltip: t("loans.tooltips.tenor_months", default: "Total number of payments. Example: 12 means 12 installments."),
                                      placeholder: 12,
                                      "data-loan-form-target": "tenor",
-                                     "data-action": "input->loan-form#termsChanged change->loan-form#termsChanged" %>
+                                     "data-action": "input->loan-form#termsChanged change->loan-form#termsChanged_code>
           <%= loan_form.select :payment_frequency,
                                 loan_payment_frequency_options,
-                                { label: "Payment frequency", label_tooltip: t("loans.tooltips.payment_frequency", default: "Frekuensi pembayaran cicilan (bulanan, mingguan, dll).") },
+                                { label: "Payment frequency", label_tooltip: t("loans.tooltips.payment_frequency", default: "How often you make payments (monthly, weekly, etc.).") },
                                 { "data-loan-form-target": "frequency", "data-action": "change->loan-form#termsChanged" } %>
         </div>
         <% unless form.object.import&.present? || loan_form.object.imported %>
@@ -123,9 +143,9 @@
             <%= loan_form.collection_select :disbursement_account_id,
                                             Current.family.accounts.assets.alphabetically,
                                             :id, :name,
-                                            { label: "Destination account", required: true, label_tooltip: t("loans.tooltips.disbursement_account", default: "Akun tujuan pencairan dana pinjaman.") },
+                                            { label: "Destination account", required: true, label_tooltip: t("loans.tooltips.disbursement_account", default: "The cash/bank account where the loan was disbursed.") },
                                             { required: true } %>
-            <%= loan_form.date_field :origination_date, label: "Transfer date", label_tooltip: t("loans.tooltips.origination_date", default: "Tanggal pencairan/transfer dana pinjaman."), value: (loan_form.object.origination_date || Date.current) %>
+            <%= loan_form.date_field :origination_date, label: "Transfer date", label_tooltip: t("loans.tooltips.origination_date", default: "The date when the funds were disbursed/transferred."), value: (loan_form.object.origination_date || Date.current) %>
           </div>
           <p class="text-xs text-secondary">Select the cash or bank account where the loan amount was deposited. This increases that account to mirror the real transaction.</p>
         <% end %>
@@ -149,17 +169,17 @@
           <div class="grid gap-2 md:grid-cols-2">
             <%= loan_form.number_field :interest_rate,
                                      label: "Interest rate (%)",
-                                     label_tooltip: t("loans.tooltips.interest_rate", default: "Suku bunga nominal per tahun (%)."),
+                                     label_tooltip: t("loans.tooltips.interest_rate", default: "Nominal annual interest rate (%)."),
                                      placeholder: "5.25",
                                      min: 0,
                                      step: 0.005 %>
             <%= loan_form.select :rate_type,
                                  [["Fixed", "fixed"], ["Variable", "variable"], ["Adjustable", "adjustable"]],
-                                 { label: t("loans.form.rate_type"), label_tooltip: t("loans.tooltips.rate_type", default: "Jenis suku bunga: Fixed/Variable/Adjustable.") } %>
+                                 { label: t("loans.form.rate_type", default: "Rate type"), label_tooltip: t("loans.tooltips.rate_type", default: "Choose whether the rate is Fixed, Variable, or Adjustable.") } %>
           </div>
           <%= loan_form.number_field :rate_or_profit,
                                      label: "Effective annual rate (%)",
-                                     label_tooltip: t("loans.tooltips.rate_or_profit", default: "Suku/tingkat efektif per tahun (% APR) untuk perhitungan jadwal."),
+                                     label_tooltip: t("loans.tooltips.rate_or_profit", default: "APR used for schedule calculations (effective annual percentage rate)."),
                                      step: 0.001,
                                      min: 0,
                                      placeholder: 10,
@@ -177,14 +197,14 @@
                                   ["Ijarah (Leasing)", "ijarah"],
                                   ["Qard Hasan (Interest-free)", "qard_hasan"]
                                 ],
-                                { label: "Islamic product", include_blank: "Select Islamic product...", label_tooltip: t("loans.tooltips.islamic_product_type", default: "Pilih jenis akad Syariah yang sesuai.") },
+                                { label: "Islamic product", include_blank: "Select Islamic product...", label_tooltip: t("loans.tooltips.islamic_product_type", default: "Choose the Sharia contract type that applies.") },
                                 { "data-loan-form-target": "islamicProduct", "data-action": "change->loan-form#onIslamicProductChange" } %>
           <div class="grid gap-2 md:grid-cols-2">
             <% show_margin = loan_form.object.islamic_product_type == 'murabaha' %>
             <div data-loan-form-target="marginField" class="<%= show_margin ? '' : 'hidden' %>">
               <%= loan_form.number_field :margin_rate,
                                        label: "Margin rate (%)",
-                                       label_tooltip: t("loans.tooltips.margin_rate", default: "Margin (markup) pada akad Murabaha (% per tahun)."),
+                                       label_tooltip: t("loans.tooltips.margin_rate", default: "Markup (margin) for Murabaha contracts (% per year)."),
                                        placeholder: "3.50",
                                        min: 0,
                                        step: 0.005 %>
@@ -193,7 +213,7 @@
             <div data-loan-form-target="profitShareField" class="<%= show_profit ? '' : 'hidden' %>">
               <%= loan_form.number_field :profit_sharing_ratio,
                                        label: "Profit sharing ratio",
-                                       label_tooltip: t("loans.tooltips.profit_sharing_ratio", default: "Rasio bagi hasil 0–1 pada Musyarakah/Mudharabah."),
+                                       label_tooltip: t("loans.tooltips.profit_sharing_ratio", default: "Sharing ratio 0–1 for Musyarakah/Mudharabah."),
                                        placeholder: "0.60",
                                        min: 0,
                                        max: 1,
@@ -240,7 +260,7 @@
           <div class="grid gap-2 md:grid-cols-2">
             <%= loan_form.money_field :installment_amount,
                                       label: "Preferred installment amount (optional)",
-                                      label_tooltip: t("loans.tooltips.installment_amount", default: "Preferensi nominal cicilan; opsional, tidak selalu diikuti oleh kalkulator."),
+                                      label_tooltip: t("loans.tooltips.installment_amount", default: "Your preferred payment amount; optional and not always enforced by the calculator."),
                                       default_currency: Current.family.currency,
                                       data: { action: "input->loan-form#termsChanged change->loan-form#termsChanged" } %>
           </div>
@@ -248,11 +268,11 @@
           <div class="grid gap-2 md:grid-cols-2">
             <%= loan_form.select :schedule_method,
                                   calculation_options,
-                                  { label: "Payment calculation method", label_tooltip: t("loans.tooltips.schedule_method", default: "Metode perhitungan cicilan: Anuitas/Flat/Efektif/Bullet/Balloon.") },
+                                  { label: "Payment calculation method", label_tooltip: t("loans.tooltips.schedule_method", default: "How each installment is calculated: Annuity/Flat/Effective/Bullet/Balloon.") },
                                   { "data-loan-form-target": "method", "data-action": "change->loan-form#termsChanged" } %>
             <%= loan_form.money_field :balloon_amount,
                                      label: "Balloon payment (optional)",
-                                     label_tooltip: t("loans.tooltips.balloon_amount", default: "Nominal pelunasan besar (lump sum) di akhir masa pinjaman."),
+                                     label_tooltip: t("loans.tooltips.balloon_amount", default: "A larger final lump-sum payment at the end of the term."),
                                      default_currency: Current.family.currency,
                                      aria: { describedby: "balloon_help" },
                                      data: { action: "input->loan-form#termsChanged change->loan-form#termsChanged" } %>

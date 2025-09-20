@@ -26,7 +26,7 @@
                              label: t(".balance"),
                              required: true,
                              default_currency: Current.family.currency,
-                             label_tooltip: (account.accountable_type == "Loan" ? t("loans.form.current_balance.tooltip", default: "Sisa pokok pinjaman saat ini. Gunakan ini jika Anda mulai mencatat pinjaman yang sudah berjalan.") : nil),
+                             label_tooltip: (account.accountable_type == "Loan" ? t("loans.form.current_balance.tooltip", default: "Outstanding principal right now. Use this when you start tracking a loan that already existed.") : nil),
                              data: (account.accountable_type == "Loan" ? { "loan-form-target": "currentBalance" } : {}) %>
       <% end %>
     <% end %>

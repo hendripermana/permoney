@@ -108,7 +108,7 @@ class Loan::FormComponent < ViewComponent::Base
       help_text(
         t(
           ".existing_loan.help",
-          default: "Jika Anda sudah punya pinjaman yang sedang berjalan, isi Current balance (sisa hutang saat ini) pada bagian atas. Initial balance adalah jumlah saat pinjaman dimulai."
+          default: "If you are onboarding an already-running loan, set the Current balance (outstanding principal today) in the account section below. Initial balance is the amount when the loan originally started."
         )
       )
     end
@@ -702,17 +702,14 @@ class Loan::FormComponent < ViewComponent::Base
     end
 
     def wizard_content
+      # Render all steps with data-step-content so the Stimulus controller can toggle visibility
       content_tag :div, class: "min-h-[400px]" do
-        case current_step
-        when :type
-          render_step_type
-        when :basic
-          render_step_basic
-        when :terms
-          render_step_terms
-        when :review
-          render_step_review
-        end
+        safe_join([
+          content_tag(:div, render_step_type, data: { step_content: "type" }, style: (current_step == :type ? "" : "display:none;")),
+          content_tag(:div, render_step_basic, data: { step_content: "basic" }, style: (current_step == :basic ? "" : "display:none;")),
+          content_tag(:div, render_step_terms, data: { step_content: "terms" }, style: (current_step == :terms ? "" : "display:none;")),
+          content_tag(:div, render_step_review, data: { step_content: "review" }, style: (current_step == :review ? "" : "display:none;"))
+        ])
       end
     end
 
@@ -726,7 +723,7 @@ class Loan::FormComponent < ViewComponent::Base
     end
 
     def step_indicator(step)
-      content_tag :div, class: wizard_helper.step_classes(step, current_step, completed_steps) do
+      content_tag :div, class: wizard_helper.step_classes(step, current_step, completed_steps), data: { step: step[:key] } do
         safe_join([
           icon(step[:icon], size: "sm"),
           content_tag(:span, step[:title])
@@ -944,7 +941,7 @@ class Loan::FormComponent < ViewComponent::Base
     def next_button
       render DS::Button.new(
         text: button_text,
-        data: { action: "click->loan-wizard#nextStep" }
+        data: { action: "click->loan-wizard#nextOrSubmit" }
       )
     end
 

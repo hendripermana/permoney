@@ -47,6 +47,21 @@ export default class LoanWizardController extends Controller {
     }
   }
 
+  nextOrSubmit() {
+    if (this.currentStepValue === 'review') {
+      this.submitForm();
+    } else {
+      this.nextStep();
+    }
+  }
+
+  submitForm() {
+    const form = this.element.closest('form');
+    if (form && this.validateCurrentStep()) {
+      form.requestSubmit ? form.requestSubmit() : form.submit();
+    }
+  }
+
   updateUI() {
     this.updateStepIndicators();
     this.updateContentVisibility();
@@ -80,7 +95,7 @@ export default class LoanWizardController extends Controller {
 
   updateActionButtons() {
     const backBtn = this.element.querySelector('[data-action*="previousStep"]');
-    const nextBtn = this.element.querySelector('[data-action*="nextStep"]');
+    const nextBtn = this.element.querySelector('[data-action*="nextOrSubmit"]');
 
     if (backBtn) {
       backBtn.style.display = this.currentStepValue === 'type' ? 'none' : 'inline-flex';
