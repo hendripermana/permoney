@@ -904,8 +904,20 @@ class Loan::FormComponent < ViewComponent::Base
       end
     end
 
+    # Whether to display the smart rate suggestion info box
+    def show_rate_suggestion?
+      current_step == :terms
+    end
+
+    # Human text for the rate suggestion, computed from component state
     def rate_suggestion_text
-      wizard_helper.rate_suggestion_for(loan_type, loan)
+      if sharia_mode?
+        t("loans.wizard.rate_suggestion.sharia")
+      elsif personal_mode?
+        t("loans.wizard.rate_suggestion.personal")
+      else
+        t("loans.wizard.rate_suggestion.institutional")
+      end
     end
 
     def loan_summary
