@@ -894,7 +894,8 @@ class Loan::FormComponent < ViewComponent::Base
     end
 
     def smart_rate_suggestion
-      return unless show_rate_suggestion?
+      # Keep simple and robust: only show on the 'terms' step
+      return unless current_step == :terms
 
       content_tag :div, class: "bg-green-50 border border-green-200 rounded-lg p-4" do
         safe_join([
