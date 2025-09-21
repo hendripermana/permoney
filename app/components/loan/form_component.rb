@@ -22,12 +22,12 @@ class Loan::FormComponent < ViewComponent::Base
   end
 
   def render_wizard_form
-    content_tag :div, class: "loan-wizard", data: wizard_stimulus_data do
+    Rails.logger.debug "Rendering wizard form with current_step: #{current_step}"
+    content_tag :div, class: "loan-wizard space-y-6", data: wizard_stimulus_data do
       safe_join([
-        wizard_header,
-        wizard_steps,
-        wizard_content,
-        wizard_actions
+        render_wizard_header,
+        render_wizard_content,
+        render_wizard_navigation
       ])
     end
   end
@@ -50,7 +50,7 @@ class Loan::FormComponent < ViewComponent::Base
       section_wrapper(title: t(".lender_details.title")) do
         safe_join([
           render_field(:counterparty_name, field_config(:counterparty_name)),
-          conditional_fields(:personal_mode?, personal_loan_fields),
+          conditional_fields(:personal_loan?, personal_loan_fields),
           conditional_fields(:institutional_mode?, institutional_loan_fields)
         ])
       end
@@ -133,7 +133,7 @@ class Loan::FormComponent < ViewComponent::Base
 
     def disbursement_fields
       # For personal loans, disbursement account is optional
-      return if personal_mode? && available_accounts.empty?
+      return if loan.personal_loan? && available_accounts.empty?
 
       content_tag :div do
         safe_join([
@@ -310,119 +310,215 @@ class Loan::FormComponent < ViewComponent::Base
 
     # Helper method delegates with fallbacks
     def render_field(field_name, config)
-      return text_field(field_name, config) if respond_to?(:text_field)
-      return form.text_field(field_name, **config) if form.respond_to?(:text_field)
+      cfg = normalized_config(config)
+      return text_field(field_name, cfg) if respond_to?(:text_field)
+      return form.text_field(field_name, **builder_options(cfg)) if form&.respond_to?(:text_field)
 
-      # Fallback HTML
-      "<input type=\"text\" name=\"#{field_name}\" value=\"#{config[:value]}\" class=\"w-full px-3 py-2 border border-secondary rounded-lg\" #{config.except(:label, :value).map { |k, v| "#{k}=\"#{v}\"" }.join(' ')}>"
+      html_options = fallback_input_options(field_name, cfg)
+      tag.input(**html_options.merge(type: "text", name: loan_param(field_name), value: cfg[:value]).compact)
     end
 
     def render_money_field(field_name, config)
-      return money_field(field_name, config) if respond_to?(:money_field)
+      cfg = normalized_config(config)
+      return money_field(field_name, cfg) if respond_to?(:money_field)
 
       currency = Current.family&.currency || "USD"
-      "<input type=\"number\" name=\"#{field_name}\" value=\"#{config[:value]}\" step=\"0.01\" min=\"0\" class=\"w-full px-3 py-2 border border-secondary rounded-lg\" data-currency=\"#{currency}\">"
+      html_options = fallback_input_options(field_name, cfg, default_classes: "form-input flex-1")
+      label_text = cfg[:label] || field_name.to_s.humanize
+
+      content_tag :div, class: "space-y-2" do
+        safe_join([
+          content_tag(:label, label_text,
+                     class: "block text-sm font-medium text-primary",
+                     for: html_options[:id]),
+          content_tag(:div, class: "flex items-center gap-2") do
+            data_attrs = merge_currency_data(html_options.delete(:data), currency)
+            number_input = tag.input(**html_options.merge(type: "number",
+                                                         name: loan_param(field_name),
+                                                         value: cfg[:value],
+                                                         step: cfg[:step] || "0.01",
+                                                         min: cfg[:min] || "0",
+                                                         placeholder: cfg[:placeholder] || "0.00",
+                                                         data: data_attrs).compact)
+
+            safe_join([
+              content_tag(:span, currency_symbol(currency),
+                         class: "text-sm text-secondary px-2 py-1 bg-surface border border-secondary rounded-l-lg"),
+              number_input
+            ])
+          end
+        ].compact)
+      end
     end
 
     def render_number_field(field_name, config)
-      return number_field(field_name, config) if respond_to?(:number_field)
-      return form.number_field(field_name, **config) if form.respond_to?(:number_field)
+      cfg = normalized_config(config)
+      return number_field(field_name, cfg) if respond_to?(:number_field)
+      return form.number_field(field_name, **builder_options(cfg)) if form&.respond_to?(:number_field)
 
-      "<input type=\"number\" name=\"#{field_name}\" value=\"#{config[:value]}\" class=\"w-full px-3 py-2 border border-secondary rounded-lg\" #{config.except(:label, :value).map { |k, v| "#{k}=\"#{v}\"" }.join(' ')}>"
+      html_options = fallback_input_options(field_name, cfg)
+      label_text = cfg[:label] || field_name.to_s.humanize
+
+      content_tag :div, class: "space-y-2" do
+        safe_join([
+          content_tag(:label, label_text,
+                     class: "block text-sm font-medium text-primary",
+                     for: html_options[:id]),
+          tag.input(**html_options.merge(type: "number",
+                                        name: loan_param(field_name),
+                                        value: cfg[:value],
+                                        placeholder: cfg[:placeholder]).compact)
+        ])
+      end
     end
 
     def render_date_field(field_name, config)
-      return date_field(field_name, config) if respond_to?(:date_field)
-      return form.date_field(field_name, **config) if form.respond_to?(:date_field)
+      cfg = normalized_config(config)
+      return date_field(field_name, cfg) if respond_to?(:date_field)
+      return form.date_field(field_name, **builder_options(cfg)) if form&.respond_to?(:date_field)
 
-      "<input type=\"date\" name=\"#{field_name}\" value=\"#{config[:value]}\" class=\"w-full px-3 py-2 border border-secondary rounded-lg\" #{config.except(:label, :value).map { |k, v| "#{k}=\"#{v}\"" }.join(' ')}>"
+      html_options = fallback_input_options(field_name, cfg)
+      label_text = cfg[:label] || field_name.to_s.humanize
+
+      content_tag :div, class: "space-y-2" do
+        safe_join([
+          content_tag(:label, label_text,
+                     class: "block text-sm font-medium text-primary",
+                     for: html_options[:id]),
+          content_tag(:div, class: "relative") do
+            safe_join([
+              tag.input(**html_options.merge(type: "date",
+                                             name: loan_param(field_name),
+                                             value: cfg[:value]).compact),
+              content_tag(:div, class: "absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none") do
+                icon("calendar", size: :sm, class: "text-secondary")
+              end
+            ])
+          end
+        ])
+      end
     end
 
     def render_select(field_name, options, config)
-      # Prefer form builder when available
-      if form && form.respond_to?(:select)
+      if form&.respond_to?(:select)
         opts_cfg, html_cfg = split_select_config(config)
         return form.select(field_name, options || [], opts_cfg, html_cfg)
       end
 
-      opts = Array(options).compact
-      cfg = (config || {})
-      include_blank = cfg[:include_blank]
-      html_attrs = cfg.except(:label, :value, :options, :include_blank, :label_tooltip)
+      cfg = normalized_config(config)
+      options_cfg, html_cfg = split_select_config(cfg)
+      html_options = fallback_input_options(field_name, html_cfg, default_classes: "form-input w-full")
 
-      select_html = "<select name=\"#{field_name}\" class=\"w-full px-3 py-2 border border-secondary rounded-lg\" #{html_attrs.map { |k, v| "#{k}=\"#{v}\"" }.join(' ')}>"
-      if include_blank
-        blank_label = include_blank == true ? "" : include_blank
-        select_html << "<option value=\"\">#{blank_label}</option>"
+      selected_value = options_cfg[:selected] || cfg[:value]
+      option_tags = options_for_select(Array(options).compact, selected_value)
+      if options_cfg[:include_blank] || options_cfg[:prompt]
+        blank_label = options_cfg[:prompt] || (options_cfg[:include_blank] == true ? "" : options_cfg[:include_blank])
+        option_tags = content_tag(:option, blank_label, value: "") + option_tags
       end
 
-      select_html << opts.map do |opt|
-        if opt.is_a?(Array)
-          label, value = opt[0], opt[1]
-        else
-          label = value = opt
-        end
-        selected = (value.to_s == cfg[:value].to_s) ? "selected" : ""
-        "<option value=\"#{value}\" #{selected}>#{label}</option>"
-      end.join
-
-      select_html << "</select>"
-      select_html
+      content_tag(:select, option_tags,
+                  **html_options.merge(name: loan_param(field_name)))
     end
 
     def split_select_config(config)
-      cfg = (config || {})
-      option_keys = [:label, :label_tooltip, :include_blank, :prompt, :selected, :required]
+      cfg = normalized_config(config)
+      option_keys = [ :label, :label_tooltip, :include_blank, :prompt, :selected, :required ]
       [ cfg.slice(*option_keys), cfg.except(*option_keys) ]
     end
 
     def render_collection_select(field_name, collection, config)
-      # Prefer form builder when available
-      if form && form.respond_to?(:collection_select)
+      if form&.respond_to?(:collection_select)
         opts_cfg, html_cfg = split_select_config(config)
         return form.collection_select(field_name, collection || [], :id, :name, opts_cfg, html_cfg)
       end
 
-      col = Array(collection).compact
-      cfg = (config || {})
-      html_options = cfg[:html_options] || {}
-      options_cfg = cfg[:options] || {}
+      cfg = normalized_config(config)
+      options_cfg, html_cfg = split_select_config(cfg)
+      html_options = fallback_input_options(field_name, html_cfg, default_classes: "form-input w-full")
 
-      "<select name=\"#{field_name}\" class=\"w-full px-3 py-2 border border-secondary rounded-lg\" #{html_options.map { |k, v| "#{k}=\"#{v}\"" }.join(' ')}>" +
-        col.map do |item|
-          value = item.respond_to?(:id) ? item.id : item.to_s
-          text = item.respond_to?(:name) ? item.name : item.to_s
-          selected = value.to_s == options_cfg[:selected].to_s ? "selected" : ""
-          "<option value=\"#{value}\" #{selected}>#{text}</option>"
-        end.join +
-        "</select>"
+      selected_value = options_cfg[:selected] || cfg[:value]
+      option_tags = options_from_collection_for_select(Array(collection).compact, :id, :name, selected_value)
+      if options_cfg[:include_blank] || options_cfg[:prompt]
+        blank_label = options_cfg[:prompt] || (options_cfg[:include_blank] == true ? "" : options_cfg[:include_blank])
+        option_tags = content_tag(:option, blank_label, value: "") + option_tags
+      end
+
+      content_tag(:select, option_tags,
+                  **html_options.merge(name: loan_param(field_name)))
     end
 
     def render_textarea(field_name, config)
-      return text_area(field_name, config) if respond_to?(:text_area)
-      return form.text_area(field_name, **config) if form.respond_to?(:text_area)
+      cfg = normalized_config(config)
+      return text_area(field_name, cfg) if respond_to?(:text_area)
+      return form.text_area(field_name, **builder_options(cfg)) if form&.respond_to?(:text_area)
 
-      "<textarea name=\"#{field_name}\" class=\"w-full px-3 py-2 border border-secondary rounded-lg\" #{config.except(:label, :value).map { |k, v| "#{k}=\"#{v}\"" }.join(' ')}>#{config[:value]}</textarea>"
+      html_options = fallback_input_options(field_name, cfg, default_classes: "form-input w-full")
+      content_tag(:textarea, cfg[:value],
+                  **html_options.merge(name: loan_param(field_name)))
     end
 
     def render_toggle(field_name, config)
-      return toggle(field_name, config) if respond_to?(:toggle)
-      return form.toggle(field_name, **config) if form.respond_to?(:toggle)
+      cfg = normalized_config(config)
+      return toggle(field_name, cfg) if respond_to?(:toggle)
+      return form.toggle(field_name, **builder_options(cfg)) if form&.respond_to?(:toggle)
 
-      "<input type=\"checkbox\" name=\"#{field_name}\" value=\"1\" #{config[:checked] ? 'checked' : ''} class=\"rounded border-gray-300 text-primary focus:ring-primary\">"
+      html_options = fallback_input_options(field_name, cfg, default_classes: "rounded border-secondary")
+      checked_flag = cfg[:checked] ? "checked" : nil
+      tag.input(**html_options.merge(type: "checkbox",
+                                     name: loan_param(field_name),
+                                     value: "1",
+                                     checked: checked_flag).compact)
     end
 
-    # State predicates
-    def personal_mode?
-      loan_mode_helper.personal_mode?(loan)
+    def render_radio_button(field_name, value, config = {})
+      cfg = normalized_config(config)
+      return form.radio_button(field_name, value, **builder_options(cfg)) if form&.respond_to?(:radio_button)
+
+      id = cfg.delete(:id) || "loan_#{field_name}_#{value}"
+      class_name = cfg.delete(:class)
+      data_attrs = cfg.delete(:data)
+      checked_flag = cfg.delete(:checked)
+
+      attributes = {
+        type: "radio",
+        name: loan_param(field_name),
+        id: id,
+        value: value
+      }
+
+      attributes[:class] = class_name if class_name.present?
+      attributes[:data] = normalize_data_attributes(data_attrs) if data_attrs.present?
+      attributes[:checked] = "checked" if checked_flag
+
+      attributes.merge!(cfg)
+
+      tag.input(**attributes.compact)
+    end
+
+    # State predicates (defined in helper methods above)
+
+    def show_preview?
+      ActiveModel::Type::Boolean.new.cast(options[:show_preview])
+    end
+
+    def preview_enabled?
+      show_preview? && loan_feature_helper.preview_enabled?
+    end
+
+    def use_wizard?
+      options[:wizard] || loan.new_record?
+    end
+
+    def personal_loan?
+      loan.personal_loan?
     end
 
     def institutional_mode?
-      loan_mode_helper.institutional_mode?(loan)
+      loan_import_helper.institutional_mode?(loan)
     end
 
     def conventional_mode?
-      loan_mode_helper.conventional_mode?(loan)
+      loan_import_helper.conventional_mode?(loan)
     end
 
     def sharia_mode?
@@ -433,33 +529,16 @@ class Loan::FormComponent < ViewComponent::Base
       loan_import_helper.imported?(loan, account)
     end
 
-    def show_margin_field?
-      islamic_product_helper.show_margin_field?(loan)
-    end
-
-    def show_profit_sharing_field?
-      islamic_product_helper.show_profit_sharing_field?(loan)
-    end
-
-    def show_preview?
-      options[:show_preview] || false
-    end
-
-    def preview_enabled?
-      loan_feature_helper.preview_enabled?
-    end
-
-    def use_wizard?
-      options[:wizard] || loan.new_record?
-    end
-
     # Configuration helpers
-    def field_config(field_name)
-      loan_field_config_helper.config_for(field_name, loan: loan, account: account, form: form)
+    def field_config(field_name, overrides = {})
+      base = loan_field_config(field_name, loan: loan, account: account, form: form)
+      base = (base.present? ? base.deep_dup : {})
+      base.merge!(overrides) if overrides.present?
+      base
     end
 
     def stimulus_data
-      loan_stimulus_helper.form_data(account: account, loan: loan)
+      loan_stimulus_helper.form_data(account: account, loan: loan, preview_enabled: preview_enabled?)
     end
 
     # Option helpers
@@ -554,7 +633,9 @@ class Loan::FormComponent < ViewComponent::Base
     end
 
     def conditional_fields(condition, content)
-      content if condition
+      check = condition
+      check = send(condition) if condition.is_a?(Symbol)
+      content if check
     end
 
     def help_text(text, **options)
@@ -626,7 +707,7 @@ class Loan::FormComponent < ViewComponent::Base
     def mode_active?(mode)
       case mode
       when :personal
-        personal_mode?
+        loan.personal_loan?
       when :institution
         institutional_mode?
       else
@@ -645,10 +726,6 @@ class Loan::FormComponent < ViewComponent::Base
 
     def islamic_product_helper
       @islamic_product_helper ||= IslamicProductHelper.new
-    end
-
-    def loan_field_config_helper
-      @loan_field_config_helper ||= LoanFieldConfigHelper.new
     end
 
     def loan_stimulus_helper
@@ -675,70 +752,221 @@ class Loan::FormComponent < ViewComponent::Base
       @wizard_helper ||= WizardHelper.new
     end
 
-    def personal_mode?
-      loan_mode_helper.personal_mode?(loan)
-    end
-
-    def institutional_mode?
-      loan_mode_helper.institutional_mode?(loan)
-    end
-
-    def conventional_mode?
-      loan_mode_helper.conventional_mode?(loan)
-    end
-
-    def sharia_mode?
-      loan_mode_helper.sharia_mode?(loan)
-    end
-
-    def imported?
-      loan_import_helper.imported?(loan, account)
-    end
-
-    def show_margin_field?
-      islamic_product_helper.show_margin_field?(loan)
-    end
-
-    def show_profit_sharing_field?
-      islamic_product_helper.show_profit_sharing_field?(loan)
-    end
-
-    def preview_enabled?
-      loan_feature_helper.preview_enabled?
-    end
-
     # Wizard-specific methods
-    def wizard_header
-      content_tag :div, class: "border-b border-primary/20 pb-4 mb-6" do
+    def render_wizard_header
+      content_tag :div, class: "mb-6" do
         safe_join([
-          content_tag(:h2, t(".wizard.title"), class: "text-xl font-semibold text-primary"),
-          content_tag(:p, t(".wizard.subtitle"), class: "text-sm text-secondary mt-1")
+          content_tag(:div, class: "mb-4") do
+            safe_join([
+              content_tag(:h2, "Create loan", class: "text-xl font-bold text-primary"),
+              content_tag(:p, "Set up your loan details step by step", class: "text-sm text-subtle mt-1")
+            ])
+          end,
+          render_progress_steps
         ])
       end
     end
 
-    def wizard_steps
-      content_tag :div, class: "flex items-center justify-between mb-8" do
-        safe_join(
-          wizard_steps_list.map do |step|
-            step_indicator(step)
+    def render_progress_steps
+      steps = [
+        { key: :type, label: "Loan type", icon: "user" },
+        { key: :basic, label: "Details", icon: "edit" },
+        { key: :terms, label: "Terms", icon: "calculator" },
+        { key: :review, label: "Review", icon: "check-circle" }
+      ]
+
+      content_tag :div, class: "wizard-steps-container relative flex items-center justify-between" do
+        safe_join([
+          # Render background connector line
+          render_background_connector(steps.size),
+          # Render step indicators
+          content_tag(:div, class: "relative flex items-center justify-between w-full z-10") do
+            steps.map.with_index do |step, index|
+              render_step_indicator(step, index, steps.size)
+            end.join.html_safe
           end
-        )
+        ])
       end
     end
 
-    def wizard_steps_list
-      wizard_helper.steps_list
+    def render_step_indicator(step, index, total_steps)
+      current_index = get_current_step_index
+      is_active = index == current_index
+      is_completed = index < current_index
+
+      # Clean step indicator without extra spacing issues
+      content_tag :div,
+                  class: "flex flex-col items-center relative z-20 step-indicator transition-all duration-300",
+                  data: {
+                    "loan-wizard-target": "stepIndicator",
+                    step_index: index,
+                    step_name: step[:key]
+                  } do
+        safe_join([
+          # Step circle with proper positioning
+          content_tag(:div,
+                     class: step_circle_classes(is_active, is_completed),
+                     data: { "loan-wizard-target": "stepCircle" }) do
+            if is_completed
+              icon("check", size: :sm, class: "text-white")
+            else
+              content_tag(:span, (index + 1).to_s, class: "text-sm font-medium")
+            end
+          end,
+          # Step label with proper spacing
+          content_tag(:div, class: "mt-3 text-center") do
+            safe_join([
+              content_tag(:span, step[:label], class: step_label_classes(is_active)),
+              (content_tag(:div, "", class: "w-1 h-1 bg-success rounded-full mx-auto mt-1") if is_active)
+            ].compact)
+          end
+        ])
+      end
     end
 
-    def wizard_content
+    def step_circle_classes(is_active, is_completed)
+      base = "w-8 h-8 rounded-full flex items-center justify-center transition-all duration-300 transform"
+
+      if is_completed
+        "#{base} bg-success text-white shadow-md scale-110 ring-2 ring-success/20"
+      elsif is_active
+        "#{base} bg-success text-white shadow-lg scale-110 ring-4 ring-success/30 animate-pulse"
+      else
+        "#{base} bg-container border-2 border-secondary text-secondary hover:border-success/40 hover:bg-container-hover hover:text-primary"
+      end
+    end
+
+    def step_label_classes(is_active)
+      base = "text-xs mt-2 transition-all duration-200"
+      if is_active
+        "#{base} font-semibold text-success"
+      else
+        "#{base} text-secondary hover:text-primary"
+      end
+    end
+
+    def render_background_connector(total_steps)
+      content_tag :div, class: "absolute inset-x-0 top-4 h-1 z-0 flex items-center px-8" do
+        safe_join([
+          # Background line that spans between step circles
+          content_tag(:div, "", class: "flex-1 h-full bg-secondary rounded-full"),
+          # Progress line that fills based on current step
+          content_tag(:div, "",
+                     class: "absolute left-8 right-8 h-full bg-gradient-to-r from-success to-success/90 rounded-full transition-all duration-700 ease-out origin-left",
+                     style: "transform: scaleX(#{calculate_connector_progress / 100.0})",
+                     data: { "loan-wizard-target": "progressBar" }),
+          # Glow effect for active progress
+          content_tag(:div, "",
+                     class: "absolute left-8 right-8 h-full bg-success/20 rounded-full blur-sm transition-all duration-700 origin-left",
+                     style: "transform: scaleX(#{calculate_connector_progress / 100.0}); opacity: #{calculate_connector_progress > 0 ? '1' : '0'};")
+        ])
+      end
+    end
+
+    def render_step_connector
+      # This method is now replaced by render_background_connector
+      # Keeping for backward compatibility
+      ""
+    end
+
+    def render_step_header(title, subtitle = nil, description = nil)
+      content_tag :div, class: "mb-6 pb-4 border-b border-secondary" do
+        safe_join([
+          content_tag(:h3, title, class: "text-lg font-medium text-primary mb-1"),
+          (content_tag(:p, subtitle, class: "text-sm text-primary") if subtitle.presence),
+          (content_tag(:p, description, class: "text-sm text-secondary mt-1") if description.presence)
+        ].compact)
+      end
+    end
+
+
+    def calculate_progress_width
+      current_index = get_current_step_index
+      return 0 if current_index == 0
+      (current_index.to_f / 3 * 100).round
+    end
+
+    def calculate_connector_progress
+      current_index = get_current_step_index
+      return 0 if current_index == 0
+
+      # Calculate progress between step circles (0-100%)
+      # Step 1 -> 2: 33%, Step 2 -> 3: 66%, Step 3 -> 4: 100%
+      (current_index.to_f / 3 * 100).round
+    end
+
+    def render_wizard_navigation
+      content_tag :div, class: "flex items-center justify-between pt-6 mt-8 border-t border-secondary" do
+        safe_join([
+          render_back_button,
+          render_next_button
+        ])
+      end
+    end
+
+    def render_back_button
+      # Always render back button, let JavaScript handle visibility
+      content_tag :button,
+                  type: "button",
+                  class: "flex items-center space-x-2 px-4 py-2 text-secondary hover:text-primary transition-all duration-200 hover:bg-container-hover rounded-lg border border-secondary hover:border-primary/40",
+                  data: {
+                    action: "click->loan-wizard#previousStep",
+                    "loan-wizard-target": "backButton"
+                  } do
+        safe_join([
+          icon("chevron-left", size: :sm),
+          content_tag(:span, "Back", class: "font-medium")
+        ])
+      end
+    end
+
+    def render_next_button
+      current_index = get_current_step_index
+      is_last_step = current_index == 3
+
+      button_classes = "px-6 py-3 button-bg-primary fg-inverse rounded-lg hover:button-bg-primary-hover transition-all duration-200 font-medium shadow-md hover:shadow-lg transform hover:scale-105"
+
+      if is_last_step
+        if form&.respond_to?(:submit)
+          form.submit t("loans.actions.create", default: "Create loan"), class: button_classes
+        else
+          tag.button t("loans.actions.create", default: "Create loan"),
+                     type: "submit",
+                     class: button_classes
+        end
+      else
+        content_tag :button,
+                   type: "button",
+                   class: "flex items-center space-x-2 #{button_classes}",
+                   data: { action: "click->loan-wizard#nextStep" } do
+          safe_join([
+            content_tag(:span, t("loans.actions.next", default: "Next")),
+            icon("chevron-right", size: :sm)
+          ])
+        end
+      end
+    end
+
+    def get_current_step_index
+      case current_step
+      when :type then 0
+      when :basic then 1
+      when :terms then 2
+      when :review then 3
+      else 0
+      end
+    end
+
+
+    def render_wizard_content
       # Render all steps with data-step-content so the Stimulus controller can toggle visibility
+      # Always show the first step initially, JavaScript will handle the rest
       content_tag :div, class: "min-h-[400px]" do
         safe_join([
           content_tag(:div, render_step_type, data: { step_content: "type" }, style: (current_step == :type ? "" : "display:none;")),
-          content_tag(:div, render_step_basic, data: { step_content: "basic" }, style: (current_step == :basic ? "" : "display:none;")),
-          content_tag(:div, render_step_terms, data: { step_content: "terms" }, style: (current_step == :terms ? "" : "display:none;")),
-          content_tag(:div, render_step_review, data: { step_content: "review" }, style: (current_step == :review ? "" : "display:none;"))
+          content_tag(:div, render_step_basic, data: { step_content: "basic" }, style: "display:none;"),
+          content_tag(:div, render_step_terms, data: { step_content: "terms" }, style: "display:none;"),
+          content_tag(:div, render_step_review, data: { step_content: "review" }, style: "display:none;")
         ])
       end
     end
@@ -764,8 +992,11 @@ class Loan::FormComponent < ViewComponent::Base
     def render_step_type
       content_tag :div, class: "space-y-6" do
         safe_join([
-          content_tag(:h3, t(".type.title"), class: "text-lg font-medium"),
-          content_tag(:p, t(".type.description"), class: "text-sm text-secondary"),
+          render_step_header(
+            t("loans.wizard.steps.type", default: "Loan type"),
+            t("loans.wizard.type.prompt", default: "What type of loan is this?"),
+            t("loans.wizard.type.help", default: "Choose the counterparty type below and fill in the relevant details.")
+          ),
           loan_type_selection,
           smart_suggestion
         ])
@@ -775,10 +1006,24 @@ class Loan::FormComponent < ViewComponent::Base
     def render_step_basic
       content_tag :div, class: "space-y-6" do
         safe_join([
-          content_tag(:h3, t(".basic.title"), class: "text-lg font-medium"),
-          content_tag(:p, t(".basic.description"), class: "text-sm text-secondary"),
-          render_field(:counterparty_name, basic_field_config),
-          conditional_basic_fields
+          render_step_header(
+            t("loans.wizard.steps.basic", default: "Basic information"),
+            t("loans.wizard.basic.title", default: "Loan details"),
+            t("loans.wizard.basic.description", default: "Enter the basic information about your loan. Fields will appear based on your loan type selection from step 1.")
+          ),
+          render_current_loan_type_indicator,
+          content_tag(:div, class: "space-y-2") do
+            safe_join([
+              content_tag(:label, "Lender name", class: "block text-sm font-medium text-primary", for: "loan_counterparty_name"),
+              render_field(:counterparty_name, field_config(
+                :counterparty_name,
+                id: "loan_counterparty_name",
+                placeholder: "e.g., Ana, Bank Mandiri, John Doe",
+                required: true
+              ))
+            ])
+          end,
+          render_dynamic_basic_fields
         ])
       end
     end
@@ -786,8 +1031,11 @@ class Loan::FormComponent < ViewComponent::Base
     def render_step_terms
       content_tag :div, class: "space-y-6" do
         safe_join([
-          content_tag(:h3, t(".terms.title"), class: "text-lg font-medium"),
-          content_tag(:p, t(".terms.description"), class: "text-sm text-secondary"),
+          render_step_header(
+            t("loans.wizard.steps.terms", default: "Loan terms"),
+            t("loans.wizard.terms.title", default: "Configure the payment terms"),
+            t("loans.wizard.terms.description", default: "Configure the payment terms and interest rate")
+          ),
           terms_fields,
           smart_rate_suggestion
         ])
@@ -797,7 +1045,11 @@ class Loan::FormComponent < ViewComponent::Base
     def render_step_review
       content_tag :div, class: "space-y-6" do
         safe_join([
-          content_tag(:h3, t(".review.title"), class: "text-lg font-medium"),
+          render_step_header(
+            t("loans.wizard.steps.review", default: "Review & confirm"),
+            t("loans.wizard.review.title", default: "Review your loan details"),
+            t("loans.wizard.review.description", default: "Review your loan details before creating")
+          ),
           loan_summary,
           schedule_preview,
           confirmation_fields
@@ -806,31 +1058,247 @@ class Loan::FormComponent < ViewComponent::Base
     end
 
     def loan_type_selection
-      grid_wrapper do
-        safe_join(
-          wizard_helper.loan_type_options.map do |type_option|
-            loan_type_card(type_option[:key], type_option[:title], type_option[:description])
-          end
-        )
+      content_tag :div, class: "grid grid-cols-1 md:grid-cols-2 gap-4" do
+        safe_join([
+          loan_type_card("personal", "Personal loan", "Borrowing from family, friends, or colleagues"),
+          loan_type_card("institutional", "Institutional loan", "Borrowing from banks, fintech, or other institutions")
+        ])
       end
     end
 
     def loan_type_card(type, title, description)
-      is_selected = loan_type == type.to_s
-      classes = "p-4 border rounded-lg cursor-pointer transition-all hover:border-primary/50"
-      classes += is_selected ? " border-primary bg-primary/5" : " border-primary/20"
+      selected = (loan.debt_kind || "personal") == type.to_s
+
+      content_tag :label,
+                  class: loan_type_card_classes(selected),
+                  for: "loan_debt_kind_#{type}",
+                  data: {
+                    action: "click->loan-wizard#selectLoanType",
+                    "loan-type": type,
+                    "loan-wizard-target": "loanTypeCard"
+                  } do
+        safe_join([
+          render_radio_button(:debt_kind, type,
+                              class: "peer sr-only",
+                              checked: selected,
+                              id: "loan_debt_kind_#{type}",
+                              data: { "loan-wizard-target": "loanTypeRadio" }),
+          content_tag(:div, class: "flex items-start gap-4 px-4 py-4") do
+            safe_join([
+              content_tag(:div,
+                          class: loan_type_icon_container_classes(selected),
+                          data: { "loan-type-role": "icon" }) do
+                icon(icon_name_for_type(type),
+                     size: :lg,
+                     class: loan_type_icon_classes(selected))
+              end,
+              content_tag(:div, class: "flex-1") do
+                safe_join([
+                  content_tag(:h4, title, class: "font-semibold text-primary transition-colors duration-200"),
+                  content_tag(:p, description, class: "text-sm text-secondary mt-1 leading-relaxed")
+                ])
+              end,
+              selection_indicator(selected)
+            ])
+          end
+        ])
+      end
+    end
+
+    def loan_type_card_classes(selected)
+      class_names(
+        "loan-type-card block cursor-pointer rounded-lg border border-secondary bg-container transition-all duration-200 hover:border-primary/40 hover:shadow-sm",
+        ("border-primary bg-primary/5 ring-2 ring-primary/15 shadow-sm" if selected)
+      )
+    end
+
+    def loan_type_icon_container_classes(selected)
+      class_names(
+        "loan-type-icon icon-container p-3 rounded-lg bg-surface transition-colors duration-200",
+        ("bg-primary/10" if selected)
+      )
+    end
+
+    def loan_type_icon_classes(selected)
+      class_names(
+        "transition-colors duration-200 text-secondary",
+        ("text-primary" if selected)
+      )
+    end
+
+    def selection_indicator(selected)
+      container_classes = class_names(
+        "loan-type-indicator hidden w-6 h-6 items-center justify-center rounded-full border border-secondary text-secondary transition-all duration-200",
+        ("flex border-primary bg-primary/10 text-primary" if selected)
+      )
 
       content_tag :div,
-                  class: classes,
-                  data: { action: "click->loan-wizard#selectType", "type-value": type } do
+                  class: container_classes,
+                  data: { "loan-type-role": "indicator" } do
+        icon("check", size: :sm, class: "h-4 w-4")
+      rescue
+        content_tag :span, "✓", class: "text-sm font-semibold"
+      end
+    end
+
+    def icon_name_for_type(type)
+      case type
+      when "personal" then "users"
+      when "institutional" then "building-2"
+      else "circle"
+      end
+    end
+
+    def smart_suggestion
+      body = content_tag(:div, class: "flex items-start justify-between gap-3") do
         safe_join([
           content_tag(:div, class: "flex items-start gap-3") do
             safe_join([
-              render(DS::RadioButton.new(checked: is_selected, name: "loan_type")),
+              icon("lightbulb", size: :sm, class: "text-primary mt-0.5"),
               content_tag(:div) do
                 safe_join([
-                  content_tag(:h4, title, class: "font-medium text-sm"),
-                  content_tag(:p, description, class: "text-xs text-secondary mt-1")
+                  content_tag(:h4, "Tip: Personal loans are often interest-free", class: "font-medium text-primary text-sm"),
+                  content_tag(:p, "Family and friends usually don't charge interest. You can set this up as 0% interest with flexible payment terms.", class: "text-sm text-secondary mt-1")
+                ])
+              end
+            ])
+          end,
+          render(DS::Button.new(
+            text: "Apply",
+            size: :sm,
+            variant: :primary,
+            data: { action: "click->loan-wizard#applyQuickSetup" }
+          ))
+        ])
+      end
+
+      render DS::Alert.new(message: body, variant: :info)
+    end
+
+    def render_current_loan_type_indicator
+      loan_type = loan.debt_kind || "personal"
+      type_info = case loan_type
+      when "personal"
+        { title: "Personal Loan", description: "Borrowing from family, friends, or colleagues", icon: "users", color: "green" }
+      when "institutional"
+        { title: "Institutional Loan", description: "Borrowing from banks, fintech, or other institutions", icon: "building-2", color: "blue" }
+      else
+        { title: "Loan", description: "Please select loan type in step 1", icon: "circle", color: "gray" }
+      end
+
+      content_tag :div, class: "bg-#{type_info[:color]}-50 theme-dark:bg-#{type_info[:color]}-900/20 border border-#{type_info[:color]}-200 theme-dark:border-#{type_info[:color]}-700 rounded-lg p-3" do
+        safe_join([
+          content_tag(:div, class: "flex items-center gap-3") do
+            safe_join([
+              icon(type_info[:icon], size: :sm, class: "text-#{type_info[:color]}-600 theme-dark:text-#{type_info[:color]}-400"),
+              content_tag(:div) do
+                safe_join([
+                  content_tag(:h4, "Selected: #{type_info[:title]}", class: "font-medium text-#{type_info[:color]}-900 theme-dark:text-#{type_info[:color]}-100 text-sm"),
+                  content_tag(:p, type_info[:description], class: "text-xs text-#{type_info[:color]}-700 theme-dark:text-#{type_info[:color]}-200")
+                ])
+              end,
+              content_tag(:button,
+                         "Change",
+                         type: "button",
+                         class: "text-xs text-#{type_info[:color]}-600 hover:text-#{type_info[:color]}-800 underline",
+                         data: { action: "click->loan-wizard#goToStep1" })
+            ])
+          end
+        ])
+      end
+    end
+
+    def suggestion_text
+      "Quick setup for personal loans with 0% interest and flexible terms"
+    end
+
+    def relationship_options
+      [
+        [ "Family member", "family" ],
+        [ "Friend", "friend" ],
+        [ "Colleague", "colleague" ],
+        [ "Business partner", "business_partner" ],
+        [ "Other", "other" ]
+      ]
+    end
+
+    def fintech_type_options
+      Loan::FINTECH_TYPES.map { |key, meta| [ meta[:long], key ] }
+    end
+
+    def institution_type_options
+      Loan::INSTITUTION_TYPES.map { |type| [ type.titleize, type ] }
+    end
+
+    def render_dynamic_basic_fields
+      # Show both personal and institutional fields, let JavaScript handle visibility
+      content_tag :div, class: "space-y-4" do
+        safe_join([
+          # Personal loan fields
+          content_tag(:div,
+                     class: "space-y-4",
+                     data: { "loan-type": "personal", "loan-wizard-target": "personalFields" },
+                     style: (loan.debt_kind == "personal" ? "" : "display: none;")) do
+            safe_join([
+              content_tag(:h4, "Personal loan details", class: "font-medium text-primary"),
+              content_tag(:div, class: "grid grid-cols-1 md:grid-cols-2 gap-4") do
+                safe_join([
+                  content_tag(:div, class: "space-y-1") do
+                    safe_join([
+                      content_tag(:label, "Relationship", class: "block text-sm font-medium text-primary", for: "loan_relationship"),
+                      render_field(:relationship, field_config(
+                        :relationship,
+                        id: "loan_relationship",
+                        placeholder: "e.g., Friend, Family, Colleague"
+                      ))
+                    ])
+                  end,
+                  content_tag(:div, class: "space-y-1") do
+                    safe_join([
+                      content_tag(:label, "Contact (optional)", class: "block text-sm font-medium text-primary", for: "loan_contact"),
+                      render_field(:linked_contact_id, field_config(
+                        :linked_contact_id,
+                        id: "loan_contact",
+                        placeholder: "+62-812-1234-5678",
+                        required: false
+                      ))
+                    ])
+                  end
+                ])
+              end,
+              content_tag(:p, "Add a phone number to set reminders for payments", class: "text-xs text-secondary")
+            ])
+          end,
+
+          # Institutional loan fields
+          content_tag(:div,
+                     class: "space-y-4",
+                     data: { "loan-type": "institutional", "loan-wizard-target": "institutionalFields" },
+                     style: (loan.debt_kind == "institutional" ? "" : "display: none;")) do
+            safe_join([
+              content_tag(:h4, "Institutional loan details", class: "font-medium text-primary"),
+              content_tag(:div, class: "grid grid-cols-1 md:grid-cols-2 gap-4") do
+                safe_join([
+                  content_tag(:div, class: "space-y-1") do
+                    safe_join([
+                      content_tag(:label, "Institution type", class: "block text-sm font-medium text-primary", for: "loan_fintech_type"),
+                      render_select(:fintech_type, fintech_type_options, field_config(
+                        :fintech_type,
+                        id: "loan_fintech_type",
+                        prompt: "Select type..."
+                      ))
+                    ])
+                  end,
+                  content_tag(:div, class: "space-y-1") do
+                    safe_join([
+                      content_tag(:label, "Institution name", class: "block text-sm font-medium text-primary", for: "loan_institution_name"),
+                      render_field(:institution_name, field_config(
+                        :institution_name,
+                        id: "loan_institution_name",
+                        placeholder: "e.g., Bank Mandiri, BCA"
+                      ))
+                    ])
+                  end
                 ])
               end
             ])
@@ -839,56 +1307,93 @@ class Loan::FormComponent < ViewComponent::Base
       end
     end
 
-    def smart_suggestion
-      content_tag :div, class: "bg-blue-50 border border-blue-200 rounded-lg p-4" do
-        safe_join([
-          content_tag(:h4, t(".smart_suggestion.title"), class: "font-medium text-blue-900"),
-          content_tag(:p, suggestion_text, class: "text-sm text-blue-700 mt-1")
-        ])
-      end
-    end
-
-    def suggestion_text
-      wizard_helper.smart_suggestion_for(loan_type)
-    end
-
     def conditional_basic_fields
-      return unless loan_type.present?
-
-      if loan_type == "personal"
-        personal_basic_fields
-      else
-        institutional_basic_fields
-      end
+      # Deprecated - use render_dynamic_basic_fields instead
+      render_dynamic_basic_fields
     end
 
     def personal_basic_fields
-      content_tag :div, class: "space-y-4" do
+      content_tag :div, class: "space-y-4", data: { loan_type: "personal" } do
         safe_join([
-          content_tag(:h4, t(".personal_fields.title"), class: "font-medium text-sm"),
-          render_field(:relationship, basic_field_config),
-          render_field(:linked_contact_id, basic_field_config)
+          content_tag(:h4, "Personal loan details", class: "font-medium text-primary"),
+          content_tag(:div, class: "grid grid-cols-1 md:grid-cols-2 gap-4") do
+            safe_join([
+              render_field(:relationship, field_config(:relationship, label: "Relationship", placeholder: "e.g., Friend, Family")),
+              render_field(:linked_contact_id, field_config(:linked_contact_id, label: "Contact (optional)", placeholder: "+62-812-1234-5678"))
+            ])
+          end,
+          content_tag(:p, "Add a phone number to set reminders for payments", class: "text-xs text-secondary")
         ])
       end
     end
 
     def institutional_basic_fields
-      content_tag :div, class: "space-y-4" do
+      content_tag :div, class: "space-y-4", data: { loan_type: "institutional" } do
         safe_join([
-          content_tag(:h4, t(".institutional_fields.title"), class: "font-medium text-sm"),
-          render_select(:fintech_type, fintech_type_options, basic_field_config),
-          render_field(:institution_name, basic_field_config)
+          content_tag(:h4, "Institutional loan details", class: "font-medium text-primary"),
+          content_tag(:div, class: "grid grid-cols-1 md:grid-cols-2 gap-4") do
+            safe_join([
+              render_select(:fintech_type, fintech_type_options, field_config(:fintech_type, label: "Institution type", prompt: "Select type...")),
+              render_field(:institution_name, field_config(:institution_name, label: "Institution name", placeholder: "e.g., Bank Mandiri"))
+            ])
+          end
         ])
       end
     end
 
     def terms_fields
-      grid_wrapper do
+      content_tag :div, class: "space-y-6" do
         safe_join([
-          render_money_field(:initial_balance, terms_field_config),
-          render_date_field(:start_date, terms_field_config),
-          render_number_field(:tenor_months, terms_field_config),
-          render_select(:payment_frequency, payment_frequency_options, terms_field_config)
+          # Principal amount - full width
+          content_tag(:div, class: "space-y-2") do
+            safe_join([
+              content_tag(:label, "Principal amount", class: "block text-sm font-medium text-primary"),
+              render_money_field(:principal_amount, field_config(:principal_amount, label: nil))
+            ])
+          end,
+
+          # Two column grid for other fields
+          content_tag(:div, class: "grid grid-cols-1 md:grid-cols-2 gap-4") do
+            safe_join([
+              content_tag(:div, class: "space-y-2") do
+                safe_join([
+                  content_tag(:label, "Loan term (months)", class: "block text-sm font-medium text-primary"),
+                  render_number_field(:term_months, field_config(:term_months, label: nil, placeholder: "12"))
+                ])
+              end,
+              content_tag(:div, class: "space-y-2") do
+                safe_join([
+                  content_tag(:label, "Payment frequency", class: "block text-sm font-medium text-primary"),
+                  render_select(:payment_frequency, payment_frequency_options, field_config(:payment_frequency, label: nil))
+                ])
+              end
+            ])
+          end,
+
+          # Interest rate section
+          content_tag(:div, class: "space-y-4") do
+            safe_join([
+              content_tag(:div, class: "flex items-center gap-3") do
+                safe_join([
+                  content_tag(:input, nil,
+                             type: "checkbox",
+                             id: "loan_interest_free",
+                             name: "loan[interest_free]",
+                             class: "w-4 h-4 text-success bg-container border-secondary rounded focus:ring-success focus:ring-2",
+                             data: { action: "change->loan-wizard#toggleInterestRate" }),
+                  content_tag(:label, "Interest-free loan",
+                             class: "text-sm font-medium text-primary cursor-pointer",
+                             for: "loan_interest_free")
+                ])
+              end,
+              content_tag(:div, class: "space-y-2", data: { "loan-wizard-target": "interestRateSection" }) do
+                safe_join([
+                  content_tag(:label, "Interest rate (%)", class: "block text-sm font-medium text-primary"),
+                  render_number_field(:interest_rate, field_config(:interest_rate, label: nil, placeholder: "0.0", step: "0.1", min: "0"))
+                ])
+              end
+            ])
+          end
         ])
       end
     end
@@ -897,12 +1402,12 @@ class Loan::FormComponent < ViewComponent::Base
       # Keep simple and robust: only show on the 'terms' step
       return unless current_step == :terms
 
-      content_tag :div, class: "bg-green-50 border border-green-200 rounded-lg p-4" do
-        safe_join([
-          content_tag(:h4, t(".rate_suggestion.title"), class: "font-medium text-green-900"),
-          content_tag(:p, rate_suggestion_text, class: "text-sm text-green-700 mt-1")
-        ])
-      end
+      body = safe_join([
+        content_tag(:h4, t(".rate_suggestion.title", default: "Rate suggestion"), class: "font-medium text-primary"),
+        content_tag(:p, rate_suggestion_text, class: "text-sm text-secondary mt-1")
+      ])
+
+      render DS::Alert.new(message: body, variant: :success)
     end
 
     # Whether to display the smart rate suggestion info box
@@ -914,7 +1419,7 @@ class Loan::FormComponent < ViewComponent::Base
     def rate_suggestion_text
       if sharia_mode?
         t("loans.wizard.rate_suggestion.sharia")
-      elsif personal_mode?
+      elsif loan.personal_loan?
         t("loans.wizard.rate_suggestion.personal")
       else
         t("loans.wizard.rate_suggestion.institutional")
@@ -922,7 +1427,7 @@ class Loan::FormComponent < ViewComponent::Base
     end
 
     def loan_summary
-      content_tag :div, class: "bg-surface rounded-lg border p-4" do
+      content_tag :div, class: "bg-surface rounded-lg border border-secondary p-4" do
         safe_join([
           summary_row(t(".summary.type"), loan_type_label),
           summary_row(t(".summary.amount"), format_loan_amount(loan.initial_balance)),
@@ -936,7 +1441,7 @@ class Loan::FormComponent < ViewComponent::Base
     def schedule_preview
       return unless preview_enabled?
 
-      content_tag :div, class: "border rounded-lg p-4" do
+      content_tag :div, class: "border border-secondary rounded-lg p-4" do
         safe_join([
           content_tag(:h4, t(".preview.title"), class: "font-medium mb-3"),
           turbo_frame_tag("loan-schedule-preview", loading: "lazy")
@@ -958,17 +1463,17 @@ class Loan::FormComponent < ViewComponent::Base
       return if imported?
 
       # For personal loans, disbursement account is optional
-      return unless personal_mode? || available_accounts.any?
+      return unless loan.personal_loan? || available_accounts.any?
 
-      render_collection_select(:disbursement_account_id, available_accounts, review_field_config)
+      render_collection_select(:disbursement_account_id, available_accounts, field_config(:disbursement_account_id))
     end
 
     def origination_date_field
-      render_date_field(:origination_date, review_field_config)
+      render_date_field(:origination_date, field_config(:origination_date))
     end
 
     def notes_field
-      render_textarea(:notes, review_field_config)
+      render_textarea(:notes, field_config(:notes, rows: 3))
     end
 
     def back_button
@@ -1001,6 +1506,17 @@ class Loan::FormComponent < ViewComponent::Base
       end
     end
 
+    def currency_symbol(currency_code)
+      case currency_code.to_s.upcase
+      when "IDR" then "Rp"
+      when "USD" then "$"
+      when "EUR" then "€"
+      when "GBP" then "£"
+      when "JPY" then "¥"
+      else currency_code.to_s
+      end
+    end
+
     def loan_type_label
       wizard_helper.loan_type_options.find { |opt| opt[:key].to_s == loan_type }&.dig(:title) || loan_type.humanize
     end
@@ -1008,34 +1524,19 @@ class Loan::FormComponent < ViewComponent::Base
     def interest_summary
       if loan.interest_free?
         t(".summary.interest_free")
-      elsif sharia_mode?
+      elsif loan.sharia_compliant?
         "#{loan.effective_rate}% (#{loan.islamic_product_type&.humanize})"
       else
         "#{loan.interest_rate}%"
       end
     end
 
-    # Field configurations
-    def basic_field_config
-      { class: "w-full" }
-    end
-
-    def terms_field_config
-      basic_field_config.merge(
-        "data-loan-form-target": "principal,tenor,frequency,startDate",
-        "data-action": "input->loan-form#termsChanged change->loan-form#termsChanged"
-      )
-    end
-
-    def review_field_config
-      { class: "w-full", rows: 3 }
-    end
-
     def wizard_stimulus_data
       {
         controller: "loan-wizard",
         "loan-wizard-current-step-value": current_step.to_s,
-        "loan-wizard-loan-type-value": loan_type
+        "loan-wizard-total-steps-value": 4,
+        "loan-wizard-loan-type-value": loan.debt_kind || "personal"
       }
     end
 
@@ -1049,5 +1550,44 @@ class Loan::FormComponent < ViewComponent::Base
 
     def completed_steps
       @completed_steps ||= []
+    end
+
+    def normalized_config(config)
+      (config || {}).deep_dup
+    end
+
+    def builder_options(config)
+      normalized_config(config)
+    end
+
+    def fallback_input_options(field_name, config, default_classes: "form-input w-full")
+      options = normalized_config(config).except(:label, :value, :label_tooltip, :help_text, :options, :include_blank, :prompt, :selected)
+      options[:id] ||= "loan_#{field_name}_#{SecureRandom.hex(6)}"
+      options[:class] = combine_classes(default_classes, options[:class])
+
+      data_attrs = options.delete(:data)
+      options[:data] = normalize_data_attributes(data_attrs) if data_attrs.present?
+
+      options
+    end
+
+    def normalize_data_attributes(data_attrs)
+      (data_attrs || {}).each_with_object({}) do |(key, value), memo|
+        memo[(key.to_s.tr("_", "-") rescue key)] = value
+      end
+    end
+
+    def combine_classes(*classes)
+      classes.flatten.compact.map { |value| value.respond_to?(:strip) ? value.strip : value }
+             .reject { |value| value.respond_to?(:blank?) ? value.blank? : value.nil? }
+             .uniq.join(" ")
+    end
+
+    def merge_currency_data(existing_data, currency)
+      normalize_data_attributes(existing_data).merge("currency" => currency)
+    end
+
+    def loan_param(field_name)
+      "loan[#{field_name}]"
     end
 end

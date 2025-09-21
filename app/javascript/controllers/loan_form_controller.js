@@ -1,5 +1,4 @@
 import { Controller } from "@hotwired/stimulus";
-import { debounce } from "debounce";
 
 // Connects to data-controller="loan-form"
 export default class LoanFormController extends Controller {
@@ -34,14 +33,14 @@ export default class LoanFormController extends Controller {
   static classes = ["hidden", "visible"];
 
   connect() {
-    this.debouncedPreview = debounce(this.updatePreview.bind(this), 500);
+    this.debouncedPreview = this.debounce(this.updatePreview.bind(this), 500);
     this.setupVisibilityToggling();
     this.setupInterestModeToggling();
   }
 
   disconnect() {
     if (this.debouncedPreview) {
-      this.debouncedPreview.clear();
+      clearTimeout(this.debouncedPreview.timeoutId);
     }
   }
 
@@ -257,11 +256,27 @@ export default class LoanFormController extends Controller {
   }
 
   isValidEmail(email) {
-    return /^[^\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email);
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   }
 
   toggleFieldError(field, hasError) {
-    const errorClass = "border-red-500";
-    field.classList.toggle(errorClass, hasError);
+    const errorClasses = [
+      "border-destructive",
+      "focus:border-destructive",
+      "focus:ring-destructive/20",
+    ];
+
+    errorClasses.forEach((cls) => field.classList.toggle(cls, hasError));
+  }
+
+  // Utility method for debouncing
+  debounce(func, wait) {
+    let timeoutId;
+    const debounced = (...args) => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => func.apply(this, args), wait);
+    };
+    debounced.timeoutId = timeoutId;
+    return debounced;
   }
 }

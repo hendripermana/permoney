@@ -67,6 +67,10 @@ module LoanFormHelper
         required: true,
         label_tooltip: t("loans.form.initial_balance.tooltip")
       },
+      principal_amount: {
+        label: t("loans.form.principal_amount.label", default: t("loans.form.initial_balance.label")),
+        required: true
+      },
       start_date: {
         label: t("loans.form.start_date.label"),
         required: false
@@ -76,6 +80,12 @@ module LoanFormHelper
         placeholder: 12,
         min: 1,
         max: 480
+      },
+      term_months: {
+        label: t("loans.form.term_months.label", default: t("loans.form.tenor_months.label")),
+        placeholder: 12,
+        min: 1,
+        max: 600
       },
       payment_frequency: {
         label: t("loans.form.payment_frequency.label"),
@@ -172,20 +182,24 @@ module LoanFormHelper
     }
   end
 
-  # Mode detection helpers
+  # Mode detection helpers with better handling of nil values
   def loan_personal_mode?(loan)
+    return false if loan.blank?
     loan.debt_kind == "personal" || loan.counterparty_type == "person"
   end
 
   def loan_institutional_mode?(loan)
+    return false if loan.blank?
     !loan_personal_mode?(loan)
   end
 
   def loan_conventional_mode?(loan)
+    return false if loan.blank?
     loan.compliance_type != "sharia" && !loan.interest_free?
   end
 
   def loan_sharia_mode?(loan)
+    return false if loan.blank?
     loan.compliance_type == "sharia"
   end
 
@@ -674,10 +688,14 @@ module LoanFormHelper
     case field_name
     when :initial_balance
       loan.initial_balance || loan.principal_amount
+    when :principal_amount
+      loan.principal_amount || loan.initial_balance
     when :start_date
       loan.start_date || Date.current.next_month
     when :origination_date
       loan.origination_date || Date.current
+    when :term_months
+      loan.term_months || loan.tenor_months
     else
       loan.public_send(field_name) if loan.respond_to?(field_name)
     end
@@ -687,7 +705,7 @@ module LoanFormHelper
 
   def stimulus_data_for(field_name)
     case field_name
-    when :initial_balance, :rate_or_profit, :tenor_months, :payment_frequency,
+    when :initial_balance, :principal_amount, :rate_or_profit, :tenor_months, :term_months, :payment_frequency,
          :schedule_method, :installment_amount, :balloon_amount
       {
         "loan-form-target": stimulus_target_for(field_name),
@@ -715,8 +733,10 @@ module LoanFormHelper
   def stimulus_target_for(field_name)
     {
       initial_balance: "principal",
+      principal_amount: "principal",
       rate_or_profit: "rateOrProfit",
       tenor_months: "tenor",
+      term_months: "tenor",
       payment_frequency: "frequency",
       schedule_method: "method"
     }[field_name] || field_name.to_s.camelize(:lower)
@@ -1075,9 +1095,9 @@ module LoanFormHelper
     end
 
     def rate_suggestion_for(loan_type, loan)
-      if loan.sharia_mode?
+      if loan.sharia_compliant?
         t("loans.wizard.rate_suggestion.sharia")
-      elsif loan.personal_mode?
+      elsif loan.personal_loan?
         t("loans.wizard.rate_suggestion.personal")
       else
         t("loans.wizard.rate_suggestion.institutional")

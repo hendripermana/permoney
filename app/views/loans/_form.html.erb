@@ -45,22 +45,11 @@
 
       <% # Use wizard component for new loans %>
       <% if use_wizard %>
-        <%= render Loan::FormComponent.new(
-          loan: loan_form.object,
-          account: account,
-          form: loan_form,
-          wizard: true,
-          current_step: params[:step] || :type,
-          loan_type: debt_kind,
-          show_preview: borrowed_enabled
-        ) %>
-
-        <%= render "shared/ruler", classes: "my-4" %>
-
-        <section class="space-y-3">
-          <h3 class="text-primary font-medium">Account details</h3>
+        <!-- Account details section at the top -->
+        <section class="bg-surface border border-secondary rounded-lg p-4 space-y-3 mb-6">
+          <h3 class="text-base font-medium text-primary">Account details</h3>
           <p class="text-xs text-secondary">Tell us how you want this loan account to appear on your dashboard.</p>
-          <div class="space-y-2">
+          <div class="space-y-3">
             <%= form.text_field :name,
                                 label: t("accounts.form.name_label", default: "Account name"),
                                 placeholder: t("accounts.form.name_placeholder", default: "e.g., Personal loan, Mortgage, BCA Loan") %>
@@ -74,6 +63,17 @@
             <% end %>
           </div>
         </section>
+
+        <!-- Wizard component for loan details -->
+        <%= render Loan::FormComponent.new(
+          loan: loan_form.object,
+          account: account,
+          form: loan_form,
+          wizard: true,
+          current_step: params[:step] || :type,
+          loan_type: debt_kind,
+          show_preview: borrowed_enabled
+        ) %>
       <% else %>
         <section class="space-y-3">
           <h3 class="text-primary font-medium">Lender details</h3>

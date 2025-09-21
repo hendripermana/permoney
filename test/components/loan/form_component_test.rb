@@ -86,8 +86,8 @@ class Loan::FormComponentTest < ViewComponent::TestCase
     ))
 
     assert_selector "h3", text: /loan terms/i
-    assert_selector "input[name*='initial_balance']"
-    assert_selector "input[name*='tenor_months']"
+    assert_selector "input[name='loan[principal_amount]']"
+    assert_selector "input[name='loan[term_months]']"
   end
 
   def test_wizard_review_step_shows_summary
@@ -138,7 +138,8 @@ class Loan::FormComponentTest < ViewComponent::TestCase
     ))
 
     # Should show smart suggestion for personal loans
-    assert_selector "div.bg-blue-50"
+    assert_selector "div", text: /personal loans are often interest-free/i
+    assert_selector "button", text: "Apply"
   end
 
   def test_wizard_rate_suggestions
@@ -153,7 +154,7 @@ class Loan::FormComponentTest < ViewComponent::TestCase
     ))
 
     # Should show rate suggestion for sharia loans
-    assert_selector "div.bg-green-50"
+    assert_selector "div", text: /rate suggestion/i
   end
 
   def test_conditional_fields_based_on_loan_type
