@@ -52,7 +52,7 @@
           <div class="space-y-3">
             <%= form.text_field :name,
                                 label: t("accounts.form.name_label", default: "Account name"),
-                                placeholder: t("accounts.form.name_placeholder", default: "e.g., Personal loan, Mortgage, BCA Loan") %>
+                                placeholder: smart_loan_name_placeholder(personal_mode) %>
             <% unless account.linked? %>
               <%= form.money_field :balance,
                                    label: t("accounts.form.balance", default: "Current balance"),
@@ -64,16 +64,13 @@
           </div>
         </section>
 
-        <!-- Wizard component for loan details -->
-        <%= render Loan::FormComponent.new(
-          loan: loan_form.object,
-          account: account,
-          form: loan_form,
-          wizard: true,
-          current_step: params[:step] || :type,
-          loan_type: debt_kind,
-          show_preview: borrowed_enabled
-        ) %>
+        <!-- Enhanced loan form with smart field ordering -->
+        <%= render "loans/enhanced_form", 
+            loan_form: loan_form, 
+            account: account,
+            personal_mode: personal_mode, 
+            borrowed_enabled: borrowed_enabled,
+            preview_base_href: preview_base_href %>
       <% else %>
         <section class="space-y-3">
           <h3 class="text-primary font-medium">Lender details</h3>
