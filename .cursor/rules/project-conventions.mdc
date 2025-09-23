@@ -1,12 +1,9 @@
-This rule serves as high-level documentation for how you should write code for the Permoney codebase. 
-
-## Prohibited actions
-
-- Do not run `rails server` in your responses.
-- Do not run `touch tmp/restart.txt`
-- Do not run `rails credentials`
-- Do not automatically run migrations
-- This rule serves as high-level documentation for how you should write code for the Permoney codebase. 
+---
+description: 
+globs: 
+alwaysApply: true
+---
+This rule serves as high-level documentation for how you should write code in this codebase. 
 
 ## Project Tech Stack
 
@@ -25,7 +22,7 @@ This rule serves as high-level documentation for how you should write code for t
 
 ## Project conventions
 
-These conventions should be used when writing code for Permoney.
+These conventions should be used when writing code for the project.
 
 ### Convention 1: Minimize dependencies, vanilla Rails is plenty
 
@@ -74,7 +71,3 @@ All code should maximize readability and simplicity.
 - ActiveRecord validations _may_ mirror the DB level ones, but not 100% necessary.  These are for convenience when error handling in forms.  Always prefer client-side form validation when possible.
 - Complex validations and business logic should remain in ActiveRecord
 
-
-- Enforce `null` checks, unique indexes, and other simple validations in the DB
-- ActiveRecord validations _may_ mirror the DB level ones, but not 100% necessary.  These are for convenience when error handling in forms.  Always prefer client-side form validation when possible.
-- Complex validations and business logic should remain in ActiveRecord
