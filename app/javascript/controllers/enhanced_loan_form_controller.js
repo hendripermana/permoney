@@ -2,12 +2,13 @@ import { Controller } from "@hotwired/stimulus"
 
 export default class extends Controller {
   static targets = [
-    "personalCard", "institutionalCard", 
+    "personalCard", "institutionalCard",
     "personalFields", "institutionalFields",
     "personalInterestSection", "interestFields",
     "lenderName", "relationship", "loanAmount", "termMonths",
     "institutionName", "fintechType",
     "interestRate", "rateType", "paymentFrequency", "startDate", "originationDate",
+    "currentBalance", "interestFree", "scheduleMethod", "balloonAmount",
     "debtKindField", "counterpartyTypeField",
     "essentialSection", "interestSection", "disbursementSection", "advancedSection"
   ]
@@ -68,12 +69,16 @@ export default class extends Controller {
     this.personalFieldsTarget.classList.remove("hidden")
     this.institutionalFieldsTarget.classList.add("hidden")
     this.personalInterestSectionTarget.classList.remove("hidden")
+    this.setSectionDisabled(this.personalFieldsTarget, false)
+    this.setSectionDisabled(this.institutionalFieldsTarget, true)
   }
 
   showInstitutionalFields() {
     this.personalFieldsTarget.classList.add("hidden")
     this.institutionalFieldsTarget.classList.remove("hidden")
     this.personalInterestSectionTarget.classList.add("hidden")
+    this.setSectionDisabled(this.personalFieldsTarget, true)
+    this.setSectionDisabled(this.institutionalFieldsTarget, false)
   }
 
   setPersonalDefaults() {
@@ -90,6 +95,26 @@ export default class extends Controller {
     if (!this.paymentFrequencyTarget.value) {
       this.paymentFrequencyTarget.value = "MONTHLY"
     }
+  }
+
+  setSectionDisabled(section, disabled) {
+    if (!section) return
+
+    section.querySelectorAll('input, select, textarea').forEach((element) => {
+      const key = 'enhancedLoanFormWasDisabled'
+      if (disabled) {
+        element.dataset[key] = element.disabled ? 'true' : 'false'
+        element.disabled = true
+      } else {
+        const wasDisabled = element.dataset[key]
+        if (wasDisabled !== undefined) {
+          element.disabled = wasDisabled === 'true'
+          delete element.dataset[key]
+        } else {
+          element.disabled = false
+        }
+      }
+    })
   }
 
   setInstitutionalDefaults() {
@@ -242,35 +267,19 @@ export default class extends Controller {
     
     // Build preview URL with parameters
     const previewUrl = this.buildPreviewUrl(formData)
-    
-    // Create modal popup instead of new tab
+
+    // Create modal popup with inline content rendering
     this.openModalPreview(previewUrl)
   }
 
   // Open preview in modal popup
   openModalPreview(url) {
-    // Create modal overlay that will appear above HTML dialog elements
     const modal = document.createElement('div')
     modal.id = 'loan-preview-modal'
-    
-    // Use extremely high z-index that's higher than browser's native dialog z-index
-    modal.style.cssText = `
-      position: fixed !important;
-      top: 0 !important;
-      left: 0 !important;
-      width: 100vw !important;
-      height: 100vh !important;
-      z-index: 2147483647 !important;
-      background-color: rgba(0, 0, 0, 0.6) !important;
-      display: flex !important;
-      align-items: center !important;
-      justify-content: center !important;
-      pointer-events: auto !important;
-      backdrop-filter: blur(4px) !important;
-    `
-    
+    modal.className = 'fixed inset-0 z-[2147483000] flex items-center justify-center bg-black/60 backdrop-blur-sm'
+
     modal.innerHTML = `
-      <div class="bg-container border border-secondary rounded-lg shadow-2xl max-w-5xl w-full mx-4 max-h-[90vh] overflow-hidden" style="z-index: 1000000 !important; position: relative !important; pointer-events: auto !important;">
+      <div class="bg-container border border-secondary rounded-lg shadow-2xl max-w-5xl w-full mx-4 max-h-[90vh] overflow-hidden relative">
         <div class="flex items-center justify-between p-6 border-b border-secondary bg-surface">
           <div class="flex items-center gap-3">
             <div class="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
@@ -283,111 +292,234 @@ export default class extends Controller {
               <p class="text-sm text-secondary">Review your loan repayment plan</p>
             </div>
           </div>
-          <button class="text-secondary hover:text-primary transition-colors p-2 rounded-lg hover:bg-secondary/10" onclick="this.closest('.fixed').remove()">
+          <button type="button" class="text-secondary hover:text-primary transition-colors p-2 rounded-lg hover:bg-secondary/10" data-preview-close>
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
             </svg>
           </button>
         </div>
-        <div class="p-6 overflow-auto max-h-[calc(90vh-120px)]">
-          <div class="bg-surface border border-secondary rounded-lg p-4 mb-4">
-            <div class="flex items-center gap-2 text-sm text-secondary mb-2">
+        <div class="p-6 space-y-4 overflow-auto max-h-[calc(90vh-120px)]">
+          <div class="bg-surface border border-secondary/60 rounded-lg p-4">
+            <div class="flex items-center gap-2 text-sm text-secondary">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
               </svg>
               <span>This preview shows your estimated payment schedule based on the current form data.</span>
             </div>
           </div>
-          <iframe src="${url}" class="w-full h-[500px] border border-secondary rounded-lg bg-white"></iframe>
+          <div data-preview-content class="relative min-h-[200px]">
+            ${this.loadingMarkup()}
+          </div>
         </div>
       </div>
     `
-    
-    // Remove any existing modal first
     const existingModal = document.getElementById('loan-preview-modal')
     if (existingModal) {
-      existingModal.remove()
+      this.closeModal(existingModal)
     }
-    
-    // Force modal to be on top by temporarily lowering all other high z-index elements
-    const allElements = document.querySelectorAll('*')
-    const originalZIndexes = []
-    
-    allElements.forEach((el, index) => {
-      const computedStyle = window.getComputedStyle(el)
-      const zIndex = computedStyle.zIndex
-      if (zIndex !== 'auto' && parseInt(zIndex) > 1000) {
-        originalZIndexes[index] = { element: el, zIndex: zIndex }
-        el.style.zIndex = '1'
-      }
-    })
-    
-    // Store for restoration
-    modal._originalZIndexes = originalZIndexes
-    
-    // Add to body with maximum priority
-    document.body.appendChild(modal)
-    
-    // Prevent body scroll when modal is open
+
+    const container = this.element.closest('dialog') || document.body
+    container.appendChild(modal)
+
     document.body.style.overflow = 'hidden'
-    
-    // Close on overlay click
-    modal.addEventListener('click', (e) => {
-      if (e.target === modal) {
+
+    modal.addEventListener('mousedown', (event) => {
+      event.stopPropagation()
+    })
+
+    modal.addEventListener('click', (event) => {
+      event.stopPropagation()
+      if (event.target === modal) {
         this.closeModal(modal)
       }
     })
-    
-    // Close on escape key
-    const handleEscape = (e) => {
-      if (e.key === 'Escape') {
+
+    const closeButton = modal.querySelector('[data-preview-close]')
+    if (closeButton) {
+      closeButton.addEventListener('mousedown', (event) => event.stopPropagation())
+      closeButton.addEventListener('click', (event) => {
+        event.preventDefault()
+        event.stopPropagation()
         this.closeModal(modal)
-        document.removeEventListener('keydown', handleEscape)
+      })
+    }
+
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') {
+        event.stopImmediatePropagation()
+        this.closeModal(modal)
       }
     }
+
     document.addEventListener('keydown', handleEscape)
-    
-    // Store reference for cleanup
     modal._escapeHandler = handleEscape
+
+    this.fetchPreviewContent(modal, url)
   }
 
   // Close modal helper
   closeModal(modal) {
-    // Restore original z-indexes
-    if (modal._originalZIndexes) {
-      modal._originalZIndexes.forEach(({ element, zIndex }) => {
-        if (element && zIndex) {
-          element.style.zIndex = zIndex
-        }
-      })
-    }
-    
-    document.body.style.overflow = '' // Restore body scroll
+    if (!modal) return
+
     if (modal._escapeHandler) {
       document.removeEventListener('keydown', modal._escapeHandler)
     }
+
     modal.remove()
+    document.body.style.overflow = ''
   }
 
   // Collect form data for preview
   collectFormData() {
-    const data = {
-      initial_balance: this.loanAmountTarget?.value || 0,
-      interest_rate: this.interestRateTarget?.value || 0,
-      term_months: this.termMonthsTarget?.value || 12,
-      payment_frequency: this.paymentFrequencyTarget?.value || 'MONTHLY',
-      schedule_method: 'ANNUITY', // Default method
-      start_date: this.startDateTarget?.value || new Date().toISOString().split('T')[0]
+    const initialRaw = this.normalizeNumber(this.targetValue('loanAmount', ''))
+    const currentRaw = this.normalizeNumber(this.targetValue('currentBalance', ''))
+    const tenorMonths = this.targetValue('termMonths', '12') || '12'
+    const paymentFrequency = this.targetValue('paymentFrequency', 'MONTHLY') || 'MONTHLY'
+    const scheduleMethod = this.targetValue('scheduleMethod', 'ANNUITY').toString().toUpperCase()
+    const startDate = this.normalizeDate(this.targetValue('startDate', ''))
+    const rate = this.normalizeNumber(this.targetValue('interestRate', '0')) || '0'
+    const balloon = this.normalizeNumber(this.targetValue('balloonAmount', '0')) || '0'
+
+    const principal = currentRaw && currentRaw !== '' ? currentRaw : (initialRaw && initialRaw !== '' ? initialRaw : '0')
+    const initial = initialRaw && initialRaw !== '' ? initialRaw : principal
+    const interestFree = this.hasInterestFreeTarget ? (this.interestFreeTarget.checked ? '1' : '0') : '0'
+
+    return {
+      principal_amount: principal,
+      initial_balance: initial,
+      tenor_months: tenorMonths,
+      payment_frequency: paymentFrequency,
+      schedule_method: scheduleMethod,
+      start_date: startDate,
+      rate_or_profit: rate,
+      interest_free: interestFree,
+      balloon_amount: balloon
     }
-    
-    return data
   }
 
   // Build preview URL with form data
   buildPreviewUrl(formData) {
     const baseUrl = this.data.get('preview-base-href') || '/loans/schedule_preview'
-    const params = new URLSearchParams(formData)
-    
+    const params = new URLSearchParams()
+
+    Object.entries(formData).forEach(([key, value]) => {
+      if (value !== null && value !== undefined && value !== '') {
+        params.set(key, value)
+      }
+    })
+
     return `${baseUrl}?${params.toString()}`
+  }
+
+  // Normalize numbers coming from inputs
+  normalizeNumber(value) {
+    if (value === null || value === undefined) return ''
+    const stringValue = value.toString().trim()
+    if (stringValue === '') return ''
+
+    const sanitized = stringValue.replace(/[^0-9.,-]/g, '')
+    if (sanitized === '') return ''
+
+    const lastComma = sanitized.lastIndexOf(',')
+    const lastDot = sanitized.lastIndexOf('.')
+    const decimalSeparator = lastComma > lastDot ? ',' : '.'
+
+    let normalized = sanitized
+    if (decimalSeparator === ',') {
+      normalized = normalized.replace(/\./g, '')
+      const commaIndex = normalized.lastIndexOf(',')
+      if (commaIndex !== -1) {
+        normalized = `${normalized.slice(0, commaIndex).replace(/,/g, '')}.${normalized.slice(commaIndex + 1)}`
+      } else {
+        normalized = normalized.replace(/,/g, '')
+      }
+    } else {
+      const dotIndex = normalized.lastIndexOf('.')
+      if (dotIndex !== -1) {
+        normalized = `${normalized.slice(0, dotIndex).replace(/\./g, '')}.${normalized.slice(dotIndex + 1)}`
+      }
+      normalized = normalized.replace(/,/g, '')
+    }
+
+    return normalized
+  }
+
+  targetValue(name, fallback = '') {
+    const capitalized = name.charAt(0).toUpperCase() + name.slice(1)
+    const hasKey = `has${capitalized}Target`
+    const targetKey = `${name}Target`
+
+    if (this[hasKey] && this[targetKey]) {
+      return this[targetKey].value
+    }
+
+    return fallback
+  }
+
+  normalizeDate(value) {
+    if (!value) {
+      return new Date().toISOString().split('T')[0]
+    }
+
+    try {
+      const d = new Date(value)
+      if (Number.isNaN(d.getTime())) {
+        return new Date().toISOString().split('T')[0]
+      }
+      return d.toISOString().split('T')[0]
+    } catch (error) {
+      return new Date().toISOString().split('T')[0]
+    }
+  }
+
+  fetchPreviewContent(modal, url) {
+    const container = modal.querySelector('[data-preview-content]')
+    if (!container) return
+
+    container.innerHTML = this.loadingMarkup()
+
+    fetch(url, {
+      credentials: 'same-origin',
+      headers: { Accept: 'text/html' }
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error('Failed to load preview')
+        return response.text()
+      })
+      .then((html) => {
+        const trimmed = html.trim()
+        container.innerHTML = trimmed.length > 0 ? trimmed : this.emptyMarkup()
+      })
+      .catch(() => {
+        container.innerHTML = this.errorMarkup()
+      })
+  }
+
+  loadingMarkup() {
+    return `
+      <div class="flex items-center justify-center gap-2 rounded-lg border border-dashed border-primary/30 bg-container-subtle p-4 text-sm text-secondary">
+        <svg class="h-4 w-4 animate-spin text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+        </svg>
+        <span>Loading schedule…</span>
+      </div>
+    `
+  }
+
+  emptyMarkup() {
+    return `
+      <div class="rounded-lg border border-dashed border-primary/30 bg-container-subtle p-6 text-center text-sm text-secondary">
+        <p>No payments to preview yet. Enter the loan amount and term to generate a schedule.</p>
+      </div>
+    `
+  }
+
+  errorMarkup() {
+    return `
+      <div class="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+        Unable to load the schedule preview. Please double-check the inputs and try again.
+      </div>
+    `
   }
 }

@@ -104,6 +104,7 @@
                                      default_currency: Current.family.currency,
                                      required: true,
                                      placeholder: "0",
+                                     label_tooltip: "Total amount originally borrowed when the loan started.",
                                      data: { "enhanced-loan-form-target": "loanAmount" } %>
             
             <%= loan_form.number_field :term_months,
@@ -111,6 +112,7 @@
                                      placeholder: smart_term_months_default(true),
                                      min: 1,
                                      max: 120,
+                                     label_tooltip: "How many months you plan to take to finish repaying this loan.",
                                      data: { "enhanced-loan-form-target": "termMonths" } %>
           </div>
         </div>
@@ -145,6 +147,7 @@
                                      default_currency: Current.family.currency,
                                      required: true,
                                      placeholder: "0",
+                                     label_tooltip: "Total amount originally borrowed when the loan started.",
                                      data: { "enhanced-loan-form-target": "loanAmount" } %>
             
             <%= loan_form.number_field :term_months,
@@ -152,6 +155,7 @@
                                      placeholder: smart_term_months_default(false),
                                      min: 1,
                                      max: 360,
+                                     label_tooltip: "How many months remain (or total agreed months) for this loan.",
                                      data: { "enhanced-loan-form-target": "termMonths" } %>
           </div>
         </div>
@@ -181,7 +185,11 @@
             <p class="text-sm text-green-700">Most personal loans don't charge interest</p>
           </div>
           <%= loan_form.check_box :interest_free,
-                                 { checked: true, class: "w-4 h-4 text-green-600 bg-container border-secondary rounded focus:ring-green-500" },
+                                 {
+                                   checked: true,
+                                   class: "w-4 h-4 text-green-600 bg-container border-secondary rounded focus:ring-green-500",
+                                   data: { "enhanced-loan-form-target": "interestFree" }
+                                 },
                                  "1", "0" %>
         </div>
       </div>
@@ -195,11 +203,12 @@
                                    min: 0,
                                    max: 100,
                                    step: 0.01,
+                                   label_tooltip: "Annual interest or profit rate charged by the lender (APR).",
                                    data: { "enhanced-loan-form-target": "interestRate" } %>
           
           <%= loan_form.select :rate_type,
                               [["Fixed", "fixed"], ["Variable", "variable"], ["Adjustable", "adjustable"]],
-                              { label: "Rate type", include_blank: "Select type..." },
+                              { label: "Rate type", include_blank: "Select type...", label_tooltip: "Fixed rate stays the same; variable or adjustable can change over time." },
                               { data: { "enhanced-loan-form-target": "rateType" } } %>
         </div>
       </div>
@@ -208,12 +217,13 @@
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <%= loan_form.select :payment_frequency,
                             loan_payment_frequency_options,
-                            { label: "Payment frequency" },
+                            { label: "Payment frequency", label_tooltip: "How often installments are due (monthly, weekly, etc.)." },
                             { data: { "enhanced-loan-form-target": "paymentFrequency" } } %>
         
         <%= loan_form.date_field :start_date,
                                label: "Start date",
                                value: Date.current.next_month,
+                               label_tooltip: "Date when the next installment is expected to be paid.",
                                data: { "enhanced-loan-form-target": "startDate" } %>
       </div>
     </div>
@@ -239,12 +249,13 @@
                                           Current.family.accounts.assets.alphabetically,
                                           :id, :name,
                                           { label: "Destination account", required: true, 
-                                            label_tooltip: "The account where the loan money was deposited" },
+                                            label_tooltip: "Cash/bank account where the loan was disbursed." },
                                           { required: true } %>
             
             <%= loan_form.date_field :origination_date,
                                    label: "Transfer date",
                                    value: Date.current,
+                                   label_tooltip: "Date when the loan funds were originally transferred to you.",
                                    data: { "enhanced-loan-form-target": "originationDate" } %>
           </div>
           <p class="text-xs text-secondary">
@@ -266,12 +277,15 @@
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <%= loan_form.select :schedule_method,
                             loan_schedule_method_options,
-                            { label: "Payment calculation method" } %>
+                            { label: "Payment calculation method", label_tooltip: "Choose how principal and interest are allocated (annuity, flat, bullet, etc.)." },
+                            { data: { "enhanced-loan-form-target": "scheduleMethod" } } %>
         
         <%= loan_form.money_field :balloon_amount,
                                  label: "Balloon payment (optional)",
                                  default_currency: Current.family.currency,
-                                 placeholder: "0" %>
+                                 placeholder: "0",
+                                 label_tooltip: "Optional lump-sum that will be added to the final installment.",
+                                 data: { "enhanced-loan-form-target": "balloonAmount" } %>
       </div>
       
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -316,10 +330,10 @@
   <section class="border-t border-secondary pt-6">
     <div class="flex items-center justify-end">
       <%= render DS::Button.new(
-        text: "Create Loan Account",
+        text: account.new_record? ? "Create loan account" : "Save loan changes",
         variant: "primary",
         size: "lg",
-        icon: "plus",
+        icon: account.new_record? ? "plus" : "save",
         type: "submit",
         class: "px-6 py-3"
       ) %>

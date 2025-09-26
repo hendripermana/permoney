@@ -24,6 +24,8 @@ class AccountsController < ApplicationController
     @pagy, @entries = pagy(entries, limit: params[:per_page] || "10")
 
     @activity_feed_data = Account::ActivityFeedData.new(@account, @entries)
+
+    load_loan_adjustment_prompt if @account.accountable_type == "Loan"
   end
 
   def sync
@@ -73,5 +75,78 @@ class AccountsController < ApplicationController
 
     def set_account
       @account = family.accounts.find(params[:id])
+    end
+
+    def load_loan_adjustment_prompt
+      prompt = flash.delete(:loan_adjustment)
+      if prompt.present? && prompt[:account_id].to_s == @account.id
+        build_loan_prompt_from_flash(prompt)
+      else
+        fallback_loan_prompt
+      end
+    rescue ArgumentError
+      @loan_adjustment_prompt = nil
+    end
+
+    def build_loan_prompt_from_flash(prompt)
+      amount_decimal = BigDecimal(prompt[:amount]) rescue nil
+      suggested_date = begin
+        Date.parse(prompt[:date]) if prompt[:date].present?
+      rescue ArgumentError
+        nil
+      end
+
+      assign_loan_prompt(amount_decimal, suggested_date, prompt[:reconciliation_entry_id])
+    end
+
+    def fallback_loan_prompt
+      return if @account.accountable.extra&.[]("balance_adjustment_confirmed")
+
+      initial = BigDecimal(@account.accountable.initial_balance.to_s) rescue nil
+      current = BigDecimal((@account.accountable.principal_amount || @account.balance).to_s) rescue nil
+      return unless initial && current
+
+      delta = initial - current
+      return unless delta.positive?
+
+      return if loan_has_recorded_principal_payments?
+
+      recon_entry = detect_recent_reconciliation(current)
+      return unless recon_entry
+
+      assign_loan_prompt(delta, @account.accountable.start_date, recon_entry.id)
+    end
+
+    def assign_loan_prompt(amount_decimal, suggested_date, entry_id)
+      return unless amount_decimal && amount_decimal.positive?
+
+      @loan_adjustment_prompt = {
+        amount: amount_decimal,
+        suggested_date: suggested_date || Date.current,
+        reconciliation_entry_id: entry_id
+      }
+
+      @loan_prompt_sources = family.accounts.assets.alphabetically.where.not(id: @account.id)
+    end
+
+    def loan_has_recorded_principal_payments?
+      @account.entries
+              .joins("INNER JOIN transactions ON transactions.id = entries.entryable_id AND entries.entryable_type = 'Transaction'")
+              .where(transactions: { kind: "funds_movement" })
+              .where("entries.amount < 0")
+              .exists?
+    end
+
+    def detect_recent_reconciliation(expected_balance)
+      scope = @account.entries
+                       .joins("INNER JOIN valuations ON valuations.id = entries.entryable_id")
+                       .where(entryable_type: "Valuation", valuations: { kind: "reconciliation" }, currency: @account.currency)
+                       .order(created_at: :desc)
+
+      scope.find do |entry|
+        (entry.amount.to_d - expected_balance.to_d).abs < 0.01
+      end
+    rescue
+      nil
     end
 end

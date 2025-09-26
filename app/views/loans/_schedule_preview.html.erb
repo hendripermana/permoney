@@ -1,49 +1,130 @@
-<%# locals: (rows:, account: nil) %>
+<%# locals: (rows:, account: nil, initial_amount: nil, principal_amount: nil) %>
+<% rows = Array(rows) %>
 <% currency = account&.currency || Current.family.currency %>
-<div class="space-y-4">
-  <div class="rounded-xl border border-primary/20 bg-container px-4 py-3 shadow-sm">
-    <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-      <div class="space-y-1">
-        <p class="text-xs font-semibold uppercase tracking-wide text-secondary">Projection preview</p>
-        <p class="text-sm font-medium leading-5 text-primary">Installment schedule preview</p>
-        <p class="text-xs text-secondary">This estimate updates as you adjust the loan terms.</p>
+<% total_principal = rows.sum { |row| row.principal.to_d } rescue 0.to_d %>
+<% total_interest = rows.sum { |row| row.interest.to_d } rescue 0.to_d %>
+<% total_payment = rows.sum { |row| row.total.to_d } rescue 0.to_d %>
+<% first_due = rows.first&.due_date %>
+<% last_due = rows.last&.due_date %>
+<% installment_count = rows.size %>
+<% interest_free = total_interest.zero? %>
+<% outstanding_amount = begin
+     value = local_assigns[:principal_amount] || total_principal
+     BigDecimal(value.to_s)
+   rescue
+     total_principal.to_d
+   end %>
+<% initial_amount = begin
+     value = local_assigns.key?(:initial_amount) ? local_assigns[:initial_amount] : nil
+     value ||= account&.accountable&.initial_balance
+     value ||= outstanding_amount
+     BigDecimal(value.to_s)
+   rescue
+     outstanding_amount
+   end %>
+<% paid_amount = (initial_amount - outstanding_amount) if initial_amount && outstanding_amount && initial_amount > outstanding_amount %>
+<% financing_class = interest_free ? "text-success" : "text-primary" %>
+
+<div class="space-y-6">
+  <% if rows.present? && total_payment.positive? %>
+    <div class="grid gap-3 md:grid-cols-3">
+      <div class="rounded-xl border border-primary/20 bg-container p-4 shadow-sm">
+        <p class="text-xs font-semibold uppercase tracking-wide text-secondary">Remaining principal</p>
+        <p class="mt-1 text-lg font-semibold text-primary">
+          <%= number_to_currency(outstanding_amount, unit: currency) %>
+        </p>
+        <p class="mt-2 flex items-center gap-2 text-xs text-secondary">
+          <%= icon "calendar", size: "xs" %>
+          Starts <%= first_due ? l(first_due) : "—" %>
+        </p>
+        <% if paid_amount && paid_amount.positive? %>
+          <p class="mt-1 text-xs text-secondary">
+            Original <%= number_to_currency(initial_amount, unit: currency) %> • Paid so far <%= number_to_currency(paid_amount, unit: currency) %>
+          </p>
+        <% end %>
       </div>
 
-      <% if account.present? %>
-        <dl class="grid gap-2 text-xs text-right text-secondary">
-          <div>
-            <dt class="font-semibold text-primary">Original amount</dt>
-            <dd><%= number_to_currency(account.accountable.initial_balance, unit: currency) %></dd>
-          </div>
-          <div>
-            <dt class="font-semibold text-primary">Current principal</dt>
-            <dd><%= number_to_currency(account.accountable.principal_amount || account.accountable.initial_balance, unit: currency) %></dd>
-          </div>
-        </dl>
-      <% end %>
-    </div>
-  </div>
+      <div class="rounded-xl border border-primary/20 bg-container p-4 shadow-sm">
+        <p class="text-xs font-semibold uppercase tracking-wide text-secondary">Total repayments</p>
+        <p class="mt-1 text-lg font-semibold text-primary">
+          <%= number_to_currency(total_payment, unit: currency) %>
+        </p>
+        <p class="mt-2 text-xs text-secondary">
+          <span class="font-medium text-primary"><%= installment_count %></span> installments • Final due <%= last_due ? l(last_due) : "—" %>
+        </p>
+      </div>
 
-  <div class="overflow-auto rounded-xl border border-primary/20 bg-surface shadow-lg">
-    <table class="min-w-full text-sm">
-      <thead>
-        <tr class="text-secondary bg-container-subtle">
-          <th class="text-left py-3 pl-4 pr-4"><%= t("loans.schedule_preview.columns.due_date") %></th>
-          <th class="text-right py-3 pr-4"><%= t("loans.schedule_preview.columns.principal") %></th>
-          <th class="text-right py-3 pr-4"><%= t("loans.schedule_preview.columns.interest") %></th>
-          <th class="text-right py-3 pr-4"><%= t("loans.schedule_preview.columns.total") %></th>
-        </tr>
-      </thead>
-      <tbody>
-        <% rows.each do |r| %>
-          <tr class="border-t border-primary/10 hover:bg-container-subtle transition">
-            <td class="py-3 pl-4 pr-4 text-sm"><%= l(r.due_date) %></td>
-            <td class="py-3 pr-4 text-right tabular-nums"><%= number_to_currency(r.principal, unit: currency) %></td>
-            <td class="py-3 pr-4 text-right tabular-nums"><%= number_to_currency(r.interest, unit: currency) %></td>
-            <td class="py-3 pr-4 text-right font-medium tabular-nums text-primary"><%= number_to_currency(r.total, unit: currency) %></td>
-          </tr>
-        <% end %>
-      </tbody>
-    </table>
-  </div>
+      <div class="rounded-xl border border-primary/20 bg-container p-4 shadow-sm">
+        <p class="text-xs font-semibold uppercase tracking-wide text-secondary">Financing cost</p>
+        <p class="mt-1 text-lg font-semibold <%= financing_class %>">
+          <%= number_to_currency(total_interest, unit: currency) %>
+        </p>
+        <p class="mt-2 text-xs text-secondary">
+          <%= interest_free ? "Interest-free schedule" : "Interest / profit collected over the term" %>
+        </p>
+      </div>
+    </div>
+  <% end %>
+
+  <% if rows.blank? || total_payment.zero? %>
+    <div class="rounded-xl border border-dashed border-primary/30 bg-container-subtle p-6 text-center">
+      <div class="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
+        <%= icon "table", size: "sm" %>
+      </div>
+      <p class="text-sm font-medium text-primary">No schedule yet</p>
+      <p class="text-xs text-secondary">Fill in the loan amount, term, and start date to generate a preview.</p>
+    </div>
+  <% else %>
+    <% remaining_principal = outstanding_amount %>
+    <div class="overflow-hidden rounded-xl border border-primary/20 bg-container shadow-sm">
+      <div class="flex flex-wrap items-center justify-between gap-3 border-b border-primary/10 px-4 py-3">
+        <div>
+          <p class="text-sm font-semibold text-primary">Installment schedule</p>
+          <p class="text-xs text-secondary">
+            Next payment <%= first_due ? l(first_due) : "—" %> • Final payment <%= last_due ? l(last_due) : "—" %>
+          </p>
+        </div>
+        <span class="inline-flex items-center rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+          <%= pluralize(installment_count, "installment") %>
+        </span>
+      </div>
+
+      <div class="max-h-[60vh] overflow-auto">
+        <table class="min-w-full divide-y divide-primary/10 text-sm">
+          <thead class="bg-container-subtle text-xs font-semibold uppercase tracking-wide text-secondary">
+            <tr>
+              <th scope="col" class="py-3 pl-4 pr-4 text-left">#</th>
+              <th scope="col" class="py-3 pr-4 text-left">Due date</th>
+              <th scope="col" class="py-3 pr-4 text-right">Principal</th>
+              <th scope="col" class="py-3 pr-4 text-right">Interest / Profit</th>
+              <th scope="col" class="py-3 pr-4 text-right">Payment</th>
+              <th scope="col" class="py-3 pr-4 text-right">Remaining principal</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-primary/10 bg-container">
+            <% rows.each_with_index do |row, index| %>
+              <% remaining_principal = [remaining_principal - row.principal.to_d, 0].max %>
+              <tr class="transition hover:bg-container-subtle">
+                <td class="py-3 pl-4 pr-4 text-xs font-medium text-secondary"><%= index + 1 %></td>
+                <td class="py-3 pr-4 text-sm text-primary"><%= row.due_date ? l(row.due_date) : "—" %></td>
+                <td class="py-3 pr-4 text-right tabular-nums text-primary"><%= number_to_currency(row.principal, unit: currency) %></td>
+                <td class="py-3 pr-4 text-right tabular-nums text-secondary"><%= number_to_currency(row.interest, unit: currency) %></td>
+                <td class="py-3 pr-4 text-right tabular-nums font-medium text-primary"><%= number_to_currency(row.total, unit: currency) %></td>
+                <td class="py-3 pr-4 text-right tabular-nums text-secondary"><%= number_to_currency(remaining_principal, unit: currency) %></td>
+              </tr>
+            <% end %>
+          </tbody>
+          <tfoot class="bg-container-subtle text-sm">
+            <tr>
+              <td colspan="2" class="py-3 pl-4 pr-4 text-left font-medium text-secondary">Totals</td>
+              <td class="py-3 pr-4 text-right font-semibold text-primary"><%= number_to_currency(total_principal, unit: currency) %></td>
+              <td class="py-3 pr-4 text-right font-semibold text-primary"><%= number_to_currency(total_interest, unit: currency) %></td>
+              <td class="py-3 pr-4 text-right font-semibold text-primary"><%= number_to_currency(total_payment, unit: currency) %></td>
+              <td class="py-3 pr-4 text-right text-secondary">—</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  <% end %>
 </div>

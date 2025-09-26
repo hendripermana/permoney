@@ -1,5 +1,23 @@
 <%# locals: (account:) %>
 
+<% original_money = account.loan.original_balance || Money.new(0, account.currency) %>
+<% remaining_money = account.loan.remaining_principal_money || Money.new(0, account.currency) %>
+<% total_paid_money = begin
+     original_money - remaining_money
+   rescue
+     Money.new(0, account.currency)
+   end %>
+<% last_payment_entry = account.entries
+      .joins("INNER JOIN transactions ON transactions.id = entries.entryable_id AND entries.entryable_type = 'Transaction'")
+      .where(transactions: { kind: "funds_movement" })
+      .where("entries.amount < 0")
+      .order(date: :desc, created_at: :desc)
+      .first %>
+<% last_payment_money = if last_payment_entry
+     Money.new(-last_payment_entry.amount.to_d, account.currency)
+   end %>
+<% last_payment_date = last_payment_entry&.date %>
+
 <div class="space-y-6">
   <!-- Loan Status Overview -->
   <div class="bg-gradient-to-r from-primary/10 to-primary/5 rounded-xl p-6 border border-primary/20">
@@ -23,11 +41,11 @@
 
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
       <div class="text-center">
-        <div class="text-2xl font-bold text-primary"><%= format_money account.loan.original_balance %></div>
+        <div class="text-2xl font-bold text-primary"><%= format_money original_money %></div>
         <div class="text-sm text-secondary">Original Principal</div>
       </div>
       <div class="text-center">
-        <div class="text-2xl font-bold text-orange-600"><%= format_money account.loan.remaining_principal_money %></div>
+        <div class="text-2xl font-bold text-orange-600"><%= format_money remaining_money %></div>
         <div class="text-sm text-secondary">Remaining Balance</div>
       </div>
       <div class="text-center">
@@ -35,6 +53,24 @@
           <%= number_to_percentage(((account.loan.original_balance.to_f - account.loan.remaining_principal_money.to_f) / account.loan.original_balance.to_f * 100), precision: 1) %>
         </div>
         <div class="text-sm text-secondary">Paid Progress</div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+      <div class="rounded-lg border border-primary/10 bg-container px-4 py-3">
+        <p class="text-xs font-semibold uppercase tracking-wide text-secondary">Total paid so far</p>
+        <p class="text-lg font-semibold text-primary">
+          <%= format_money total_paid_money %>
+        </p>
+      </div>
+      <div class="rounded-lg border border-primary/10 bg-container px-4 py-3">
+        <p class="text-xs font-semibold uppercase tracking-wide text-secondary">Last payment</p>
+        <% if last_payment_money.present? %>
+          <p class="text-lg font-semibold text-primary"><%= format_money last_payment_money %></p>
+          <p class="text-xs text-secondary">Recorded on <%= l(last_payment_date) %></p>
+        <% else %>
+          <p class="text-sm text-secondary">No payments recorded yet</p>
+        <% end %>
       </div>
     </div>
   </div>
@@ -55,6 +91,9 @@
         <% else %>
           <%= t(".unknown") %>
         <% end %>
+      <% elsif account.loan.interest_free? %>
+        <span class="text-success font-semibold">Interest-free</span>
+        <span class="text-xs text-secondary block">No interest charged</span>
       <% elsif account.loan.interest_rate.present? %>
         <%= number_to_percentage(account.loan.interest_rate, precision: 3) %>
         <span class="text-xs text-secondary block">Interest Rate</span>
@@ -64,20 +103,24 @@
     <% end %>
 
     <%= summary_card title: t(".monthly_payment") do %>
-      <% if account.loan.monthly_payment.present? %>
+      <% if account.loan.loan_installments.pending.any? && account.loan.monthly_payment.present? %>
         <%= format_money(account.loan.monthly_payment) %>
         <span class="text-xs text-secondary block">Estimated</span>
+      <% elsif last_payment_money.present? %>
+        <%= format_money(last_payment_money) %>
+        <span class="text-xs text-secondary block">Last recorded payment</span>
       <% else %>
         <%= t(".not_applicable") %>
       <% end %>
     <% end %>
 
     <%= summary_card title: t(".term") do %>
-      <% if account.loan.term_months.present? %>
-        <% if account.loan.term_months < 12 %>
-          <%= pluralize(account.loan.term_months, "month") %>
+      <% term_value = account.loan.term_months || account.loan.tenor_months %>
+      <% if term_value.present? %>
+        <% if term_value < 12 %>
+          <%= pluralize(term_value, "month") %>
         <% else %>
-          <%= pluralize(account.loan.term_months / 12, "year") %>
+          <%= pluralize((term_value / 12.0).round(1), "year") %>
         <% end %>
       <% else %>
         <%= t(".unknown") %>
@@ -89,6 +132,9 @@
       <% if next_installment %>
         <div><%= format_money next_installment.total_money %></div>
         <div class="text-xs text-secondary">Due <%= next_installment.due_date.strftime('%b %d, %Y') %></div>
+      <% elsif last_payment_money.present? %>
+        <div><%= format_money last_payment_money %></div>
+        <div class="text-xs text-secondary">Last paid <%= l(last_payment_date) %></div>
       <% else %>
         <span class="text-green-600">All Paid</span>
       <% end %>

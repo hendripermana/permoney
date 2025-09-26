@@ -183,7 +183,7 @@ class Loan < ApplicationRecord
       # Return the first installment payment as monthly payment
       currency = account&.currency || "USD"
       Money.new(schedule.first[:total_amount], currency)
-  end
+    end
 
 
     # Calculate monthly payment for Sharia-compliant loans
@@ -221,7 +221,9 @@ class Loan < ApplicationRecord
         payment = principal.to_d / term_months
         Money.new(payment.round, account&.currency || "USD")
       end
-      end
+    end
+
+    public :monthly_payment, :sharia_monthly_payment
 
     # Check if this is a Sharia-compliant loan
     def sharia_compliant?
@@ -272,6 +274,7 @@ class Loan < ApplicationRecord
       end
       Money.new(base_amount, account.currency)
     end
+    public :original_balance
 
     # Compute remaining principal from ledger postings
     # Moved to Loan::Payable concern
@@ -303,6 +306,8 @@ class Loan < ApplicationRecord
       super(nil)
       errors.add(:balloon_amount, "is not a number")
     end
+
+    public :balloon_amount, :balloon_amount=
 
     class << self
       def normalize_rate(value)
@@ -336,13 +341,13 @@ class Loan < ApplicationRecord
 
       def initialize(loan:, principal_amount: nil, rate_or_profit: nil, tenor_months: nil, start_date: nil, payment_frequency: nil, schedule_method: nil, balloon_amount: nil)
         @loan = loan
-        @principal_amount = principal_amount || loan.principal_amount || loan.account.balance.abs
-        @rate_or_profit = rate_or_profit || loan.effective_rate
-        @tenor_months = tenor_months || loan.tenor_months || loan.term_months || LoanConfigurationService.default_tenor_months
-        @start_date = start_date || loan.start_date || Date.current
-        @payment_frequency = payment_frequency || loan.payment_frequency || LoanConfigurationService.default_payment_frequency
-        @schedule_method = schedule_method || loan.schedule_method || LoanConfigurationService.default_schedule_method
-        @balloon_amount = balloon_amount || loan.balloon_amount || 0
+        @principal_amount = coerce_decimal(principal_amount) || coerce_decimal(loan.principal_amount) || loan.account.balance.abs
+        @rate_or_profit = coerce_decimal(rate_or_profit) || loan.effective_rate
+        @tenor_months = coerce_integer(tenor_months) || coerce_integer(loan.tenor_months) || coerce_integer(loan.term_months) || LoanConfigurationService.default_tenor_months
+        @start_date = start_date.presence || loan.start_date || Date.current
+        @payment_frequency = (payment_frequency.presence || loan.payment_frequency.presence || LoanConfigurationService.default_payment_frequency).to_s
+        @schedule_method = (schedule_method.presence || loan.schedule_method.presence || LoanConfigurationService.default_schedule_method).to_s
+        @balloon_amount = coerce_decimal(balloon_amount) || coerce_decimal(loan.balloon_amount) || 0
 
         validate_inputs!
       end
@@ -359,7 +364,9 @@ class Loan < ApplicationRecord
         schedule_method_config = LoanConfigurationService.schedule_method_config(schedule_method)
         return [] unless schedule_method_config
 
-        case schedule_method_config[:calculation_type].to_sym
+        calculation_type = schedule_method_config[:calculation_type]&.to_sym || :annuity
+
+        case calculation_type
         when :annuity
           calculate_annuity_schedule
         when :flat
@@ -384,7 +391,7 @@ class Loan < ApplicationRecord
           raise ArgumentError, "Unsupported schedule method: #{schedule_method}. Supported: #{LoanConfigurationService.supported_schedule_methods.join(', ')}"
         end
 
-        unless principal_amount > 0
+        unless principal_amount.to_d > 0
           raise ArgumentError, "Principal amount must be positive"
         end
 
@@ -395,11 +402,24 @@ class Loan < ApplicationRecord
 
       private
 
+        def coerce_decimal(value)
+          return nil if value.blank?
+          BigDecimal(value.to_s)
+        rescue ArgumentError
+          nil
+        end
+
+        def coerce_integer(value)
+          return nil if value.blank?
+          value.to_i
+        end
+
         def calculate_annuity_schedule
           return [] if principal_amount <= 0 || tenor_months <= 0
 
           frequency_config = LoanConfigurationService.payment_frequency_config(payment_frequency)
-          months_interval = frequency_config[:months_interval]
+          months_interval = frequency_config&.dig(:months_interval).to_i
+          months_interval = 1 if months_interval <= 0
 
           # Convert annual rate to periodic rate based on frequency
           periodic_rate = rate_or_profit.to_f / 100 / 12 * months_interval

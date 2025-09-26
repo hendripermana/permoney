@@ -124,10 +124,27 @@ class LoansController < ApplicationController
 
   # GET /loans/schedule_preview and /loans/:id/schedule_preview
   def schedule_preview
+    principal_param = params[:principal_amount].presence
+    initial_param = params[:initial_balance].presence
+
     if params[:id].present?
       @account = Current.family.accounts.find(params[:id])
       authorize_account!(@account)
-      principal = (params[:principal_amount] || @account.accountable.initial_balance || @account.balance).to_d
+      principal = if principal_param
+        principal_param.to_d
+      else
+        (
+          @account.accountable.try(:remaining_principal) ||
+          @account.accountable.try(:principal_amount) ||
+          @account.accountable.try(:initial_balance) ||
+          @account.balance
+        ).to_d
+      end
+      initial_amount = if initial_param
+        initial_param.to_d
+      else
+        (@account.accountable.initial_balance || principal).to_d
+      end
       boolean = ActiveModel::Type::Boolean.new
       interest_free_flag = if params.key?(:interest_free)
         boolean.cast(params[:interest_free])
@@ -147,7 +164,12 @@ class LoansController < ApplicationController
         @account.accountable.balloon_amount || 0.to_d
       end
     else
-      principal = params[:principal_amount].to_d
+      principal = (principal_param || params[:principal_amount] || 0).to_d
+      initial_amount = if initial_param
+        initial_param.to_d
+      else
+        principal
+      end
       boolean = ActiveModel::Type::Boolean.new
       interest_free = boolean.cast(params[:interest_free])
       raw_rate = params[:rate_or_profit]
@@ -171,10 +193,10 @@ class LoansController < ApplicationController
     rows = generator.generate
     respond_to do |format|
       format.turbo_stream do
-        render partial: "loans/schedule_preview", locals: { rows: rows, account: @account }
+        render partial: "loans/schedule_preview", locals: { rows: rows, account: @account, initial_amount: initial_amount, principal_amount: principal }
       end
       format.html do
-        content = render_to_string(partial: "loans/schedule_preview", locals: { rows: rows, account: @account })
+        content = render_to_string(partial: "loans/schedule_preview", locals: { rows: rows, account: @account, initial_amount: initial_amount, principal_amount: principal })
 
         if turbo_frame_request?
           render html: view_context.tag.turbo_frame(id: "loan-schedule-preview") { content.html_safe }
@@ -227,6 +249,14 @@ class LoansController < ApplicationController
       if account_params.dig(:accountable_attributes, :initial_balance).present?
         flash[:notice] = [ flash[:notice], "Opening balance anchored successfully." ].join(" — ")
       end
+      if result.principal_delta.to_d.positive?
+        flash[:loan_adjustment] = {
+          amount: result.principal_delta.to_s,
+          account_id: result.account.id,
+          date: result.delta_date&.iso8601,
+          reconciliation_entry_id: result.balance_adjustment_entry_id
+        }
+      end
       redirect_to(safe_return_path(account_params[:return_to]) || result.account, allow_other_host: false)
     else
       @account = Current.family.accounts.build(
@@ -236,6 +266,56 @@ class LoansController < ApplicationController
       @error_message = result.error
       render :new, status: :unprocessable_entity
     end
+  end
+
+  def record_backdated_payment
+    @account = Current.family.accounts.find(params[:id])
+    unless @account.accountable_type == "Loan"
+      redirect_to account_path(@account), alert: "Invalid loan account"
+      return
+    end
+
+    if params[:skip].present?
+      mark_adjustment_confirmed(permitted[:reconciliation_entry_id])
+      flash[:notice] = "Keeping current balance adjustment."
+      redirect_to account_path(@account)
+      return
+    end
+
+    permitted = loan_adjustment_params
+    amount = BigDecimal(permitted[:amount]) rescue nil
+    source_account = Current.family.accounts.find_by(id: permitted[:source_account_id])
+    payment_date = begin
+      Date.parse(permitted[:date])
+    rescue ArgumentError, TypeError
+      Date.current
+    end
+
+    if amount.nil? || amount <= 0 || source_account.nil?
+      flash[:alert] = "Please select a valid source account and amount."
+      redirect_to account_path(@account)
+      return
+    end
+
+    service_params = {
+      loan_account_id: @account.id,
+      source_account_id: source_account.id,
+      amount: amount,
+      date: payment_date,
+      notes: "Backdated adjustment"
+    }
+
+    result = Loan::PaymentService.call!(family: Current.family, params: service_params)
+
+    if result.success?
+      remove_balance_adjustment(permitted[:reconciliation_entry_id])
+      flash[:notice] = "Recorded a backdated payment of #{view_context.number_to_currency(amount, unit: @account.currency)}."
+      @account.sync_later
+    else
+      flash[:alert] = result.error
+    end
+
+    redirect_to account_path(@account)
   end
 
   private
@@ -258,5 +338,38 @@ class LoansController < ApplicationController
     def authorize_account!(account)
       # Placeholder for future authorization; Current.family scoping already applies
       account
+    end
+
+    def loan_adjustment_params
+      params.require(:loan_payment).permit(:source_account_id, :amount, :date, :reconciliation_entry_id)
+    end
+
+    def remove_balance_adjustment(entry_id)
+      return if entry_id.blank?
+
+      entry = @account.entries.find_by(id: entry_id)
+      return unless entry&.entryable_type == "Valuation" && entry.entryable.respond_to?(:kind) && entry.entryable.reconciliation?
+
+      entry.destroy
+      clear_adjustment_confirmation
+    rescue => e
+      Rails.logger.warn({ at: "LoansController.remove_balance_adjustment", account_id: @account.id, entry_id: entry_id, error: e.message }.to_json) rescue nil
+    end
+
+    def mark_adjustment_confirmed(entry_id)
+      return if entry_id.blank?
+
+      extra = (@account.accountable.extra || {}).dup
+      extra["balance_adjustment_confirmed"] = true
+      @account.accountable.update(extra: extra)
+    rescue => e
+      Rails.logger.warn({ at: "LoansController.confirm_adjustment", account_id: @account.id, entry_id: entry_id, error: e.message }.to_json) rescue nil
+    end
+
+    def clear_adjustment_confirmation
+      extra = (@account.accountable.extra || {}).dup
+      if extra.delete("balance_adjustment_confirmed")
+        @account.accountable.update(extra: extra)
+      end
     end
 end
