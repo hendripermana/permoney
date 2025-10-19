@@ -1,0 +1,261 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Analyze Upstream Commits Script
+# Provides detailed analysis of each upstream commit
+
+require "json"
+require "open3"
+
+class CommitAnalyzer
+  def initialize
+    @upstream_branch = "upstream/main"
+    @local_branch = "main"
+  end
+
+  def run
+    puts "🔍 Analyzing Upstream Commits"
+    puts "=" * 80
+    puts
+
+    fetch_upstream
+    analyze_commits
+  end
+
+  private
+
+  def fetch_upstream
+    puts "📥 Fetching latest upstream..."
+    system("git fetch upstream --quiet")
+    puts "✅ Fetch complete\n\n"
+  end
+
+  def analyze_commits
+    # Get commits that are in upstream but not in local
+    commits = get_upstream_commits
+    
+    puts "📊 Found #{commits.length} commits in upstream\n\n"
+    
+    commits.each_with_index do |commit, index|
+      analyze_commit(commit, index + 1, commits.length)
+      puts "\n" + "-" * 80 + "\n\n"
+    end
+
+    generate_summary(commits)
+  end
+
+  def get_upstream_commits
+    output, _status = Open3.capture2("git log #{@local_branch}..#{@upstream_branch} --oneline --no-merges")
+    output.split("\n").map do |line|
+      sha, *message = line.split(" ")
+      { sha: sha, message: message.join(" ") }
+    end
+  end
+
+  def analyze_commit(commit, index, total)
+    sha = commit[:sha]
+    
+    puts "[#{index}/#{total}] Commit: #{sha}"
+    puts "Message: #{commit[:message]}"
+    puts
+
+    # Get detailed commit info
+    details = get_commit_details(sha)
+    
+    # Analyze files changed
+    files_changed = get_files_changed(sha)
+    
+    # Categorize commit
+    category = categorize_commit(files_changed, commit[:message])
+    
+    puts "Category: #{category[:emoji]} #{category[:name]}"
+    puts "Risk Level: #{risk_level(category, files_changed)}"
+    puts
+
+    puts "Files Changed (#{files_changed.length}):"
+    files_changed.each do |file|
+      status = file_status(file)
+      puts "  #{status} #{file}"
+    end
+    
+    puts
+    puts "Recommendation: #{recommendation(category, files_changed)}"
+  end
+
+  def get_commit_details(sha)
+    output, _status = Open3.capture2("git show #{sha} --stat --format='%an|%ae|%ad|%s'")
+    lines = output.split("\n")
+    author_line = lines.first.split("|")
+    
+    {
+      author: author_line[0],
+      email: author_line[1],
+      date: author_line[2],
+      subject: author_line[3]
+    }
+  end
+
+  def get_files_changed(sha)
+    output, _status = Open3.capture2("git show #{sha} --name-only --format=''")
+    output.split("\n").reject(&:empty?)
+  end
+
+  def categorize_commit(files, message)
+    message_lower = message.downcase
+
+    # Security updates
+    return { emoji: "🔒", name: "Security Update", safe: true } if message_lower.include?("security") || message_lower.include?("bump")
+
+    # Feature removals (DANGEROUS)
+    if files.any? { |f| f.include?("loan") || f.include?("personal_lending") || f.include?("pay_later") }
+      deletions = files.select { |f| file_deleted?(f) }
+      if deletions.any?
+        return { emoji: "⚠️", name: "Feature Removal", safe: false }
+      end
+    end
+
+    # Branding changes (DANGEROUS for us)
+    if files.any? { |f| f.include?("permoney") || f.include?("design-system") }
+      return { emoji: "🎨", name: "Branding Change", safe: false }
+    end
+
+    # Configuration changes
+    if files.any? { |f| f.include?(".env") || f.include?("Gemfile") || f.include?("package.json") }
+      return { emoji: "⚙️", name: "Configuration", safe: true }
+    end
+
+    # Documentation
+    if files.all? { |f| f.end_with?(".md") || f.include?("docs/") }
+      return { emoji: "📚", name: "Documentation", safe: true }
+    end
+
+    # UI/UX improvements
+    if files.any? { |f| f.include?("views/") || f.include?("components/") }
+      return { emoji: "🎨", name: "UI/UX", safe: true }
+    end
+
+    # New features
+    if message_lower.include?("add") || message_lower.include?("feat")
+      return { emoji: "✨", name: "New Feature", safe: true }
+    end
+
+    # Bug fixes
+    if message_lower.include?("fix")
+      return { emoji: "🐛", name: "Bug Fix", safe: true }
+    end
+
+    # Default
+    { emoji: "📝", name: "Other", safe: true }
+  end
+
+  def file_deleted?(file)
+    # Check if file exists in upstream but not in local
+    !File.exist?(file)
+  end
+
+  def file_status(file)
+    if file_deleted?(file)
+      "❌ DELETED"
+    elsif File.exist?(file)
+      "✏️  MODIFIED"
+    else
+      "➕ NEW"
+    end
+  end
+
+  def risk_level(category, files)
+    return "🔴 HIGH RISK - DO NOT CHERRY-PICK" unless category[:safe]
+    
+    # Check if it touches protected features
+    protected_files = [
+      "app/models/loan.rb",
+      "app/models/personal_lending.rb",
+      "app/models/pay_later.rb",
+      "app/components/loan/",
+      "app/services/loan/",
+      "app/assets/tailwind/permoney-design-system.css"
+    ]
+
+    if files.any? { |f| protected_files.any? { |pf| f.include?(pf) } }
+      return "🟡 MEDIUM RISK - Manual review required"
+    end
+
+    "🟢 LOW RISK - Safe to cherry-pick"
+  end
+
+  def recommendation(category, files)
+    return "❌ DO NOT INTEGRATE - This removes features we need" unless category[:safe]
+
+    if category[:name] == "Configuration"
+      return "📝 MANUAL INTEGRATION - Merge configuration changes carefully"
+    end
+
+    if category[:name] == "Branding Change"
+      return "📝 MANUAL INTEGRATION - Keep Permoney branding, adopt improvements"
+    end
+
+    if files.any? { |f| f.include?("design-system") }
+      return "📝 MANUAL INTEGRATION - Review design system changes"
+    end
+
+    "✅ SAFE TO CHERRY-PICK - Automated integration recommended"
+  end
+
+  def generate_summary(commits)
+    puts "\n\n"
+    puts "=" * 80
+    puts "📊 SUMMARY"
+    puts "=" * 80
+    puts
+
+    categories = commits.map { |c| categorize_commit(get_files_changed(c[:sha]), c[:message]) }
+    
+    safe_count = categories.count { |c| c[:safe] }
+    unsafe_count = categories.count { |c| !c[:safe] }
+
+    puts "Total Commits: #{commits.length}"
+    puts "Safe to Cherry-pick: #{safe_count}"
+    puts "Unsafe (Feature Removals): #{unsafe_count}"
+    puts
+
+    puts "Breakdown by Category:"
+    category_counts = categories.group_by { |c| c[:name] }.transform_values(&:count)
+    category_counts.each do |name, count|
+      emoji = categories.find { |c| c[:name] == name }[:emoji]
+      puts "  #{emoji} #{name}: #{count}"
+    end
+
+    puts "\n\n"
+    puts "🎯 RECOMMENDED ACTIONS:"
+    puts
+
+    safe_commits = commits.select.with_index { |c, i| categories[i][:safe] }
+    unsafe_commits = commits.select.with_index { |c, i| !categories[i][:safe] }
+
+    if safe_commits.any?
+      puts "✅ Cherry-pick these commits (#{safe_commits.length}):"
+      safe_commits.each do |commit|
+        puts "   git cherry-pick #{commit[:sha]}  # #{commit[:message]}"
+      end
+      puts
+    end
+
+    if unsafe_commits.any?
+      puts "❌ DO NOT cherry-pick these commits (#{unsafe_commits.length}):"
+      unsafe_commits.each do |commit|
+        puts "   # #{commit[:sha]} - #{commit[:message]}"
+      end
+      puts
+    end
+
+    puts "📝 Manual integration required for:"
+    puts "   • Design system updates"
+    puts "   • Configuration file merges"
+    puts "   • Documentation updates"
+    puts
+    puts "See docs/MANUAL_INTEGRATION_GUIDE.md for details"
+  end
+end
+
+# Run the analyzer
+CommitAnalyzer.new.run

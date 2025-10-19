@@ -1,0 +1,333 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Upstream Sync Helper Script
+# Helps safely integrate upstream changes while preserving local features
+
+require "fileutils"
+require "json"
+
+class UpstreamSync
+  SAFE_COMMITS = [
+    { sha: "24cf830c", desc: "Bump rexml from 3.4.1 to 3.4.2 (Security)" },
+    { sha: "2716fad7", desc: "Fix: Check user's theme preference during page load" },
+    { sha: "b4aa5194", desc: "Adjust color styles for checkboxes and text utilities" },
+    { sha: "f3fecc40", desc: "Add ability to delete invite codes" },
+    { sha: "5f97f2fc", desc: "Add new date format and 10-year period option" },
+    { sha: "dfd467cc", desc: "Add 'Reset account' followed by sample data preload" },
+    { sha: "730330ab", desc: "Add back button to password reset page" },
+    { sha: "b45f96e4", desc: "Password reset back button also after confirmation" },
+    { sha: "72738789", desc: "Langfuse config ENV vars" },
+    { sha: "cbc653a6", desc: "Track Langfuse sessions and users" },
+    { sha: "53adc4f2", desc: "Expose AI_DEBUG_MODE in .env.local.example" },
+    { sha: "617876f1", desc: "Add dummy PLAID_CLIENT_ID and PLAID_SECRET to env" },
+    { sha: "7245dd79", desc: "LLM context files cleanup" },
+    { sha: "2892ebb2", desc: "Codex environment script" },
+    { sha: "c1480f80", desc: "Removing orphaned assets" },
+    { sha: "ed99a4dc", desc: "Tag latest image on release" }
+  ].freeze
+
+  PROTECTED_FEATURES = [
+    "app/models/loan.rb",
+    "app/models/personal_lending.rb",
+    "app/models/pay_later.rb",
+    "app/components/loan/",
+    "app/services/loan/",
+    "app/services/personal_lending/",
+    "app/services/pay_later_services/",
+    "app/controllers/loans_controller.rb",
+    "app/controllers/personal_lendings_controller.rb",
+    "app/controllers/pay_laters_controller.rb",
+    "app/assets/tailwind/permoney-design-system.css",
+    "config/loan_settings.yml"
+  ].freeze
+
+  def initialize
+    @branch_name = "feature/upstream-sync-v0.6.4"
+    @backup_branch = "backup/pre-upstream-sync-#{Time.now.strftime('%Y%m%d-%H%M%S')}"
+  end
+
+  def run
+    puts "🚀 Permoney Upstream Sync Helper"
+    puts "=" * 60
+    puts
+
+    check_prerequisites
+    show_menu
+  end
+
+  private
+
+  def check_prerequisites
+    puts "📋 Checking prerequisites..."
+    
+    # Check if we're in a git repository
+    unless system("git rev-parse --git-dir > /dev/null 2>&1")
+      abort "❌ Not in a git repository!"
+    end
+
+    # Check if upstream remote exists
+    unless system("git remote | grep -q upstream")
+      abort "❌ Upstream remote not configured! Run: git remote add upstream https://github.com/we-promise/sure.git"
+    end
+
+    # Check for uncommitted changes
+    if system("git diff-index --quiet HEAD --")
+      puts "✅ Working directory is clean"
+    else
+      puts "⚠️  Warning: You have uncommitted changes"
+      print "Continue anyway? (y/N): "
+      response = gets.chomp.downcase
+      abort "Aborted by user" unless response == "y"
+    end
+
+    puts
+  end
+
+  def show_menu
+    loop do
+      puts "\n📚 Available Actions:"
+      puts "1. Fetch latest upstream changes"
+      puts "2. Show upstream commits analysis"
+      puts "3. Create integration branch"
+      puts "4. Cherry-pick safe commits (automated)"
+      puts "5. Show protected features status"
+      puts "6. Run tests"
+      puts "7. Show manual integration tasks"
+      puts "8. Exit"
+      puts
+      print "Select action (1-8): "
+
+      choice = gets.chomp
+
+      case choice
+      when "1" then fetch_upstream
+      when "2" then show_commits_analysis
+      when "3" then create_integration_branch
+      when "4" then cherry_pick_safe_commits
+      when "5" then check_protected_features
+      when "6" then run_tests
+      when "7" then show_manual_tasks
+      when "8"
+        puts "\n👋 Goodbye!"
+        exit 0
+      else
+        puts "❌ Invalid choice"
+      end
+    end
+  end
+
+  def fetch_upstream
+    puts "\n📥 Fetching upstream changes..."
+    system("git fetch upstream")
+    
+    commits_ahead = `git rev-list --count main..upstream/main`.strip.to_i
+    commits_behind = `git rev-list --count upstream/main..main`.strip.to_i
+    
+    puts "\n📊 Status:"
+    puts "  • Upstream commits ahead: #{commits_ahead}"
+    puts "  • Local commits ahead: #{commits_behind}"
+    puts "  • Current branch: #{current_branch}"
+  end
+
+  def show_commits_analysis
+    puts "\n📊 Upstream Commits Analysis"
+    puts "=" * 60
+    puts
+
+    puts "✅ SAFE COMMITS (#{SAFE_COMMITS.length} commits):"
+    puts "These can be cherry-picked automatically:\n\n"
+    SAFE_COMMITS.each_with_index do |commit, index|
+      puts "#{index + 1}. #{commit[:sha]} - #{commit[:desc]}"
+    end
+
+    puts "\n\n⚠️  DANGEROUS COMMITS:"
+    puts "These remove features and should NOT be cherry-picked:\n"
+    puts "  • Commits removing loan management features"
+    puts "  • Commits removing personal lending system"
+    puts "  • Commits removing pay later/BNPL system"
+    puts "  • Commits removing Indonesian finance features"
+    puts "  • Commits changing branding from Permoney to Sure"
+    
+    puts "\n\n📝 MANUAL INTEGRATION REQUIRED:"
+    puts "  • Design system updates (keep Permoney branding)"
+    puts "  • Configuration file merges (.env, Gemfile, etc.)"
+    puts "  • Documentation updates (AGENTS.md, README.md)"
+  end
+
+  def create_integration_branch
+    puts "\n🌿 Creating integration branch..."
+    
+    # Create backup branch first
+    puts "Creating backup branch: #{@backup_branch}"
+    system("git branch #{@backup_branch}")
+    
+    # Check if integration branch already exists
+    if system("git show-ref --verify --quiet refs/heads/#{@branch_name}")
+      puts "⚠️  Branch #{@branch_name} already exists"
+      print "Delete and recreate? (y/N): "
+      response = gets.chomp.downcase
+      if response == "y"
+        system("git branch -D #{@branch_name}")
+      else
+        puts "Aborted"
+        return
+      end
+    end
+    
+    # Create and checkout integration branch
+    system("git checkout -b #{@branch_name}")
+    puts "✅ Created and checked out branch: #{@branch_name}"
+    puts "✅ Backup created at: #{@backup_branch}"
+  end
+
+  def cherry_pick_safe_commits
+    puts "\n🍒 Cherry-picking safe commits..."
+    puts "=" * 60
+    
+    unless current_branch == @branch_name
+      puts "⚠️  Not on integration branch!"
+      print "Switch to #{@branch_name}? (y/N): "
+      response = gets.chomp.downcase
+      if response == "y"
+        system("git checkout #{@branch_name}")
+      else
+        puts "Aborted"
+        return
+      end
+    end
+
+    successful = 0
+    failed = []
+
+    SAFE_COMMITS.each_with_index do |commit, index|
+      puts "\n[#{index + 1}/#{SAFE_COMMITS.length}] Cherry-picking #{commit[:sha]}..."
+      puts "  #{commit[:desc]}"
+      
+      if system("git cherry-pick #{commit[:sha]}")
+        successful += 1
+        puts "  ✅ Success"
+      else
+        failed << commit
+        puts "  ❌ Failed - conflict detected"
+        print "  Resolve conflict and continue? (y/N): "
+        response = gets.chomp.downcase
+        if response == "y"
+          puts "  Please resolve conflicts, then run: git cherry-pick --continue"
+          puts "  Press Enter when done..."
+          gets
+        else
+          system("git cherry-pick --abort")
+          puts "  Cherry-pick aborted"
+        end
+      end
+    end
+
+    puts "\n\n📊 Cherry-pick Summary:"
+    puts "  ✅ Successful: #{successful}/#{SAFE_COMMITS.length}"
+    puts "  ❌ Failed: #{failed.length}/#{SAFE_COMMITS.length}"
+    
+    if failed.any?
+      puts "\n  Failed commits:"
+      failed.each do |commit|
+        puts "    • #{commit[:sha]} - #{commit[:desc]}"
+      end
+    end
+  end
+
+  def check_protected_features
+    puts "\n🛡️  Checking Protected Features..."
+    puts "=" * 60
+    puts
+
+    all_present = true
+
+    PROTECTED_FEATURES.each do |feature|
+      if feature.end_with?("/")
+        # Directory check
+        exists = Dir.exist?(feature)
+        status = exists ? "✅" : "❌"
+        puts "#{status} #{feature}"
+        all_present = false unless exists
+      else
+        # File check
+        exists = File.exist?(feature)
+        status = exists ? "✅" : "❌"
+        puts "#{status} #{feature}"
+        all_present = false unless exists
+      end
+    end
+
+    puts
+    if all_present
+      puts "✅ All protected features are present!"
+    else
+      puts "⚠️  Some protected features are missing!"
+      puts "This may indicate that upstream changes removed local features."
+    end
+  end
+
+  def run_tests
+    puts "\n🧪 Running Tests..."
+    puts "=" * 60
+    puts
+
+    puts "Running full test suite..."
+    system("bin/rails test")
+    
+    puts "\n\nRunning RuboCop..."
+    system("bin/rubocop")
+    
+    puts "\n\nRunning Brakeman security scan..."
+    system("bin/brakeman --no-pager")
+  end
+
+  def show_manual_tasks
+    puts "\n📝 Manual Integration Tasks"
+    puts "=" * 60
+    puts
+
+    puts "After cherry-picking safe commits, you need to manually integrate:\n\n"
+    
+    puts "1. Design System Updates:"
+    puts "   • Review: app/assets/tailwind/maybe-design-system.css"
+    puts "   • Apply improvements to: app/assets/tailwind/permoney-design-system.css"
+    puts "   • Keep Permoney branding and tokens\n"
+    
+    puts "2. Configuration Files:"
+    puts "   • Merge: .env.local.example (add Langfuse, AI_DEBUG_MODE vars)"
+    puts "   • Review: Gemfile and Gemfile.lock"
+    puts "   • Review: package.json and package-lock.json"
+    puts "   • Check: config/initializers/* for new settings\n"
+    
+    puts "3. Documentation:"
+    puts "   • Merge: AGENTS.md (keep Permoney-specific rules)"
+    puts "   • Review: .github/copilot-instructions.md"
+    puts "   • Update: README.md if needed\n"
+    
+    puts "4. Views/Layouts:"
+    puts "   • Add: app/views/layouts/_dark_mode_check.html.erb"
+    puts "   • Update: app/views/password_resets/new.html.erb (back button)"
+    puts "   • Update: app/views/invite_codes/_invite_code.html.erb (delete)\n"
+    
+    puts "5. Testing:"
+    puts "   • Run: bin/rails test"
+    puts "   • Test all loan management features"
+    puts "   • Test personal lending features"
+    puts "   • Test pay later features"
+    puts "   • Test new upstream features\n"
+    
+    puts "6. Final Steps:"
+    puts "   • Update CHANGELOG.md"
+    puts "   • Run: bin/rubocop -A"
+    puts "   • Run: bin/brakeman --no-pager"
+    puts "   • Create PR for review"
+  end
+
+  def current_branch
+    `git rev-parse --abbrev-ref HEAD`.strip
+  end
+end
+
+# Run the script
+UpstreamSync.new.run
