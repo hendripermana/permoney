@@ -1,5 +1,52 @@
 # Changelog
 
+## [Unreleased]
+
+### Added - Upstream Sync v0.6.4
+
+* **Langfuse AI Tracking Integration** - Track AI chat sessions and users for better monitoring
+* **Account Reset with Sample Data** - Quick demo setup and testing workflow
+* **Invite Codes Deletion** - Ability to delete unused invite codes
+* **New Date Format Options** - Added 10-year period view and new date formats
+* **AI Debug Mode** - Exposed AI_DEBUG_MODE for better development experience
+* **Codex Environment Script** - Added bin/codex-env for Codex integration
+* **Docker Image Tagging** - Tag latest image on release for better versioning
+
+### Improved - Upstream Sync v0.6.4
+
+* **Password Reset UX** - Added back button for better user flow
+* **Theme Preference** - Fixed theme check on page load to prevent flash
+* **Selection Bar Styles** - Improved contrast and semantic token usage
+* **Plaid Configuration** - Added dummy credentials for better onboarding
+* **LLM Context** - Cleaned up cursor rules for better AI context
+
+### Security - Upstream Sync v0.6.4
+
+* **rexml** - Bumped from 3.4.1 to 3.4.2 (security vulnerability patch)
+
+### Documentation - Upstream Sync v0.6.4
+
+* **Upstream Sync Strategy** - Comprehensive integration documentation
+* **Interactive Tools** - Added bin/upstream-sync and bin/analyze-upstream-commits
+* **Integration Guides** - Detailed manual integration and quick start guides
+* **Completion Report** - Full analysis and results documentation
+
+### Maintenance - Upstream Sync v0.6.4
+
+* **Code Quality** - Auto-fixed 414 rubocop offenses
+* **Orphaned Assets** - Removed unused SVG assets for cleaner repository
+
+### Notes
+
+This release integrates 16 upstream improvements from we-promise/sure (v0.6.4) while preserving ALL Permoney features:
+- ✅ Loan Management System (fully preserved)
+- ✅ Personal Lending System (fully preserved)
+- ✅ Pay Later/BNPL System (fully preserved)
+- ✅ Indonesian Finance Features (fully preserved)
+- ✅ Permoney Branding (fully preserved)
+
+See `docs/UPSTREAM_SYNC_COMPLETION_REPORT.md` for detailed integration report.
+
 ## [0.5.0](https://github.com/hendripermana/permoney/compare/v0.4.1...v0.5.0) (2025-10-19)
 
 
