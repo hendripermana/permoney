@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/hendripermana/permoney/compare/v0.5.0...v0.6.0) (2025-10-19)
+
+
+### Features
+
+* add database restore script and documentation ([29e6991](https://github.com/hendripermana/permoney/commit/29e6991a82bac3e3fd1daba8e9a308ab781a0947))
+
+
+### Bug Fixes
+
+* Check user's theme preference during page load ([#156](https://github.com/hendripermana/permoney/issues/156)) ([6a5c85f](https://github.com/hendripermana/permoney/commit/6a5c85f109939368a0a22588526df3c61819c72b))
+
 ## [Unreleased]
 
 ### Added - Upstream Sync v0.6.4
