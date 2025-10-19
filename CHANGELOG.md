@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.5.0](https://github.com/hendripermana/permoney/compare/v0.4.1...v0.5.0) (2025-10-19)
+
+
+### Features
+
+* add loan reminders job and enhance loan schedule options in forms ([f1624c7](https://github.com/hendripermana/permoney/commit/f1624c771b5bd44d8827fd74e779a5b04a6ca139))
+* add rate suggestion text and logic for display based on sharia, personal, or institutional modes ([cfe82d2](https://github.com/hendripermana/permoney/commit/cfe82d28347c1f03cd1b3d9f56560dc95662a7f4))
+* add tooltips and helper for loan form fields, and existing loan toggle in the form component. ([fbb209d](https://github.com/hendripermana/permoney/commit/fbb209dd0e3e07a628800e2c5e57456b294e393c))
+* enhance loan feature with comprehensive improvements ([4fc6631](https://github.com/hendripermana/permoney/commit/4fc66311f587f4604592ac71d61d2b71071a14a4))
+* enhance loan form with smart UX improvements ([939d7e6](https://github.com/hendripermana/permoney/commit/939d7e6069c87ee6bcc837b691910eb5b8d151bf))
+* enhance select and collection_select methods with better config handling and include_blank support ([ef622d8](https://github.com/hendripermana/permoney/commit/ef622d8676fe69957fe63dcef3f689ef1a069de8))
+
+
+### Bug Fixes
+
+* correct data-action attribute in loan form ([09460c1](https://github.com/hendripermana/permoney/commit/09460c12729f1a4c56c0ff3f9ced23923e0fac76))
+* show rate suggestion only on 'terms' step ([ef98463](https://github.com/hendripermana/permoney/commit/ef98463bf1a4c463fae0dc1abef3fff2b20ca220))
+* update loan form tooltips and modify loan wizard behavior to streamline next/submit actions. ([0d39ef2](https://github.com/hendripermana/permoney/commit/0d39ef23359efa5c1f794c432202e5435cca0730))
+
 ## [0.4.1](https://github.com/hendripermana/permoney/compare/v0.4.0...v0.4.1) (2025-09-20)
 
 
