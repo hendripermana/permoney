@@ -206,6 +206,7 @@ Rails.application.routes.draw do
       post :post_installment
       get :new_extra_payment
       post :create_extra_payment
+      post :record_backdated_payment
     end
   end
   resources :personal_lendings, only: %i[new create edit update] do

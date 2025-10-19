@@ -6,3 +6,10 @@
     ) do |account_page| %>
   <%= account_page.with_activity_feed(feed_data: @activity_feed_data, pagy: @pagy, search: @q[:search]) %>
 <% end %>
+
+<% if defined?(@loan_adjustment_prompt) && @loan_adjustment_prompt.present? %>
+  <%= render "loans/backdated_payment_prompt",
+             account: @account,
+             prompt: @loan_adjustment_prompt,
+             source_accounts: @loan_prompt_sources %>
+<% end %>

@@ -30,6 +30,11 @@ class Loan::RemainingPrincipalCalculator
 
     remaining = (base + disbursements - principal_paid)
 
+    if principal_paid.zero?
+      fallback = @account.accountable.principal_amount
+      return fallback.to_d if fallback.present?
+    end
+
     begin
       Rails.logger.info({ at: "Loan.Remaining", account_id: @account.id, disburse_count: disbursement_count, principal_payments_count: principal_payment_count, remaining: remaining.to_s }.to_json)
     rescue

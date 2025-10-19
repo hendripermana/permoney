@@ -1,5 +1,5 @@
 <% if params[:step] == "method_select" %>
-  <p class="text-xs text-secondary mb-2"><%= t(".method_select_hint") %></p>
+  <p class="text-xs text-subtle mb-2">Choose how you want to create this loan</p>
   <%= render "accounts/new/method_selector",
              path: new_loan_path(return_to: params[:return_to]),
              show_us_link: @show_us_link,
@@ -7,9 +7,9 @@
              accountable_type: "Loan" %>
 <% else %>
   <%= render DS::Dialog.new do |dialog| %>
-    <% dialog.with_header(title: t(".title")) %>
+    <% dialog.with_header(title: "Create a new loan") %>
     <% dialog.with_body do %>
-      <p class="text-xs text-secondary mb-3"><%= t(".dialog_body_hint") %></p>
+      <p class="text-sm text-subtle mb-4">Track loans from banks, friends, or other sources</p>
       <%= render "loans/form", account: @account, url: loans_path %>
     <% end %>
   <% end %>

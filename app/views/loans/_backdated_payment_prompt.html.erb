@@ -1,0 +1,53 @@
+<%# locals: (account:, prompt:, source_accounts:) %>
+<%= render DS::Dialog.new(auto_open: true, width: :md, frame: "loan-adjustment-#{account.id}") do |dialog| %>
+  <% dialog.with_header(title: "Record prior payment?", subtitle: "We noticed the current balance is lower than the original amount.") %>
+  <% dialog.with_body do %>
+    <% remaining_balance = account.accountable.principal_amount || account.balance %>
+    <div class="space-y-4">
+      <div class="rounded-lg border border-primary/20 bg-container p-4">
+        <p class="text-sm text-secondary">
+          You entered an original principal of
+          <span class="font-semibold text-primary"><%= number_to_currency(account.accountable.initial_balance || 0, unit: account.currency) %></span>
+          and a current balance of
+          <span class="font-semibold text-primary"><%= number_to_currency(remaining_balance, unit: account.currency) %></span>.
+          This indicates a prior repayment of
+          <span class="font-semibold text-primary"><%= number_to_currency(prompt[:amount], unit: account.currency) %></span>.
+          Do you want to record that repayment now?
+        </p>
+      </div>
+
+      <%= styled_form_with url: record_backdated_payment_loan_path(account), scope: :loan_payment, method: :post, data: { turbo_frame: "_top" } do |form| %>
+        <%= form.hidden_field :amount, value: prompt[:amount].to_s %>
+        <%= form.hidden_field :reconciliation_entry_id, value: prompt[:reconciliation_entry_id] %>
+
+        <div class="space-y-3">
+          <div class="grid gap-3 md:grid-cols-2">
+            <%= form.collection_select :source_account_id,
+                                       source_accounts,
+                                       :id,
+                                       :name,
+                                       { include_blank: "Select account", label: "Paid from account" },
+                                       { required: true, disabled: source_accounts.empty?, data: { controller: (source_accounts.empty? ? "" : nil) } } %>
+            <% if source_accounts.empty? %>
+              <p class="text-xs text-warning">Add a cash/bank account first to record the payment.</p>
+            <% end %>
+
+            <%= form.date_field :date,
+                                label: "Payment date",
+                                value: prompt[:suggested_date],
+                                required: true %>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3 mt-6">
+          <%= link_to "Keep adjustment",
+                      record_backdated_payment_loan_path(account, skip: true, loan_payment: { reconciliation_entry_id: prompt[:reconciliation_entry_id] }),
+                      data: { turbo_method: :post, turbo_frame: "_top" },
+                      class: "inline-flex items-center gap-1 rounded-lg border border-secondary px-3 py-2 text-sm text-secondary hover:bg-container-subtle" %>
+
+          <%= render DS::Button.new(text: "Record payment", variant: "primary", icon: "check", type: "submit") %>
+        </div>
+      <% end %>
+    </div>
+  <% end %>
+<% end %>

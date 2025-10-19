@@ -1,0 +1,173 @@
+/* Loan Wizard Styles - Theme Aware */
+.loan-wizard-container {
+  @apply max-w-4xl mx-auto;
+}
+
+.loan-type-card {
+  @apply transition-all duration-200 ease-in-out bg-container hover:bg-container-hover;
+  transform-origin: center;
+}
+
+.loan-type-card:hover {
+  @apply shadow-md border-primary/40;
+  transform: scale(1.02);
+}
+
+.loan-type-card:active {
+  transform: scale(0.98);
+}
+
+.loan-type-card.selected {
+  @apply border-primary bg-surface ring-2 ring-primary/20 shadow-lg;
+}
+
+.loan-type-card .selection-indicator {
+  @apply transition-all duration-200;
+}
+
+.step-indicator {
+  @apply transition-all duration-300 ease-in-out;
+  transform-origin: center;
+  min-width: 80px; /* Ensure consistent spacing */
+}
+
+.step-indicator:hover {
+  transform: scale(1.05);
+}
+
+/* Progress bar container improvements */
+.progress-bar-container {
+  @apply relative;
+}
+
+/* Step layout improvements */
+.wizard-steps-container {
+  @apply relative px-8 py-4; /* Add padding to accommodate connector line */
+}
+
+/* Ensure step indicators are properly spaced */
+.step-indicator {
+  @apply flex-shrink-0; /* Prevent shrinking */
+  flex: 1; /* Equal distribution */
+  max-width: 120px; /* Consistent max width */
+}
+
+.step-circle {
+  @apply relative z-10 transition-all duration-300 bg-surface;
+}
+
+.step-circle.active {
+  @apply bg-primary text-white ring-4 ring-primary/20 shadow-lg;
+  animation: pulse-glow 2s infinite;
+}
+
+.step-circle.completed {
+  @apply bg-success text-white ring-4 ring-success/20 shadow-md;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { 
+    box-shadow: 0 0 0 0 rgba(var(--primary-rgb), 0.4);
+  }
+  50% { 
+    box-shadow: 0 0 0 10px rgba(var(--primary-rgb), 0);
+  }
+}
+
+/* Form field improvements - Theme Aware */
+.form-input {
+  @apply bg-container border-gray-200 text-primary;
+}
+
+.form-input:focus {
+  @apply ring-2 ring-primary/20 border-primary bg-container;
+}
+
+.form-select {
+  @apply bg-container border-gray-200 text-primary;
+}
+
+.form-select:focus {
+  @apply ring-2 ring-primary/20 border-primary bg-container;
+}
+
+/* Smart suggestion styling */
+.smart-suggestion {
+  @apply animate-pulse;
+}
+
+.smart-suggestion:hover {
+  @apply animate-none;
+}
+
+/* Payment calculator preview */
+.payment-calculator {
+  @apply bg-gradient-to-r from-primary/5 to-primary/10 border border-primary/20;
+}
+
+.payment-amount {
+  @apply text-primary font-bold;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Loading states */
+.calculating {
+  @apply opacity-50 pointer-events-none;
+}
+
+.calculating::after {
+  content: '';
+  @apply absolute inset-0 bg-white/50 rounded-lg;
+  background-image: linear-gradient(45deg, transparent 40%, rgba(255,255,255,0.5) 50%, transparent 60%);
+  animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+@keyframes progress-pulse {
+  0%, 100% { 
+    opacity: 1;
+    filter: brightness(1);
+    box-shadow: 0 0 0 0 rgba(16, 168, 97, 0.4);
+  }
+  50% { 
+    opacity: 0.9;
+    filter: brightness(1.1);
+    box-shadow: 0 0 0 4px rgba(16, 168, 97, 0.1);
+  }
+}
+
+/* Enhanced progress bar styling */
+.progress-bar-container {
+  @apply relative overflow-hidden;
+}
+
+.progress-bar-glow {
+  @apply absolute inset-0 rounded-full;
+  background: linear-gradient(90deg, transparent, rgba(16, 168, 97, 0.3), transparent);
+  animation: progress-glow 2s ease-in-out infinite;
+}
+
+@keyframes progress-glow {
+  0% { transform: translateX(-100%); }
+  50% { transform: translateX(0%); }
+  100% { transform: translateX(100%); }
+}
+
+/* Responsive improvements */
+@media (max-width: 768px) {
+  .loan-wizard-container {
+    @apply px-4;
+  }
+  
+  .step-indicator {
+    @apply text-xs;
+  }
+  
+  .loan-type-card {
+    @apply text-sm;
+  }
+}

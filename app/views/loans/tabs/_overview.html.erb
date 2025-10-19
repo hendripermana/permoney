@@ -1,62 +1,190 @@
 <%# locals: (account:) %>
 
-<div class="grid grid-cols-3 gap-2">
-  <%= summary_card title: t(".original_principal") do %>
-    <%= format_money account.loan.original_balance %>
-  <% end %>
+<% original_money = account.loan.original_balance || Money.new(0, account.currency) %>
+<% remaining_money = account.loan.remaining_principal_money || Money.new(0, account.currency) %>
+<% total_paid_money = begin
+     original_money - remaining_money
+   rescue
+     Money.new(0, account.currency)
+   end %>
+<% last_payment_entry = account.entries
+      .joins("INNER JOIN transactions ON transactions.id = entries.entryable_id AND entries.entryable_type = 'Transaction'")
+      .where(transactions: { kind: "funds_movement" })
+      .where("entries.amount < 0")
+      .order(date: :desc, created_at: :desc)
+      .first %>
+<% last_payment_money = if last_payment_entry
+     Money.new(-last_payment_entry.amount.to_d, account.currency)
+   end %>
+<% last_payment_date = last_payment_entry&.date %>
 
-  <%= summary_card title: t(".remaining_principal") do %>
-    <%= format_money account.loan.remaining_principal_money %>
-  <% end %>
+<div class="space-y-6">
+  <!-- Loan Status Overview -->
+  <div class="bg-gradient-to-r from-primary/10 to-primary/5 rounded-xl p-6 border border-primary/20">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-lg font-semibold text-primary">Loan Overview</h3>
+      <div class="flex items-center gap-2">
+        <% if account.loan.sharia_compliant? %>
+          <span class="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">
+            <%= icon "check-circle", size: "xs" %>
+            Syariah Compliant
+          </span>
+        <% end %>
+        <% if account.loan.personal_loan? %>
+          <span class="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">
+            <%= icon "user", size: "xs" %>
+            Personal Loan
+          </span>
+        <% end %>
+      </div>
+    </div>
 
-  <%= summary_card title: account.loan.rate_label do %>
-    <% if account.loan.sharia_compliant? %>
-      <% if account.loan.islamic_product_type == "murabaha" && account.loan.margin_rate.present? %>
-        <%= number_to_percentage(account.loan.margin_rate, precision: 3) %>
-        <span class="text-xs text-secondary block">Margin Rate</span>
-      <% elsif account.loan.islamic_product_type.in?(%w[musyarakah mudharabah]) && account.loan.profit_sharing_ratio.present? %>
-        <%= number_to_percentage(account.loan.profit_sharing_ratio * 100, precision: 1) %>
-        <span class="text-xs text-secondary block">Profit Share</span>
-      <% elsif account.loan.islamic_product_type == "qard_hasan" %>
-        <span class="text-success">Interest-Free</span>
-        <span class="text-xs text-secondary block">Qard Hasan</span>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="text-center">
+        <div class="text-2xl font-bold text-primary"><%= format_money original_money %></div>
+        <div class="text-sm text-secondary">Original Principal</div>
+      </div>
+      <div class="text-center">
+        <div class="text-2xl font-bold text-orange-600"><%= format_money remaining_money %></div>
+        <div class="text-sm text-secondary">Remaining Balance</div>
+      </div>
+      <div class="text-center">
+        <div class="text-2xl font-bold text-green-600">
+          <%= number_to_percentage(((account.loan.original_balance.to_f - account.loan.remaining_principal_money.to_f) / account.loan.original_balance.to_f * 100), precision: 1) %>
+        </div>
+        <div class="text-sm text-secondary">Paid Progress</div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+      <div class="rounded-lg border border-primary/10 bg-container px-4 py-3">
+        <p class="text-xs font-semibold uppercase tracking-wide text-secondary">Total paid so far</p>
+        <p class="text-lg font-semibold text-primary">
+          <%= format_money total_paid_money %>
+        </p>
+      </div>
+      <div class="rounded-lg border border-primary/10 bg-container px-4 py-3">
+        <p class="text-xs font-semibold uppercase tracking-wide text-secondary">Last payment</p>
+        <% if last_payment_money.present? %>
+          <p class="text-lg font-semibold text-primary"><%= format_money last_payment_money %></p>
+          <p class="text-xs text-secondary">Recorded on <%= l(last_payment_date) %></p>
+        <% else %>
+          <p class="text-sm text-secondary">No payments recorded yet</p>
+        <% end %>
+      </div>
+    </div>
+  </div>
+
+  <!-- Key Metrics Grid -->
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <%= summary_card title: account.loan.rate_label do %>
+      <% if account.loan.sharia_compliant? %>
+        <% if account.loan.islamic_product_type == "murabaha" && account.loan.margin_rate.present? %>
+          <%= number_to_percentage(account.loan.margin_rate, precision: 3) %>
+          <span class="text-xs text-secondary block">Margin Rate</span>
+        <% elsif account.loan.islamic_product_type.in?(%w[musyarakah mudharabah]) && account.loan.profit_sharing_ratio.present? %>
+          <%= number_to_percentage(account.loan.profit_sharing_ratio * 100, precision: 1) %>
+          <span class="text-xs text-secondary block">Profit Share</span>
+        <% elsif account.loan.islamic_product_type == "qard_hasan" %>
+          <span class="text-success">Interest-Free</span>
+          <span class="text-xs text-secondary block">Qard Hasan</span>
+        <% else %>
+          <%= t(".unknown") %>
+        <% end %>
+      <% elsif account.loan.interest_free? %>
+        <span class="text-success font-semibold">Interest-free</span>
+        <span class="text-xs text-secondary block">No interest charged</span>
+      <% elsif account.loan.interest_rate.present? %>
+        <%= number_to_percentage(account.loan.interest_rate, precision: 3) %>
+        <span class="text-xs text-secondary block">Interest Rate</span>
       <% else %>
         <%= t(".unknown") %>
       <% end %>
-    <% elsif account.loan.interest_rate.present? %>
-      <%= number_to_percentage(account.loan.interest_rate, precision: 3) %>
-      <span class="text-xs text-secondary block">Interest Rate</span>
-    <% else %>
-      <%= t(".unknown") %>
     <% end %>
-  <% end %>
 
-  <%= summary_card title: t(".monthly_payment") do %>
-    <% if account.loan.rate_type.present? && account.loan.rate_type != 'fixed' %>
-      <%= t(".not_applicable") %>
-    <% elsif account.loan.rate_type == 'fixed' && account.loan.monthly_payment.present? %>
-      <%= format_money(account.loan.monthly_payment) %>
-    <% else %>
-      <%= t(".unknown") %>
-    <% end %>
-  <% end %>
-
-  <%= summary_card title: t(".term") do %>
-    <% if account.loan.term_months.present? %>
-      <% if account.loan.term_months < 12 %>
-        <%= pluralize(account.loan.term_months, "month") %>
+    <%= summary_card title: t(".monthly_payment") do %>
+      <% if account.loan.loan_installments.pending.any? && account.loan.monthly_payment.present? %>
+        <%= format_money(account.loan.monthly_payment) %>
+        <span class="text-xs text-secondary block">Estimated</span>
+      <% elsif last_payment_money.present? %>
+        <%= format_money(last_payment_money) %>
+        <span class="text-xs text-secondary block">Last recorded payment</span>
       <% else %>
-        <%= pluralize(account.loan.term_months / 12, "year") %>
+        <%= t(".not_applicable") %>
       <% end %>
-    <% else %>
-      <%= t(".unknown") %>
     <% end %>
-  <% end %>
 
-  <%= summary_card title: t(".type") do %>
-    <%= account.loan.rate_type&.titleize || t(".unknown") %>
+    <%= summary_card title: t(".term") do %>
+      <% term_value = account.loan.term_months || account.loan.tenor_months %>
+      <% if term_value.present? %>
+        <% if term_value < 12 %>
+          <%= pluralize(term_value, "month") %>
+        <% else %>
+          <%= pluralize((term_value / 12.0).round(1), "year") %>
+        <% end %>
+      <% else %>
+        <%= t(".unknown") %>
+      <% end %>
+    <% end %>
+
+    <%= summary_card title: t(".next_payment") do %>
+      <% next_installment = account.loan_installments.where(status: 'planned').order(:installment_no).first %>
+      <% if next_installment %>
+        <div><%= format_money next_installment.total_money %></div>
+        <div class="text-xs text-secondary">Due <%= next_installment.due_date.strftime('%b %d, %Y') %></div>
+      <% elsif last_payment_money.present? %>
+        <div><%= format_money last_payment_money %></div>
+        <div class="text-xs text-secondary">Last paid <%= l(last_payment_date) %></div>
+      <% else %>
+        <span class="text-green-600">All Paid</span>
+      <% end %>
+    <% end %>
+  </div>
+
+  <!-- Payment Progress -->
+  <% if account.loan_installments.any? %>
+    <div class="bg-surface rounded-lg p-6 border">
+      <h4 class="font-medium text-primary mb-4">Payment Progress</h4>
+      <div class="space-y-3">
+        <% account.loan_installments.order(:installment_no).first(5).each do |installment| %>
+          <div class="flex items-center justify-between py-2 border-b border-primary/10 last:border-b-0">
+            <div class="flex items-center gap-3">
+              <div class="w-8 text-sm text-secondary">#{installment.installment_no}</div>
+              <div>
+                <div class="text-sm font-medium"><%= format_money installment.total_money %></div>
+                <div class="text-xs text-secondary">Due <%= installment.due_date.strftime('%b %d') %></div>
+              </div>
+            </div>
+            <div class="text-right">
+              <% if installment.posted? %>
+                <span class="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">
+                  <%= icon "check", size: "xs" %>
+                  Paid
+                </span>
+              <% elsif installment.partially_paid? %>
+                <div>
+                  <div class="text-sm font-medium text-orange-600">
+                    <%= number_to_percentage(installment.payment_progress * 100, precision: 1) %>
+                  </div>
+                  <div class="text-xs text-secondary">Partial</div>
+                </div>
+              <% else %>
+                <span class="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 text-gray-800 text-xs rounded-full">
+                  <%= icon "clock", size: "xs" %>
+                  Pending
+                </span>
+              <% end %>
+            </div>
+          </div>
+        <% end %>
+        <% if account.loan_installments.count > 5 %>
+          <div class="text-center pt-2">
+            <span class="text-sm text-secondary">... and <%= account.loan_installments.count - 5 %> more installments</span>
+          </div>
+        <% end %>
+      </div>
+    </div>
   <% end %>
-</div>
 
 <% if account.accountable.personal_loan? %>
   <div class="bg-container p-4 rounded-lg mt-6">
