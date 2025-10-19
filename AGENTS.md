@@ -1,5 +1,74 @@
 # Permoney Development Guide for AI Agents
 
+# 🤖 AI Agents Documentation
+
+## ⚠️ CRITICAL: Development Philosophy & Documentation Policy
+
+### 🚫 NO QUICK FIXES - ONLY PERMANENT SOLUTIONS
+
+**This project requires PROPER, COMPREHENSIVE, and PERMANENT solutions. NO shortcuts!**
+
+#### Core Development Principles:
+
+1. **🎯 PRIORITY: Full latest ruby on rails Ecosystem + Shadcn/UI**
+   - ALWAYS use ruby on rails latest stable version
+   - ALWAYS use shadcn/ui latest stable version
+   - postgresql latest stable version
+   - redis latest stable version
+   - use latest stable versions of gems
+   - always upgrade if you find deprecated gems or anything to latest stable version
+
+2. **🔍 ALWAYS USE CONTEXT7 AND EXA MCP** - Use Context7 MCP tool for up-to-date library documentation
+   - Get latest Ruby on Rails component documentation
+   - Get latest Shadcn/ui component documentation
+   - Verify API changes and best practices
+   - Never assume - always verify with official docs
+   - If need browsing use exa MCP
+
+3. **🛠️ NO QUICK FIXES** - Every solution must be:
+   - ✅ **Proper**: Based on official Ruby on Rails & Shadcn/ui documentation
+   - ✅ **Comprehensive**: Addresses root cause, not just symptoms
+   - ✅ **Permanent**: Won't break in future or cause new issues
+   - ✅ **Well-analyzed**: Thoroughly investigated before implementation
+   - ✅ **Tested**: Verified to work correctly
+   - ❌ **NOT** a temporary workaround
+   - ❌ **NOT** a "quick fix" that creates technical debt
+   - **NOT** a Hardcoded - Always use Context7 MCP to verify ruby on rails/Shadcn and other stack in this project docs
+   - 
+
+4. **🐛 WHEN FACING BUGS**:
+   - ❌ **NEVER** disable features or tools when stuck
+   - ❌ **NEVER** give up or suggest "simple fixes"
+   - ✅ **ALWAYS** analyze the root cause thoroughly
+   - ✅ **ALWAYS** use Context7 MCP to verify ruby on rails/Shadcn and other stack in this project docs
+   - ✅ **ALWAYS** improve and optimize until bug is completely resolved
+   - ✅ **ALWAYS** be patient and work incrementally
+   - ✅ **ALWAYS** test thoroughly after each change
+
+5. **📈 CONTINUOUS IMPROVEMENT**:
+   - Work incrementally with small, tested changes
+   - Each change should improve the codebase
+   - Never leave code in a broken state
+   - Always verify changes work before moving on
+   - Document complex logic with inline comments
+   - Leverage full ruby on rails ecosystem capabilities
+
+6. **🎯 QUALITY OVER SPEED**:
+   - Take time to understand the problem deeply
+   - Research proper ruby on rails & Shadcn/ui solutions using Context7 and EXA MCP
+   - Implement carefully and test thoroughly
+   - A proper solution takes longer but saves time in the long run
+   - Use ruby on rails ecosystem to its full potential
+   - not hardcoded
+   - not workarounds
+   - not quick fixes
+   - not temporary solutions
+   - not "quick fixes" that create technical debt
+   - not "simple fixes" that don't improve the codebase
+   - not "temporary solutions" that don't improve the codebase
+   - not create simple version of something when you stuck on something you improve or fix must do PROPER and PERFECT way to achieve that
+
+
 This document provides comprehensive guidance for AI agents working on the Permoney codebase. It combines essential development patterns, architectural decisions, and best practices.
 
 ## Project Overview
