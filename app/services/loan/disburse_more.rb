@@ -14,4 +14,3 @@ class Loan::DisburseMore
     Result.new(success?: res.success?, entry: res.entry, transfer: res.transfer, error: res.error)
   end
 end
-

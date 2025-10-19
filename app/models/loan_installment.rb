@@ -22,11 +22,11 @@ class LoanInstallment < ApplicationRecord
   end
 
   def paid_principal
-    attributes['paid_principal'] || 0
+    attributes["paid_principal"] || 0
   end
 
   def paid_interest
-    attributes['paid_interest'] || 0
+    attributes["paid_interest"] || 0
   end
 
   def remaining_principal

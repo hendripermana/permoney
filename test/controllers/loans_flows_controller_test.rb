@@ -49,4 +49,3 @@ class LoansFlowsControllerTest < ActionDispatch::IntegrationTest
     assert_includes @response.body, "2,050,000"
   end
 end
-

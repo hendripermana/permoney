@@ -36,4 +36,3 @@ class LoanRemainingPrincipalCalculatorTest < ActiveSupport::TestCase
     assert_in_delta 2_050_000, rp2, 0.01
   end
 end
-

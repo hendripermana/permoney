@@ -365,16 +365,16 @@ class Loan::PayableTest < ActiveSupport::TestCase
 
   private
 
-  def assert_difference(expression, difference = 1, &block)
-    before = eval(expression)
-    yield
-    after = eval(expression)
-    assert_equal before + difference, after, "Expected #{expression} to change by #{difference}"
-  end
+    def assert_difference(expression, difference = 1, &block)
+      before = eval(expression)
+      yield
+      after = eval(expression)
+      assert_equal before + difference, after, "Expected #{expression} to change by #{difference}"
+    end
 
-  def assert_nothing_raised
-    yield
-  rescue => e
-    flunk "Expected no exception but got #{e.class}: #{e.message}"
-  end
+    def assert_nothing_raised
+      yield
+    rescue => e
+      flunk "Expected no exception but got #{e.class}: #{e.message}"
+    end
 end

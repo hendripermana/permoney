@@ -4,7 +4,7 @@ require "test_helper"
 
 class LoanInstallmentTest < ActiveSupport::TestCase
   test "should have correct enum values" do
-    assert_equal ["planned", "posted", "partially_paid"], LoanInstallment.statuses.keys
+    assert_equal [ "planned", "posted", "partially_paid" ], LoanInstallment.statuses.keys
   end
 
   test "should calculate money values correctly" do

@@ -86,12 +86,12 @@ class Loan::AdditionalBorrowingService
         date: date,
         amount: amount.to_d
       ).create
-      
+
       if @transfer.persisted?
         # Update the outflow transaction to be marked as loan_disbursement
         # so the RemainingPrincipalCalculator can track it properly
         @transfer.outflow_transaction.update!(kind: "loan_disbursement")
-        
+
         # Set the borrowing entry reference for consistency
         @borrowing_entry = @transfer.outflow_transaction.entry
       end

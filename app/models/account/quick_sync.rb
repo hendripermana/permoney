@@ -4,4 +4,3 @@ class Account::QuickSync
     Balance::Materializer.new(account, strategy: strategy).materialize_balances
   end
 end
-

@@ -40,10 +40,10 @@ class LoanTest < ActiveSupport::TestCase
   test "balloon amount persists as decimal" do
     loan = Loan.create!(
       debt_kind: "institutional",
-      counterparty_type: "institution", 
+      counterparty_type: "institution",
       counterparty_name: "Test Bank",
-      interest_rate: 1, 
-      term_months: 12, 
+      interest_rate: 1,
+      term_months: 12,
       rate_type: "fixed"
     )
     loan.send(:balloon_amount=, "15000")
@@ -75,8 +75,8 @@ class LoanTest < ActiveSupport::TestCase
       debt_kind: "personal",
       counterparty_type: "person",
       counterparty_name: "Test Friend",
-      term_months: 6, 
-      rate_type: "fixed", 
+      term_months: 6,
+      rate_type: "fixed",
       relationship: "friend"
     )
     assert_equal "friend", loan.reload.relationship
@@ -98,7 +98,7 @@ class LoanTest < ActiveSupport::TestCase
     # Test that calculator can be instantiated
     assert_nothing_raised do
       Loan::PaymentCalculator.new(
-        loan: loan, 
+        loan: loan,
         principal_amount: 1000000,
         rate_or_profit: 12.0,
         tenor_months: 12,
@@ -118,11 +118,11 @@ class LoanTest < ActiveSupport::TestCase
     )
 
     # Test that calculator can handle different methods
-    ["ANNUITY", "FLAT", "EFFECTIVE"].each do |method|
+    [ "ANNUITY", "FLAT", "EFFECTIVE" ].each do |method|
       loan.schedule_method = method
       assert_nothing_raised do
         Loan::PaymentCalculator.new(
-          loan: loan, 
+          loan: loan,
           principal_amount: 1000000,
           rate_or_profit: 12.0,
           tenor_months: 12,

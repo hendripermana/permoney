@@ -20,4 +20,3 @@ class LoansSchedulePreviewTest < ActionDispatch::IntegrationTest
     assert_includes @response.body, I18n.t("loans.schedule_preview.columns.principal")
   end
 end
-

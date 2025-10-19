@@ -33,4 +33,3 @@ class LoanPaymentServiceSplitTest < ActiveSupport::TestCase
     assert_in_delta(before - 100_000, after, 0.01, "remaining principal reduced by principal portion only")
   end
 end
-

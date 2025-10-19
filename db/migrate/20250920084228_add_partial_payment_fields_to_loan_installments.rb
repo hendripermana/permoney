@@ -10,7 +10,7 @@ class AddPartialPaymentFieldsToLoanInstallments < ActiveRecord::Migration[7.2]
     # Note: This will be handled by the model enum definition
 
     # Add index for better query performance
-    add_index :loan_installments, [:account_id, :status]
+    add_index :loan_installments, [ :account_id, :status ]
     add_index :loan_installments, :last_payment_date
   end
 end

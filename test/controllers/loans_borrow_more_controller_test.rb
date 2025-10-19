@@ -32,4 +32,3 @@ class LoansBorrowMoreControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to account_path(@loan)
   end
 end
-

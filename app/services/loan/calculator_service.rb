@@ -39,7 +39,7 @@ module Loan
       (1..term_months).each do |month|
         interest_amount = calculate_interest(remaining_balance)
         principal_payment = payment_amount - interest_amount
-        
+
         # Adjust last payment for rounding
         if month == term_months
           principal_payment = remaining_balance
@@ -54,7 +54,7 @@ module Loan
           payment_amount: payment_amount,
           principal_payment: principal_payment,
           interest_payment: interest_amount,
-          remaining_balance: [remaining_balance, Money.new(0, currency)].max
+          remaining_balance: [ remaining_balance, Money.new(0, currency) ].max
         }
       end
 
@@ -153,81 +153,81 @@ module Loan
 
     private
 
-    def initialize_from_loan(loan)
-      @principal = loan.principal_amount_money || Money.new(0, loan.account&.currency || "USD")
-      @rate = loan.effective_rate || 0
-      @term_months = loan.term_months || 0
-      @payment_frequency = loan.payment_frequency || "MONTHLY"
-      @schedule_method = loan.schedule_method || "ANNUITY"
-      @currency = loan.account&.currency || "USD"
-    end
-
-    def initialize_from_params(params)
-      @principal = Money.new(params[:principal] || 0, params[:currency] || "USD")
-      @rate = params[:rate] || 0
-      @term_months = params[:term_months] || 0
-      @payment_frequency = params[:payment_frequency] || "MONTHLY"
-      @schedule_method = params[:schedule_method] || "ANNUITY"
-      @currency = params[:currency] || "USD"
-    end
-
-    def calculate_annuity_payment
-      return principal / term_months if rate.zero?
-
-      monthly_rate = rate / 100.0 / 12
-      payment = principal * (monthly_rate * (1 + monthly_rate) ** term_months) / 
-                ((1 + monthly_rate) ** term_months - 1)
-      
-      Money.new(payment.round, currency)
-    end
-
-    def calculate_linear_payment
-      principal_payment = principal / term_months
-      first_month_interest = calculate_interest(principal)
-      principal_payment + first_month_interest
-    end
-
-    def calculate_balloon_payment
-      # For balloon loans, typically only interest is paid monthly
-      calculate_interest(principal)
-    end
-
-    def calculate_interest(balance)
-      monthly_rate = rate / 100.0 / 12
-      Money.new((balance.amount * monthly_rate).round, currency)
-    end
-
-    def calculate_accelerated_schedule(extra_payment)
-      schedule = []
-      remaining_balance = principal
-      payment_amount = monthly_payment + extra_payment
-      month = 0
-
-      while remaining_balance > Money.new(0, currency) && month < term_months * 2
-        month += 1
-        interest_amount = calculate_interest(remaining_balance)
-        principal_payment = payment_amount - interest_amount
-
-        if principal_payment >= remaining_balance
-          principal_payment = remaining_balance
-          payment_amount = principal_payment + interest_amount
-        end
-
-        remaining_balance -= principal_payment
-
-        schedule << {
-          payment_number: month,
-          payment_date: Date.current + month.months,
-          payment_amount: payment_amount,
-          principal_payment: principal_payment,
-          interest_payment: interest_amount,
-          remaining_balance: [remaining_balance, Money.new(0, currency)].max
-        }
-
-        break if remaining_balance.zero?
+      def initialize_from_loan(loan)
+        @principal = loan.principal_amount_money || Money.new(0, loan.account&.currency || "USD")
+        @rate = loan.effective_rate || 0
+        @term_months = loan.term_months || 0
+        @payment_frequency = loan.payment_frequency || "MONTHLY"
+        @schedule_method = loan.schedule_method || "ANNUITY"
+        @currency = loan.account&.currency || "USD"
       end
 
-      schedule
-    end
+      def initialize_from_params(params)
+        @principal = Money.new(params[:principal] || 0, params[:currency] || "USD")
+        @rate = params[:rate] || 0
+        @term_months = params[:term_months] || 0
+        @payment_frequency = params[:payment_frequency] || "MONTHLY"
+        @schedule_method = params[:schedule_method] || "ANNUITY"
+        @currency = params[:currency] || "USD"
+      end
+
+      def calculate_annuity_payment
+        return principal / term_months if rate.zero?
+
+        monthly_rate = rate / 100.0 / 12
+        payment = principal * (monthly_rate * (1 + monthly_rate) ** term_months) /
+                  ((1 + monthly_rate) ** term_months - 1)
+
+        Money.new(payment.round, currency)
+      end
+
+      def calculate_linear_payment
+        principal_payment = principal / term_months
+        first_month_interest = calculate_interest(principal)
+        principal_payment + first_month_interest
+      end
+
+      def calculate_balloon_payment
+        # For balloon loans, typically only interest is paid monthly
+        calculate_interest(principal)
+      end
+
+      def calculate_interest(balance)
+        monthly_rate = rate / 100.0 / 12
+        Money.new((balance.amount * monthly_rate).round, currency)
+      end
+
+      def calculate_accelerated_schedule(extra_payment)
+        schedule = []
+        remaining_balance = principal
+        payment_amount = monthly_payment + extra_payment
+        month = 0
+
+        while remaining_balance > Money.new(0, currency) && month < term_months * 2
+          month += 1
+          interest_amount = calculate_interest(remaining_balance)
+          principal_payment = payment_amount - interest_amount
+
+          if principal_payment >= remaining_balance
+            principal_payment = remaining_balance
+            payment_amount = principal_payment + interest_amount
+          end
+
+          remaining_balance -= principal_payment
+
+          schedule << {
+            payment_number: month,
+            payment_date: Date.current + month.months,
+            payment_amount: payment_amount,
+            principal_payment: principal_payment,
+            interest_payment: interest_amount,
+            remaining_balance: [ remaining_balance, Money.new(0, currency) ].max
+          }
+
+          break if remaining_balance.zero?
+        end
+
+        schedule
+      end
   end
 end

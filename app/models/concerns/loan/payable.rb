@@ -180,130 +180,130 @@ module Loan::Payable
 
   private
 
-  def validate_payment!(amount, from_account)
-    raise ArgumentError, "Amount must be positive" unless amount.to_d.positive?
-    raise ArgumentError, "Source account required" unless from_account
-    raise ArgumentError, "Cannot pay from same account" if from_account == account
-  end
-
-  def validate_borrowing!(amount, to_account)
-    raise ArgumentError, "Amount must be positive" unless amount.to_d.positive?
-    raise ArgumentError, "Destination account required" unless to_account
-    raise ArgumentError, "Cannot borrow to same account" if to_account == account
-  end
-
-  def amounts_match?(planned_total, provided_amount)
-    (planned_total.to_d - provided_amount.to_d).abs < 0.01
-  end
-
-  def create_payment_transfer(amount:, from_account:, date:, notes:)
-    transfer = Transfer::Creator.new(
-      family: Current.family,
-      source_account_id: from_account.id,
-      destination_account_id: account.id,
-      date: date,
-      amount: amount.to_d
-    ).create
-
-    if transfer.persisted?
-      contextual_notes = build_payment_notes(notes)
-      transfer.update!(notes: contextual_notes)
-      sync_accounts!(from_account)
+    def validate_payment!(amount, from_account)
+      raise ArgumentError, "Amount must be positive" unless amount.to_d.positive?
+      raise ArgumentError, "Source account required" unless from_account
+      raise ArgumentError, "Cannot pay from same account" if from_account == account
     end
 
-    transfer
-  end
-
-  def create_principal_transfer(amount:, from_account:, date:)
-    Transfer::Creator.new(
-      family: Current.family,
-      source_account_id: from_account.id,
-      destination_account_id: account.id,
-      date: date,
-      amount: amount
-    ).create
-  end
-
-  def create_interest_expense(amount:, from_account:, date:)
-    interest_money = Money.new(amount, account.currency)
-    converted_interest = interest_money.exchange_to(
-      from_account.currency,
-      date: date,
-      fallback_rate: 1.0
-    )
-
-    entry = from_account.entries.create!(
-      date: date,
-      name: interest_expense_name,
-      amount: converted_interest.amount,
-      currency: from_account.currency,
-      entryable: Transaction.new(kind: interest_transaction_kind)
-    )
-
-    # Set appropriate category
-    category_key = sharia_compliant? ? "system:islamic_profit_expense" : "system:interest_expense"
-    category = CategoryResolver.ensure_system_category(Current.family, category_key)
-    entry.entryable.set_category!(category)
-
-    entry
-  end
-
-  def apply_principal_payment(amount:, from_account:, date:)
-    # Simple principal-only payment
-    create_payment_transfer(
-      amount: amount,
-      from_account: from_account,
-      date: date,
-      notes: "Extra principal payment"
-    )
-  end
-
-  def apply_with_schedule_adjustment(amount:, from_account:, date:)
-    # Apply payment and regenerate future schedule
-    create_payment_transfer(
-      amount: amount,
-      from_account: from_account,
-      date: date,
-      notes: "Extra payment with schedule adjustment"
-    )
-
-    # Regenerate remaining schedule based on new balance
-    rebuild_schedule!
-  end
-
-  def build_payment_notes(user_notes)
-    base_note = if personal_loan? && counterparty_name.present?
-      context = sharia_compliant? ? "(Syariah compliant)" : ""
-      "Repayment to #{counterparty_name} #{context}".strip
-    else
-      "Loan payment"
+    def validate_borrowing!(amount, to_account)
+      raise ArgumentError, "Amount must be positive" unless amount.to_d.positive?
+      raise ArgumentError, "Destination account required" unless to_account
+      raise ArgumentError, "Cannot borrow to same account" if to_account == account
     end
 
-    user_notes.present? ? "#{base_note} — #{user_notes}" : base_note
-  end
-
-  def build_borrowing_notes(user_notes)
-    base_note = if personal_loan? && counterparty_name.present?
-      context = sharia_compliant? ? "(Syariah compliant)" : ""
-      "Additional borrowing from #{counterparty_name} #{context}".strip
-    else
-      "Additional loan disbursement"
+    def amounts_match?(planned_total, provided_amount)
+      (planned_total.to_d - provided_amount.to_d).abs < 0.01
     end
 
-    user_notes.present? ? "#{base_note} — #{user_notes}" : base_note
-  end
+    def create_payment_transfer(amount:, from_account:, date:, notes:)
+      transfer = Transfer::Creator.new(
+        family: Current.family,
+        source_account_id: from_account.id,
+        destination_account_id: account.id,
+        date: date,
+        amount: amount.to_d
+      ).create
 
-  def interest_expense_name
-    base = sharia_compliant? ? "Profit portion of installment" : "Interest portion of installment"
-    "#{base} — #{account.name}"
-  end
+      if transfer.persisted?
+        contextual_notes = build_payment_notes(notes)
+        transfer.update!(notes: contextual_notes)
+        sync_accounts!(from_account)
+      end
 
-  def interest_transaction_kind
-    sharia_compliant? ? "margin_payment" : "loan_payment"
-  end
+      transfer
+    end
+
+    def create_principal_transfer(amount:, from_account:, date:)
+      Transfer::Creator.new(
+        family: Current.family,
+        source_account_id: from_account.id,
+        destination_account_id: account.id,
+        date: date,
+        amount: amount
+      ).create
+    end
+
+    def create_interest_expense(amount:, from_account:, date:)
+      interest_money = Money.new(amount, account.currency)
+      converted_interest = interest_money.exchange_to(
+        from_account.currency,
+        date: date,
+        fallback_rate: 1.0
+      )
+
+      entry = from_account.entries.create!(
+        date: date,
+        name: interest_expense_name,
+        amount: converted_interest.amount,
+        currency: from_account.currency,
+        entryable: Transaction.new(kind: interest_transaction_kind)
+      )
+
+      # Set appropriate category
+      category_key = sharia_compliant? ? "system:islamic_profit_expense" : "system:interest_expense"
+      category = CategoryResolver.ensure_system_category(Current.family, category_key)
+      entry.entryable.set_category!(category)
+
+      entry
+    end
+
+    def apply_principal_payment(amount:, from_account:, date:)
+      # Simple principal-only payment
+      create_payment_transfer(
+        amount: amount,
+        from_account: from_account,
+        date: date,
+        notes: "Extra principal payment"
+      )
+    end
+
+    def apply_with_schedule_adjustment(amount:, from_account:, date:)
+      # Apply payment and regenerate future schedule
+      create_payment_transfer(
+        amount: amount,
+        from_account: from_account,
+        date: date,
+        notes: "Extra payment with schedule adjustment"
+      )
+
+      # Regenerate remaining schedule based on new balance
+      rebuild_schedule!
+    end
+
+    def build_payment_notes(user_notes)
+      base_note = if personal_loan? && counterparty_name.present?
+        context = sharia_compliant? ? "(Syariah compliant)" : ""
+        "Repayment to #{counterparty_name} #{context}".strip
+      else
+        "Loan payment"
+      end
+
+      user_notes.present? ? "#{base_note} — #{user_notes}" : base_note
+    end
+
+    def build_borrowing_notes(user_notes)
+      base_note = if personal_loan? && counterparty_name.present?
+        context = sharia_compliant? ? "(Syariah compliant)" : ""
+        "Additional borrowing from #{counterparty_name} #{context}".strip
+      else
+        "Additional loan disbursement"
+      end
+
+      user_notes.present? ? "#{base_note} — #{user_notes}" : base_note
+    end
+
+    def interest_expense_name
+      base = sharia_compliant? ? "Profit portion of installment" : "Interest portion of installment"
+      "#{base} — #{account.name}"
+    end
+
+    def interest_transaction_kind
+      sharia_compliant? ? "margin_payment" : "loan_payment"
+    end
 
 
-  def sync_accounts!(*accounts)
-    ([account] + accounts).uniq.each(&:sync_later)
-  end
+    def sync_accounts!(*accounts)
+      ([ account ] + accounts).uniq.each(&:sync_later)
+    end
 end

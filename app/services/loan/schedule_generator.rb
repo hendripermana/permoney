@@ -239,7 +239,7 @@ class Loan::ScheduleGenerator
         if i == n - 1
           principal_component = remaining
         else
-          principal_component = [princ_per, [remaining - balloon, 0.to_d].max].min
+          principal_component = [ princ_per, [ remaining - balloon, 0.to_d ].max ].min
         end
         total = principal_component + interest
         rows << Row.new(

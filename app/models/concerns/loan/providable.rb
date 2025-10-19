@@ -146,75 +146,75 @@ module Loan::Providable
 
   private
 
-  def rate_comparison_text(percentage_diff)
-    case percentage_diff
-    when -Float::INFINITY..-10
-      "Significantly below market"
-    when -10..-5
-      "Below market"
-    when -5..5
-      "At market rate"
-    when 5..10
-      "Above market"
-    when 10..Float::INFINITY
-      "Significantly above market"
-    else
-      "Unknown"
-    end
-  end
-
-  # Provider classes - these would be implemented based on actual provider APIs
-  class InterestRateProvider
-    def self.rates_for(loan_type:, institution_type:, product_type:, currency:)
-      # Integration with rate providers like Fred, Bank APIs, etc.
-      # This is a placeholder - implement based on actual provider APIs
-      {}
-    end
-
-    def self.suggest_rates(current_rate:, loan_amount:, term_months:, credit_profile:, loan_type:)
-      # Return array of rate suggestions with provider details
-      []
-    end
-  end
-
-  class LendingInstitutionProvider
-    def self.details_for(institution_name, country:)
-      # Integration with institution databases
-      {}
-    end
-  end
-
-  class LoanProductProvider
-    def self.products_for(institution:, loan_type:, currency:)
-      # Get available products from institution APIs
-      []
-    end
-
-    def self.calculator_for(institution:, product_type:)
-      # Return institution-specific calculator if available
-      nil
-    end
-  end
-
-  class IslamicFinanceProvider
-    def self.compliance_info_for(product_type:, institution:)
-      # Get Islamic finance compliance information
-      case product_type
-      when "murabaha"
-        {
-          compliant: true,
-          description: "Cost-plus financing compliant with Islamic principles",
-          certification: "Certified by Islamic Finance Authority"
-        }
-      when "qard_hasan"
-        {
-          compliant: true,
-          description: "Interest-free benevolent loan",
-          certification: "Fully Sharia compliant"
-        }
+    def rate_comparison_text(percentage_diff)
+      case percentage_diff
+      when -Float::INFINITY..-10
+        "Significantly below market"
+      when -10..-5
+        "Below market"
+      when -5..5
+        "At market rate"
+      when 5..10
+        "Above market"
+      when 10..Float::INFINITY
+        "Significantly above market"
       else
+        "Unknown"
+      end
+    end
+
+    # Provider classes - these would be implemented based on actual provider APIs
+    class InterestRateProvider
+      def self.rates_for(loan_type:, institution_type:, product_type:, currency:)
+        # Integration with rate providers like Fred, Bank APIs, etc.
+        # This is a placeholder - implement based on actual provider APIs
+        {}
+      end
+
+      def self.suggest_rates(current_rate:, loan_amount:, term_months:, credit_profile:, loan_type:)
+        # Return array of rate suggestions with provider details
+        []
+      end
+    end
+
+    class LendingInstitutionProvider
+      def self.details_for(institution_name, country:)
+        # Integration with institution databases
         {}
       end
     end
-  end
+
+    class LoanProductProvider
+      def self.products_for(institution:, loan_type:, currency:)
+        # Get available products from institution APIs
+        []
+      end
+
+      def self.calculator_for(institution:, product_type:)
+        # Return institution-specific calculator if available
+        nil
+      end
+    end
+
+    class IslamicFinanceProvider
+      def self.compliance_info_for(product_type:, institution:)
+        # Get Islamic finance compliance information
+        case product_type
+        when "murabaha"
+          {
+            compliant: true,
+            description: "Cost-plus financing compliant with Islamic principles",
+            certification: "Certified by Islamic Finance Authority"
+          }
+        when "qard_hasan"
+          {
+            compliant: true,
+            description: "Interest-free benevolent loan",
+            certification: "Fully Sharia compliant"
+          }
+        else
+          {}
+        end
+      end
+    end
 end

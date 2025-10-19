@@ -16,13 +16,13 @@ class Import::MappingsController < ApplicationController
     # Only permit these class names for mapping_class and mappable_class.
     ALLOWED_MAPPING_CLASSES = {
       "AllowedTypeA" => AllowedTypeA,
-      "AllowedTypeB" => AllowedTypeB,
+      "AllowedTypeB" => AllowedTypeB
       # add more allowed classes here
     }.freeze
 
     ALLOWED_MAPPABLE_CLASSES = {
       "AllowedMappableA" => AllowedMappableA,
-      "AllowedMappableB" => AllowedMappableB,
+      "AllowedMappableB" => AllowedMappableB
       # add more allowed mappable classes here
     }.freeze
 
