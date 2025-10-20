@@ -3,7 +3,8 @@
 # jemalloc is configured at Ruby compilation level (see docs/PERFORMANCE_GUIDE.md)
 
 # Web server with YJIT enabled
-web: RUBY_YJIT_ENABLE=1 bundle exec ${DEBUG:+rdbg -O -n -c --} bin/rails server -b 0.0.0.0
+# OBJC_DISABLE_INITIALIZE_FORK_SAFETY fixes macOS fork issues with Puma workers
+web: OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES RUBY_YJIT_ENABLE=1 bundle exec ${DEBUG:+rdbg -O -n -c --} bin/rails server -b 0.0.0.0
 
 # CSS watcher
 css: bundle exec bin/rails tailwindcss:watch 2>/dev/null

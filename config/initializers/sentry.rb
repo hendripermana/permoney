@@ -49,14 +49,11 @@ if defined?(Sentry)
       "ActiveRecord::RecordNotFound"
     ]
 
-    # Add custom tags for better filtering
-    config.tags = {
-      environment: Rails.env,
-      app_mode: Rails.application.config.app_mode
-    }
-
     # Set release version if available
     config.release = ENV["GIT_COMMIT_SHA"] if ENV["GIT_COMMIT_SHA"]
+
+    # Set environment
+    config.environment = Rails.env
 
     # Before send callback for additional context
     config.before_send = lambda do |event, hint|
@@ -68,6 +65,10 @@ if defined?(Sentry)
           family_id: Current.family&.id
         }
       end
+
+      # Add custom tags
+      event.tags[:app_mode] = Rails.application.config.app_mode
+      event.tags[:environment] = Rails.env
 
       # Add custom context
       event.contexts[:runtime] = {

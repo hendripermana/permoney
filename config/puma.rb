@@ -32,7 +32,7 @@ if workers_count > 0
     ActiveRecord::Base.connection_pool.disconnect! if defined?(ActiveRecord)
   end
 
-  on_worker_boot do
+  before_worker_boot do
     ActiveRecord::Base.establish_connection if defined?(ActiveRecord)
   end
 end

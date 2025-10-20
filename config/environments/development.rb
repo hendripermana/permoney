@@ -68,10 +68,8 @@ Rails.application.configure do
   # Raise an error on page load if there are pending migrations.
   config.active_record.migration_error = :page_load
 
-  # Highlight code that triggered database queries in logs.
-  config.active_record.verbose_query_logs = true
-
   # Append comments with runtime information tags to SQL queries in logs.
+  # Rails 8: query_log_tags_enabled replaces verbose_query_logs
   config.active_record.query_log_tags_enabled = true
 
   # Highlight code that enqueued background job in logs.

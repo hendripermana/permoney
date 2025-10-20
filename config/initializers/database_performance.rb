@@ -3,9 +3,10 @@
 
 if defined?(ActiveRecord)
   # Enable query logging in development for debugging
+  # Rails 8 uses query_log_tags_enabled instead of verbose_query_logs
   if Rails.env.development?
+    # Enable SQL query logging to STDOUT if requested
     ActiveRecord::Base.logger = Logger.new(STDOUT) if ENV["DB_QUERY_LOG"]
-    ActiveRecord::Base.verbose_query_logs = true
   end
 
   # Monitor slow queries in production
