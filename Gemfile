@@ -41,9 +41,6 @@ gem "sentry-sidekiq"
 gem "logtail-rails"
 gem "skylight", groups: [ :production ]
 
-# Performance Optimization
-gem "jemalloc" # Memory allocator for reduced fragmentation
-
 # Active Storage
 gem "aws-sdk-s3", "~> 1.200.0", require: false
 gem "image_processing", ">= 1.2"

@@ -117,17 +117,22 @@ if Rails.env.production? && defined?(Sentry)
   end
 end
 
-# Configure jemalloc if available
-if defined?(Jemalloc)
-  # jemalloc is automatically used when the gem is loaded
-  # No additional configuration needed
-  Rails.logger.info("jemalloc memory allocator enabled")
-
-  # Add jemalloc stats to Sentry context
-  if Rails.env.production? && defined?(Sentry)
-    Sentry.set_context(:memory_allocator, {
-      allocator: "jemalloc",
-      version: Jemalloc::VERSION
-    })
+# Check if jemalloc is available (compiled with Ruby)
+# jemalloc should be configured at Ruby compilation level for optimal performance
+# See docs/PERFORMANCE_GUIDE.md for installation instructions
+if Rails.env.production? && defined?(Sentry)
+  # Detect memory allocator
+  allocator = if ENV["LD_PRELOAD"]&.include?("jemalloc") || ENV["DYLD_INSERT_LIBRARIES"]&.include?("jemalloc")
+    "jemalloc"
+  else
+    "system_default"
   end
+  
+  Sentry.set_context(:memory_allocator, {
+    allocator: allocator,
+    ruby_version: RUBY_VERSION,
+    platform: RUBY_PLATFORM
+  })
+  
+  Rails.logger.info("Memory allocator: #{allocator}")
 end

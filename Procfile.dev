@@ -1,11 +1,12 @@
 # Development Procfile with Performance Optimization
-# Uses jemalloc for better memory management and YJIT for performance
+# Uses YJIT for 12-40% performance boost
+# jemalloc is configured at Ruby compilation level (see docs/PERFORMANCE_GUIDE.md)
 
 # Web server with YJIT enabled
-web: RUBY_YJIT_ENABLE=1 bundle exec je ${DEBUG:+rdbg -O -n -c --} bin/rails server -b 0.0.0.0
+web: RUBY_YJIT_ENABLE=1 bundle exec ${DEBUG:+rdbg -O -n -c --} bin/rails server -b 0.0.0.0
 
 # CSS watcher
 css: bundle exec bin/rails tailwindcss:watch 2>/dev/null
 
 # Background worker with YJIT enabled
-worker: RUBY_YJIT_ENABLE=1 bundle exec je sidekiq
+worker: RUBY_YJIT_ENABLE=1 bundle exec sidekiq

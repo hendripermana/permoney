@@ -374,7 +374,7 @@ Permoney is optimized for blazing-fast performance with comprehensive improvemen
 
 **Runtime Optimization:**
 - **YJIT Enabled**: 12-40% performance boost via JIT compilation
-- **jemalloc**: 30-40% memory reduction via optimized allocation
+- **jemalloc**: 30-40% memory reduction via optimized allocation (system-level, not gem)
 - **Ruby GC Tuning**: Optimized garbage collection parameters
 
 **Application Server:**
