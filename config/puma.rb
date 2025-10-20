@@ -17,9 +17,10 @@ threads_count = ENV.fetch("RAILS_MAX_THREADS", 5).to_i
 threads threads_count, threads_count
 
 # Worker configuration
-# Development: 2-4 workers, Production: 1 per CPU core
+# Development: Use single mode (0 workers) to avoid macOS fork issues
+# Production: 1 per CPU core
 # Set WEB_CONCURRENCY=0 to disable cluster mode (single process)
-workers_count = ENV.fetch("WEB_CONCURRENCY", 0).to_i
+workers_count = ENV.fetch("WEB_CONCURRENCY") { Rails.env.production? ? 4 : 0 }.to_i
 workers workers_count if workers_count > 0
 
 # Preload application for memory efficiency via copy-on-write
