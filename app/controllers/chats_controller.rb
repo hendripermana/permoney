@@ -4,22 +4,36 @@ class ChatsController < ApplicationController
   before_action :set_chat, only: [ :show, :edit, :update, :destroy ]
 
   def index
-    @chat = nil # override application_controller default behavior of setting @chat to last viewed chat
     @chats = Current.user.chats.order(created_at: :desc)
   end
 
   def show
     set_last_viewed_chat(@chat)
+    @message ||= UserMessage.new(chat: @chat)
+
+    if params[:floating]
+      render "chats/floating_show", layout: false
+    end
   end
 
   def new
     @chat = Current.user.chats.new(title: "New chat #{Time.current.strftime("%Y-%m-%d %H:%M")}")
+
+    if params[:floating]
+      render "chats/floating_new", layout: false
+    end
   end
 
   def create
     @chat = Current.user.chats.start!(chat_params[:content], model: chat_params[:ai_model])
     set_last_viewed_chat(@chat)
-    redirect_to chat_path(@chat, thinking: true)
+
+    if turbo_frame_request?
+      @message = UserMessage.new(chat: @chat)
+      render "chats/floating_show", layout: false
+    else
+      redirect_to chat_redirect_path
+    end
   end
 
   def edit
@@ -43,7 +57,12 @@ class ChatsController < ApplicationController
 
   def retry
     @chat.retry_last_message!
-    redirect_to chat_path(@chat, thinking: true)
+    @message ||= UserMessage.new(chat: @chat)
+    if turbo_frame_request?
+      render "chats/floating_show", layout: false
+    else
+      redirect_to chat_redirect_path
+    end
   end
 
   private
@@ -61,5 +80,15 @@ class ChatsController < ApplicationController
 
     def chat_params
       params.require(:chat).permit(:title, :content, :ai_model)
+    end
+
+    def floating_request?
+      params[:floating].present?
+    end
+
+    def chat_redirect_path
+      options = { thinking: true }
+      options[:floating] = true if floating_request?
+      chat_path(@chat, options)
     end
 end

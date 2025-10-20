@@ -2,7 +2,7 @@ import { Controller } from "@hotwired/stimulus";
 
 // Connects to data-controller="dialog"
 export default class extends Controller {
-  static targets = ["leftSidebar", "rightSidebar", "mobileSidebar"];
+  static targets = ["leftSidebar", "mobileSidebar"];
   static classes = [
     "expandedSidebar",
     "collapsedSidebar",
@@ -22,12 +22,6 @@ export default class extends Controller {
     const isOpen = this.leftSidebarTarget.classList.contains("w-full");
     this.#updateUserPreference("show_sidebar", !isOpen);
     this.#toggleSidebarWidth(this.leftSidebarTarget, isOpen);
-  }
-
-  toggleRightSidebar() {
-    const isOpen = this.rightSidebarTarget.classList.contains("w-full");
-    this.#updateUserPreference("show_ai_sidebar", !isOpen);
-    this.#toggleSidebarWidth(this.rightSidebarTarget, isOpen);
   }
 
   #toggleSidebarWidth(el, isCurrentlyOpen) {

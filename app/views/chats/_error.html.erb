@@ -1,4 +1,6 @@
-<%# locals: (chat:) %>
+<%# locals: (chat:, floating: false) %>
+
+<% floating = local_assigns.fetch(:floating, false) %>
 
 <div id="chat-error" class="px-3 py-2 bg-red-100 border border-red-500 rounded-lg">
   <% if chat.debug_mode? %>
@@ -12,7 +14,7 @@
 
     <%= render DS::Button.new(
       text: "Retry",
-      href: retry_chat_path(chat),
+      href: retry_chat_path(chat, floating: (floating ? true : nil)),
     ) %>
   </div>
 </div>

@@ -647,3 +647,69 @@ A Stimulus controller that displays current date and time with smooth anime.js a
 - Uses native CSS transitions for optimal performance
 - Updates automatically every second
 - Respects browser's locale for date formatting
+
+## Floating Chat Component
+
+A modern floating AI chat widget that provides access to the AI assistant from anywhere in the application.
+
+### Usage
+
+```erb
+<%= render FloatingChatComponent.new(user: Current.user) %>
+```
+
+### Features
+- **Floating Button**: Fixed position button at bottom-right corner
+- **Responsive Design**: Full-screen on mobile, popover on desktop
+- **PWA Optimized**: Handles safe area insets for notched devices
+- **Smooth Animations**: CSS transitions for open/close states
+- **Keyboard Navigation**: Escape key to close, auto-focus on input
+- **Turbo Integration**: Uses Turbo Frames for chat content
+- **AI Consent**: Shows consent screen if AI not enabled
+- **Accessible**: ARIA labels, keyboard support, screen reader friendly
+- **Dark Mode**: Fully supports dark theme
+
+### Component Structure
+- `FloatingChatComponent` - ViewComponent for the widget
+- `floating_chat_controller.js` - Stimulus controller for UI state
+- `floating_show.html.erb` - Chat view for existing conversations
+- `floating_new.html.erb` - Chat view for new conversations
+- `floating_ai_consent.html.erb` - Consent screen partial
+
+### Stimulus Controller
+- **Targets**: `panel`, `backdrop`, `trigger`, `badge`
+- **Values**: `open` (Boolean)
+- **Actions**: `toggle`, `open`, `close`
+- **Features**: Body scroll lock on mobile, escape key handling, smooth animations
+
+### Styling
+- Uses design system tokens from `permoney-design-system.css`
+- Custom styles in `app/assets/stylesheets/components/floating_chat.css`
+- Responsive breakpoints: Mobile (< 1024px), Desktop (≥ 1024px)
+- PWA-specific styles for standalone mode
+- Reduced motion support for accessibility
+
+### Mobile Behavior
+- Full-screen overlay with backdrop
+- Body scroll disabled when open
+- Touch-optimized button size (56px)
+- Safe area insets for notched devices
+
+### Desktop Behavior
+- Fixed popover (400px × 600px)
+- Bottom-right positioning
+- Smooth scale animation
+- No backdrop (non-modal)
+
+### Integration
+- Automatically added to `application.html.erb` layout
+- Replaces previous right sidebar AI chat
+- Works with existing Chat model and controllers
+- Supports both new and existing conversations
+
+### PWA Considerations
+- Handles `display-mode: standalone`
+- Respects `safe-area-inset-*` for notched devices
+- Touch-friendly button sizing
+- Optimized for mobile performance
+- Works offline with cached chat history

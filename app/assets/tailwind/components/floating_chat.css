@@ -1,0 +1,95 @@
+/* Floating Chat Component Styles */
+
+/* Ensure chat button is always accessible above other content */
+[data-controller="floating-chat"] {
+  /* Safe area insets for notched devices (iPhone X+, etc.) */
+  bottom: calc(1rem + env(safe-area-inset-bottom));
+  right: calc(1rem + env(safe-area-inset-right));
+}
+
+@media (min-width: 1024px) {
+  [data-controller="floating-chat"] {
+    bottom: calc(1.5rem + env(safe-area-inset-bottom));
+    right: calc(1.5rem + env(safe-area-inset-right));
+  }
+}
+
+/* Mobile: Full screen chat panel */
+@media (max-width: 1023px) {
+  [data-floating-chat-target="panel"] {
+    /* Account for mobile browser chrome and safe areas */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+/* Desktop: Floating panel with shadow */
+@media (min-width: 1024px) {
+  [data-floating-chat-target="panel"] {
+    /* Ensure panel doesn't go off-screen */
+    max-height: calc(100vh - 8rem);
+  }
+}
+
+/* Smooth transitions for panel */
+[data-floating-chat-target="panel"] {
+  transition-property: opacity, transform;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Backdrop blur effect */
+[data-floating-chat-target="backdrop"] {
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+/* Prevent text selection on trigger button */
+[data-floating-chat-target="trigger"] {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Subtle pulse animation for attention */
+@keyframes floating-chat-pulse {
+  0%, 100% {
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  }
+  50% {
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  }
+}
+
+[data-floating-chat-target="trigger"]:not(:hover) {
+  animation: floating-chat-pulse 3s ease-in-out infinite;
+}
+
+/* Optimize for touch devices */
+@media (hover: none) and (pointer: coarse) {
+  [data-floating-chat-target="trigger"] {
+    /* Larger touch target on mobile */
+    min-width: 56px;
+    min-height: 56px;
+  }
+}
+
+/* Reduce motion for accessibility */
+@media (prefers-reduced-motion: reduce) {
+  [data-floating-chat-target="panel"],
+  [data-floating-chat-target="trigger"] {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* PWA: Handle standalone mode */
+@media (display-mode: standalone) {
+  [data-controller="floating-chat"] {
+    /* Adjust positioning for PWA without browser chrome */
+    bottom: calc(1.5rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* Dark mode adjustments */
+[data-theme="dark"] [data-floating-chat-target="panel"] {
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2);
+}

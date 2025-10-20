@@ -10,6 +10,7 @@
 
 @import "./simonweb_pickr.css";
 @import "./components/box_carousel.css";
+@import "./components/floating_chat.css";
 
 @layer components {
   .pcr-app{

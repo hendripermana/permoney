@@ -1,19 +1,55 @@
-<%# locals: (chat: nil, message_hint: nil) %>
+<%# locals: (chat: nil, message_hint: nil, floating: false, message: nil) %>
 
 <div id="chat-form" class="space-y-2">
-  <% model = chat && chat.persisted? ? [chat, Message.new] : Chat.new %>
+  <% message_hint = local_assigns.fetch(:message_hint, nil) %>
+  <% floating = local_assigns.fetch(:floating, false) %>
+  <% message_record = local_assigns.fetch(:message, nil) || (defined?(@message) && @message.is_a?(Message) ? @message : nil) %>
+  <% if chat && chat.persisted? %>
+    <% message_record = message_record if message_record.is_a?(Message) %>
+  <% else %>
+    <% message_record = nil %>
+  <% end %>
+  <% model = if chat && chat.persisted?
+    message_record ||= Message.new
+    [chat, message_record]
+  else
+    Chat.new
+  end %>
+  <% form_options = {
+    class: "flex lg:flex-col gap-2 bg-container px-2 py-1.5 rounded-full lg:rounded-lg shadow-border-xs",
+    data: { chat_target: "form" }
+  } %>
+  <% if floating %>
+    <% form_options[:url] =
+      if chat && chat.persisted?
+        chat_messages_path(chat, floating: true)
+      else
+        chats_path(floating: true)
+      end %>
+  <% end %>
 
-  <%= form_with model: model,
-                class: "flex lg:flex-col gap-2 bg-container px-2 py-1.5 rounded-full lg:rounded-lg shadow-border-xs",
-                data: { chat_target: "form" } do |f| %>
+  <% if message_record&.errors&.any? %>
+    <div class="px-2 py-1">
+      <%= render "shared/form_errors", model: message_record %>
+    </div>
+  <% end %>
+
+  <%= form_with model: model, **form_options do |f| %>
 
     <%# In the future, this will be a dropdown with different AI models %>
     <%= f.hidden_field :ai_model, value: "gpt-4.1" %>
 
-    <%= f.text_area :content, placeholder: "Ask anything ...", value: message_hint,
-                  class: "w-full border-0 focus:ring-0 text-sm resize-none px-1 bg-transparent",
-                  data: { chat_target: "input", action: "input->chat#autoResize keydown->chat#handleInputKeyDown" },
-                  rows: 1 %>
+    <% text_area_options = {
+      placeholder: "Ask anything ...",
+      class: "w-full border-0 focus:ring-0 text-sm resize-none px-1 bg-transparent",
+      data: { chat_target: "input", action: "input->chat#autoResize keydown->chat#handleInputKeyDown" },
+      rows: 1
+    } %>
+    <% if message_hint.present? %>
+      <% text_area_options[:value] = message_hint %>
+    <% end %>
+
+    <%= f.text_area :content, **text_area_options %>
 
     <div class="flex items-center justify-between gap-1">
       <div class="items-center gap-1 hidden lg:flex">

@@ -32,12 +32,13 @@ class Settings::HostingsController < ApplicationController
     end
 
     if hosting_params.key?(:openai_access_token)
-      Setting.openai_access_token = hosting_params[:openai_access_token]
-    end
-    if hosting_params.key?(:openai_access_token)
       token_param = hosting_params[:openai_access_token].to_s.strip
-      # Ignore blanks and redaction placeholders to prevent accidental overwrite
-      unless token_param.blank? || token_param == "********"
+
+      case token_param
+      when "", "********"
+        # Ignore placeholder value, but allow explicit clearing when field is blank
+        Setting.openai_access_token = nil if token_param.blank?
+      else
         Setting.openai_access_token = token_param
       end
     end

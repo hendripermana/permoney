@@ -54,6 +54,32 @@ class Settings::HostingsControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  test "does not overwrite openai access token when placeholder is submitted" do
+    with_self_hosting do
+      original_token = Setting.openai_access_token
+      Setting.openai_access_token = "existing-token"
+
+      patch settings_hosting_url, params: { setting: { openai_access_token: "********" } }
+
+      assert_equal "existing-token", Setting.openai_access_token
+    ensure
+      Setting.openai_access_token = original_token
+    end
+  end
+
+  test "clears openai access token when blank value is submitted" do
+    with_self_hosting do
+      original_token = Setting.openai_access_token
+      Setting.openai_access_token = "existing-token"
+
+      patch settings_hosting_url, params: { setting: { openai_access_token: "" } }
+
+      assert_nil Setting.openai_access_token
+    ensure
+      Setting.openai_access_token = original_token
+    end
+  end
+
   test "can clear data cache when self hosting is enabled" do
     account = accounts(:investment)
     holding = account.holdings.first
