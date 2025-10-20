@@ -25,7 +25,7 @@ class LoanPostInstallmentObservabilityTest < ActiveSupport::TestCase
     end
     ::Sentry.singleton_class.class_eval do
       attr_accessor :span_called
-      def with_child_span(op:, description: nil)
+      def with_child_span(op:, description: nil, **_kwargs)
         self.span_called = true
         span = Object.new
         span.define_singleton_method(:set_data) { |_k, _v| }

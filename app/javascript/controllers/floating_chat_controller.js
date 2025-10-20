@@ -51,15 +51,20 @@ export default class extends Controller {
 
     // Show panel with animation
     this.panelTarget.classList.remove("hidden");
+    this.panelTarget.classList.add("flex", "flex-col");
 
     // Trigger animation after a frame
     requestAnimationFrame(() => {
-      this.panelTarget.classList.add("opacity-100", "translate-y-0", "lg:scale-100");
+      this.panelTarget.classList.add(
+        "opacity-100",
+        "translate-y-0",
+        "lg:scale-100",
+      );
       this.panelTarget.classList.remove(
         "opacity-0",
         "translate-y-4",
         "lg:translate-y-0",
-        "lg:scale-95"
+        "lg:scale-95",
       );
     });
 
@@ -80,17 +85,22 @@ export default class extends Controller {
 
   hidePanel() {
     // Start exit animation
-    this.panelTarget.classList.remove("opacity-100", "translate-y-0", "lg:scale-100");
+    this.panelTarget.classList.remove(
+      "opacity-100",
+      "translate-y-0",
+      "lg:scale-100",
+    );
     this.panelTarget.classList.add(
       "opacity-0",
       "translate-y-4",
       "lg:translate-y-0",
-      "lg:scale-95"
+      "lg:scale-95",
     );
 
     // Hide after animation completes
     setTimeout(() => {
       this.panelTarget.classList.add("hidden");
+      this.panelTarget.classList.remove("flex", "flex-col");
       if (this.hasBackdropTarget) {
         this.backdropTarget.classList.add("hidden");
       }

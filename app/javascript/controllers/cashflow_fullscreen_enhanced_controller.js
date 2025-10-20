@@ -630,7 +630,9 @@ export default class extends Controller {
 
   // Utility methods
   isFullscreenOpen() {
-    return !!(this.fullscreenModal && document.body.contains(this.fullscreenModal));
+    return !!(
+      this.fullscreenModal && document.body.contains(this.fullscreenModal)
+    );
   }
 
   getTotalIncome() {

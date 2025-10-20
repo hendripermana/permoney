@@ -105,8 +105,11 @@ The instructions below are for developers to get started with contributing to th
 
 ### Requirements
 
-- See `.ruby-version` file for required Ruby version
+- Ruby 3.4.7 (see `.ruby-version` file)
+- Bundler 2.7.2
+- RubyGems 3.7.2
 - PostgreSQL >9.3 (latest stable version recommended)
+- Node.js (for frontend tooling)
 
 ### Getting Started
 ```sh

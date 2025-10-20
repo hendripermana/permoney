@@ -8,7 +8,9 @@ export function eagerLoadControllersFrom(prefix, application) {
     if (!importmapScript) return;
 
     const { imports = {} } = JSON.parse(importmapScript.textContent || "{}");
-    const specifiers = Object.keys(imports).filter((key) => key.startsWith(`${prefix}/`));
+    const specifiers = Object.keys(imports).filter((key) =>
+      key.startsWith(`${prefix}/`),
+    );
 
     specifiers.forEach(async (specifier) => {
       try {
@@ -37,4 +39,3 @@ export function eagerLoadControllersFrom(prefix, application) {
 export function lazyLoadControllersFrom() {
   // No-op in this lightweight implementation
 }
-

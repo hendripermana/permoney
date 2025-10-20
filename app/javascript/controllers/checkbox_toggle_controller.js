@@ -1,4 +1,4 @@
-import { Controller } from "@hotwired/stimulus"
+import { Controller } from "@hotwired/stimulus";
 
 // data-controller="checkbox-toggle"
 // - Add data-checkbox-toggle-target="checkbox" to the checkbox input
@@ -6,31 +6,32 @@ import { Controller } from "@hotwired/stimulus"
 // This controller shows/hides the section and disables/enables its inputs
 // based on the checkbox state, keeping the form semantics intact.
 export default class extends Controller {
-  static targets = ["checkbox", "section"]
+  static targets = ["checkbox", "section"];
 
   connect() {
-    this.update()
+    this.update();
   }
 
   toggle() {
-    this.update()
+    this.update();
   }
 
   update() {
-    const checked = this.hasCheckboxTarget ? this.checkboxTarget.checked : false
-    this.sectionTargets.forEach(section => {
+    const checked = this.hasCheckboxTarget
+      ? this.checkboxTarget.checked
+      : false;
+    this.sectionTargets.forEach((section) => {
       // Toggle visibility
       if (checked) {
-        section.classList.remove("hidden")
+        section.classList.remove("hidden");
       } else {
-        section.classList.add("hidden")
+        section.classList.add("hidden");
       }
 
       // Toggle interactivity
       section.querySelectorAll("input, select, textarea").forEach((el) => {
-        el.disabled = !checked
-      })
-    })
+        el.disabled = !checked;
+      });
+    });
   }
 }
-
