@@ -62,7 +62,10 @@ pin "@floating-ui/utils/dom", to: "@floating-ui--utils--dom.js" # @0.2.9
 pin "d3-sankey" # @0.12.3
 pin "d3-array-src", to: "d3-array.js"
 pin "d3-shape-src", to: "d3-shape.js"
-pin "motion-dom" # @12.23.12
+pin "motion-dom" # @12.23.23
 pin "motion-utils" # @12.23.6
 pin "react/jsx-runtime", to: "react--jsx-runtime.js" # @19.1.1
 pin "scheduler" # @0.26.0
+pin "lodash" # @4.17.21
+pin "motion" # @12.23.24
+pin "framer-motion/dom", to: "framer-motion--dom.js" # @12.23.24

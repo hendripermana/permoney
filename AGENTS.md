@@ -556,3 +556,94 @@ A modern 3D carousel component built with Stimulus and Framer Motion for interac
 
 ### Demo
 Visit `/carousel-demo` to see the component in action.
+
+## Variable Font Hover By Letter
+
+An interactive text animation component that animates font variation settings on hover, letter by letter.
+
+### Usage
+
+```erb
+<h1 
+  data-controller="variable-font-hover"
+  data-variable-font-hover-from-value="'wght' 400"
+  data-variable-font-hover-to-value="'wght' 700"
+  data-variable-font-hover-stagger-duration-value="30"
+  data-variable-font-hover-duration-value="500"
+  data-action="mouseenter->variable-font-hover#mouseenter mouseleave->variable-font-hover#mouseleave">
+  Your Text Here
+</h1>
+```
+
+### Features
+- **Variable Font Animation**: Animates font-variation-settings on hover
+- **Stagger Effect**: Letters animate in sequence with configurable delay
+- **Customizable**: Control animation duration, stagger timing, and font settings
+- **Smooth Transitions**: Uses native CSS transitions for optimal performance
+- **Lightweight**: No external animation libraries required
+
+### Data Attributes
+- `data-variable-font-hover-from-value`: Initial font variation settings (default: "'wght' 400")
+- `data-variable-font-hover-to-value`: Target font variation settings on hover (default: "'wght' 700")
+- `data-variable-font-hover-stagger-duration-value`: Delay between each letter in milliseconds (default: 30)
+- `data-variable-font-hover-duration-value`: Animation duration in milliseconds (default: 500)
+
+### Requirements
+- Works only with variable fonts (e.g., Geist, Inter Variable, etc.)
+- Uses native CSS transitions for optimal performance
+- No external animation libraries required
+
+## Time-Based Greeting Helper
+
+A helper method that returns appropriate greeting based on current time.
+
+### Usage
+
+```erb
+<%= time_based_greeting %>, <%= Current.user.first_name %>!
+```
+
+### Returns
+- "Good morning" (5:00 AM - 11:59 AM)
+- "Good afternoon" (12:00 PM - 5:59 PM)
+- "Good evening" (6:00 PM - 4:59 AM)
+
+### Implementation
+Uses `Time.current` to respect application timezone settings.
+
+## Realtime Clock Component
+
+A Stimulus controller that displays current date and time with smooth anime.js animations.
+
+### Usage
+
+```erb
+<div data-controller="realtime-clock">
+  <div data-realtime-clock-target="date">Loading...</div>
+  <div data-realtime-clock-target="time">--:--:--</div>
+</div>
+```
+
+### Features
+- **Realtime Updates**: Updates every second automatically
+- **Smooth Animations**: Uses native CSS transitions for fade in/out effects
+- **Date Format**: Displays full date (e.g., "Monday, October 20, 2025")
+- **Time Format**: 24-hour format with seconds (HH:MM:SS)
+- **Auto Cleanup**: Properly clears interval on disconnect
+- **Smart Updates**: Only animates when values actually change
+
+### Targets
+- `date`: Element to display formatted date
+- `time`: Element to display formatted time
+
+### Animation
+- Fade out with upward translation (300ms)
+- Text update
+- Fade in with downward translation (300ms)
+- Uses CSS `ease-out` timing function for smooth transitions
+
+### Requirements
+- No external animation libraries required
+- Uses native CSS transitions for optimal performance
+- Updates automatically every second
+- Respects browser's locale for date formatting

@@ -1,11 +1,36 @@
 <% content_for :page_header do %>
   <div class="space-y-6 mb-6">
     <!-- Hero Section with Carousel -->
-    <div class="bg-gradient-to-r from-purple-50 to-blue-50 dark:from-purple-900/20 dark:to-blue-900/20 rounded-2xl p-8 shadow-lg">
+    <div class="bg-surface rounded-2xl p-8 border border-primary shadow-sm">
       <div class="flex flex-col lg:flex-row gap-8 items-center justify-between">
         <!-- Welcome Text -->
         <div class="space-y-4 flex-1">
-          <h1 class="text-2xl lg:text-4xl font-bold text-primary">Welcome back, <%= Current.user.first_name %>! 👋</h1>
+          <!-- Realtime Clock -->
+          <div 
+            class="mb-4"
+            data-controller="realtime-clock">
+            <div 
+              class="text-sm font-medium text-secondary"
+              data-realtime-clock-target="date">
+              Loading...
+            </div>
+            <div 
+              class="text-lg font-semibold text-primary font-mono"
+              data-realtime-clock-target="time">
+              --:--:--
+            </div>
+          </div>
+
+          <h1 
+            class="text-2xl lg:text-4xl font-bold text-primary cursor-default"
+            data-controller="variable-font-hover"
+            data-variable-font-hover-from-value="'wght' 400"
+            data-variable-font-hover-to-value="'wght' 700"
+            data-variable-font-hover-stagger-duration-value="30"
+            data-variable-font-hover-duration-value="500"
+            data-action="mouseenter->variable-font-hover#mouseenter mouseleave->variable-font-hover#mouseleave">
+            <%= time_based_greeting %>, <%= Current.user.first_name %>! 👋
+          </h1>
           <p class="text-base lg:text-lg text-secondary">Here's what's happening with your finances</p>
           
           <div class="flex gap-3 pt-4">
@@ -19,9 +44,10 @@
             
             <%= render DS::Link.new(
               variant: "secondary",
-              icon: "bar-chart-3",
-              text: "View Reports",
-              href: "#",
+              icon: "plus",
+              text: "Add Transaction",
+              href: new_transaction_path,
+              frame: :modal,
               class: "inline-flex"
             ) %>
           </div>
@@ -31,15 +57,14 @@
         <div class="flex-shrink-0">
           <%= render BoxCarouselComponent.new(
             items: [
-              { id: "1", type: "image", src: "https://images.unsplash.com/photo-1579621970563-ebec7560ff3e?w=600&h=400&fit=crop", alt: "Financial Planning" },
-              { id: "2", type: "image", src: "https://images.unsplash.com/photo-1554224155-6726b3ff858f?w=600&h=400&fit=crop", alt: "Investment Growth" },
-              { id: "3", type: "image", src: "https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=600&h=400&fit=crop", alt: "Data Analytics" },
-              { id: "4", type: "image", src: "https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=600&h=400&fit=crop", alt: "Business Insights" },
-              { id: "5", type: "image", src: "https://images.unsplash.com/photo-1590283603385-17ffb3a7f29f?w=600&h=400&fit=crop", alt: "Currency Exchange" },
-              { id: "6", type: "image", src: "https://images.unsplash.com/photo-1563013544-824ae1b704d3?w=600&h=400&fit=crop", alt: "Wealth Management" }
+              { id: "1", type: "video", src: "https://cdn.cosmos.so/3fe9c8a8-b562-4090-a5ac-5bbdf655a938.mp4", alt: "@portalsandpaths" },
+              { id: "2", type: "video", src: "https://cdn.cosmos.so/594e87df-e8ca-4d03-8137-f78b5dab6793.mp4", alt: "@studio.size" },
+              { id: "3", type: "image", src: "https://cdn.cosmos.so/92162e2e-abf6-4b98-a557-bfe25a336608?format=jpeg", alt: "@david_wise" },
+              { id: "4", type: "video", src: "https://cdn.cosmos.so/aae0a1e6-d03d-43ae-aa7f-21627a950730.mp4", alt: "@svenvranjes" },
+              { id: "5", type: "image", src: "https://cdn.cosmos.so/7a5f1a73-ca73-466b-afaf-2b3d0639aa1a?format=jpeg", alt: "@deconstructie" }
             ],
-            width: 300,
-            height: 200,
+            width: 380,
+            height: 260,
             direction: "right",
             auto_play: true,
             auto_play_interval: 3500,

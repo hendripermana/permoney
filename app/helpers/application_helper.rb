@@ -93,6 +93,18 @@ module ApplicationHelper
     cookies[:admin] == "true"
   end
 
+  def time_based_greeting
+    hour = Time.current.hour
+
+    if hour >= 5 && hour < 12
+      "Good morning"
+    elsif hour >= 12 && hour < 18
+      "Good afternoon"
+    else
+      "Good evening"
+    end
+  end
+
   # Renders Markdown text using Redcarpet and sanitizes the output
   def markdown(text)
     return "" if text.blank?
