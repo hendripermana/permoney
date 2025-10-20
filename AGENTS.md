@@ -522,3 +522,37 @@ When working with Indonesian finance features, remember:
 - **Cultural sensitivity** in reminders and communications
 - **Local categories** (Arisan, Zakat, Infaq/Sadaqah)
 - **Multi-currency support** with IDR formatting
+
+## Box Carousel Component
+
+A modern 3D carousel component built with Stimulus and Framer Motion for interactive content display.
+
+### Usage
+
+```erb
+<%= render BoxCarouselComponent.new(
+  items: [
+    { id: "1", type: "image", src: "image-url.jpg", alt: "Description" },
+    { id: "2", type: "video", src: "video-url.mp4", poster: "poster.jpg" }
+  ],
+  width: 400,
+  height: 300,
+  direction: "right",  # "left", "right", "top", "bottom"
+  auto_play: true,
+  auto_play_interval: 3000,
+  enable_drag: true,
+  perspective: 1000
+) %>
+```
+
+### Features
+- **3D Rotation**: Smooth cube rotation with 4 visible faces
+- **Drag Support**: Mouse and touch drag interactions
+- **Keyboard Navigation**: Arrow keys for navigation
+- **Auto-play Mode**: Automatic progression through items
+- **Mixed Media**: Supports both images and videos
+- **Responsive**: Adapts to different screen sizes
+- **Accessible**: ARIA labels and keyboard support
+
+### Demo
+Visit `/carousel-demo` to see the component in action.

@@ -1,0 +1,93 @@
+/* Box Carousel Component Styles - 3D Cube Effect */
+
+.box-carousel-container {
+  @apply relative focus:outline-none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.box-carousel-container[data-box-carousel-enable-drag-value="true"] {
+  @apply cursor-grab;
+}
+
+.box-carousel-container[data-box-carousel-enable-drag-value="true"]:active {
+  @apply cursor-grabbing;
+}
+
+.box-carousel-wrapper {
+  @apply w-full h-full flex items-center justify-center;
+}
+
+.box-carousel-scene {
+  @apply relative;
+  perspective-origin: 50% 50%;
+  -webkit-perspective-origin: 50% 50%;
+}
+
+.box-carousel-cube {
+  @apply relative w-full h-full;
+  transform-style: preserve-3d;
+  -webkit-transform-style: preserve-3d;
+  transition: transform 0.05s linear;
+  will-change: transform;
+}
+
+.box-carousel-cube.animating {
+  transition: transform 1.25s cubic-bezier(0.953, 0.001, 0.019, 0.995);
+}
+
+.box-carousel-face {
+  @apply absolute overflow-hidden;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform-style: preserve-3d;
+  -webkit-transform-style: preserve-3d;
+}
+
+.box-carousel-media {
+  @apply w-full h-full object-cover pointer-events-none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+  -webkit-touch-callout: none;
+}
+
+/* Smooth animations */
+.box-carousel-cube {
+  will-change: transform;
+}
+
+/* Focus styles for accessibility */
+.box-carousel-container:focus-visible {
+  @apply outline-2 outline-offset-2 outline-blue-500;
+}
+
+/* Loading state */
+.box-carousel-loading {
+  @apply flex items-center justify-center;
+}
+
+.box-carousel-loading::after {
+  content: "";
+  @apply w-8 h-8 border-4 border-gray-300 border-t-blue-500 rounded-full;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .box-carousel-face {
+    @apply rounded-md shadow-md;
+  }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  .box-carousel-cube {
+    transition-duration: 0.01s;
+  }
+}

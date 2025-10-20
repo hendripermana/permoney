@@ -9,6 +9,7 @@
 @plugin "@tailwindcss/forms";
 
 @import "./simonweb_pickr.css";
+@import "./components/box_carousel.css";
 
 @layer components {
   .pcr-app{

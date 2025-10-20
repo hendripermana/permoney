@@ -36,10 +36,13 @@ ActiveRecord::Schema[7.2].define(version: 2025_09_20_084228) do
     t.jsonb "locked_attributes", default: {}
     t.string "status", default: "active"
     t.string "provider"
+    t.string "external_id"
+    t.text "access_token_encrypted"
     t.uuid "simplefin_account_id"
     t.index ["accountable_id", "accountable_type"], name: "index_accounts_on_accountable_id_and_accountable_type"
     t.index ["accountable_type"], name: "index_accounts_on_accountable_type"
     t.index ["currency"], name: "index_accounts_on_currency"
+    t.index ["external_id"], name: "index_accounts_on_external_id"
     t.index ["family_id", "accountable_type"], name: "index_accounts_on_family_id_and_accountable_type"
     t.index ["family_id", "id"], name: "index_accounts_on_family_id_and_id"
     t.index ["family_id", "status"], name: "index_accounts_on_family_id_and_status"
@@ -482,12 +485,12 @@ ActiveRecord::Schema[7.2].define(version: 2025_09_20_084228) do
     t.integer "term_months"
     t.decimal "initial_balance", precision: 19, scale: 4
     t.jsonb "locked_attributes", default: {}
-    t.string "subtype"
     t.string "debt_kind"
     t.string "counterparty_type"
     t.string "counterparty_name"
     t.uuid "disbursement_account_id"
     t.date "origination_date"
+    t.string "subtype"
     t.string "compliance_type", default: "conventional"
     t.string "islamic_product_type"
     t.decimal "profit_sharing_ratio", precision: 5, scale: 4

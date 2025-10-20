@@ -73,6 +73,10 @@ class PagesController < ApplicationController
     # Demo page for responsive Sankey chart
   end
 
+  def carousel_demo
+    # Demo page for Box Carousel component
+  end
+
   def redis_configuration_error
     render layout: "blank"
   end

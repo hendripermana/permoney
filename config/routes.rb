@@ -324,6 +324,7 @@ Rails.application.routes.draw do
 
   get "privacy", to: redirect("https://maybefinance.com/privacy")
   get "terms", to: redirect("https://maybefinance.com/tos")
+  get "carousel-demo", to: "pages#carousel_demo"
 
   # Defines the root path route ("/")
   root "pages#dashboard"

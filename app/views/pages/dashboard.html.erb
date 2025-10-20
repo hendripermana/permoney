@@ -1,25 +1,54 @@
 <% content_for :page_header do %>
-  <div class="space-y-1 mb-6 flex gap-4 justify-between items-center lg:items-start">
-    <div class="space-y-1">
-      <h1 class="text-xl lg:text-3xl font-medium text-primary">Welcome back, <%= Current.user.first_name %></h1>
-      <p class="text-sm lg:text-base text-secondary">Here's what's happening with your finances</p>
+  <div class="space-y-6 mb-6">
+    <!-- Hero Section with Carousel -->
+    <div class="bg-gradient-to-r from-purple-50 to-blue-50 dark:from-purple-900/20 dark:to-blue-900/20 rounded-2xl p-8 shadow-lg">
+      <div class="flex flex-col lg:flex-row gap-8 items-center justify-between">
+        <!-- Welcome Text -->
+        <div class="space-y-4 flex-1">
+          <h1 class="text-2xl lg:text-4xl font-bold text-primary">Welcome back, <%= Current.user.first_name %>! 👋</h1>
+          <p class="text-base lg:text-lg text-secondary">Here's what's happening with your finances</p>
+          
+          <div class="flex gap-3 pt-4">
+            <%= render DS::Link.new(
+              icon: "plus",
+              text: "Add Account",
+              href: new_account_path,
+              frame: :modal,
+              class: "inline-flex"
+            ) %>
+            
+            <%= render DS::Link.new(
+              variant: "secondary",
+              icon: "bar-chart-3",
+              text: "View Reports",
+              href: "#",
+              class: "inline-flex"
+            ) %>
+          </div>
+        </div>
+
+        <!-- Carousel -->
+        <div class="flex-shrink-0">
+          <%= render BoxCarouselComponent.new(
+            items: [
+              { id: "1", type: "image", src: "https://images.unsplash.com/photo-1579621970563-ebec7560ff3e?w=600&h=400&fit=crop", alt: "Financial Planning" },
+              { id: "2", type: "image", src: "https://images.unsplash.com/photo-1554224155-6726b3ff858f?w=600&h=400&fit=crop", alt: "Investment Growth" },
+              { id: "3", type: "image", src: "https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=600&h=400&fit=crop", alt: "Data Analytics" },
+              { id: "4", type: "image", src: "https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=600&h=400&fit=crop", alt: "Business Insights" },
+              { id: "5", type: "image", src: "https://images.unsplash.com/photo-1590283603385-17ffb3a7f29f?w=600&h=400&fit=crop", alt: "Currency Exchange" },
+              { id: "6", type: "image", src: "https://images.unsplash.com/photo-1563013544-824ae1b704d3?w=600&h=400&fit=crop", alt: "Wealth Management" }
+            ],
+            width: 300,
+            height: 200,
+            direction: "right",
+            auto_play: true,
+            auto_play_interval: 3500,
+            enable_drag: true,
+            perspective: 1000
+          ) %>
+        </div>
+      </div>
     </div>
-
-    <%= render DS::Link.new(
-      icon: "plus",
-      text: "New",
-      href: new_account_path,
-      frame: :modal,
-      class: "hidden lg:inline-flex"
-    ) %>
-
-    <%= render DS::Link.new(
-        variant: "icon-inverse",
-        icon: "plus",
-        href: new_account_path,
-        frame: :modal,
-        class: "rounded-full lg:hidden"
-      ) %>
   </div>
 <% end %>
 

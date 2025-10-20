@@ -1,0 +1,94 @@
+<% content_for :page_header do %>
+  <div class="space-y-1 mb-6">
+    <h1 class="text-xl lg:text-3xl font-medium text-primary">Box Carousel Demo</h1>
+    <p class="text-sm lg:text-base text-secondary">Interactive 3D carousel showcase</p>
+  </div>
+<% end %>
+
+<div class="w-full max-w-6xl mx-auto space-y-12 pb-24">
+  <!-- Hero Carousel -->
+  <section class="bg-container py-12 rounded-xl shadow-border-xs">
+    <div class="flex flex-col items-center justify-center space-y-8">
+      <h2 class="text-2xl font-semibold text-primary">Welcome to Permoney</h2>
+      
+      <%= render BoxCarouselComponent.new(
+        items: [
+          { id: "1", type: "image", src: "https://images.unsplash.com/photo-1579621970563-ebec7560ff3e?w=800&h=600&fit=crop", alt: "Financial Planning" },
+          { id: "2", type: "image", src: "https://images.unsplash.com/photo-1554224155-6726b3ff858f?w=800&h=600&fit=crop", alt: "Investment Growth" },
+          { id: "3", type: "image", src: "https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=800&h=600&fit=crop", alt: "Data Analytics" },
+          { id: "4", type: "image", src: "https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=800&h=600&fit=crop", alt: "Business Insights" },
+          { id: "5", type: "image", src: "https://images.unsplash.com/photo-1590283603385-17ffb3a7f29f?w=800&h=600&fit=crop", alt: "Currency Exchange" },
+          { id: "6", type: "image", src: "https://images.unsplash.com/photo-1563013544-824ae1b704d3?w=800&h=600&fit=crop", alt: "Wealth Management" },
+          { id: "7", type: "image", src: "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=800&h=600&fit=crop", alt: "Financial Freedom" }
+        ],
+        width: 400,
+        height: 300,
+        direction: "right",
+        auto_play: true,
+        auto_play_interval: 4000,
+        enable_drag: true,
+        perspective: 1200
+      ) %>
+      
+      <div class="flex gap-4">
+        <button 
+          onclick="document.querySelector('[data-controller=box-carousel]').boxCarousel.prev()"
+          class="px-4 py-2 text-sm border border-primary text-primary rounded-full cursor-pointer transition-all duration-300 ease-out hover:bg-gray-100 active:scale-95">
+          <%= icon "arrow-left", class: "w-4 h-4" %>
+          Previous
+        </button>
+        <button 
+          onclick="document.querySelector('[data-controller=box-carousel]').boxCarousel.next()"
+          class="px-4 py-2 text-sm border border-primary text-primary rounded-full cursor-pointer transition-all duration-300 ease-out hover:bg-gray-100 active:scale-95">
+          Next
+          <%= icon "arrow-right", class: "w-4 h-4" %>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features Section -->
+  <section class="grid grid-cols-1 md:grid-cols-3 gap-6">
+    <div class="bg-container p-6 rounded-xl shadow-border-xs">
+      <%= icon "trending-up", class: "w-8 h-8 text-success mb-4" %>
+      <h3 class="text-lg font-semibold text-primary mb-2">Track Your Wealth</h3>
+      <p class="text-sm text-secondary">Monitor your net worth across all accounts in real-time</p>
+    </div>
+    
+    <div class="bg-container p-6 rounded-xl shadow-border-xs">
+      <%= icon "pie-chart", class: "w-8 h-8 text-blue-500 mb-4" %>
+      <h3 class="text-lg font-semibold text-primary mb-2">Budget Insights</h3>
+      <p class="text-sm text-secondary">Get detailed insights into your spending patterns</p>
+    </div>
+    
+    <div class="bg-container p-6 rounded-xl shadow-border-xs">
+      <%= icon "shield-check", class: "w-8 h-8 text-purple-500 mb-4" %>
+      <h3 class="text-lg font-semibold text-primary mb-2">Secure & Private</h3>
+      <p class="text-sm text-secondary">Your financial data is encrypted and protected</p>
+    </div>
+  </section>
+
+  <!-- Vertical Carousel Demo -->
+  <section class="bg-container py-12 rounded-xl shadow-border-xs">
+    <div class="flex flex-col items-center justify-center space-y-8">
+      <h2 class="text-2xl font-semibold text-primary">Vertical Carousel</h2>
+      
+      <%= render BoxCarouselComponent.new(
+        items: [
+          { id: "1", type: "image", src: "https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600&h=400&fit=crop", alt: "Analytics Dashboard" },
+          { id: "2", type: "image", src: "https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=600&h=400&fit=crop", alt: "Charts and Graphs" },
+          { id: "3", type: "image", src: "https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=600&h=400&fit=crop", alt: "Business Metrics" },
+          { id: "4", type: "image", src: "https://images.unsplash.com/photo-1590283603385-17ffb3a7f29f?w=600&h=400&fit=crop", alt: "Financial Reports" }
+        ],
+        width: 350,
+        height: 250,
+        direction: "top",
+        auto_play: false,
+        enable_drag: true,
+        perspective: 1000
+      ) %>
+      
+      <p class="text-sm text-secondary">Use arrow keys or drag to navigate</p>
+    </div>
+  </section>
+</div>
