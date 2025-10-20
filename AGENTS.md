@@ -303,14 +303,36 @@ The application provides both internal and external APIs:
 
 ## Technology Stack
 
-- **Backend**: Ruby on Rails 7
+### Current Versions (October 2025)
+- **Ruby**: 3.4.7 (PRISM parser enabled, CVE-2025-61594 fixed)
+- **Bundler**: 2.7.2 (preparing for Bundler 4)
+- **RubyGems**: 3.7.2 (IMDSv2 support)
+- **Rails**: 8.0.3
+- **Node.js**: Latest LTS recommended
+- **PostgreSQL**: >9.3 (latest stable recommended)
+- **Redis**: 5.4.1
+
+### Stack Components
+- **Backend**: Ruby on Rails 8.0.3
 - **Database**: PostgreSQL with UUID primary keys
 - **Frontend**: Hotwire (Turbo + Stimulus)
 - **Styling**: TailwindCSS v4 with custom design system
+- **Linting**: Biome 2.2.6 (JavaScript/TypeScript)
 - **Testing**: Minitest + fixtures
 - **Jobs**: Sidekiq + Redis
 - **External APIs**: Plaid, OpenAI, Stripe
 - **Deployment**: Docker support for self-hosting
+
+### Key Dependencies
+- **aws-sdk-s3**: 1.200.0 (IMDSv2 support)
+- **rubyzip**: 3.2 (enhanced security)
+- **@biomejs/biome**: 2.2.6 (migrated from 1.9.4)
+
+### Upgrade Policy
+- Always use latest stable versions
+- Security patches applied immediately
+- Major version upgrades documented in AGENTS.md
+- Run `bundle outdated` and `npm outdated` regularly
 
 ## Sync & Import System
 
@@ -418,14 +440,27 @@ loan = Loan.create!(
 ```
 
 ## Documentation Guidelines
-- **DO NOT create new .md files** after completing tasks unless explicitly requested by the user
-- **Update existing documentation** when your changes affect existing features or configurations
-- **Only create documentation** when:
-  - User explicitly requests new documentation
-  - Adding entirely new features that require user guidance
-  - Creating API documentation for new endpoints
-- **Preferred approach**: Update existing files in `docs/`, `README.md`, or inline code comments
-- **Avoid**: Creating summary reports, completion reports, or task-specific .md files
+
+### ⚠️ CRITICAL: NO NEW DOCUMENTATION FILES
+
+**NEVER create new .md files after completing tasks!**
+
+- ❌ **NEVER** create summary reports, completion reports, or task-specific .md files
+- ❌ **NEVER** create UPGRADE_GUIDE.md, CHANGELOG_*.md, or similar files
+- ❌ **NEVER** create documentation for completed work
+- ✅ **ALWAYS** update existing files only (AGENTS.md, README.md, existing docs/)
+- ✅ **ONLY** create new docs when explicitly requested by user for NEW features
+
+**After completing ANY task:**
+1. Update AGENTS.md if it affects development workflow
+2. Update README.md if it affects setup/usage
+3. Update inline code comments for complex logic
+4. **DO NOT** create any summary or completion documents
+
+**Exception:** Only create new documentation when:
+- User explicitly says "create documentation for X"
+- Adding entirely new features that require user guidance
+- Creating API documentation for new endpoints (when requested)
 
 ## Troubleshooting
 
