@@ -1,3 +1,11 @@
-web: bundle exec ${DEBUG:+rdbg -O -n -c --} bin/rails server -b 0.0.0.0
+# Development Procfile with Performance Optimization
+# Uses jemalloc for better memory management and YJIT for performance
+
+# Web server with YJIT enabled
+web: RUBY_YJIT_ENABLE=1 bundle exec je ${DEBUG:+rdbg -O -n -c --} bin/rails server -b 0.0.0.0
+
+# CSS watcher
 css: bundle exec bin/rails tailwindcss:watch 2>/dev/null
-worker: bundle exec sidekiq
+
+# Background worker with YJIT enabled
+worker: RUBY_YJIT_ENABLE=1 bundle exec je sidekiq

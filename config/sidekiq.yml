@@ -1,7 +1,28 @@
-concurrency: <%= ENV.fetch("RAILS_MAX_THREADS") { 3 } %>
+# Sidekiq Performance Configuration
+# Concurrency: Number of threads processing jobs simultaneously
+# Optimal: 10-25 threads for most Rails apps
+# Database pool must be >= Sidekiq concurrency + Puma (workers × threads)
+concurrency: <%= ENV.fetch("SIDEKIQ_CONCURRENCY") { 10 } %>
+
+# Queue Configuration with Weighted Priorities
+# Higher weight = checked more frequently
+# Format: [queue_name, weight]
 queues:
-  - [scheduled, 10] # For cron-like jobs (e.g. "daily market data sync")
-  - [high_priority, 4]
-  - [medium_priority, 2]
-  - [low_priority, 1]
-  - [default, 1]
+  - [scheduled, 10]      # Cron jobs (highest priority)
+  - [high_priority, 6]   # Critical background tasks
+  - [medium_priority, 3] # Standard background tasks
+  - [default, 2]         # Default queue
+  - [low_priority, 1]    # Low priority tasks (lowest priority)
+
+# Timeout Configuration
+# Maximum time a job can run before being terminated
+:timeout: 30
+
+# Retry Configuration
+# Maximum number of retries for failed jobs
+:max_retries: 25
+
+# Dead Job Queue
+# Jobs that fail after max retries go here
+:dead_max_jobs: 10000
+:dead_timeout_in_seconds: <%= 180.days.to_i %>

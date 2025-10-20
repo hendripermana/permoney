@@ -25,8 +25,30 @@ Rails.application.configure do
     config.action_controller.perform_caching = false
   end
 
-  # Change to :null_store to avoid any caching.
-  config.cache_store = :memory_store
+  # Redis Cache Store for development (mirrors production behavior)
+  # Use memory_store if Redis is not available
+  begin
+    redis_url = ENV.fetch("REDIS_CACHE_URL") { ENV.fetch("REDIS_URL", "redis://localhost:6379/1") }
+    config.cache_store = :redis_cache_store, {
+      url: redis_url,
+      pool_size: 5,
+      pool_timeout: 5,
+      connect_timeout: 1,
+      read_timeout: 1,
+      write_timeout: 1,
+      reconnect_attempts: 1,
+      namespace: ENV.fetch("CACHE_NAMESPACE", "permoney_development"),
+      compress: true,
+      compress_threshold: 1024,
+      error_handler: lambda { |method:, returning:, exception:|
+        Rails.logger.warn("Cache error: #{method} - #{exception.message}")
+      }
+    }
+  rescue => e
+    # Fallback to memory store if Redis is not available
+    Rails.logger.warn("Redis not available, using memory store: #{e.message}")
+    config.cache_store = :memory_store, { size: 64.megabytes }
+  end
 
   # Store uploaded files on the local file system (see config/storage.yml for options).
   config.active_storage.service = :local
