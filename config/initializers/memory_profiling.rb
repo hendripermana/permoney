@@ -127,12 +127,12 @@ if Rails.env.production? && defined?(Sentry)
   else
     "system_default"
   end
-  
+
   Sentry.set_context(:memory_allocator, {
     allocator: allocator,
     ruby_version: RUBY_VERSION,
     platform: RUBY_PLATFORM
   })
-  
+
   Rails.logger.info("Memory allocator: #{allocator}")
 end

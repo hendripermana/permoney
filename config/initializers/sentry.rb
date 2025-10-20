@@ -9,30 +9,30 @@ if defined?(Sentry)
     config.profiles_sample_rate = ENV.fetch("SENTRY_PROFILES_SAMPLE_RATE", "0.1").to_f
 
     # Breadcrumbs for debugging context
-    config.breadcrumbs_logger = [:active_support_logger, :http_logger]
+    config.breadcrumbs_logger = [ :active_support_logger, :http_logger ]
     config.max_breadcrumbs = 50
 
     # Adaptive sampling: capture critical paths at 100%
     config.traces_sampler = lambda do |ctx|
       path = ctx.dig(:rack_env, "PATH_INFO").to_s
-      
+
       # Critical API endpoints - 100% sampling
       return 1.0 if path.start_with?("/api/v1/debt/loans")
       return 1.0 if path.start_with?("/api/v1/accounts")
       return 1.0 if path.start_with?("/api/v1/transactions")
-      
+
       # Sync operations - 100% sampling
       return 1.0 if path.include?("/sync")
-      
+
       # Background job processing - 80% sampling
       return 0.8 if ctx.dig(:sidekiq_context)
-      
+
       # AI chat operations - 80% sampling
       return 0.8 if path.start_with?("/chats")
-      
+
       # Import operations - 80% sampling
       return 0.8 if path.start_with?("/imports")
-      
+
       # Default sampling rate
       config.traces_sample_rate
     end
