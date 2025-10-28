@@ -31,8 +31,13 @@ Rails.application.configure do
     redis_url = ENV.fetch("REDIS_CACHE_URL") { ENV.fetch("REDIS_URL", "redis://localhost:6379/1") }
     config.cache_store = :redis_cache_store, {
       url: redis_url,
-      pool_size: 5,
-      pool_timeout: 5,
+
+      # Connection pool configuration (Rails 8 format)
+      pool: {
+        size: 5,
+        timeout: 5
+      },
+
       connect_timeout: 1,
       read_timeout: 1,
       write_timeout: 1,

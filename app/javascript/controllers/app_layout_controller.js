@@ -1,8 +1,11 @@
 import { Controller } from "@hotwired/stimulus";
 
-// Connects to data-controller="dialog"
+// Connects to data-controller="app-layout"
 export default class extends Controller {
   static targets = ["leftSidebar", "mobileSidebar"];
+  static values = {
+    userId: String
+  };
   static classes = [
     "expandedSidebar",
     "collapsedSidebar",

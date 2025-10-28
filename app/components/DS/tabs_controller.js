@@ -7,8 +7,15 @@ export default class extends Controller {
   static values = { sessionKey: String, urlParamKey: String };
 
   show(e) {
-    const btn = e.target.closest("button");
+    // Prevent default button behavior
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const btn = e.currentTarget.closest("button");
+    if (!btn) return;
+    
     const selectedTabId = btn.dataset.id;
+    if (!selectedTabId) return;
 
     this.navBtnTargets.forEach((navBtn) => {
       if (navBtn.dataset.id === selectedTabId) {

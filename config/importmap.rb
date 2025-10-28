@@ -1,19 +1,26 @@
 # Pin npm packages by running ./bin/importmap
 
-pin "application"
+# Critical assets - preload for faster initial page load
+pin "application", preload: true
 pin "@hotwired/turbo-rails", to: "turbo.min.js", preload: true
-pin "@hotwired/stimulus", to: "stimulus.min.js"
-pin "@hotwired/stimulus-loading", to: "stimulus-loading.js"
+pin "@hotwired/stimulus", to: "stimulus.min.js", preload: true
+pin "@hotwired/stimulus-loading", to: "stimulus-loading.js", preload: true
+
+# Controllers - lazy load with Stimulus
 pin_all_from "app/javascript/controllers", under: "controllers"
 pin_all_from "app/components", under: "controllers", to: ""
+
+# Services, hooks, and components - load on demand
 pin_all_from "app/javascript/services", under: "services", to: "services"
 pin_all_from "app/javascript/hooks", under: "hooks"
 pin_all_from "app/javascript/lib", under: "lib"
 pin_all_from "app/javascript/components", under: "components"
+
+# Third-party utilities - load on demand
 pin "@github/hotkey", to: "@github--hotkey.js" # @3.1.1
 pin "@simonwep/pickr", to: "@simonwep--pickr.js" # @1.9.1
 
-# D3 packages
+# D3 packages - lazy load for charts (via dynamic import)
 pin "d3" # @7.9.0
 pin "d3-array", to: "shims/d3-array-default.js"
 pin "d3-axis" # @3.0.0

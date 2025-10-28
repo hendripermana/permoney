@@ -12,11 +12,6 @@ if defined?(Sidekiq)
       network_timeout: 5
     }
 
-    # Monitor job execution time
-    config.server_middleware do |chain|
-      chain.add Sidekiq::Middleware::Server::Logging
-    end
-
     # Add custom monitoring
     if Rails.env.production? && defined?(Sentry)
       # Monitor queue depths

@@ -307,10 +307,30 @@ The application provides both internal and external APIs:
 - **Ruby**: 3.4.7 (PRISM parser enabled, CVE-2025-61594 fixed)
 - **Bundler**: 2.7.2 (preparing for Bundler 4)
 - **RubyGems**: 3.7.2 (IMDSv2 support)
-- **Rails**: 8.0.3
+- **Rails**: 8.1.0 (Upgraded October 28, 2025)
 - **Node.js**: Latest LTS recommended
 - **PostgreSQL**: >9.3 (latest stable recommended)
 - **Redis**: 5.4.1
+- **Turbo**: 2.0.17 (Enhanced frame handling)
+- **Stimulus**: 3.x (Improved event binding)
+
+### Rails 8.1 New Features & Changes
+- **Active Job Continuations**: Long-running jobs can be broken into discrete steps for better resilience during deployments
+- **Structured Event Reporting**: Unified interface for producing structured events for logging and monitoring
+- **Schema Format Version 8.1**: Columns now sorted alphabetically in schema dumps by default
+- **Enhanced Turbo Integration**: Better frame handling and error recovery
+- **Improved Performance**: Optimized query execution and caching strategies
+
+### Rails 8.1 Breaking Changes from 8.0
+- **Schema Sorting**: `schema.rb` columns are now sorted alphabetically by default (configure with `config.active_record.schema_format_version`)
+- **Event Reporting**: New structured event reporting system for better observability
+- **Stimulus Event Binding**: Arrow functions in event handlers must be properly bound to maintain context
+- **Turbo Frame Handling**: Enhanced error handling for missing frames requires explicit event listeners
+
+### Rails 8 Breaking Changes (from 7.x)
+- **RedisCacheStore Configuration**: Connection pool parameters changed from `pool_size:` and `pool_timeout:` to nested `pool: { size:, timeout: }` format
+- **Query Log Tags**: `verbose_query_logs` replaced with `query_log_tags_enabled`
+- **Puma Worker Boot**: `on_worker_boot` deprecated in favor of `before_worker_boot`
 
 ### Stack Components
 - **Backend**: Ruby on Rails 8.0.3

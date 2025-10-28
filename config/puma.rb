@@ -10,11 +10,20 @@
 # - Threads: 3-5 per worker balances throughput and latency
 # - Total capacity: workers × threads concurrent requests
 # - Database pool must be >= (workers × threads) + Sidekiq concurrency
+# - HTTP Compression: Enabled for responses >2KB for faster transfers
 
 # Thread configuration
 # Optimal: 3-5 threads per worker for Rails apps with ~50% I/O time
 threads_count = ENV.fetch("RAILS_MAX_THREADS", 5).to_i
 threads threads_count, threads_count
+
+# Enable HTTP compression for better performance
+# Compresses responses larger than 2KB
+# Supports both Brotli (preferred) and Gzip compression
+# Content-Type filtering handled by Rack::Deflater
+on_booted do
+  require "rack/deflater"
+end
 
 # Worker configuration
 # Development: Use single mode (0 workers) to avoid macOS fork issues
