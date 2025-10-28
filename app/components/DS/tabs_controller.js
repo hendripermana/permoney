@@ -1,6 +1,6 @@
 import { Controller } from "@hotwired/stimulus";
 
-// Connects to data-controller="tabs--components"
+// Connects to data-controller="DS--tabs"
 export default class extends Controller {
   static classes = ["navBtnActive", "navBtnInactive"];
   static targets = ["panel", "navBtn"];
