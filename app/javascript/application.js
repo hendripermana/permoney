@@ -11,7 +11,7 @@ Turbo.StreamActions.redirect = function () {
 document.addEventListener("turbo:frame-missing", (event) => {
   // Prevent default error handling for drawer/modal frames
   const { detail } = event;
-  const { response, visit } = detail;
+  const { response } = detail;
   
   if (response.ok) {
     event.preventDefault();
@@ -31,4 +31,4 @@ document.addEventListener("turbo:click", (event) => {
 });
 
 // Rails 8.1 - Enhanced Turbo Drive configuration
-Turbo.setProgressBarDelay(100); // Show progress bar after 100ms
+Turbo.config.drive.progressBarDelay = 100; // Show progress bar after 100ms
