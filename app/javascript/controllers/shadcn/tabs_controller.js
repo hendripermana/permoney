@@ -36,52 +36,29 @@ export default class extends Controller {
     }
 
     // Remove all trigger click listeners
+    // Rails 8.1: Options must match addEventListener exactly to prevent memory leaks
+    // Reference: https://developer.mozilla.org/en-US/docs/Web/API/EventTarget/removeEventListener
     if (this.triggerClickHandlers) {
       this.triggerClickHandlers.forEach((handler, trigger) => {
-        trigger.removeEventListener("click", handler, { capture: true });
+        // Options must exactly match addEventListener: { capture: true, passive: false }
+        trigger.removeEventListener("click", handler, { capture: true, passive: false });
       });
       this.triggerClickHandlers.clear();
     }
   }
 
-  // Handle tab selection (kept for compatibility with Stimulus data-action)
-  // Note: We also attach explicit listeners in connect() for better reliability
-  selectTab(event) {
-    // Rails 8.1: Handle clicks from both Stimulus data-action and explicit listeners
-    // This method serves as a fallback if explicit listeners fail
-    event.preventDefault();
-    event.stopPropagation();
-
-    // Rails 8.1: Use event.target for better reliability across themes
-    // event.currentTarget may not be set correctly in some cases (e.g., dark mode with overlays)
-    // Find the button element using closest to handle nested elements (icons, SVG, etc.)
-    const trigger = event.target.closest("button[data-shadcn--tabs-target='trigger']");
-    if (!trigger) {
-      // Fallback: try to find trigger from currentTarget if available
-      const fallbackTrigger = event.currentTarget?.hasAttribute?.("data-shadcn--tabs-target")
-        ? event.currentTarget
-        : null;
-      if (!fallbackTrigger) return;
-      const value = fallbackTrigger.dataset.tabValue;
-      if (value) {
-        this.activateTab(value, true);
-      }
-      return;
-    }
-
-    const value = trigger.dataset.tabValue;
-
-    if (value) {
-      this.activateTab(value, true);
-    }
-  }
+  // Note: selectTab method removed - it was dead code
+  // Explicit listeners in attachClickListeners() call stopPropagation() in capture phase,
+  // which prevents Stimulus data-action from ever reaching this method.
+  // All tab switching is now handled by explicit click listeners for reliable dark mode support.
 
   // Attach click listeners to all triggers (called on connect and when triggers change)
   attachClickListeners() {
     // Remove old listeners first
     if (this.triggerClickHandlers) {
       this.triggerClickHandlers.forEach((handler, trigger) => {
-        trigger.removeEventListener("click", handler, { capture: true });
+        // Options must exactly match addEventListener to correctly remove listener
+        trigger.removeEventListener("click", handler, { capture: true, passive: false });
       });
       this.triggerClickHandlers.clear();
     }
@@ -89,9 +66,6 @@ export default class extends Controller {
     // Attach new listeners to current triggers
     this.triggerClickHandlers = new Map();
     this.triggerTargets.forEach((trigger) => {
-      // Ensure pointer-events is enabled (in case CSS disabled it)
-      trigger.style.pointerEvents = "auto";
-      
       const handler = (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -101,7 +75,8 @@ export default class extends Controller {
         }
       };
       this.triggerClickHandlers.set(trigger, handler);
-      // Use capture phase to intercept before any CSS layers
+      // Rails 8.1: Use capture phase to intercept before any CSS layers or Stimulus handlers
+      // This ensures reliable click handling across all themes (light, dark, system)
       trigger.addEventListener("click", handler, { capture: true, passive: false });
     });
   }
