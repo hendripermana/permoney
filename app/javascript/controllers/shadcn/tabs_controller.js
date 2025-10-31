@@ -26,19 +26,7 @@ export default class extends Controller {
     // Rails 8.1: Explicitly attach click listeners to all triggers for better reliability
     // This ensures clicks work even in dark mode with overlays or nested SVG elements
     // Stimulus data-action can sometimes be blocked by CSS layers in dark mode
-    this.triggerClickHandlers = new Map();
-    this.triggerTargets.forEach((trigger) => {
-      const handler = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const value = trigger.dataset.tabValue;
-        if (value) {
-          this.activateTab(value, true);
-        }
-      };
-      this.triggerClickHandlers.set(trigger, handler);
-      trigger.addEventListener("click", handler, { capture: true });
-    });
+    this.attachClickListeners();
   }
 
   disconnect() {
