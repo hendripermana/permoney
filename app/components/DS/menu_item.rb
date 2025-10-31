@@ -58,7 +58,8 @@ class DS::MenuItem < DesignSystemComponent
       else
         # Rails 8.1: Default to _top frame for menu items to break out of any parent frames
         # This ensures navigation works correctly when menu is inside a Turbo Frame
-        data = data.merge(turbo_frame: "_top") if variant == :link
+        # Apply to both links and buttons (especially for logout which uses button_to)
+        data = data.merge(turbo_frame: "_top") if variant == :link || (variant == :button && method == :delete)
       end
 
       merged_opts.merge(data: data)
