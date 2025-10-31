@@ -1,141 +1,104 @@
-# Plaid Integration Guide
+> [!WARNING]
+> Plaid integration currently only works for Western users. Plaid Production support is not available to European users.
 
-This guide explains how to set up Plaid integration for your Permoney instance.
+> [!NOTE]
+> For Plaid integration your Sure instance needs to be accessible by the internet behind a domain with working SSL.
+> See additional context in [maybe-finance/maybe#2419](https://github.com/maybe-finance/maybe/pull/2419).
 
-## Overview
+# Setting Up Plaid
 
-Plaid is a financial data provider that allows Permoney to connect to banks and financial institutions in the US and Canada. It provides access to:
+## 1. Create Your Plaid Account
 
-- Bank account balances
-- Transaction history
-- Investment holdings
-- Credit card data
-- Loan information
+Go to [https://dashboard.plaid.com](https://dashboard.plaid.com) and register for a new account.
 
-## Setup Process
+---
 
-### 1. Create a Plaid Account
+## 2. Requesting Access Based on Your Bank Type
 
-1. Visit [Plaid's website](https://plaid.com) and sign up for a developer account
-2. Choose the appropriate plan for your needs
-3. Complete the verification process
+### For Banks That **Do Not Require OAuth**
 
-### 2. Get Your API Keys
+1. On the Home page, find the section labeled "Learn how to build with Plaid" and click **Unlock real data**.
+2. Enter your real name and phone number.
+3. In the description box, write a statement such as:  
+   This is for personal use only on a self-hosted version of the Sure Finance software. I am only using it to manage my finances, sync my bank accounts, track my spending, and create a budget.
+4. Leave the "Additional products" section **unchecked**.
+5. Click **Request Access**.
+6. Wait for your request to be approved (this may take more than 24 hours).
 
-Once your account is approved, you'll receive:
+---
 
-- **Client ID**: Your unique identifier
-- **Secret Key**: Your authentication key
-- **Environment**: Development, Sandbox, or Production
+### For Banks That **Require OAuth**
 
-### 3. Configure Permoney
+> [!NOTE]
+> Per Plaid Support as of July 2025, certain banks are seeing extended OAuth approval timelines.
+> - Chase Bank: there have been some additional delays, resulting in an updated wait time of roughly 3-4 months
+> - Schwab: the manual review process by Schwab can take up to two months to be completed
 
-Add your Plaid credentials to your Permoney environment:
+1. In the left sidebar on the Plaid dashboard, click **Get production access**.
+2. Enter your real address.
+3. For the business profile, write:  
+   This is for personal use only on a self-hosted version of the Sure Finance software. I am only using it to manage my finances, sync my bank accounts, track my spending, and create a budget.
+4. Leave the company website field **blank**.
+5. Enter your real name, phone number, email address, and date of birth.
+6. Click **Next**.
+7. Indicate that you have 0 employees, specify your country of data access, confirm that you do not sell data, and confirm that you have not experienced a security breach in the past 12 months.
+8. Click **Next**.
+9. When asked "What industry are you in?", select **Budgeting and financial management tools**.
+10. Click **Next**.
+11. Enter any name for your application.
+12. Upload any photo as the logo (must be 1024x1024px and under 4MB).
+13. Leave the brand color as **#22CCEE**.
+14. Set the Website URL to:  
+    https://github.com/we-promise/sure
+15. In the "Reason for data access" box, enter:  
+    This is for personal use only on a self-hosted version of the Sure Finance software. I am only using it to manage my finances, sync my bank accounts, track my spending, and create a budget.
+16. Enter your real email address as the support email.
+17. Click **Next**.
+18. For the "Where do you want to launch?" section, enter your country.
+19. - In the "Payments" section, check only **Auth** and **Balance**. Leave the rest unchecked.
+    - Leave all products in "Credit Underwriting" and "Fraud & Compliance" **unchecked**.
+    - Check **all products** under the "Financial Management" section.
+20. Click **Next**.
+21. For use cases:
+    - Select **Consumer bill pay** for the Payments section.
+    - Select **Personal budgeting and financial advice** for all products in the Financial Management section.
+22. Click **Next**.
+23. Select the **Pay As You Go** plan.
+24. Click **Next**.
+25. Enter your billing details and check the agreement boxes.
+26. Click **Next**.
+27. Click **Start Security Practices Questionnaire**.
+28. For each question, select **Other - please see comments**, then write in the notes:  
+    This is for personal use only on a self-hosted version of the Sure Finance software. I am only using it to manage my finances, sync my bank accounts, track my spending, and create a budget.
+29. Click **Next**.
+30. Repeat the process from step 28 for each new section of the questionnaire.
+31. Continue clicking **Next** and repeating step 28 until the questionnaire is finished.
+32. Click **Submit**.
+33. Wait for approval (this may take more than 24 hours).
 
-```bash
-# Add to your .env file or environment variables
-PLAID_CLIENT_ID=your_client_id
-PLAID_SECRET=your_secret_key
-PLAID_ENV=sandbox  # or 'development' or 'production'
+---
+
+# Setting Up Sure to Use Plaid
+
+1. After your Plaid account is registered, go to [https://dashboard.plaid.com/developers/api](https://dashboard.plaid.com/developers/api) or click **Developers > API** in the sidebar, then click **Configure** next to Allowed redirect URIs.
+2. Click **Add new URI**, type your domain, and add `/accounts` at the end (for example: `https://budget.yourdomain.com/accounts`).
+3. Click **Save changes**.
+4. Go to [https://dashboard.plaid.com/developers/keys](https://dashboard.plaid.com/developers/keys) or click **Developers > Keys** in the sidebar.
+5. Copy your `client_id` and `secret` keys. Use the "Production" secret key.
+6. In your `docker-compose` file, below the `OPENAI_ACCESS_TOKEN: ${OPENAI_ACCESS_TOKEN}` line, add these lines:
 ```
+PLAID_CLIENT_ID: ${PLAID_CLIENT_ID}
+PLAID_SECRET: ${PLAID_SECRET}
+PLAID_ENV: ${PLAID_ENV}
+```
+7. In your `.env` file (next to your `docker-compose` file), add these lines:
+```
+   PLAID_CLIENT_ID: ENTER_CLIENT_ID_FROM_PLAID_HERE  
+   PLAID_SECRET: ENTER_SECRET_KEY_FROM_PLAID_HERE  
+   PLAID_ENV: production  # (use 'production' for Full/Limited Production Access, or 'sandbox' for Sandbox Access)
+```
+8. Restart Sure.
 
-### 4. Test the Integration
+---
 
-1. Start your Permoney instance
-2. Go to Settings > Bank Sync
-3. Click "Add Bank Account"
-4. Follow the Plaid Link flow to connect a test account
-
-## Environment Types
-
-### Sandbox (Recommended for Testing)
-
-- Free to use
-- Pre-populated with test data
-- No real bank connections
-- Perfect for development and testing
-
-### Development
-
-- Real bank connections
-- Limited to development accounts
-- Free tier available
-- Good for testing with real data
-
-### Production
-
-- Full access to all banks
-- Real user data
-- Requires approval from Plaid
-- Paid service
-
-## Supported Institutions
-
-Plaid supports thousands of financial institutions including:
-
-- Major banks (Chase, Bank of America, Wells Fargo)
-- Credit unions
-- Investment platforms (Vanguard, Fidelity)
-- Digital banks (Chime, Ally)
-- Credit card companies
-
-## Troubleshooting
-
-### Common Issues
-
-1. **"Institution not supported"**
-   - Some smaller banks may not be supported
-   - Check Plaid's [institution directory](https://plaid.com/institutions/)
-
-2. **"Connection failed"**
-   - Verify your API keys are correct
-   - Check that your Plaid account is active
-   - Ensure you're using the correct environment
-
-3. **"Rate limit exceeded"**
-   - Plaid has rate limits based on your plan
-   - Consider upgrading your Plaid plan
-   - Implement proper error handling
-
-### Getting Help
-
-- **Plaid Documentation**: [docs.plaid.com](https://docs.plaid.com)
-- **Plaid Support**: [support.plaid.com](https://support.plaid.com)
-- **Permoney Issues**: [GitHub Issues](https://github.com/hendripermana/permoney/issues)
-
-## Security Considerations
-
-- Never commit API keys to version control
-- Use environment variables for sensitive data
-- Regularly rotate your API keys
-- Monitor your Plaid usage and costs
-- Follow Plaid's security best practices
-
-## Cost Considerations
-
-Plaid pricing varies by plan:
-
-- **Sandbox**: Free
-- **Development**: Free (limited)
-- **Production**: Pay-per-use or subscription
-
-Check [Plaid's pricing page](https://plaid.com/pricing/) for current rates.
-
-## Alternative Providers
-
-If Plaid doesn't meet your needs, consider:
-
-- **Tink** (Europe)
-- **TrueLayer** (UK/Europe)
-- **MX** (US)
-- **Yodlee** (US)
-
-Note: Permoney is currently optimized for Plaid, but the architecture supports multiple providers.
-
-## Support
-
-For help with Permoney's Plaid integration:
-
-- **Documentation**: [docs/](https://github.com/hendripermana/permoney/tree/main/docs)
-- **Issues**: [GitHub Issues](https://github.com/hendripermana/permoney/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/hendripermana/permoney/discussions)
+Once you access your Sure instance from your domain, you should now see the **Link account** option in the Sure UI.

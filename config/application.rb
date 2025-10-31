@@ -46,5 +46,9 @@ module Permoney
     # Compresses responses with Gzip/Brotli for supported clients
     # Improves loading time by 60-80% for text-based assets
     config.middleware.use Rack::Deflater
+
+    # Permoney: Dynamic branding configuration (used by helpers and mailers)
+    config.x.brand_name = ENV.fetch("BRAND_NAME", "Permoney")
+    config.x.product_name = ENV.fetch("PRODUCT_NAME", "Finance")
   end
 end

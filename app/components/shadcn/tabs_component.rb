@@ -2,7 +2,7 @@
 
 # Shadcn-style Tabs Component
 # Modern, accessible tabs with icon support
-# 
+#
 # Usage:
 #   <%= render Shadcn::TabsComponent.new(default_value: "all") do |tabs| %>
 #     <% tabs.tab(value: "all", label: "All", icon: "layout-grid") do %>

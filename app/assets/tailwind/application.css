@@ -12,6 +12,8 @@
 @import "./components/box_carousel.css";
 @import "./components/floating_chat.css";
 
+@import "./google-sign-in.css";
+
 @layer components {
   .pcr-app{
     position: static !important;

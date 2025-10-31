@@ -4,41 +4,26 @@ class PagesController < ApplicationController
   skip_authentication only: :redis_configuration_error
 
   def dashboard
-    # For self-hosted environments, auto-create a family if user doesn't have one
-    # This prevents redirect loops and ensures a valid state, but only if user has completed onboarding
-    if Rails.application.config.app_mode.self_hosted? && Current.user && !Current.family && Current.user.onboarding_complete?
-      ApplicationRecord.transaction do
-        family = Current.user.families.create!(
-          name: "#{Current.user.first_name || Current.user.email.split('@').first}'s Family",
-          currency: default_currency_for_user,
-          country: default_country_for_user,
-          locale: I18n.locale.to_s,
-          date_format: "%m-%d-%Y",
-          timezone: Time.zone.name
-        )
-        Current.user.update!(family: family)
-        log_dashboard_decision("Auto-created family for self-hosted user with currency: #{family.currency}, country: #{family.country}, locale: #{family.locale}")
-      end
-    end
+    @balance_sheet = Current.family.balance_sheet
+    @accounts = Current.family.accounts.visible.with_attached_logo
 
-    unless Current.family
-      redirect_to onboarding_path and return
-    end
-    # Cache expensive balance sheet calculation
-    @balance_sheet = Rails.cache.fetch(
-      "balance_sheet/#{Current.family.id}/#{Current.family.accounts.maximum(:updated_at)&.to_i}",
-      expires_in: 5.minutes
-    ) do
-      Current.family.balance_sheet
-    end
-
-    # Optimize account loading with eager loading
-    @accounts = Current.family.accounts.visible.with_attached_logo.includes(:accountable)
-
-    period_param = params[:cashflow_period]
-    @cashflow_period = if period_param.present?
+    # Handle cashflow period
+    cashflow_period_param = params[:cashflow_period]
+    @cashflow_period = if cashflow_period_param.present?
       begin
-        Period.from_key(period_param)
+        Period.from_key(cashflow_period_param)
+      rescue Period::InvalidKeyError
+        Period.last_30_days
+      end
+    else
+      Period.last_30_days
+    end
+
+    # Handle outflows period
+    outflows_period_param = params[:outflows_period]
+    @outflows_period = if outflows_period_param.present?
+      begin
+        Period.from_key(outflows_period_param)
       rescue Period::InvalidKeyError
         Period.last_30_days
       end
@@ -48,18 +33,14 @@ class PagesController < ApplicationController
 
     family_currency = Current.family.currency
 
-    # Cache expensive income/expense calculations
-    cache_key = "income_statement/#{Current.family.id}/#{@cashflow_period.key}/#{Current.family.entries.maximum(:updated_at)&.to_i}"
+    # Get data for cashflow section
+    income_totals = Current.family.income_statement.income_totals(period: @cashflow_period)
+    cashflow_expense_totals = Current.family.income_statement.expense_totals(period: @cashflow_period)
+    @cashflow_sankey_data = build_cashflow_sankey_data(income_totals, cashflow_expense_totals, family_currency)
 
-    income_totals = Rails.cache.fetch("#{cache_key}/income", expires_in: 5.minutes) do
-      Current.family.income_statement.income_totals(period: @cashflow_period)
-    end
-
-    expense_totals = Rails.cache.fetch("#{cache_key}/expense", expires_in: 5.minutes) do
-      Current.family.income_statement.expense_totals(period: @cashflow_period)
-    end
-
-    @cashflow_sankey_data = build_cashflow_sankey_data(income_totals, expense_totals, family_currency)
+    # Get data for outflows section (using its own period)
+    outflows_expense_totals = Current.family.income_statement.expense_totals(period: @outflows_period)
+    @outflows_data = build_outflows_donut_data(outflows_expense_totals)
 
     @breadcrumbs = [ [ "Home", root_path ], [ "Dashboard", nil ] ]
   end
@@ -69,13 +50,12 @@ class PagesController < ApplicationController
 
     # Fallback if no release notes are available
     if @release_notes.nil?
-      gh = github_provider
       @release_notes = {
-        avatar: gh.owner_avatar_url,
-        username: gh.owner,
+        avatar: "https://github.com/we-promise.png",
+        username: "we-promise",
         name: "Release notes unavailable",
         published_at: Date.current,
-        body: "<p>Unable to fetch the latest release notes at this time. Please check back later or visit our <a href='#{gh.releases_url}' target='_blank'>GitHub releases page</a> directly.</p>"
+        body: "<p>Unable to fetch the latest release notes at this time. Please check back later or visit our <a href='https://github.com/we-promise/sure/releases' target='_blank'>GitHub releases page</a> directly.</p>"
       }
     end
 
@@ -86,14 +66,6 @@ class PagesController < ApplicationController
     render layout: "settings"
   end
 
-  def sankey_demo
-    # Demo page for responsive Sankey chart
-  end
-
-  def carousel_demo
-    # Demo page for Box Carousel component
-  end
-
   def redis_configuration_error
     render layout: "blank"
   end
@@ -101,162 +73,6 @@ class PagesController < ApplicationController
   private
     def github_provider
       Provider::Registry.get_provider(:github)
-    end
-
-    # Determine default currency based on user locale, browser headers, or fallback to USD
-    def default_currency_for_user
-      # Try to determine from user's locale first
-      currency_from_locale = currency_from_locale(I18n.locale)
-      return currency_from_locale if currency_from_locale
-
-      # Try to determine from browser's Accept-Language header
-      currency_from_browser = currency_from_browser_locale
-      return currency_from_browser if currency_from_browser
-
-      # Fallback to highest priority currency (USD)
-      "USD"
-    end
-
-    # Determine default country based on user locale, browser headers, or fallback to US
-    def default_country_for_user
-      # Try to determine from user's locale first
-      country_from_locale = country_from_locale(I18n.locale)
-      return country_from_locale if country_from_locale
-
-      # Try to determine from browser's Accept-Language header
-      country_from_browser = country_from_browser_locale
-      return country_from_browser if country_from_browser
-
-      # Fallback to US
-      "US"
-    end
-
-    # Map common locales to currencies using existing data sources
-    def currency_from_locale(locale)
-      # Common locale to currency mappings based on geographical regions
-      # This uses knowledge of which currencies are used in which regions
-      locale_str = locale.to_s.downcase
-
-      case locale_str
-      when /^en[-_]?us?$/, /^en$/
-        "USD"
-      when /^en[-_]ca$/
-        "CAD"
-      when /^en[-_]gb$/
-        "GBP"
-      when /^en[-_]au$/
-        "AUD"
-      when /^fr[-_]?fr?$/, /^fr$/, /^de[-_]?de?$/, /^de$/, /^es[-_]?es?$/, /^es$/, /^it[-_]?it?$/, /^it$/, /^pt[-_]pt$/, /^nl[-_]?nl?$/, /^nl$/, /^fi[-_]?fi?$/, /^fi$/
-        "EUR"
-      when /^fr[-_]ca$/
-        "CAD"
-      when /^de[-_]ch$/, /^fr[-_]ch$/, /^it[-_]ch$/
-        "CHF"
-      when /^es[-_]mx$/
-        "MXN"
-      when /^es[-_]ar$/
-        "ARS"
-      when /^pt[-_]br$/
-        "BRL"
-      when /^ja[-_]?jp?$/, /^ja$/
-        "JPY"
-      when /^ko[-_]?kr?$/, /^ko$/
-        "KRW"
-      when /^zh[-_]?cn?$/, /^zh$/
-        "CNY"
-      when /^zh[-_]tw$/
-        "TWD"
-      when /^zh[-_]hk$/
-        "HKD"
-      when /^ru[-_]?ru?$/, /^ru$/
-        "RUB"
-      when /^ar[-_]?sa?$/, /^ar$/
-        "SAR"
-      when /^ar[-_]ae$/
-        "AED"
-      when /^hi[-_]?in?$/, /^hi$/
-        "INR"
-      when /^th[-_]?th?$/, /^th$/
-        "THB"
-      when /^vi[-_]?vn?$/, /^vi$/
-        "VND"
-      when /^tr[-_]?tr?$/, /^tr$/
-        "TRY"
-      when /^pl[-_]?pl?$/, /^pl$/
-        "PLN"
-      when /^sv[-_]?se?$/, /^sv$/
-        "SEK"
-      when /^no[-_]?no?$/, /^no$/
-        "NOK"
-      when /^da[-_]?dk?$/, /^da$/
-        "DKK"
-      else
-        nil
-      end
-    end
-
-    # Map common locales to countries using existing LanguagesHelper data
-    def country_from_locale(locale)
-      # Use the existing COUNTRY_MAPPING from LanguagesHelper if available
-      return nil unless defined?(LanguagesHelper::COUNTRY_MAPPING)
-
-      locale_str = locale.to_s.downcase
-
-      # Extract country code from locale (e.g., "en-US" -> "US", "fr-CA" -> "CA")
-      if locale_str.include?("-") || locale_str.include?("_")
-        country_code = locale_str.split(/[-_]/).last.upcase
-        return country_code if LanguagesHelper::COUNTRY_MAPPING.key?(country_code.to_sym)
-      end
-
-      # Fallback mappings for language-only locales
-      language_to_country = {
-        "en" => "US", "fr" => "FR", "de" => "DE", "es" => "ES", "it" => "IT",
-        "pt" => "PT", "ja" => "JP", "ko" => "KR", "zh" => "CN", "ru" => "RU",
-        "ar" => "SA", "hi" => "IN", "th" => "TH", "vi" => "VN", "tr" => "TR",
-        "pl" => "PL", "nl" => "NL", "sv" => "SE", "no" => "NO", "da" => "DK", "fi" => "FI"
-      }
-
-      language = locale_str.split(/[-_]/).first
-      country_code = language_to_country[language]
-      return country_code if country_code && LanguagesHelper::COUNTRY_MAPPING.key?(country_code.to_sym)
-
-      nil
-    end
-
-    # Try to determine currency from browser's Accept-Language header
-    def currency_from_browser_locale
-      return nil unless request.headers["Accept-Language"]
-
-      # Parse Accept-Language header to get preferred locales
-      accepted_locales = request.headers["Accept-Language"]
-        .split(",")
-        .map { |lang| lang.split(";").first.strip.downcase }
-        .first(3) # Only check first 3 preferences
-
-      accepted_locales.each do |locale|
-        currency = currency_from_locale(locale)
-        return currency if currency
-      end
-
-      nil
-    end
-
-    # Try to determine country from browser's Accept-Language header
-    def country_from_browser_locale
-      return nil unless request.headers["Accept-Language"]
-
-      # Parse Accept-Language header to get preferred locales
-      accepted_locales = request.headers["Accept-Language"]
-        .split(",")
-        .map { |lang| lang.split(";").first.strip.downcase }
-        .first(3) # Only check first 3 preferences
-
-      accepted_locales.each do |locale|
-        country = country_from_locale(locale)
-        return country if country
-      end
-
-      nil
     end
 
     def build_cashflow_sankey_data(income_totals, expense_totals, currency_symbol)
@@ -353,5 +169,27 @@ class PagesController < ApplicationController
       # No primary income node anymore, percentages are on individual income cats relative to total_income_val
 
       { nodes: nodes, links: links, currency_symbol: Money::Currency.new(currency_symbol).symbol }
+    end
+
+    def build_outflows_donut_data(expense_totals)
+      currency_symbol = Money::Currency.new(expense_totals.currency).symbol
+      total = expense_totals.total
+
+      # Only include top-level categories with non-zero amounts
+      categories = expense_totals.category_totals
+        .reject { |ct| ct.category.parent_id.present? || ct.total.zero? }
+        .sort_by { |ct| -ct.total }
+        .map do |ct|
+          {
+            id: ct.category.id,
+            name: ct.category.name,
+            amount: ct.total.to_f.round(2),
+            percentage: ct.weight.round(1),
+            color: ct.category.color.presence || Category::UNCATEGORIZED_COLOR,
+            icon: ct.category.lucide_icon
+          }
+        end
+
+      { categories: categories, total: total.to_f.round(2), currency_symbol: currency_symbol }
     end
 end

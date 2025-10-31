@@ -10,7 +10,9 @@ class User < ApplicationRecord
   has_many :invitations, foreign_key: :inviter_id, dependent: :destroy
   has_many :impersonator_support_sessions, class_name: "ImpersonationSession", foreign_key: :impersonator_id, dependent: :destroy
   has_many :impersonated_support_sessions, class_name: "ImpersonationSession", foreign_key: :impersonated_id, dependent: :destroy
-  accepts_nested_attributes_for :family
+  # Upstream: OpenID Connect support
+  has_many :oidc_identities, dependent: :destroy
+  accepts_nested_attributes_for :family, update_only: true
 
   validates :email, presence: true, uniqueness: true, format: { with: URI::MailTo::EMAIL_REGEXP }
   validate :ensure_valid_profile_image
@@ -30,7 +32,7 @@ class User < ApplicationRecord
     # This follows F1 performance optimization - always ready to serve
     attachable.variant :small, resize_to_fill: [ 72, 72 ], convert: :webp, saver: { quality: 85, strip: true }, preprocessed: true
     attachable.variant :medium, resize_to_fill: [ 200, 200 ], convert: :webp, saver: { quality: 85, strip: true }, preprocessed: true
-    
+
     # Lazy-loaded variant for larger displays (on-demand processing)
     attachable.variant :thumbnail, resize_to_fill: [ 300, 300 ], convert: :webp, saver: { quality: 80, strip: true }
   end

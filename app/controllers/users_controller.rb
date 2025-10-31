@@ -47,9 +47,11 @@ class UsersController < ApplicationController
       @user.update!(update_params)
       @user.profile_image.purge if should_purge_profile_image?
 
-      # Add a special notice if AI was just enabled
+      # Add a special notice if AI was just enabled or disabled
       notice = if !was_ai_enabled && @user.ai_enabled
         "AI Assistant has been enabled successfully."
+      elsif was_ai_enabled && !@user.ai_enabled
+        "AI Assistant has been disabled."
       else
         t(".success")
       end
@@ -98,6 +100,8 @@ class UsersController < ApplicationController
         redirect_to goals_onboarding_path
       when "trial"
         redirect_to trial_onboarding_path
+      when "ai_prompts"
+        redirect_to settings_ai_prompts_path, notice: notice
       else
         redirect_to settings_profile_path, notice: notice
       end

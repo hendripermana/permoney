@@ -1,79 +1,29 @@
 <% content_for :page_header do %>
-  <div class="space-y-6 mb-6">
-    <!-- Hero Section with Carousel -->
-    <div class="bg-surface rounded-2xl p-8 border border-primary shadow-sm">
-      <div class="flex flex-col lg:flex-row gap-8 items-center justify-between">
-        <!-- Welcome Text -->
-        <div class="space-y-4 flex-1">
-          <!-- Realtime Clock -->
-          <div 
-            class="mb-4"
-            data-controller="realtime-clock">
-            <div 
-              class="text-sm font-medium text-secondary"
-              data-realtime-clock-target="date">
-              Loading...
-            </div>
-            <div 
-              class="text-lg font-semibold text-primary font-mono"
-              data-realtime-clock-target="time">
-              --:--:--
-            </div>
-          </div>
-
-          <h1 
-            class="text-2xl lg:text-4xl font-bold text-primary cursor-default"
-            data-controller="variable-font-hover"
-            data-variable-font-hover-from-value="'wght' 400"
-            data-variable-font-hover-to-value="'wght' 700"
-            data-variable-font-hover-stagger-duration-value="30"
-            data-variable-font-hover-duration-value="500"
-            data-action="mouseenter->variable-font-hover#mouseenter mouseleave->variable-font-hover#mouseleave">
-            <%= time_based_greeting %>, <%= Current.user.first_name %>! 👋
-          </h1>
-          <p class="text-base lg:text-lg text-secondary">Here's what's happening with your finances</p>
-          
-          <div class="flex gap-3 pt-4">
-            <%= render DS::Link.new(
-              icon: "plus",
-              text: "Add Account",
-              href: new_account_path,
-              frame: :modal,
-              class: "inline-flex"
-            ) %>
-            
-            <%= render DS::Link.new(
-              variant: "secondary",
-              icon: "plus",
-              text: "Add Transaction",
-              href: new_transaction_path,
-              frame: :modal,
-              class: "inline-flex"
-            ) %>
-          </div>
-        </div>
-
-        <!-- Carousel -->
-        <div class="flex-shrink-0">
-          <%= render BoxCarouselComponent.new(
-            items: [
-              { id: "1", type: "video", src: "https://cdn.cosmos.so/3fe9c8a8-b562-4090-a5ac-5bbdf655a938.mp4", alt: "@portalsandpaths" },
-              { id: "2", type: "video", src: "https://cdn.cosmos.so/594e87df-e8ca-4d03-8137-f78b5dab6793.mp4", alt: "@studio.size" },
-              { id: "3", type: "image", src: "https://cdn.cosmos.so/92162e2e-abf6-4b98-a557-bfe25a336608?format=jpeg", alt: "@david_wise" },
-              { id: "4", type: "video", src: "https://cdn.cosmos.so/aae0a1e6-d03d-43ae-aa7f-21627a950730.mp4", alt: "@svenvranjes" },
-              { id: "5", type: "image", src: "https://cdn.cosmos.so/7a5f1a73-ca73-466b-afaf-2b3d0639aa1a?format=jpeg", alt: "@deconstructie" }
-            ],
-            width: 380,
-            height: 260,
-            direction: "right",
-            auto_play: true,
-            auto_play_interval: 3500,
-            enable_drag: true,
-            perspective: 1000
-          ) %>
-        </div>
-      </div>
+  <div class="space-y-1 mb-6 flex gap-4 justify-between items-center lg:items-start">
+    <div class="space-y-1">
+      <h1 class="text-xl lg:text-3xl font-medium text-primary">
+        <%= t("pages.dashboard.welcome", name: Current.user.first_name) %>
+      </h1>
+      <p class="text-sm lg:text-base text-secondary">
+        <%= t("pages.dashboard.subtitle") %>
+      </p>
     </div>
+
+    <%= render DS::Link.new(
+      icon: "plus",
+      text: t("pages.dashboard.new"),
+      href: new_account_path,
+      frame: :modal,
+      class: "hidden lg:inline-flex"
+    ) %>
+
+    <%= render DS::Link.new(
+        variant: "icon-inverse",
+        icon: "plus",
+        href: new_account_path,
+        frame: :modal,
+        class: "rounded-full lg:hidden"
+      ) %>
   </div>
 <% end %>
 
@@ -86,6 +36,17 @@
           period: @cashflow_period
         } %>
       </section>
+    <% end %>
+
+    <% if @outflows_data[:categories].present? %>
+      <%= turbo_frame_tag "outflows_donut_section" do %>
+        <section class="bg-container py-4 rounded-xl shadow-border-xs mb-6">
+          <%= render partial: "pages/dashboard/outflows_donut", locals: {
+            outflows_data: @outflows_data,
+            period: @outflows_period
+          } %>
+        </section>
+      <% end %>
     <% end %>
 
     <section class="bg-container py-4 rounded-xl shadow-border-xs">

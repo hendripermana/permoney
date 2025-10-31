@@ -14,7 +14,7 @@ module Permoney
 
     private
       def semver
-        "0.6.3"
+        "0.6.5-alpha.6"  # Upstream version
       end
   end
 end

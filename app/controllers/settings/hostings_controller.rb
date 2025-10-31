@@ -12,11 +12,14 @@ class Settings::HostingsController < ApplicationController
     ]
     twelve_data_provider = Provider::Registry.get_provider(:twelve_data)
     @twelve_data_usage = twelve_data_provider&.usage
+
+    @yahoo_finance_provider = Provider::Registry.get_provider(:yahoo_finance)
   end
 
   def update
-    if hosting_params.key?(:require_invite_for_signup)
-      Setting.require_invite_for_signup = hosting_params[:require_invite_for_signup]
+    if hosting_params.key?(:onboarding_state)
+      onboarding_state = hosting_params[:onboarding_state].to_s
+      Setting.onboarding_state = onboarding_state
     end
 
     if hosting_params.key?(:require_email_confirmation)
@@ -43,9 +46,25 @@ class Settings::HostingsController < ApplicationController
       end
     end
 
+    # Validate OpenAI configuration before updating
+    if hosting_params.key?(:openai_uri_base) || hosting_params.key?(:openai_model)
+      Setting.validate_openai_config!(
+        uri_base: hosting_params[:openai_uri_base],
+        model: hosting_params[:openai_model]
+      )
+    end
+
+    if hosting_params.key?(:openai_uri_base)
+      Setting.openai_uri_base = hosting_params[:openai_uri_base]
+    end
+
+    if hosting_params.key?(:openai_model)
+      Setting.openai_model = hosting_params[:openai_model]
+    end
+
     redirect_to settings_hosting_path, notice: t(".success")
-  rescue ActiveRecord::RecordInvalid => error
-    flash.now[:alert] = t(".failure")
+  rescue Setting::ValidationError => error
+    flash.now[:alert] = error.message
     render :show, status: :unprocessable_entity
   end
 
@@ -56,7 +75,7 @@ class Settings::HostingsController < ApplicationController
 
   private
     def hosting_params
-      params.require(:setting).permit(:require_invite_for_signup, :require_email_confirmation, :brand_fetch_client_id, :twelve_data_api_key, :openai_access_token)
+      params.require(:setting).permit(:onboarding_state, :require_email_confirmation, :brand_fetch_client_id, :twelve_data_api_key, :openai_access_token, :openai_uri_base, :openai_model)
     end
 
     def ensure_admin

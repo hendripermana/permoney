@@ -106,4 +106,3 @@ class MemoryMonitoringJob < ApplicationJob
       0
     end
 end
-

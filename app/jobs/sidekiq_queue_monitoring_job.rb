@@ -86,4 +86,3 @@ class SidekiqQueueMonitoringJob < ApplicationJob
     end
   end
 end
-

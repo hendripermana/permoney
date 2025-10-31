@@ -1,14 +1,13 @@
 module ApplicationHelper
   include Pagy::Frontend
 
-  def brand_name
-    "Permoney"
+  # Upstream: Dynamic branding from Rails config (better approach)
+  def product_name
+    Rails.configuration.x.product_name
   end
 
-  def full_title
-    base = brand_name
-    page = content_for?(:title) ? content_for(:title) : nil
-    page ? "#{page} · #{base}" : base
+  def brand_name
+    Rails.configuration.x.brand_name
   end
 
   def styled_form_with(**options, &block)
@@ -93,9 +92,9 @@ module ApplicationHelper
     cookies[:admin] == "true"
   end
 
+  # Permoney: Time-based greeting (custom feature)
   def time_based_greeting
     hour = Time.current.hour
-
     if hour >= 5 && hour < 12
       "Good morning"
     elsif hour >= 12 && hour < 18
@@ -103,6 +102,13 @@ module ApplicationHelper
     else
       "Good evening"
     end
+  end
+
+  # Upstream: Default AI model helper
+  def default_ai_model
+    # Always return a valid model, never nil or empty
+    # Delegates to Chat.default_model for consistency
+    Chat.default_model
   end
 
   # Renders Markdown text using Redcarpet and sanitizes the output

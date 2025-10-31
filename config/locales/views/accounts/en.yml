@@ -2,6 +2,7 @@
 en:
   accounts:
     account:
+      link_lunchflow: Link with Lunch Flow
       troubleshoot: Troubleshoot
     chart:
       data_not_available: Data not available for the selected period
@@ -28,6 +29,7 @@ en:
       method_selector:
         connected_entry: Link account
         connected_entry_eu: Link EU account
+        lunchflow_entry: Link Lunch Flow account
         manual_entry: Enter account balance
         title: How would you like to add it?
       title: What would you like to add?
@@ -42,6 +44,8 @@ en:
         new_balance: New balance
         new_transaction: New transaction
         no_entries: No entries found
+        search:
+          placeholder: Search entries by name
         title: Activity
       chart:
         balance: Balance

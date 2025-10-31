@@ -1,32 +1,20 @@
 default: &default
   adapter: postgresql
   encoding: unicode
-  # Connection pool: (Puma workers × threads) + Sidekiq concurrency + buffer
-  # Ensures sufficient connections for all concurrent operations
-  pool: <%= ENV.fetch("DB_POOL") { ENV.fetch("RAILS_MAX_THREADS") { 5 }.to_i } %>
+  pool: <%= ENV.fetch("RAILS_MAX_THREADS") { 3 } %>
   host: <%= ENV.fetch("DB_HOST") { "127.0.0.1" } %>
   port: <%= ENV.fetch("DB_PORT") { "5432" } %>
   user: <%= ENV.fetch("POSTGRES_USER") { nil } %>
   password: <%= ENV.fetch("POSTGRES_PASSWORD") { nil } %>
-  # Connection timeouts for reliability
-  connect_timeout: <%= ENV.fetch("DB_CONNECT_TIMEOUT") { 5 }.to_i %>
-  # Connection reaping to clean up stale connections
-  reaping_frequency: <%= ENV.fetch("DB_REAPING_FREQUENCY") { 10 }.to_i %>
-  # Statement timeout to prevent long-running queries
-  variables:
-    statement_timeout: <%= ENV.fetch("DB_STATEMENT_TIMEOUT") { 15 }.to_i %>s
-    lock_timeout: <%= ENV.fetch("DB_LOCK_TIMEOUT") { 10 }.to_i %>s
-  # Enable prepared statements for better query performance
-  prepared_statements: true
 
 development:
   <<: *default
-  database: <%= ENV.fetch("POSTGRES_DB") { "permoney_development" } %>
+  database: <%= ENV.fetch("POSTGRES_DB") { "sure_development" } %>
 
 test:
   <<: *default
-  database: <%= ENV.fetch("POSTGRES_DB") { "permoney_test" } %>
+  database: <%= ENV.fetch("POSTGRES_DB") { "sure_test" } %>
 
 production:
   <<: *default
-  database: <%= ENV.fetch("POSTGRES_DB") { "permoney_production" } %>
+  database: <%= ENV.fetch("POSTGRES_DB") { "sure_production" } %>

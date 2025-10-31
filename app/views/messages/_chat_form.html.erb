@@ -37,7 +37,7 @@
   <%= form_with model: model, **form_options do |f| %>
 
     <%# In the future, this will be a dropdown with different AI models %>
-    <%= f.hidden_field :ai_model, value: "gpt-4.1" %>
+    <%= f.hidden_field :ai_model, value: default_ai_model %>
 
     <% text_area_options = {
       placeholder: "Ask anything ...",

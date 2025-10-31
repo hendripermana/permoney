@@ -123,27 +123,27 @@ module PerformanceHelper
       sanitized
     end
 
-  # Defer non-critical JavaScript
-  #
-  # @param src [String] Script source URL
-  # @param options [Hash] Additional HTML options
-  # @return [String] HTML script tag with defer attribute
-  #
-  # Usage:
-  #   <%= defer_javascript_tag "analytics.js" %>
-  def defer_javascript_tag(src, **options)
-    options[:defer] = true
-    javascript_include_tag(src, **options)
-  end
+    # Defer non-critical JavaScript
+    #
+    # @param src [String] Script source URL
+    # @param options [Hash] Additional HTML options
+    # @return [String] HTML script tag with defer attribute
+    #
+    # Usage:
+    #   <%= defer_javascript_tag "analytics.js" %>
+    def defer_javascript_tag(src, **options)
+      options[:defer] = true
+      javascript_include_tag(src, **options)
+    end
 
-  # Generate Service Worker registration script
-  #
-  # @return [String] JavaScript code to register Service Worker
-  #
-  # Usage:
-  #   <%= service_worker_registration_script %>
-  def service_worker_registration_script
-    javascript_tag(<<~JS.html_safe)
+    # Generate Service Worker registration script
+    #
+    # @return [String] JavaScript code to register Service Worker
+    #
+    # Usage:
+    #   <%= service_worker_registration_script %>
+    def service_worker_registration_script
+      javascript_tag(<<~JS.html_safe)
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function() {
           navigator.serviceWorker.register('/service-worker.js')
@@ -156,18 +156,18 @@ module PerformanceHelper
         });
       }
     JS
-  end
+    end
 
-  # Calculate and display page load time
-  #
-  # @return [String] JavaScript code to measure page load time
-  #
-  # Usage:
-  #   <%= page_load_time_script if Rails.env.development? %>
-  def page_load_time_script
-    return unless Rails.env.development?
+    # Calculate and display page load time
+    #
+    # @return [String] JavaScript code to measure page load time
+    #
+    # Usage:
+    #   <%= page_load_time_script if Rails.env.development? %>
+    def page_load_time_script
+      return unless Rails.env.development?
 
-    javascript_tag(<<~JS.html_safe)
+      javascript_tag(<<~JS.html_safe)
       window.addEventListener('load', function() {
         const perfData = window.performance.timing;
         const pageLoadTime = perfData.loadEventEnd - perfData.navigationStart;
@@ -180,5 +180,5 @@ module PerformanceHelper
         console.log('DOM Render Time:', renderTime + 'ms');
       });
     JS
-  end
+    end
 end
