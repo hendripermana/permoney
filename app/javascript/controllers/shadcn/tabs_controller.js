@@ -29,12 +29,17 @@ export default class extends Controller {
 
   // Handle tab selection
   selectTab(event) {
+    // Rails 8.1: Use event.target for better reliability across themes
+    // event.currentTarget may not be set correctly in some cases (e.g., dark mode with overlays)
+    // Find the button element using closest to handle nested elements (icons, etc.)
+    const trigger = event.target.closest("button[data-shadcn--tabs-target='trigger']");
+    if (!trigger) return;
+
     // Only prevent default for buttons, let the event bubble normally
-    if (event.currentTarget.tagName === "BUTTON") {
+    if (trigger.tagName === "BUTTON") {
       event.preventDefault();
     }
 
-    const trigger = event.currentTarget;
     const value = trigger.dataset.tabValue;
 
     if (value) {
