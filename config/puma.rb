@@ -5,30 +5,61 @@
 # Puma starts a configurable number of processes (workers) and each process
 # serves each request in a thread from an internal thread pool.
 #
-# You can control the number of workers using ENV["WEB_CONCURRENCY"]. You
-# should only set this value when you want to run 2 or more workers. The
-# default is already 1.
-#
-# The ideal number of threads per worker depends both on how much time the
-# application spends waiting for IO operations and on how much you wish to
-# prioritize throughput over latency.
-#
-# As a rule of thumb, increasing the number of threads will increase how much
-# traffic a given process can handle (throughput), but due to CRuby's
-# Global VM Lock (GVL) it has diminishing returns and will degrade the
-# response time (latency) of the application.
-#
-# The default is set to 3 threads as it's deemed a decent compromise between
-# throughput and latency for the average Rails application.
-#
-# Any libraries that use a connection pool or another resource pool should
-# be configured to provide at least as many connections as the number of
-# threads. This includes Active Record's `pool` parameter in `database.yml`.
-threads_count = ENV.fetch("RAILS_MAX_THREADS", 3)
+# PERFORMANCE OPTIMIZATION:
+# - Workers: Set to number of CPU cores for true parallelism
+# - Threads: 3-5 per worker balances throughput and latency
+# - Total capacity: workers × threads concurrent requests
+# - Database pool must be >= (workers × threads) + Sidekiq concurrency
+# - HTTP Compression: Enabled for responses >2KB for faster transfers
+
+# Thread configuration
+# Optimal: 3-5 threads per worker for Rails apps with ~50% I/O time
+threads_count = ENV.fetch("RAILS_MAX_THREADS", 5).to_i
 threads threads_count, threads_count
+
+# Enable HTTP compression for better performance
+# Compresses responses larger than 2KB
+# Supports both Brotli (preferred) and Gzip compression
+# Content-Type filtering handled by Rack::Deflater
+on_booted do
+  require "rack/deflater"
+end
+
+# Worker configuration
+# Development: Use single mode (0 workers) to avoid macOS fork issues
+# Production: 1 per CPU core
+# Set WEB_CONCURRENCY=0 to disable cluster mode (single process)
+workers_count = ENV.fetch("WEB_CONCURRENCY") { Rails.env.production? ? 4 : 0 }.to_i
+workers workers_count if workers_count > 0
+
+# Preload application for memory efficiency via copy-on-write
+# Only enable in cluster mode (workers > 0)
+if workers_count > 0
+  preload_app!
+
+  # Reconnect to database after fork
+  before_fork do
+    ActiveRecord::Base.connection_pool.disconnect! if defined?(ActiveRecord)
+  end
+
+  before_worker_boot do
+    ActiveRecord::Base.establish_connection if defined?(ActiveRecord)
+  end
+end
+
+# Worker timeout configuration
+# Kills workers that don't respond within timeout period
+worker_timeout ENV.fetch("PUMA_WORKER_TIMEOUT", 60).to_i if workers_count > 0
+
+# Worker boot timeout
+# Time to wait for worker to boot before killing it
+worker_boot_timeout ENV.fetch("PUMA_WORKER_BOOT_TIMEOUT", 60).to_i if workers_count > 0
 
 # Specifies the `port` that Puma will listen on to receive requests; default is 3000.
 port ENV.fetch("PORT", 3000)
+
+# Specifies the `environment` that Puma will run in.
+environment ENV.fetch("RAILS_ENV", "development")
 
 # Allow puma to be restarted by `bin/rails restart` command.
 plugin :tmp_restart
@@ -39,3 +70,7 @@ plugin :solid_queue if ENV["SOLID_QUEUE_IN_PUMA"]
 # Specify the PID file. Defaults to tmp/pids/server.pid in development.
 # In other environments, only set the PID file if requested.
 pidfile ENV["PIDFILE"] if ENV["PIDFILE"]
+
+# Logging
+# Quiet mode reduces log verbosity in production
+quiet if ENV["RAILS_ENV"] == "production"

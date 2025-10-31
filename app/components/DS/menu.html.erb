@@ -1,6 +1,6 @@
-<%= tag.div data: { controller: "DS--menu", DS__menu_placement_value: placement, DS__menu_offset_value: offset, testid: testid } do %>
+<%= tag.div data: { controller: "DS--menu", "DS--menu-placement-value": placement, "DS--menu-offset-value": offset, testid: testid } do %>
   <% if variant == :icon %>
-    <%= render DS::Button.new(variant: "icon", icon: icon_vertical ? "more-vertical" : "more-horizontal", data: { DS__menu_target: "button" }) %>
+    <%= render DS::Button.new(variant: "icon", icon: icon_vertical ? "more-vertical" : "more-horizontal", data: { "DS--menu-target": "button" }) %>
   <% elsif variant == :button %>
     <%= button %>
   <% elsif variant == :avatar %>

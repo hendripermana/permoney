@@ -100,8 +100,8 @@ class DS::Dialog < DesignSystemComponent
     data = merged_opts.delete(:data) || {}
 
     data[:controller] = [ "DS--dialog", "hotkey", data[:controller] ].compact.join(" ")
-    data[:DS__dialog_auto_open_value] = auto_open
-    data[:DS__dialog_reload_on_close_value] = reload_on_close
+    data["DS--dialog-auto-open-value"] = auto_open
+    data["DS--dialog-reload-on-close-value"] = reload_on_close
     data[:action] = [ "mousedown->DS--dialog#clickOutside", data[:action] ].compact.join(" ")
     data[:hotkey] = "esc:DS--dialog#close"
     merged_opts[:data] = data

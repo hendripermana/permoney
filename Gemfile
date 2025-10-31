@@ -2,8 +2,8 @@ source "https://rubygems.org"
 
 ruby file: ".ruby-version"
 
-# Rails
-gem "rails", "~> 8.0.2"
+# Rails 8.1 - Latest stable with new features
+gem "rails", "~> 8.1.0"
 
 # Drivers
 gem "pg", "~> 1.5"

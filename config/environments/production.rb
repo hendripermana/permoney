@@ -46,8 +46,46 @@ Rails.application.configure do
   # Don't log any deprecations.
   config.active_support.report_deprecations = false
 
-  # Replace the default in-process memory cache store with a durable alternative.
-  # config.cache_store = :mem_cache_store
+  # Redis Cache Store for production performance
+  # Provides fast, distributed caching with persistence
+  config.cache_store = :redis_cache_store, {
+    url: ENV.fetch("REDIS_CACHE_URL") { ENV.fetch("REDIS_URL", "redis://localhost:6379/1") },
+
+    # Connection pool configuration (Rails 8 format)
+    pool: {
+      size: ENV.fetch("REDIS_POOL_SIZE", 10).to_i,
+      timeout: 5
+    },
+
+    # Connection timeouts for reliability
+    connect_timeout: ENV.fetch("REDIS_CONNECT_TIMEOUT", 5).to_i,
+    read_timeout: ENV.fetch("REDIS_READ_TIMEOUT", 1).to_i,
+    write_timeout: ENV.fetch("REDIS_WRITE_TIMEOUT", 1).to_i,
+
+    # Reconnect attempts for resilience
+    reconnect_attempts: 2,
+
+    # Cache namespace for isolation
+    namespace: ENV.fetch("CACHE_NAMESPACE", "permoney_production"),
+
+    # Compression for large values (>1KB)
+    compress: true,
+    compress_threshold: ENV.fetch("CACHE_COMPRESS_THRESHOLD", 1024).to_i,
+
+    # Error handling - report to Sentry
+    error_handler: lambda { |method:, returning:, exception:|
+      if defined?(Sentry)
+        Sentry.capture_exception(exception,
+          level: "warning",
+          tags: {
+            cache_method: method,
+            cache_returning: returning
+          }
+        )
+      end
+      Rails.logger.warn("Cache error: #{method} - #{exception.message}")
+    }
+  }
 
   # Replace the default in-process and non-durable queuing backend for Active Job.
   # config.active_job.queue_adapter = :resque

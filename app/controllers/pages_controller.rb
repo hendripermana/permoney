@@ -24,8 +24,16 @@ class PagesController < ApplicationController
     unless Current.family
       redirect_to onboarding_path and return
     end
-    @balance_sheet = Current.family.balance_sheet
-    @accounts = Current.family.accounts.visible.with_attached_logo
+    # Cache expensive balance sheet calculation
+    @balance_sheet = Rails.cache.fetch(
+      "balance_sheet/#{Current.family.id}/#{Current.family.accounts.maximum(:updated_at)&.to_i}",
+      expires_in: 5.minutes
+    ) do
+      Current.family.balance_sheet
+    end
+
+    # Optimize account loading with eager loading
+    @accounts = Current.family.accounts.visible.with_attached_logo.includes(:accountable)
 
     period_param = params[:cashflow_period]
     @cashflow_period = if period_param.present?
@@ -39,8 +47,17 @@ class PagesController < ApplicationController
     end
 
     family_currency = Current.family.currency
-    income_totals = Current.family.income_statement.income_totals(period: @cashflow_period)
-    expense_totals = Current.family.income_statement.expense_totals(period: @cashflow_period)
+
+    # Cache expensive income/expense calculations
+    cache_key = "income_statement/#{Current.family.id}/#{@cashflow_period.key}/#{Current.family.entries.maximum(:updated_at)&.to_i}"
+
+    income_totals = Rails.cache.fetch("#{cache_key}/income", expires_in: 5.minutes) do
+      Current.family.income_statement.income_totals(period: @cashflow_period)
+    end
+
+    expense_totals = Rails.cache.fetch("#{cache_key}/expense", expires_in: 5.minutes) do
+      Current.family.income_statement.expense_totals(period: @cashflow_period)
+    end
 
     @cashflow_sankey_data = build_cashflow_sankey_data(income_totals, expense_totals, family_currency)
 

@@ -2,7 +2,7 @@
 // - Eager-loads and registers all controllers pinned under a given prefix
 // - Mirrors Rails' naming rules (nested paths -> --, underscores -> -)
 
-export function eagerLoadControllersFrom(prefix, application) {
+export async function eagerLoadControllersFrom(prefix, application) {
   try {
     const importmapScript = document.querySelector('script[type="importmap"]');
     if (!importmapScript) return;
@@ -12,24 +12,27 @@ export function eagerLoadControllersFrom(prefix, application) {
       key.startsWith(`${prefix}/`),
     );
 
-    specifiers.forEach(async (specifier) => {
-      try {
-        const module = await import(specifier);
-        const controller = module?.default;
-        if (!controller) return;
+    // Use Promise.all to ensure all controllers are loaded before continuing
+    await Promise.all(
+      specifiers.map(async (specifier) => {
+        try {
+          const module = await import(specifier);
+          const controller = module?.default;
+          if (!controller) return;
 
-        const identifier = specifier
-          .replace(new RegExp(`^${prefix}/`), "")
-          .replace(/_controller(\.js)?$/, "")
-          .replace(/\//g, "--")
-          .replace(/_/g, "-");
+          const identifier = specifier
+            .replace(new RegExp(`^${prefix}/`), "")
+            .replace(/_controller(\.js)?$/, "")
+            .replace(/\//g, "--")
+            .replace(/_/g, "-");
 
-        application.register(identifier, controller);
-      } catch (e) {
-        // Keep the app booting; log for visibility
-        console.error(`Failed to register controller: ${specifier}`, e);
-      }
-    });
+          application.register(identifier, controller);
+        } catch (e) {
+          // Keep the app booting; log for visibility
+          console.error(`Failed to register controller: ${specifier}`, e);
+        }
+      })
+    );
   } catch (e) {
     console.error("Failed to parse importmap for controller loading", e);
   }

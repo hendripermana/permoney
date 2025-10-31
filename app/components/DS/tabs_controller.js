@@ -1,14 +1,20 @@
 import { Controller } from "@hotwired/stimulus";
 
-// Connects to data-controller="tabs--components"
+// Connects to data-controller="DS--tabs"
 export default class extends Controller {
   static classes = ["navBtnActive", "navBtnInactive"];
   static targets = ["panel", "navBtn"];
   static values = { sessionKey: String, urlParamKey: String };
 
   show(e) {
-    const btn = e.target.closest("button");
+    // Prevent default button behavior, let event bubble normally
+    e.preventDefault();
+    
+    const btn = e.currentTarget.closest("button");
+    if (!btn) return;
+    
     const selectedTabId = btn.dataset.id;
+    if (!selectedTabId) return;
 
     this.navBtnTargets.forEach((navBtn) => {
       if (navBtn.dataset.id === selectedTabId) {

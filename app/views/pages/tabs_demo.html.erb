@@ -1,0 +1,158 @@
+<div class="container mx-auto px-4 py-8 max-w-4xl">
+  <h1 class="text-3xl font-bold mb-2">Shadcn-Style Tabs Demo</h1>
+  <p class="text-secondary mb-8">Modern, accessible tabs component with keyboard navigation</p>
+
+  <!-- Demo 1: Account Type Tabs (Your Original Use Case) -->
+  <section class="mb-12">
+    <h2 class="text-xl font-semibold mb-4">Account Type Tabs</h2>
+    
+    <%= render Shadcn::TabsComponent.new(default_value: "all", url_param: "tab") do |tabs| %>
+      <% tabs.with_tab(value: "all", label: "All", icon: "layout-grid") do %>
+        <div class="space-y-4">
+          <h3 class="text-lg font-medium">All Accounts</h3>
+          <p class="text-secondary">View all your accounts including assets and liabilities.</p>
+          
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="p-4 bg-surface-inset rounded-lg">
+              <div class="flex items-center gap-2 mb-2">
+                <%= icon "trending-up", size: 20, class: "text-green-600" %>
+                <span class="font-medium">Checking Account</span>
+              </div>
+              <p class="text-2xl font-bold">$5,234.50</p>
+            </div>
+            
+            <div class="p-4 bg-surface-inset rounded-lg">
+              <div class="flex items-center gap-2 mb-2">
+                <%= icon "credit-card", size: 20, class: "text-blue-600" %>
+                <span class="font-medium">Credit Card</span>
+              </div>
+              <p class="text-2xl font-bold">-$1,234.00</p>
+            </div>
+          </div>
+        </div>
+      <% end %>
+
+      <% tabs.with_tab(value: "asset", label: "Assets", icon: "trending-up") do %>
+        <div class="space-y-4">
+          <h3 class="text-lg font-medium">Asset Accounts</h3>
+          <p class="text-secondary">Your assets include checking, savings, investments, and more.</p>
+          
+          <div class="space-y-3">
+            <div class="flex items-center justify-between p-3 bg-surface-inset rounded-lg">
+              <div class="flex items-center gap-3">
+                <%= icon "piggy-bank", size: 20 %>
+                <span>Savings Account</span>
+              </div>
+              <span class="font-semibold">$12,450.00</span>
+            </div>
+            
+            <div class="flex items-center justify-between p-3 bg-surface-inset rounded-lg">
+              <div class="flex items-center gap-3">
+                <%= icon "trending-up", size: 20 %>
+                <span>Investment Portfolio</span>
+              </div>
+              <span class="font-semibold">$45,230.80</span>
+            </div>
+          </div>
+        </div>
+      <% end %>
+
+      <% tabs.with_tab(value: "liability", label: "Debts", icon: "trending-down") do %>
+        <div class="space-y-4">
+          <h3 class="text-lg font-medium">Liability Accounts</h3>
+          <p class="text-secondary">Track your debts including credit cards, loans, and mortgages.</p>
+          
+          <div class="space-y-3">
+            <div class="flex items-center justify-between p-3 bg-surface-inset rounded-lg">
+              <div class="flex items-center gap-3">
+                <%= icon "credit-card", size: 20 %>
+                <span>Credit Card</span>
+              </div>
+              <span class="font-semibold text-red-600">-$1,234.00</span>
+            </div>
+            
+            <div class="flex items-center justify-between p-3 bg-surface-inset rounded-lg">
+              <div class="flex items-center gap-3">
+                <%= icon "home", size: 20 %>
+                <span>Mortgage</span>
+              </div>
+              <span class="font-semibold text-red-600">-$245,000.00</span>
+            </div>
+          </div>
+        </div>
+      <% end %>
+    <% end %>
+  </section>
+
+  <!-- Demo 2: Settings Tabs -->
+  <section class="mb-12">
+    <h2 class="text-xl font-semibold mb-4">Settings Tabs</h2>
+    
+    <%= render Shadcn::TabsComponent.new(default_value: "profile") do |tabs| %>
+      <% tabs.with_tab(value: "profile", label: "Profile", icon: "user") do %>
+        <div class="space-y-4">
+          <h3 class="text-lg font-medium">Profile Settings</h3>
+          <p class="text-secondary">Manage your profile information and preferences.</p>
+          <div class="p-4 bg-surface-inset rounded-lg">
+            <p>Profile settings content goes here...</p>
+          </div>
+        </div>
+      <% end %>
+
+      <% tabs.with_tab(value: "security", label: "Security", icon: "shield") do %>
+        <div class="space-y-4">
+          <h3 class="text-lg font-medium">Security Settings</h3>
+          <p class="text-secondary">Update your password and security preferences.</p>
+          <div class="p-4 bg-surface-inset rounded-lg">
+            <p>Security settings content goes here...</p>
+          </div>
+        </div>
+      <% end %>
+
+      <% tabs.with_tab(value: "notifications", label: "Notifications", icon: "bell") do %>
+        <div class="space-y-4">
+          <h3 class="text-lg font-medium">Notification Preferences</h3>
+          <p class="text-secondary">Choose which notifications you want to receive.</p>
+          <div class="p-4 bg-surface-inset rounded-lg">
+            <p>Notification settings content goes here...</p>
+          </div>
+        </div>
+      <% end %>
+    <% end %>
+  </section>
+
+  <!-- Features List -->
+  <section class="mt-12 p-6 bg-surface-inset rounded-lg">
+    <h2 class="text-xl font-semibold mb-4">✨ Features</h2>
+    <ul class="space-y-2 text-secondary">
+      <li class="flex items-start gap-2">
+        <%= icon "check", size: 20, class: "text-green-600 mt-0.5" %>
+        <span><strong>Shadcn-style Design:</strong> Modern, clean UI matching shadcn/ui aesthetics</span>
+      </li>
+      <li class="flex items-start gap-2">
+        <%= icon "check", size: 20, class: "text-green-600 mt-0.5" %>
+        <span><strong>Icon Support:</strong> Optional Lucide icons for each tab</span>
+      </li>
+      <li class="flex items-start gap-2">
+        <%= icon "check", size: 20, class: "text-green-600 mt-0.5" %>
+        <span><strong>Keyboard Navigation:</strong> Arrow keys, Home, End support</span>
+      </li>
+      <li class="flex items-start gap-2">
+        <%= icon "check", size: 20, class: "text-green-600 mt-0.5" %>
+        <span><strong>URL Sync:</strong> Optional URL parameter synchronization</span>
+      </li>
+      <li class="flex items-start gap-2">
+        <%= icon "check", size: 20, class: "text-green-600 mt-0.5" %>
+        <span><strong>Accessible:</strong> ARIA attributes and semantic HTML</span>
+      </li>
+      <li class="flex items-start gap-2">
+        <%= icon "check", size: 20, class: "text-green-600 mt-0.5" %>
+        <span><strong>Dark Mode:</strong> Full theme support</span>
+      </li>
+      <li class="flex items-start gap-2">
+        <%= icon "check", size: 20, class: "text-green-600 mt-0.5" %>
+        <span><strong>Rails 8.1:</strong> Proper Stimulus conventions</span>
+      </li>
+    </ul>
+  </section>
+</div>
