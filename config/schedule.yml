@@ -24,3 +24,29 @@ loan_reminders:
   class: "LoanRemindersJob"
   queue: "scheduled"
   description: "Sends upcoming/overdue loan payment reminders"
+
+# Rails 8.1: Production-safe monitoring jobs (replaces Thread.new in initializers)
+# These jobs work correctly with Puma's worker forking and are more reliable
+memory_monitoring:
+  cron: "*/5 * * * *" # every 5 minutes
+  class: "MemoryMonitoringJob"
+  queue: "low_priority"
+  description: "Monitors memory usage and detects potential leaks"
+
+database_pool_monitoring:
+  cron: "* * * * *" # every minute
+  class: "DatabasePoolMonitoringJob"
+  queue: "low_priority"
+  description: "Monitors database connection pool usage"
+
+sidekiq_queue_monitoring:
+  cron: "* * * * *" # every minute
+  class: "SidekiqQueueMonitoringJob"
+  queue: "low_priority"
+  description: "Monitors Sidekiq queue depths and job status"
+
+cache_monitoring:
+  cron: "*/5 * * * *" # every 5 minutes
+  class: "CacheMonitoringJob"
+  queue: "low_priority"
+  description: "Monitors cache statistics and performance"

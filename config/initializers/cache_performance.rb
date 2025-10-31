@@ -57,38 +57,10 @@ if Rails.env.production? && defined?(Sentry)
     Rails.logger.debug("Cache DELETE: #{payload[:key]}")
   end
 
-  # Track cache statistics periodically
-  Thread.new do
-    loop do
-      sleep 300 # Every 5 minutes
-
-      begin
-        # Get cache stats if available (Redis)
-        if Rails.cache.respond_to?(:redis)
-          redis = Rails.cache.redis
-          info = redis.info
-
-          # Track memory usage
-          used_memory_mb = info["used_memory"].to_i / 1024.0 / 1024.0
-
-          Sentry.add_breadcrumb(
-            Sentry::Breadcrumb.new(
-              category: "cache",
-              message: "Cache statistics",
-              data: {
-                used_memory_mb: used_memory_mb.round(2),
-                connected_clients: info["connected_clients"],
-                total_commands_processed: info["total_commands_processed"]
-              },
-              level: "info"
-            )
-          )
-        end
-      rescue => e
-        Rails.logger.error("Cache statistics error: #{e.message}")
-      end
-    end
-  end if defined?(Thread)
+  # Rails 8.1: Cache monitoring moved to CacheMonitoringJob
+  # This job runs every 5 minutes via Sidekiq Cron (see config/schedule.yml)
+  # Replaced Thread.new to avoid issues with Puma's worker forking
+  # See app/jobs/cache_monitoring_job.rb
 end
 
 # Add cache helper methods to ApplicationRecord

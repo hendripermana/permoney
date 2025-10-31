@@ -624,6 +624,99 @@ bundle exec derailed exec perf:test
 - **Database Load**: 40-60% reduction
 - **Background Jobs**: 3-5x faster processing
 
+## Security Best Practices (Rails 8.1)
+
+### CSS Content Sanitization
+
+**Always sanitize CSS content before using `html_safe` to prevent XSS attacks:**
+
+```ruby
+# ❌ BAD: Direct html_safe without sanitization
+def inline_critical_css(css_content)
+  tag.style(css_content.html_safe, type: "text/css")
+end
+
+# ✅ GOOD: Sanitize CSS content first
+def inline_critical_css(css_content)
+  sanitized_content = sanitize_css_content(css_content)
+  tag.style(sanitized_content.html_safe, type: "text/css")
+end
+
+private
+  def sanitize_css_content(css_content)
+    return "" if css_content.blank?
+    
+    # Remove dangerous CSS constructs
+    sanitized = css_content
+      .gsub(/javascript:/i, "")           # Remove javascript: protocol
+      .gsub(/expression\s*\(/i, "")       # Remove IE expression()
+      .gsub(/vbscript:/i, "")             # Remove vbscript: protocol
+      .gsub(/@import/i, "")               # Remove @import statements
+      .gsub(/url\s*\(\s*["']?data:/i, "") # Remove data: URLs
+      .gsub(/behavior\s*:/i, "")          # Remove behavior: (IE-specific)
+    
+    # Additional validation
+    ActionController::Base.helpers.sanitize(sanitized, tags: [], attributes: [])
+  end
+```
+
+**Key Points:**
+- CSS can contain XSS payloads via `javascript:`, `expression()`, `@import`, etc.
+- Never trust user-provided CSS content
+- Always sanitize before marking as `html_safe`
+- Multiple CVEs exist for CSS-based XSS (CVE-2024-53987, CVE-2024-53988)
+
+## Production Monitoring Best Practices (Rails 8.1)
+
+### Avoid Custom Monitoring Threads in Initializers
+
+**Problem**: Custom `Thread.new` in initializers are problematic with Puma's worker forking:
+
+```ruby
+# ❌ BAD: Thread.new in initializer (doesn't survive Puma fork)
+if Rails.env.production?
+  Thread.new do
+    loop do
+      sleep 300
+      # monitoring code
+    end
+  end
+end
+```
+
+**Solution**: Use Sidekiq Cron jobs for periodic monitoring:
+
+```ruby
+# ✅ GOOD: Sidekiq Cron job (production-safe)
+class MemoryMonitoringJob < ApplicationJob
+  queue_as :low_priority
+  
+  def perform
+    return unless Rails.env.production?
+    # monitoring code
+  end
+end
+
+# config/schedule.yml
+memory_monitoring:
+  cron: "*/5 * * * *" # every 5 minutes
+  class: "MemoryMonitoringJob"
+  queue: "low_priority"
+```
+
+**Benefits:**
+- ✅ Works correctly with Puma's worker forking
+- ✅ Survives server restarts
+- ✅ Can be monitored via Sidekiq dashboard
+- ✅ More reliable than custom threads
+- ✅ Follows Rails/Sidekiq best practices
+
+**Monitoring Jobs Available:**
+- `MemoryMonitoringJob` - Memory usage and GC stats (every 5 min)
+- `DatabasePoolMonitoringJob` - Connection pool usage (every 1 min)
+- `SidekiqQueueMonitoringJob` - Queue depths and job status (every 1 min)
+- `CacheMonitoringJob` - Cache statistics (every 5 min)
+
 ## ActiveStorage Best Practices (Rails 8.1)
 
 ### Preprocessed Variants for Blazing Fast Performance

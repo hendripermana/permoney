@@ -2,12 +2,12 @@
 # Concurrency: Number of threads processing jobs simultaneously
 # Optimal: 10-25 threads for most Rails apps
 # Database pool must be >= Sidekiq concurrency + Puma (workers × threads)
-concurrency: <%= ENV.fetch("SIDEKIQ_CONCURRENCY") { 10 } %>
+:concurrency: <%= ENV.fetch("SIDEKIQ_CONCURRENCY") { 10 }.to_i %>
 
 # Queue Configuration with Weighted Priorities
 # Higher weight = checked more frequently
 # Format: [queue_name, weight]
-queues:
+:queues:
   - [scheduled, 10]      # Cron jobs (highest priority)
   - [high_priority, 6]   # Critical background tasks
   - [medium_priority, 3] # Standard background tasks

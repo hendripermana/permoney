@@ -50,41 +50,10 @@ if defined?(ActiveRecord)
     end
   end
 
-  # Monitor connection pool usage
-  if Rails.env.production? && defined?(Sentry)
-    # Check connection pool every 60 seconds
-    Thread.new do
-      loop do
-        sleep 60
-
-        ActiveRecord::Base.connection_pool.with_connection do |conn|
-          pool = ActiveRecord::Base.connection_pool
-
-          # Calculate pool usage percentage
-          usage_percentage = (pool.connections.size.to_f / pool.size * 100).round(2)
-
-          # Alert if pool usage is high (>80%)
-          if usage_percentage > 80
-            Sentry.capture_message(
-              "High Database Connection Pool Usage",
-              level: "warning",
-              extra: {
-                pool_size: pool.size,
-                connections: pool.connections.size,
-                usage_percentage: usage_percentage,
-                available: pool.size - pool.connections.size
-              },
-              tags: {
-                resource_type: "database_pool"
-              }
-            )
-          end
-        end
-      rescue => e
-        Rails.logger.error("Connection pool monitoring error: #{e.message}")
-      end
-    end if defined?(Thread)
-  end
+  # Rails 8.1: Database pool monitoring moved to DatabasePoolMonitoringJob
+  # This job runs every minute via Sidekiq Cron (see config/schedule.yml)
+  # Replaced Thread.new to avoid issues with Puma's worker forking
+  # See app/jobs/database_pool_monitoring_job.rb
 
   # Enable prepared statements for better performance
   ActiveRecord::Base.connection.instance_variable_set(:@prepared_statements, true) rescue nil

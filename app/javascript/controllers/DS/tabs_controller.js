@@ -10,7 +10,10 @@ export default class extends Controller {
     // Prevent default button behavior, let event bubble normally
     e.preventDefault();
     
-    const btn = e.currentTarget.closest("button");
+    // Rails 8.1: Use e.target.closest for better event delegation support
+    // This handles nested elements within buttons (icons, spans, etc.) correctly
+    // e.currentTarget would work if data-action is directly on button, but e.target is more defensive
+    const btn = e.target.closest("button");
     if (!btn) return;
     
     const selectedTabId = btn.dataset.id;

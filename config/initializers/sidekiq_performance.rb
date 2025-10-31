@@ -12,68 +12,10 @@ if defined?(Sidekiq)
       network_timeout: 5
     }
 
-    # Add custom monitoring
-    if Rails.env.production? && defined?(Sentry)
-      # Monitor queue depths
-      Thread.new do
-        loop do
-          sleep 60 # Every minute
-
-          begin
-            stats = Sidekiq::Stats.new
-
-            # Alert on high queue depth
-            if stats.enqueued > 1000
-              Sentry.capture_message(
-                "High Sidekiq Queue Depth",
-                level: "warning",
-                extra: {
-                  enqueued: stats.enqueued,
-                  processed: stats.processed,
-                  failed: stats.failed,
-                  retry_size: stats.retry_size,
-                  dead_size: stats.dead_size
-                },
-                tags: {
-                  resource_type: "sidekiq_queue"
-                }
-              )
-            end
-
-            # Alert on high retry queue
-            if stats.retry_size > 100
-              Sentry.capture_message(
-                "High Sidekiq Retry Queue",
-                level: "warning",
-                extra: {
-                  retry_size: stats.retry_size,
-                  enqueued: stats.enqueued
-                },
-                tags: {
-                  resource_type: "sidekiq_retry"
-                }
-              )
-            end
-
-            # Alert on dead jobs
-            if stats.dead_size > 50
-              Sentry.capture_message(
-                "High Sidekiq Dead Job Count",
-                level: "error",
-                extra: {
-                  dead_size: stats.dead_size
-                },
-                tags: {
-                  resource_type: "sidekiq_dead"
-                }
-              )
-            end
-          rescue => e
-            Rails.logger.error("Sidekiq monitoring error: #{e.message}")
-          end
-        end
-      end if defined?(Thread)
-    end
+    # Rails 8.1: Sidekiq queue monitoring moved to SidekiqQueueMonitoringJob
+    # This job runs every minute via Sidekiq Cron (see config/schedule.yml)
+    # Replaced Thread.new to avoid issues with Puma's worker forking
+    # See app/jobs/sidekiq_queue_monitoring_job.rb
   end
 
   # Configure Sidekiq client

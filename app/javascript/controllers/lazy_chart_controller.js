@@ -140,7 +140,26 @@ export default class extends Controller {
   }
 
   retry() {
+    // Rails 8.1: Recreate observer instead of reusing disconnected one
+    // Disconnected observers cannot be re-observed, so we need to create a new one
     this.loaded = false
+    
+    // Disconnect old observer if it exists
+    if (this.observer) {
+      this.observer.disconnect()
+    }
+    
+    // Create new observer
+    this.observer = new IntersectionObserver(
+      (entries) => this.handleIntersection(entries),
+      {
+        root: null,
+        rootMargin: "50px",
+        threshold: this.thresholdValue
+      }
+    )
+    
+    // Start observing
     this.observer.observe(this.element)
   }
 }

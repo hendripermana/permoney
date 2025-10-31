@@ -4,7 +4,12 @@ class DS::Menu < DesignSystemComponent
   attr_reader :variant, :avatar_url, :initials, :placement, :offset, :icon_vertical, :no_padding, :testid
 
   renders_one :button, ->(**button_options, &block) do
-    options_with_target = button_options.merge(data: { "DS--menu-target": "button" })
+    # Rails 8.1: Use deep_merge to preserve existing data attributes from button_options
+    # This prevents overwriting user-provided data attributes (e.g., data-controller, data-action)
+    existing_data = button_options.delete(:data) || {}
+    options_with_target = button_options.deep_merge(
+      data: existing_data.deep_merge("DS--menu-target" => "button")
+    )
 
     if block
       content_tag(:button, **options_with_target, &block)

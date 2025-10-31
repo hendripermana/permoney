@@ -124,8 +124,10 @@ export default class extends Controller {
         return;
     }
 
+    // Rails 8.1: Remove redundant undefined check
+    // newIndex is always set in switch cases above, or function returns early
     // Focus and activate new tab
-    if (newIndex !== undefined && triggers[newIndex]) {
+    if (triggers[newIndex]) {
       triggers[newIndex].focus();
       const value = triggers[newIndex].dataset.tabValue;
       this.activateTab(value, true);

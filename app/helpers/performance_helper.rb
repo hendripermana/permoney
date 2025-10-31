@@ -83,14 +83,45 @@ module PerformanceHelper
 
   # Inline critical CSS to prevent render-blocking
   #
-  # @param css_content [String] Critical CSS content
+  # @param css_content [String] Critical CSS content (must be from trusted source)
   # @return [String] HTML style tag with inlined CSS
+  #
+  # Security: CSS content is sanitized to prevent XSS attacks
+  # Only use with trusted CSS content (not user input)
   #
   # Usage:
   #   <%= inline_critical_css ".header { background: #fff; }" %>
   def inline_critical_css(css_content)
-    tag.style(css_content.html_safe, type: "text/css")
+    # Rails 8.1: Sanitize CSS content to prevent XSS vulnerabilities
+    # Remove any potentially dangerous CSS constructs (javascript:, expression(), etc.)
+    sanitized_content = sanitize_css_content(css_content)
+    tag.style(sanitized_content.html_safe, type: "text/css")
   end
+
+  private
+    # Sanitize CSS content to prevent XSS
+    # Removes dangerous CSS constructs while preserving valid CSS
+    def sanitize_css_content(css_content)
+      return "" if css_content.blank?
+
+      # Remove javascript: URLs and data URLs that could execute scripts
+      sanitized = css_content
+        .gsub(/javascript:/i, "")           # Remove javascript: protocol
+        .gsub(/expression\s*\(/i, "")       # Remove IE expression()
+        .gsub(/vbscript:/i, "")             # Remove vbscript: protocol
+        .gsub(/@import/i, "")               # Remove @import statements
+        .gsub(/url\s*\(\s*["']?data:/i, "") # Remove data: URLs
+        .gsub(/behavior\s*:/i, "")          # Remove behavior: (IE-specific)
+
+      # Additional validation: Ensure no script tags or event handlers
+      sanitized = ActionController::Base.helpers.sanitize(
+        sanitized,
+        tags: [],
+        attributes: []
+      )
+
+      sanitized
+    end
 
   # Defer non-critical JavaScript
   #

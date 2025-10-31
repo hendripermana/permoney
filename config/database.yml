@@ -9,13 +9,13 @@ default: &default
   user: <%= ENV.fetch("POSTGRES_USER") { nil } %>
   password: <%= ENV.fetch("POSTGRES_PASSWORD") { nil } %>
   # Connection timeouts for reliability
-  connect_timeout: <%= ENV.fetch("DB_CONNECT_TIMEOUT") { 5 } %>
+  connect_timeout: <%= ENV.fetch("DB_CONNECT_TIMEOUT") { 5 }.to_i %>
   # Connection reaping to clean up stale connections
-  reaping_frequency: <%= ENV.fetch("DB_REAPING_FREQUENCY") { 10 } %>
+  reaping_frequency: <%= ENV.fetch("DB_REAPING_FREQUENCY") { 10 }.to_i %>
   # Statement timeout to prevent long-running queries
   variables:
-    statement_timeout: <%= ENV.fetch("DB_STATEMENT_TIMEOUT") { 15 } %>s
-    lock_timeout: <%= ENV.fetch("DB_LOCK_TIMEOUT") { 10 } %>s
+    statement_timeout: <%= ENV.fetch("DB_STATEMENT_TIMEOUT") { 15 }.to_i %>s
+    lock_timeout: <%= ENV.fetch("DB_LOCK_TIMEOUT") { 10 }.to_i %>s
   # Enable prepared statements for better query performance
   prepared_statements: true
 

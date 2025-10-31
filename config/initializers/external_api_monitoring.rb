@@ -1,6 +1,8 @@
 # External API Performance Monitoring
 # This initializer monitors external API calls (Plaid, OpenAI, Stripe, etc.)
 
+require "uri"
+
 if Rails.env.production? && defined?(Sentry)
   # Monitor HTTP requests
   ActiveSupport::Notifications.subscribe("request.faraday") do |name, start, finish, id, payload|
@@ -11,13 +13,22 @@ if Rails.env.production? && defined?(Sentry)
     url = payload[:url]&.to_s
     status = payload[:status]
 
-    # Determine API provider from URL
-    provider = case url
-    when /plaid\.com/ then "plaid"
-    when /openai\.com/ then "openai"
-    when /stripe\.com/ then "stripe"
-    when /exchangerate/ then "exchange_rate"
-    when /twelvedata/ then "twelve_data"
+    # Rails 8.1: Extract host from URL securely using URI parsing
+    # This prevents regex anchor bypass vulnerabilities where domain could appear in query/path
+    # Example: http://evil.com?url=https://plaid.com would incorrectly match without this fix
+    host = begin
+      URI.parse(url).host.to_s.downcase
+    rescue URI::InvalidURIError, NoMethodError
+      ""
+    end
+
+    # Determine API provider from host (supports subdomains)
+    provider = case host
+    when /\A(?:.*\.)?plaid\.com\z/ then "plaid"
+    when /\A(?:.*\.)?openai\.com\z/ then "openai"
+    when /\A(?:.*\.)?stripe\.com\z/ then "stripe"
+    when /\A(?:.*\.)?exchangerate\.com\z/ then "exchange_rate"
+    when /\A(?:.*\.)?twelvedata\.com\z/ then "twelve_data"
     else "unknown"
     end
 
