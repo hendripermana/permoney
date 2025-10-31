@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0](https://github.com/hendripermana/permoney/compare/v0.6.0...v0.7.0) (2025-10-31)
+
+
+### Features
+
+* implement comprehensive performance optimization ([a1d0b3c](https://github.com/hendripermana/permoney/commit/a1d0b3ca1cc1f0263d4b25a9d8984ff2bd988dec))
+
+
+### Bug Fixes
+
+* resolve Rails 8 compatibility issues ([7de44e7](https://github.com/hendripermana/permoney/commit/7de44e792b747ebfd4d8b9a290cfbe109780fc18))
+* use Puma single mode in development to avoid macOS fork issues ([3a5f2df](https://github.com/hendripermana/permoney/commit/3a5f2dffe4647c60620e2027650c08b1f4822d69))
+* use system jemalloc instead of deprecated gem ([bf15343](https://github.com/hendripermana/permoney/commit/bf15343f2df1a8c39ab2fcb9ee482e637f7fdf37))
+
 ## [0.6.0](https://github.com/hendripermana/permoney/compare/v0.5.0...v0.6.0) (2025-10-19)
 
 
