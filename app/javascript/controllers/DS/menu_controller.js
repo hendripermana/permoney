@@ -37,11 +37,14 @@ export default class extends Controller {
     this.keydownHandler = this.handleKeydown.bind(this);
     this.outsideClickHandler = this.handleOutsideClick.bind(this);
     this.turboLoadHandler = this.handleTurboLoad.bind(this);
+    this.turboBeforeVisitHandler = this.handleTurboBeforeVisit.bind(this);
     
     this.buttonTarget.addEventListener("click", this.toggleHandler);
     this.element.addEventListener("keydown", this.keydownHandler);
     document.addEventListener("click", this.outsideClickHandler);
     document.addEventListener("turbo:load", this.turboLoadHandler);
+    // Rails 8.1: Close menu when Turbo navigation starts (before page changes)
+    document.addEventListener("turbo:before-visit", this.turboBeforeVisitHandler);
   }
 
   removeEventListeners() {
@@ -57,14 +60,31 @@ export default class extends Controller {
     if (this.turboLoadHandler) {
       document.removeEventListener("turbo:load", this.turboLoadHandler);
     }
+    if (this.turboBeforeVisitHandler) {
+      document.removeEventListener("turbo:before-visit", this.turboBeforeVisitHandler);
+    }
   }
 
   handleTurboLoad() {
     if (!this.show) this.close();
   }
 
+  // Rails 8.1: Close menu when Turbo navigation is about to start
+  // This allows links to navigate normally, then menu closes before page transition
+  handleTurboBeforeVisit() {
+    if (this.show) this.close();
+  }
+
   handleOutsideClick(event) {
     if (this.show && !this.element.contains(event.target)) this.close();
+  }
+
+  // Rails 8.1: Close menu when menu item is clicked
+  // Called explicitly via data-action on menu items
+  closeOnItemClick(event) {
+    // Close menu immediately when item is clicked
+    // Don't prevent default - let the link/button work normally
+    this.close();
   }
 
   handleKeydown(event) {

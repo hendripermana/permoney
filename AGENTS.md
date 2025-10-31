@@ -145,14 +145,17 @@ Only proceed with pull request creation if ALL checks pass.
 4. **Optimize for Simplicity**: Prioritize good OOP domain design over performance
 5. **Database vs ActiveRecord Validations**: Simple validations in DB, complex logic in ActiveRecord
 
-## Assets, Importmap, and Controllers
+## Assets, Importmap, and Controllers (Rails 8.1)
 - **Asset pipeline**: Propshaft with Importmap (no bundler). Assets are served from:
   - `app/assets/builds` for Tailwind output (`tailwind.css`)
   - `app/javascript` for app code and Stimulus controllers
   - `vendor/javascript` for third‑party ESM files
-- **Controller loading**:
+- **Controller loading** (CRITICAL for Rails 8.1):
   - We pin `@hotwired/stimulus-loading` to a local shim at `app/javascript/stimulus-loading.js` via `config/importmap.rb`
-  - `app/javascript/controllers/index.js` eager‑loads controllers under the `controllers/*` importmap namespace
+  - Custom loading uses `Promise.all` for proper async controller registration
+  - `app/javascript/controllers/index.js` eager‑loads controllers with `await` to ensure all controllers load before app initialization
+  - **ALL controllers MUST be in `app/javascript/controllers/`** - subdirectories like `controllers/shadcn/` and `controllers/DS/` are supported
+  - Controllers are registered with hyphenated identifiers: `shadcn/tabs_controller.js` → `shadcn--tabs`
 - **After adding controllers or vendor JS**, restart `bin/dev` and consider `bin/rails tmp:cache:clear` if digests look stale
 
 ## TailwindCSS Design System
@@ -199,8 +202,10 @@ Only proceed with pull request creation if ALL checks pass.
 - Keep controllers lightweight and simple (< 7 targets)
 - Use private methods and expose clear public API
 - Single responsibility or highly related responsibilities
-- Component controllers stay in component directory, global controllers in `app/javascript/controllers/`
+- **CRITICAL**: ALL Stimulus controllers MUST be in `app/javascript/controllers/` (Rails 8.1 requirement)
+- Subdirectories are allowed: `app/javascript/controllers/shadcn/`, `app/javascript/controllers/DS/`
 - Pass data via `data-*-value` attributes, not inline JavaScript
+- Avoid `event.stopPropagation()` - let events bubble for Turbo navigation
 
 ## Coding Style & Naming Conventions
 - **Ruby**: 2-space indent, `snake_case` for methods/vars, `CamelCase` for classes/modules. Follow Rails conventions for folders and file names
@@ -303,14 +308,14 @@ The application provides both internal and external APIs:
 
 ## Technology Stack
 
-### Current Versions (October 2025)
+### Current Versions (October 31, 2025)
 - **Ruby**: 3.4.7 (PRISM parser enabled, CVE-2025-61594 fixed)
 - **Bundler**: 2.7.2 (preparing for Bundler 4)
 - **RubyGems**: 3.7.2 (IMDSv2 support)
-- **Rails**: 8.1.0 (Upgraded October 28, 2025)
+- **Rails**: 8.1.0 (Upgraded October 31, 2025)
 - **Node.js**: Latest LTS recommended
-- **PostgreSQL**: >9.3 (latest stable recommended)
-- **Redis**: 5.4.1
+- **PostgreSQL**: 18.x (latest stable)
+- **Redis**: 7.4.x (latest stable)
 - **Turbo**: 2.0.17 (Enhanced frame handling)
 - **Stimulus**: 3.x (Improved event binding)
 
@@ -327,19 +332,106 @@ The application provides both internal and external APIs:
 - **Stimulus Event Binding**: Arrow functions in event handlers must be properly bound to maintain context
 - **Turbo Frame Handling**: Enhanced error handling for missing frames requires explicit event listeners
 
+## Turbo Frame Best Practices (Rails 8.1)
+
+### Breaking Out of Turbo Frames
+
+**Problem**: Links inside Turbo Frames try to load responses inside the frame instead of navigating the full page.
+
+**Solution**: Use `data-turbo-frame="_top"` to break out of frames for full page navigation:
+
+```erb
+<%# In a component inside a Turbo Frame %>
+<%= link_to "Settings", settings_path, data: { turbo_frame: "_top" } %>
+```
+
+**When to use `_top`:**
+- Menu items that should navigate to new pages
+- Links inside frames that need full page navigation
+- Any navigation that shouldn't be constrained to the frame
+
+**Automatic Implementation**:
+```ruby
+# app/components/DS/menu_item.rb automatically adds _top for menu links
+def merged_opts
+  # ...
+  if frame.present?
+    data = data.merge(turbo_frame: frame)
+  else
+    # Default to _top frame for menu items to break out of any parent frames
+    data = data.merge(turbo_frame: "_top") if variant == :link
+  end
+  # ...
+end
+```
+
+### Turbo Frame Events
+
+Always listen to proper Turbo events for menu/modal close behavior:
+
+```javascript
+// ✅ GOOD: Listen to turbo:before-visit for navigation
+document.addEventListener("turbo:before-visit", () => {
+  if (this.show) this.close();
+});
+
+// ❌ BAD: Don't intercept turbo:click - let Turbo handle navigation
+// document.addEventListener("turbo:click", (event) => {
+//   event.stopPropagation(); // DON'T DO THIS
+// });
+```
+
+### Rails 8.1 Upgrade Issues & Fixes (October 31, 2025)
+
+**Issue 1: Stimulus Controllers Not Loading from Subdirectories**
+- **Problem**: Controllers in `app/components/shadcn/` and `app/components/DS/` were not being loaded by Importmap
+- **Root Cause**: `pin_all_from "app/components"` was ineffective for nested directories
+- **Solution**: 
+  - Moved all Stimulus controllers to `app/javascript/controllers/` following Rails conventions
+  - Fixed async loading in `app/javascript/stimulus-loading.js` with `Promise.all` and `await`
+  - Updated `app/javascript/controllers/index.js` to properly await controller loading
+- **Files Changed**:
+  - `config/importmap.rb`: Removed incorrect pin_all_from
+  - `app/javascript/stimulus-loading.js`: Fixed async controller registration
+  - `app/javascript/controllers/index.js`: Added await for eager loading
+  - Moved controllers from `app/components/` to `app/javascript/controllers/`
+
+**Issue 2: Event Propagation Blocking Clicks**
+- **Problem**: `event.stopPropagation()` in multiple controllers blocked event bubbling
+- **Root Cause**: Overly aggressive event handling prevented Turbo navigation
+- **Solution**: Removed `stopPropagation()` from tab and menu controllers, keeping only `preventDefault()` where needed
+- **Files Changed**:
+  - `app/javascript/controllers/shadcn/tabs_controller.js`
+  - `app/javascript/controllers/DS/tabs_controller.js`
+  - `app/javascript/application.js`: Removed problematic `turbo:click` handler
+
+**Issue 3: Dropdown Menu Items Not Navigating**
+- **Problem**: Menu items inside Turbo Frame couldn't navigate to full pages
+- **Root Cause**: User menu wrapped in `turbo_frame_tag` caused Turbo to load responses inside frame instead of full page navigation
+- **Solution**: Added `data-turbo-frame="_top"` to menu link items to break out of parent frames
+- **Files Changed**:
+  - `app/components/DS/menu_item.rb`: Added automatic `_top` frame for link items
+  - `app/javascript/controllers/DS/menu_controller.js`: Added `turbo:before-visit` handler for clean menu close
+
+**Key Learnings:**
+- Rails 8.1 requires stricter Stimulus controller location conventions
+- Turbo Frames need explicit `_top` target to break out for full page navigation
+- Event handling must allow proper bubbling for Turbo to work correctly
+- Async controller loading must use `Promise.all` to ensure all controllers are registered
+
 ### Rails 8 Breaking Changes (from 7.x)
 - **RedisCacheStore Configuration**: Connection pool parameters changed from `pool_size:` and `pool_timeout:` to nested `pool: { size:, timeout: }` format
 - **Query Log Tags**: `verbose_query_logs` replaced with `query_log_tags_enabled`
 - **Puma Worker Boot**: `on_worker_boot` deprecated in favor of `before_worker_boot`
 
 ### Stack Components
-- **Backend**: Ruby on Rails 8.0.3
-- **Database**: PostgreSQL with UUID primary keys
-- **Frontend**: Hotwire (Turbo + Stimulus)
+- **Backend**: Ruby on Rails 8.1.0
+- **Database**: PostgreSQL 18.x with UUID primary keys
+- **Frontend**: Hotwire (Turbo 2.0.17 + Stimulus 3.x)
 - **Styling**: TailwindCSS v4 with custom design system
 - **Linting**: Biome 2.2.6 (JavaScript/TypeScript)
 - **Testing**: Minitest + fixtures
-- **Jobs**: Sidekiq + Redis
+- **Jobs**: Sidekiq + Redis 7.4.x
 - **External APIs**: Plaid, OpenAI, Stripe
 - **Deployment**: Docker support for self-hosting
 
@@ -531,6 +623,81 @@ bundle exec derailed exec perf:test
 - **Memory Usage**: 30-40% reduction
 - **Database Load**: 40-60% reduction
 - **Background Jobs**: 3-5x faster processing
+
+## ActiveStorage Best Practices (Rails 8.1)
+
+### Preprocessed Variants for Blazing Fast Performance
+
+**Always use preprocessed variants for frequently accessed images:**
+
+```ruby
+# app/models/user.rb
+has_one_attached :profile_image do |attachable|
+  # Preprocessed = generated immediately after upload for instant display
+  attachable.variant :small, resize_to_fill: [72, 72], 
+    convert: :webp, 
+    saver: { quality: 85, strip: true }, 
+    preprocessed: true
+    
+  attachable.variant :medium, resize_to_fill: [200, 200], 
+    convert: :webp, 
+    saver: { quality: 85, strip: true }, 
+    preprocessed: true
+end
+```
+
+### Use .processed.url for Immediate Variant Generation
+
+**Always use `.processed.url` instead of `.url` for variants:**
+
+```erb
+<%# ❌ BAD: May not display if variant not yet processed %>
+<%= image_tag user.profile_image.variant(:small).url %>
+
+<%# ✅ GOOD: Uses preprocessed variant with immediate URL generation %>
+<% avatar_url = user.profile_image.attached? ? user.profile_image.variant(:small).processed.url : nil %>
+<%= image_tag avatar_url %>
+```
+
+### Prevent N+1 Queries with Eager Loading
+
+**Eager load variant records in controllers:**
+
+```ruby
+# app/controllers/users_controller.rb
+def set_user
+  @user = Current.user
+  @user.profile_image.attachment&.blob&.variant_records&.load if @user.profile_image.attached?
+end
+```
+
+### Performance Optimization Tips
+
+- **Use WebP format**: Smaller file size, better compression
+- **Enable strip: true**: Remove metadata for smaller files
+- **Use preprocessed: true**: For instant display without delays
+- **Lazy loading**: Use `loading: "lazy"` for offscreen images
+- **Async decoding**: Use `decoding: "async"` for non-blocking image decode
+
+### Memory Management in JavaScript
+
+**Always cleanup blob URLs to prevent memory leaks:**
+
+```javascript
+// app/javascript/controllers/profile_image_preview_controller.js
+#currentBlobUrl = null;
+
+disconnect() {
+  this.#revokeBlobUrl();
+}
+
+#revokeBlobUrl() {
+  if (this.#currentBlobUrl) {
+    URL.revokeObjectURL(this.#currentBlobUrl);
+    this.#currentBlobUrl = null;
+  }
+}
+```
 
 ## Common Patterns
 

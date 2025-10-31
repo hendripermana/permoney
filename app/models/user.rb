@@ -23,9 +23,16 @@ class User < ApplicationRecord
 
   enum :role, { member: "member", admin: "admin", super_admin: "super_admin" }, validate: true
 
+  # Rails 8.1: Optimized ActiveStorage with preprocessed variants for blazing fast performance
+  # Reference: https://guides.rubyonrails.org/active_storage_overview.html#transforming-images
   has_one_attached :profile_image do |attachable|
-    attachable.variant :thumbnail, resize_to_fill: [ 300, 300 ], convert: :webp, saver: { quality: 80 }
-    attachable.variant :small, resize_to_fill: [ 72, 72 ], convert: :webp, saver: { quality: 80 }, preprocessed: true
+    # Preprocessed variants are generated immediately after upload for instant display
+    # This follows F1 performance optimization - always ready to serve
+    attachable.variant :small, resize_to_fill: [ 72, 72 ], convert: :webp, saver: { quality: 85, strip: true }, preprocessed: true
+    attachable.variant :medium, resize_to_fill: [ 200, 200 ], convert: :webp, saver: { quality: 85, strip: true }, preprocessed: true
+    
+    # Lazy-loaded variant for larger displays (on-demand processing)
+    attachable.variant :thumbnail, resize_to_fill: [ 300, 300 ], convert: :webp, saver: { quality: 80, strip: true }
   end
 
   validate :profile_image_size

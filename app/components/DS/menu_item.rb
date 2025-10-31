@@ -55,6 +55,10 @@ class DS::MenuItem < DesignSystemComponent
 
       if frame.present?
         data = data.merge(turbo_frame: frame)
+      else
+        # Rails 8.1: Default to _top frame for menu items to break out of any parent frames
+        # This ensures navigation works correctly when menu is inside a Turbo Frame
+        data = data.merge(turbo_frame: "_top") if variant == :link
       end
 
       merged_opts.merge(data: data)

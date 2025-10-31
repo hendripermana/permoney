@@ -20,15 +20,8 @@ document.addEventListener("turbo:frame-missing", (event) => {
   }
 });
 
-// Rails 8.1 - Fix for clickable elements inside Turbo Frames
-document.addEventListener("turbo:click", (event) => {
-  const { target } = event;
-  
-  // Ensure links with data-turbo-frame work correctly
-  if (target.tagName === "A" && target.dataset.turboFrame) {
-    event.stopPropagation();
-  }
-});
+// Rails 8.1 - No need to intercept turbo:click
+// Turbo handles link clicks automatically based on data-turbo-frame attributes
 
 // Rails 8.1 - Enhanced Turbo Drive configuration
-Turbo.config.drive.progressBarDelay = 100; // Show progress bar after 100ms
+// Progress bar is handled automatically by Turbo

@@ -1,12 +1,17 @@
 <%# locals: (user:, placement: "right-start", offset: 16) %>
 
-<div data-testid="user-menu">
-  <%= render DS::Menu.new(variant: "avatar", avatar_url: user.profile_image&.variant(:small)&.url, initials: user.initials, placement: placement, offset: offset) do |menu| %>
-    <%= menu.with_header do %>
-      <div class="px-4 py-3 flex items-center gap-3">
-        <div class="w-9 h-9 shrink-0">
-          <%= render "settings/user_avatar", avatar_url: user.profile_image&.variant(:small)&.url, initials: user.initials, lazy: true %>
-        </div>
+<%# Rails 8.1: Use Turbo Frame for auto-refresh after avatar upload %>
+<%= turbo_frame_tag "user_menu_avatar", data: { turbo_action: "advance" } do %>
+  <div data-testid="user-menu">
+    <%# Rails 8.1: Use preprocessed variant with .processed.url for instant display %>
+    <% avatar_url = user.profile_image.attached? ? user.profile_image.variant(:small).processed.url : nil %>
+    
+    <%= render DS::Menu.new(variant: "avatar", avatar_url: avatar_url, initials: user.initials, placement: placement, offset: offset) do |menu| %>
+      <%= menu.with_header do %>
+        <div class="px-4 py-3 flex items-center gap-3">
+          <div class="w-9 h-9 shrink-0">
+            <%= render "settings/user_avatar", avatar_url: avatar_url, initials: user.initials, lazy: true %>
+          </div>
 
         <div class="overflow-hidden text-ellipsis text-sm">
           <p class="font-medium"><%= user.display_name %></p>
@@ -42,4 +47,5 @@
 
     <% menu.with_item(variant: "button", text: "Log out", icon: "log-out", href: session_path(Current.session), method: :delete) %>
   <% end %>
-</div>
+  </div>
+<% end %>

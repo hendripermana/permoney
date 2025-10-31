@@ -127,7 +127,10 @@ class UsersController < ApplicationController
     end
 
     def set_user
+      # Rails 8.1: Eager load variant records to prevent N+1 queries for avatar variants
+      # Reference: https://guides.rubyonrails.org/active_storage_overview.html#avoiding-n-1-queries
       @user = Current.user
+      @user.profile_image.attachment&.blob&.variant_records&.load if @user.profile_image.attached?
     end
 
     def ensure_admin
