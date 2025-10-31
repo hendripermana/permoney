@@ -20,24 +20,65 @@ export default class extends Controller {
     }
 
     // Add keyboard navigation
-    this.element.addEventListener("keydown", this.handleKeydown.bind(this));
+    this.keydownHandler = this.handleKeydown.bind(this);
+    this.element.addEventListener("keydown", this.keydownHandler);
+
+    // Rails 8.1: Explicitly attach click listeners to all triggers for better reliability
+    // This ensures clicks work even in dark mode with overlays or nested SVG elements
+    // Stimulus data-action can sometimes be blocked by CSS layers in dark mode
+    this.triggerClickHandlers = new Map();
+    this.triggerTargets.forEach((trigger) => {
+      const handler = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const value = trigger.dataset.tabValue;
+        if (value) {
+          this.activateTab(value, true);
+        }
+      };
+      this.triggerClickHandlers.set(trigger, handler);
+      trigger.addEventListener("click", handler, { capture: true });
+    });
   }
 
   disconnect() {
-    this.element.removeEventListener("keydown", this.handleKeydown.bind(this));
+    // Remove keyboard navigation listener
+    if (this.keydownHandler) {
+      this.element.removeEventListener("keydown", this.keydownHandler);
+    }
+
+    // Remove all trigger click listeners
+    if (this.triggerClickHandlers) {
+      this.triggerClickHandlers.forEach((handler, trigger) => {
+        trigger.removeEventListener("click", handler, { capture: true });
+      });
+      this.triggerClickHandlers.clear();
+    }
   }
 
-  // Handle tab selection
+  // Handle tab selection (kept for compatibility with Stimulus data-action)
+  // Note: We also attach explicit listeners in connect() for better reliability
   selectTab(event) {
+    // Rails 8.1: Handle clicks from both Stimulus data-action and explicit listeners
+    // This method serves as a fallback if explicit listeners fail
+    event.preventDefault();
+    event.stopPropagation();
+
     // Rails 8.1: Use event.target for better reliability across themes
     // event.currentTarget may not be set correctly in some cases (e.g., dark mode with overlays)
-    // Find the button element using closest to handle nested elements (icons, etc.)
+    // Find the button element using closest to handle nested elements (icons, SVG, etc.)
     const trigger = event.target.closest("button[data-shadcn--tabs-target='trigger']");
-    if (!trigger) return;
-
-    // Only prevent default for buttons, let the event bubble normally
-    if (trigger.tagName === "BUTTON") {
-      event.preventDefault();
+    if (!trigger) {
+      // Fallback: try to find trigger from currentTarget if available
+      const fallbackTrigger = event.currentTarget?.hasAttribute?.("data-shadcn--tabs-target")
+        ? event.currentTarget
+        : null;
+      if (!fallbackTrigger) return;
+      const value = fallbackTrigger.dataset.tabValue;
+      if (value) {
+        this.activateTab(value, true);
+      }
+      return;
     }
 
     const value = trigger.dataset.tabValue;
@@ -45,6 +86,36 @@ export default class extends Controller {
     if (value) {
       this.activateTab(value, true);
     }
+  }
+
+  // Attach click listeners to all triggers (called on connect and when triggers change)
+  attachClickListeners() {
+    // Remove old listeners first
+    if (this.triggerClickHandlers) {
+      this.triggerClickHandlers.forEach((handler, trigger) => {
+        trigger.removeEventListener("click", handler, { capture: true });
+      });
+      this.triggerClickHandlers.clear();
+    }
+
+    // Attach new listeners to current triggers
+    this.triggerClickHandlers = new Map();
+    this.triggerTargets.forEach((trigger) => {
+      // Ensure pointer-events is enabled (in case CSS disabled it)
+      trigger.style.pointerEvents = "auto";
+      
+      const handler = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const value = trigger.dataset.tabValue;
+        if (value) {
+          this.activateTab(value, true);
+        }
+      };
+      this.triggerClickHandlers.set(trigger, handler);
+      // Use capture phase to intercept before any CSS layers
+      trigger.addEventListener("click", handler, { capture: true, passive: false });
+    });
   }
 
   // Activate a specific tab
