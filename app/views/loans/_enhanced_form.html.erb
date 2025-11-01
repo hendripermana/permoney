@@ -15,17 +15,17 @@
       </div>
     </div>
     
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch">
       <!-- Personal Loan Card -->
-      <label class="cursor-pointer" 
+      <label class="cursor-pointer h-full flex"
              data-enhanced-loan-form-target="personalCard"
              data-action="click->enhanced-loan-form#selectPersonal">
-        <div class="p-4 border-2 border-secondary rounded-lg hover:border-gray-400 transition-colors">
-          <div class="flex items-start gap-3">
-            <div class="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center">
+        <div class="loan-type-card w-full h-full flex flex-col min-h-[120px] p-4 border-2 border-secondary rounded-lg bg-container transition-all duration-200 ease-out hover:border-primary/40 hover:shadow-md active:scale-[0.98] data-[selected=true]:border-primary data-[selected=true]:bg-primary/5 data-[selected=true]:ring-2 data-[selected=true]:ring-primary data-[selected=true]:ring-offset-0 data-[selected=true]:shadow-sm" data-selected="<%= personal_mode ? 'true' : 'false' %>">
+          <div class="flex items-start gap-3 flex-1">
+            <div class="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center flex-shrink-0">
               <%= icon "users", size: "sm", class: "text-green-600" %>
             </div>
-            <div class="flex-1">
+            <div class="flex-1 min-w-0">
               <h4 class="font-medium text-primary">Personal Loan</h4>
               <p class="text-sm text-secondary mt-1">From family, friends, or colleagues</p>
               <div class="mt-2 text-xs text-green-600 font-medium">
@@ -37,15 +37,15 @@
       </label>
 
       <!-- Institutional Loan Card -->
-      <label class="cursor-pointer"
+      <label class="cursor-pointer h-full flex"
              data-enhanced-loan-form-target="institutionalCard"
              data-action="click->enhanced-loan-form#selectInstitutional">
-        <div class="p-4 border-2 border-secondary rounded-lg hover:border-gray-400 transition-colors">
-          <div class="flex items-start gap-3">
-            <div class="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center">
+        <div class="loan-type-card w-full h-full flex flex-col min-h-[120px] p-4 border-2 border-secondary rounded-lg bg-container transition-all duration-200 ease-out hover:border-primary/40 hover:shadow-md active:scale-[0.98] data-[selected=true]:border-primary data-[selected=true]:bg-primary/5 data-[selected=true]:ring-2 data-[selected=true]:ring-primary data-[selected=true]:ring-offset-0 data-[selected=true]:shadow-sm" data-selected="<%= personal_mode ? 'false' : 'true' %>">
+          <div class="flex items-start gap-3 flex-1">
+            <div class="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center flex-shrink-0">
               <%= icon "building-2", size: "sm", class: "text-blue-600" %>
             </div>
-            <div class="flex-1">
+            <div class="flex-1 min-w-0">
               <h4 class="font-medium text-primary">Institutional Loan</h4>
               <p class="text-sm text-secondary mt-1">From banks, fintech, or institutions</p>
               <div class="mt-2 text-xs text-blue-600 font-medium">

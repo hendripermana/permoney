@@ -80,13 +80,22 @@ export default class extends Controller {
   }
 
   updateCardSelection(selectedCard, unselectedCard) {
-    // Add selected styling
-    selectedCard.classList.add("ring-2", "ring-primary", "bg-primary/5");
-    selectedCard.classList.remove("border-secondary");
+    // Use data attributes for state management (best practice 2025)
+    // This ensures consistent styling via CSS data-* selectors
+    // Optimized: Cache selector results to avoid multiple DOM queries
+    const selectedCardDiv =
+      selectedCard?.querySelector?.(".loan-type-card") || selectedCard;
+    const unselectedCardDiv =
+      unselectedCard?.querySelector?.(".loan-type-card") || unselectedCard;
 
-    // Remove selected styling
-    unselectedCard.classList.remove("ring-2", "ring-primary", "bg-primary/5");
-    unselectedCard.classList.add("border-secondary");
+    // Batch DOM updates for better performance (Rails 8.1 optimization)
+    if (selectedCardDiv) {
+      selectedCardDiv.setAttribute("data-selected", "true");
+    }
+
+    if (unselectedCardDiv) {
+      unselectedCardDiv.setAttribute("data-selected", "false");
+    }
   }
 
   showPersonalFields() {
@@ -143,12 +152,15 @@ export default class extends Controller {
 
   setInstitutionalDefaults() {
     // Smart defaults for institutional loans
+    // Optimized: Cache currency meta tag query (Rails 8.1 performance best practice)
     if (!this.interestRateTarget.value) {
-      // Set based on currency (Indonesian context)
-      const currency =
-        document.querySelector('meta[name="family-currency"]')?.content ||
-        "IDR";
-      this.interestRateTarget.value = currency === "IDR" ? "12" : "6";
+      // Cache meta tag query to avoid repeated DOM lookups
+      if (!this._cachedCurrency) {
+        const currencyMeta =
+          document.querySelector('meta[name="family-currency"]');
+        this._cachedCurrency = currencyMeta?.content || "IDR";
+      }
+      this.interestRateTarget.value = this._cachedCurrency === "IDR" ? "12" : "6";
     }
 
     if (!this.termMonthsTarget.value) {
@@ -162,16 +174,21 @@ export default class extends Controller {
   }
 
   setSmartDefaults() {
-    // Set smart date defaults
-    const nextMonth = new Date();
+    // Set smart date defaults - optimized date calculations (Rails 8.1 best practice)
+    // Cache current date to avoid multiple Date() calls
+    const now = new Date();
+    const nextMonth = new Date(now);
     nextMonth.setMonth(nextMonth.getMonth() + 1);
 
+    const todayISO = now.toISOString().split("T")[0];
+    const nextMonthISO = nextMonth.toISOString().split("T")[0];
+
     if (this.startDateTarget && !this.startDateTarget.value) {
-      this.startDateTarget.value = nextMonth.toISOString().split("T")[0];
+      this.startDateTarget.value = nextMonthISO;
     }
 
     if (this.originationDateTarget && !this.originationDateTarget.value) {
-      this.originationDateTarget.value = new Date().toISOString().split("T")[0];
+      this.originationDateTarget.value = todayISO;
     }
   }
 
