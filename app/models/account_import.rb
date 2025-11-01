@@ -7,11 +7,14 @@ class AccountImport < Import
         mapping = mappings.account_types.find_by(key: row.entity_type)
         accountable_class = mapping.value.constantize
 
+        # Build accountable with proper attributes for Loan personal loans
+        accountable = build_accountable_for_import(accountable_class, row)
+
         account = family.accounts.build(
           name: row.name,
           balance: row.amount.to_d,
           currency: row.currency,
-          accountable: accountable_class.new,
+          accountable: accountable,
           import: self
         )
 
@@ -60,4 +63,16 @@ class AccountImport < Import
   def max_row_count
     50
   end
+
+  private
+    def build_accountable_for_import(accountable_class, row)
+      accountable = accountable_class.new
+
+      # Handle Loan personal loans - set counterparty_name from row.name to satisfy validation
+      if accountable.is_a?(Loan) && accountable.personal_loan?
+        accountable.counterparty_name = row.name
+      end
+
+      accountable
+    end
 end
