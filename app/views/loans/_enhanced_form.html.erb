@@ -3,20 +3,31 @@
 
 <div class="space-y-6" data-controller="enhanced-loan-form" data-enhanced-loan-form-personal-mode-value="<%= personal_mode %>" data-preview-base-href="<%= preview_base_href %>">
   
-  <!-- Subtle Progress Indicator (Non-intrusive UX enhancement) -->
-  <div class="flex items-center gap-2 pb-3 mb-4 border-b border-secondary/20" data-enhanced-loan-form-target="progressIndicator">
-    <% [1, 2, 3, 4].each_with_index do |step_num, idx| %>
-      <div class="flex items-center flex-1">
-        <div class="flex items-center gap-2 flex-1">
-          <div class="progress-step w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium transition-all duration-300 bg-secondary/10 text-secondary" data-step="<%= step_num %>" data-enhanced-loan-form-target="progressStep<%= step_num %>">
-            <%= step_num %>
+  <!-- Modern Progress Indicator with Smooth Animations -->
+  <div class="relative pb-4 mb-6 border-b border-secondary/20" data-enhanced-loan-form-target="progressIndicator">
+    <div class="flex items-center justify-between relative z-10">
+      <% [1, 2, 3, 4].each_with_index do |step_num, idx| %>
+        <div class="flex items-center flex-1 <%= 'justify-end' if idx == 3 %>">
+          <!-- Step Circle with Modern Animations -->
+          <div class="relative flex flex-col items-center">
+            <div class="progress-step relative w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold transition-all duration-500 ease-out transform-gpu bg-secondary/10 text-secondary border-2 border-secondary/30 shadow-sm" data-step="<%= step_num %>" data-enhanced-loan-form-target="progressStep<%= step_num %>">
+              <span class="step-number transition-all duration-300 ease-out"><%= step_num %></span>
+              <!-- Pulse ring untuk active step -->
+              <span class="absolute inset-0 rounded-full bg-primary/20 opacity-0 animate-pulse transition-opacity duration-300" data-enhanced-loan-form-target="pulseRing<%= step_num %>"></span>
+            </div>
+            <!-- Optional: Step label (hidden by default, can be shown) -->
+            <span class="mt-2 text-xs text-secondary font-medium hidden md:block" data-enhanced-loan-form-target="stepLabel<%= step_num %>">Step <%= step_num %></span>
           </div>
+          
+          <!-- Animated Connector Line -->
           <% unless idx == 3 %>
-            <div class="flex-1 h-0.5 mx-2 bg-secondary/20 transition-colors duration-300" data-connector="<%= step_num %>" data-enhanced-loan-form-target="progressConnector<%= step_num %>"></div>
+            <div class="flex-1 mx-3 relative h-1 bg-secondary/20 rounded-full overflow-hidden" data-connector="<%= step_num %>" data-enhanced-loan-form-target="progressConnector<%= step_num %>">
+              <div class="connector-fill absolute inset-0 bg-gradient-to-r from-primary to-primary/60 rounded-full transform -translate-x-full transition-transform duration-700 ease-out" data-enhanced-loan-form-target="connectorFill<%= step_num %>"></div>
+            </div>
           <% end %>
         </div>
-      </div>
-    <% end %>
+      <% end %>
+    </div>
   </div>
 
   <!-- Step 1: Loan Type Selection (Prominent) -->
