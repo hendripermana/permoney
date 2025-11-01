@@ -29,6 +29,17 @@ export default class extends Controller {
     "interestSection",
     "disbursementSection",
     "advancedSection",
+    "step1Indicator",
+    "step2Indicator",
+    "step3Indicator",
+    "step4Indicator",
+    "progressStep1",
+    "progressStep2",
+    "progressStep3",
+    "progressStep4",
+    "progressConnector1",
+    "progressConnector2",
+    "progressConnector3",
   ];
 
   static values = {
@@ -61,6 +72,12 @@ export default class extends Controller {
 
     // Set smart defaults for personal loans
     this.setPersonalDefaults();
+
+    // UX Enhancement: Update progress and smooth scroll to next section
+    this.updateProgress(1);
+    this.smoothScrollToSection("essentialSection");
+    this.updateStepIndicator(1, true);
+    this.updateStepIndicator(2, false);
   }
 
   selectInstitutional() {
@@ -77,6 +94,12 @@ export default class extends Controller {
 
     // Set smart defaults for institutional loans
     this.setInstitutionalDefaults();
+
+    // UX Enhancement: Update progress and smooth scroll to next section
+    this.updateProgress(1);
+    this.smoothScrollToSection("essentialSection");
+    this.updateStepIndicator(1, true);
+    this.updateStepIndicator(2, false);
   }
 
   updateCardSelection(selectedCard, unselectedCard) {
@@ -593,5 +616,80 @@ export default class extends Controller {
         Unable to load the schedule preview. Please double-check the inputs and try again.
       </div>
     `;
+  }
+
+  // UX Enhancement Methods (Non-destructive improvements)
+
+  // Update progress indicator based on completed steps
+  updateProgress(completedStep) {
+    // Update progress steps (1-based)
+    for (let step = 1; step <= 4; step++) {
+      const stepTarget = this[`progressStep${step}Target`];
+      const connectorTarget = this[`progressConnector${step}Target`];
+
+      if (stepTarget) {
+        if (step <= completedStep) {
+          // Completed step - show checkmark with primary color
+          stepTarget.className =
+            "progress-step w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium transition-all duration-300 bg-primary text-white";
+          stepTarget.innerHTML = `<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>`;
+        } else if (step === completedStep + 1) {
+          // Current step - highlight with primary/10 background
+          stepTarget.className =
+            "progress-step w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium transition-all duration-300 bg-primary/10 text-primary ring-2 ring-primary/30";
+        } else {
+          // Future step - keep as secondary
+          stepTarget.className =
+            "progress-step w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium transition-all duration-300 bg-secondary/10 text-secondary";
+          stepTarget.textContent = step;
+        }
+      }
+
+      // Update connector line
+      if (connectorTarget && step < completedStep) {
+        connectorTarget.className =
+          "flex-1 h-0.5 mx-2 bg-primary transition-colors duration-300";
+      } else if (connectorTarget && step === completedStep) {
+        connectorTarget.className =
+          "flex-1 h-0.5 mx-2 bg-primary/50 transition-colors duration-300";
+      }
+    }
+  }
+
+  // Smooth scroll to section with offset for better UX
+  smoothScrollToSection(sectionTargetName) {
+    const section = this[`${sectionTargetName}Target`];
+    if (!section) return;
+
+    // Use requestAnimationFrame for smooth scroll (Rails 8.1 best practice)
+    requestAnimationFrame(() => {
+      const offset = 20; // Small offset for visual breathing room
+      const elementPosition =
+        section.getBoundingClientRect().top + window.pageYOffset;
+      const offsetPosition = elementPosition - offset;
+
+      window.scrollTo({
+        top: offsetPosition,
+        behavior: "smooth",
+      });
+    });
+  }
+
+  // Update step indicator with completion state
+  updateStepIndicator(stepNumber, isCompleted) {
+    const indicator = this[`step${stepNumber}IndicatorTarget`];
+    if (!indicator) return;
+
+    if (isCompleted) {
+      // Show checkmark for completed steps
+      indicator.className =
+        "step-indicator w-8 h-8 rounded-full bg-success/10 flex items-center justify-center transition-all duration-300 ring-2 ring-success/20";
+      indicator.innerHTML = `<svg class="w-4 h-4 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"></path></svg>`;
+    } else {
+      // Active step - primary styling
+      indicator.className =
+        "step-indicator w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center transition-all duration-300";
+      indicator.innerHTML = `<span class="text-sm font-semibold text-primary">${stepNumber}</span>`;
+    }
   }
 }

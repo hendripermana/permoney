@@ -3,10 +3,26 @@
 
 <div class="space-y-6" data-controller="enhanced-loan-form" data-enhanced-loan-form-personal-mode-value="<%= personal_mode %>" data-preview-base-href="<%= preview_base_href %>">
   
+  <!-- Subtle Progress Indicator (Non-intrusive UX enhancement) -->
+  <div class="flex items-center gap-2 pb-3 mb-4 border-b border-secondary/20" data-enhanced-loan-form-target="progressIndicator">
+    <% [1, 2, 3, 4].each_with_index do |step_num, idx| %>
+      <div class="flex items-center flex-1">
+        <div class="flex items-center gap-2 flex-1">
+          <div class="progress-step w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium transition-all duration-300 bg-secondary/10 text-secondary" data-step="<%= step_num %>" data-enhanced-loan-form-target="progressStep<%= step_num %>">
+            <%= step_num %>
+          </div>
+          <% unless idx == 3 %>
+            <div class="flex-1 h-0.5 mx-2 bg-secondary/20 transition-colors duration-300" data-connector="<%= step_num %>" data-enhanced-loan-form-target="progressConnector<%= step_num %>"></div>
+          <% end %>
+        </div>
+      </div>
+    <% end %>
+  </div>
+
   <!-- Step 1: Loan Type Selection (Prominent) -->
-  <section class="space-y-4">
+  <section class="space-y-4" data-enhanced-loan-form-target="step1" data-step-number="1">
     <div class="flex items-center gap-3">
-      <div class="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
+      <div class="step-indicator w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center transition-all duration-300" data-enhanced-loan-form-target="step1Indicator">
         <span class="text-sm font-semibold text-primary">1</span>
       </div>
       <div>
@@ -59,10 +75,10 @@
   </section>
 
   <!-- Step 2: Essential Information (Contextual based on type) -->
-  <section class="space-y-4" data-enhanced-loan-form-target="essentialSection">
+  <section class="space-y-4 pt-2 border-t border-secondary/20" data-enhanced-loan-form-target="essentialSection" data-step-number="2">
     <div class="flex items-center gap-3">
-      <div class="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
-        <span class="text-sm font-semibold text-primary">2</span>
+      <div class="step-indicator w-8 h-8 rounded-full bg-secondary/10 flex items-center justify-center transition-all duration-300" data-enhanced-loan-form-target="step2Indicator">
+        <span class="text-sm font-semibold text-secondary">2</span>
       </div>
       <div>
         <h3 class="text-lg font-medium text-primary">Essential Information</h3>
@@ -164,10 +180,10 @@
   </section>
 
   <!-- Step 3: Interest & Terms (Smart defaults based on type) -->
-  <section class="space-y-4" data-enhanced-loan-form-target="interestSection">
+  <section class="space-y-4 pt-2 border-t border-secondary/20" data-enhanced-loan-form-target="interestSection" data-step-number="3">
     <div class="flex items-center gap-3">
-      <div class="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
-        <span class="text-sm font-semibold text-primary">3</span>
+      <div class="step-indicator w-8 h-8 rounded-full bg-secondary/10 flex items-center justify-center transition-all duration-300" data-enhanced-loan-form-target="step3Indicator">
+        <span class="text-sm font-semibold text-secondary">3</span>
       </div>
       <div>
         <h3 class="text-lg font-medium text-primary">Interest & Terms</h3>
@@ -231,10 +247,10 @@
 
   <!-- Step 4: Disbursement (For new loans only) -->
   <% unless account.linked? %>
-    <section class="space-y-4" data-enhanced-loan-form-target="disbursementSection">
+    <section class="space-y-4 pt-2 border-t border-secondary/20" data-enhanced-loan-form-target="disbursementSection" data-step-number="4">
       <div class="flex items-center gap-3">
-        <div class="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
-          <span class="text-sm font-semibold text-primary">4</span>
+        <div class="step-indicator w-8 h-8 rounded-full bg-secondary/10 flex items-center justify-center transition-all duration-300" data-enhanced-loan-form-target="step4Indicator">
+          <span class="text-sm font-semibold text-secondary">4</span>
         </div>
         <div>
           <h3 class="text-lg font-medium text-primary">Money Transfer</h3>
