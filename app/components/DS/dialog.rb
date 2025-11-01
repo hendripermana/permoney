@@ -1,6 +1,8 @@
 class DS::Dialog < DesignSystemComponent
   renders_one :header, ->(title: nil, subtitle: nil, hide_close_icon: false, **opts, &block) do
-    content_tag(:header, class: "px-4 flex flex-col gap-2", **opts) do
+    # Optimize spacing: Use gap-1.5 instead of gap-2 for more compact header when subtitle exists
+    header_gap = subtitle.present? ? "gap-1.5" : "gap-2"
+    content_tag(:header, class: "px-4 flex flex-col #{header_gap}", **opts) do
       title_div = content_tag(:div, class: "flex items-center justify-between gap-2") do
         title = content_tag(:h2, title, class: class_names("font-medium text-primary", drawer? ? "text-lg" : "")) if title
         close_icon = render DS::Button.new(variant: "icon", class: "ml-auto", icon: "x", tabindex: "-1", data: { action: "DS--dialog#close" }) unless hide_close_icon
