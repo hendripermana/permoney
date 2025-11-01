@@ -267,13 +267,17 @@
   <% end %>
 
   <!-- Advanced Options (Collapsed by default) -->
-  <details class="space-y-4" data-enhanced-loan-form-target="advancedSection">
-    <summary class="cursor-pointer text-primary font-medium flex items-center gap-2">
-      <%= icon "settings", size: "sm" %>
-      Advanced Options (Optional)
+  <details class="group space-y-4" data-enhanced-loan-form-target="advancedSection">
+    <summary class="cursor-pointer text-primary font-medium flex items-center justify-between gap-3 px-4 py-3 rounded-lg border border-transparent hover:border-secondary hover:bg-secondary/5 transition-all duration-200 ease-out group-open:border-secondary group-open:bg-secondary/5 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2">
+      <div class="flex items-center gap-2">
+        <%= icon "settings", size: "sm", class: "text-secondary" %>
+        <span>Advanced Options</span>
+        <span class="text-xs text-secondary font-normal">(Optional)</span>
+      </div>
+      <%= icon "chevron-down", size: "sm", class: "text-secondary transition-transform duration-200 ease-out group-open:rotate-180 flex-shrink-0" %>
     </summary>
     
-    <div class="mt-4 space-y-4 border border-secondary rounded-lg p-4">
+    <div class="mt-4 space-y-4 border border-secondary rounded-lg p-4 bg-container">
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <%= loan_form.select :schedule_method,
                             loan_schedule_method_options,
