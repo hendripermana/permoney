@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2025_10_29_135300) do
+ActiveRecord::Schema[8.1].define(version: 2025_10_31_132654) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -850,6 +850,25 @@ ActiveRecord::Schema[8.1].define(version: 2025_10_29_135300) do
     t.integer "year_built"
   end
 
+  create_table "recurring_transactions", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "family_id", null: false
+    t.uuid "merchant_id", null: false
+    t.decimal "amount", precision: 19, scale: 4, null: false
+    t.string "currency", null: false
+    t.integer "expected_day_of_month", null: false
+    t.date "last_occurrence_date", null: false
+    t.date "next_expected_date", null: false
+    t.string "status", default: "active", null: false
+    t.integer "occurrence_count", default: 0, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["family_id", "merchant_id", "amount", "currency"], name: "idx_recurring_txns_on_family_merchant_amount_currency", unique: true
+    t.index ["family_id", "status"], name: "index_recurring_transactions_on_family_id_and_status"
+    t.index ["family_id"], name: "index_recurring_transactions_on_family_id"
+    t.index ["merchant_id"], name: "index_recurring_transactions_on_merchant_id"
+    t.index ["next_expected_date"], name: "index_recurring_transactions_on_next_expected_date"
+  end
+
   create_table "rejected_transfers", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.datetime "created_at", null: false
     t.uuid "inflow_transaction_id", null: false
@@ -1193,6 +1212,8 @@ ActiveRecord::Schema[8.1].define(version: 2025_10_29_135300) do
   add_foreign_key "pay_later_installments", "transfers", on_delete: :nullify
   add_foreign_key "plaid_accounts", "plaid_items"
   add_foreign_key "plaid_items", "families"
+  add_foreign_key "recurring_transactions", "families"
+  add_foreign_key "recurring_transactions", "merchants"
   add_foreign_key "rejected_transfers", "transactions", column: "inflow_transaction_id"
   add_foreign_key "rejected_transfers", "transactions", column: "outflow_transaction_id"
   add_foreign_key "rule_actions", "rules"
