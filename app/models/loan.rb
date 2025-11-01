@@ -3,6 +3,7 @@ class Loan < ApplicationRecord
   include AuditableChanges
   include Loan::Payable
   include Loan::Providable
+  include Loan::IslamicFinance
 
   SUBTYPES = {
     "loan_personal" => { short: "Borrowed (Person)", long: "Loan Borrowed from Person" },

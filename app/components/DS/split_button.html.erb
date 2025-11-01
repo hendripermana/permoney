@@ -1,0 +1,38 @@
+<div class="inline-flex items-center <%= class_name %>" role="group" aria-label="<%= aria_label %>">
+  <%# Primary action button - left side with rounded corners on left only %>
+  <%= render DS::Link.new(
+    text: primary_text,
+    icon: primary_icon,
+    variant: primary_variant,
+    href: primary_href,
+    frame: primary_frame,
+    class: primary_button_classes,
+    **primary_opts
+  ) %>
+
+  <%# Dropdown trigger - right side with rounded corners on right only, visually connected to primary button %>
+  <% if menu_items.any? %>
+    <%= render DS::Menu.new(
+      variant: :button,
+      placement: menu_placement,
+      offset: menu_offset
+    ) do |menu| %>
+      <% menu.with_button(
+        variant: dropdown_button_variant,
+        icon: dropdown_button_icon,
+        class: dropdown_trigger_classes
+      ) %>
+
+      <% menu_items.each do |item| %>
+        <% menu.with_item(
+          variant: item.variant,
+          text: item.text,
+          icon: item.icon,
+          href: item.href,
+          frame: item.frame,
+          **item.instance_variable_get(:@opts)
+        ) %>
+      <% end %>
+    <% end %>
+  <% end %>
+</div>

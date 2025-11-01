@@ -1,61 +1,61 @@
 <div class="space-y-4 pb-20 flex flex-col">
   <header class="flex justify-between items-center text-primary font-medium">
     <h1 class="text-xl">Transactions</h1>
-    <div class="flex items-center gap-5">
-      <div class="flex items-center gap-2">
-        <%= render DS::Menu.new do |menu| %>
-          <% menu.with_item(variant: "link", text: "New rule", href: new_rule_path(resource_type: "transaction"), icon: "plus", data: { turbo_frame: :modal }) %>
-          <% menu.with_item(variant: "link", text: "Edit rules", href: rules_path, icon: "git-branch", data: { turbo_frame: :_top }) %>
-          <% menu.with_item(variant: "link", text: "Edit categories", href: categories_path, icon: "shapes", data: { turbo_frame: :_top }) %>
-          <% menu.with_item(variant: "link", text: "Edit tags", href: tags_path, icon: "tags", data: { turbo_frame: :_top }) %>
-          <% menu.with_item(variant: "link", text: "Edit merchants", href: family_merchants_path, icon: "store", data: { turbo_frame: :_top }) %>
-          <% menu.with_item(variant: "link", text: "Edit imports", href: imports_path, icon: "hard-drive-upload", data: { turbo_frame: :_top }) %>
-          <% menu.with_item(variant: "link", text: "Import", href: new_import_path, icon: "download", data: { turbo_frame: "modal", class_name: "md:!hidden" }) %>
-        <% end %>
 
-        <div class="hidden md:flex">
-          <%= render DS::Link.new(
-            text: t(".import"),
-            icon: "download",
-            variant: "outline",
+    <%# Desktop: Settings Menu + Action Buttons Group %>
+    <%# Mobile: Settings Menu + New Transaction Icon %>
+    <div class="flex items-center gap-2">
+      <%# Settings & Management Menu - Always visible %>
+      <%= render DS::Menu.new(variant: :icon, icon_vertical: false) do |menu| %>
+        <% menu.with_item(variant: "link", text: "New rule", href: new_rule_path(resource_type: "transaction"), icon: "plus", frame: :modal) %>
+        <% menu.with_item(variant: "link", text: "Edit rules", href: rules_path, icon: "git-branch", frame: :_top) %>
+        <% menu.with_item(variant: "divider") %>
+        <% menu.with_item(variant: "link", text: "Edit categories", href: categories_path, icon: "shapes", frame: :_top) %>
+        <% menu.with_item(variant: "link", text: "Edit tags", href: tags_path, icon: "tags", frame: :_top) %>
+        <% menu.with_item(variant: "link", text: "Edit merchants", href: family_merchants_path, icon: "store", frame: :_top) %>
+        <% menu.with_item(variant: "divider") %>
+        <% menu.with_item(variant: "link", text: "Manage imports", href: imports_path, icon: "hard-drive-upload", frame: :_top) %>
+      <% end %>
+
+      <%# Desktop: New Transaction Split Button with quick actions %>
+      <div class="hidden md:flex">
+        <%= render DS::SplitButton.new(
+          primary_text: "New transaction",
+          primary_href: new_transaction_path,
+          primary_frame: :modal
+        ) do |split| %>
+          <% split.with_menu_item(
+            variant: :link,
+            text: "Import transactions",
             href: new_import_path,
-            frame: :modal,
+            icon: "download",
+            frame: :modal
           ) %>
-        </div>
-
-        <%= render DS::Link.new(
-            text: "New transaction",
-            icon: "plus",
-            variant: "primary",
-            href: new_transaction_path,
-            frame: :modal,
-            class: "hidden md:inline-flex"
-          ) %>
-
-        <%= render DS::Link.new(
-            text: "Lend More Money",
-            icon: "plus",
-            variant: "outline",
+          <% split.with_menu_item(
+            variant: :link,
+            text: "Lend money",
             href: new_global_lending_personal_lendings_path,
-            frame: :modal,
-            class: "hidden md:inline-flex" ) %>
-
-        <%= render DS::Link.new(
-            text: "Record Payment Received",
-            icon: "banknote",
-            variant: "outline",
-            href: new_global_payment_personal_lendings_path,
-            frame: :modal,
-            class: "hidden md:inline-flex" ) %>
-
-        <%= render DS::Link.new(
-            icon: "plus",
-            variant: "icon-inverse",
-            href: new_transaction_path,
-            frame: :modal,
-            class: "rounded-full md:hidden"
+            icon: "hand-coins",
+            frame: :modal
           ) %>
+          <% split.with_menu_item(
+            variant: :link,
+            text: "Record payment",
+            href: new_global_payment_personal_lendings_path,
+            icon: "banknote",
+            frame: :modal
+          ) %>
+        <% end %>
       </div>
+
+      <%# Mobile: New Transaction Icon Button - Simple and clean %>
+      <%= render DS::Link.new(
+        icon: "plus",
+        variant: "icon-inverse",
+        href: new_transaction_path,
+        frame: :modal,
+        class: "rounded-full md:hidden"
+      ) %>
     </div>
   </header>
 
