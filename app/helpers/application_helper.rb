@@ -146,6 +146,22 @@ module ApplicationHelper
     sanitize(markdown.render(text), tags: allowed_tags, attributes: allowed_attributes)
   end
 
+  # Helper to set breadcrumbs from controllers or views
+  # Supports both old array format and new hash format with icons
+  #
+  # Old format (backward compatible):
+  #   set_breadcrumbs([["Home", root_path], ["Accounts", accounts_path], ["Show", nil]])
+  #
+  # New format with icons:
+  #   set_breadcrumbs([
+  #     { text: "Home", href: root_path, icon: "home" },
+  #     { text: "Accounts", href: accounts_path, icon: "folder" },
+  #     { text: "Show", icon: "file-text" }
+  #   ])
+  def set_breadcrumbs(breadcrumbs)
+    @breadcrumbs = breadcrumbs
+  end
+
   private
     def calculate_total(item, money_method, negate)
       # Filter out transfer-type transactions from entries

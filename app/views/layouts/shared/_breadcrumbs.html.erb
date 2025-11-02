@@ -1,17 +1,34 @@
 <%# locals: (breadcrumbs:) %>
+<%#
+  Breadcrumb navigation using BreadcrumbComponent
 
-<div class="py-2 flex items-center gap-2">
-  <% breadcrumbs.each_with_index do |(name, path), index| %>
-    <% if index > 0 %>
-      <%= icon("chevron-right", color: "gray", size: "sm") %>
-    <% end %>
+  Backward compatible with old array format: [["Name", "/path"], ...]
+  New format supports icons: [{ text: "Name", href: "/path", icon: "home" }, ...]
+%>
 
-    <% if path.present? && index < breadcrumbs.size - 1 %>
-      <%= link_to name, path, class: "text-sm text-gray-500 font-medium" %>
-    <% elsif index == breadcrumbs.size - 1 %>
-      <span class="text-primary font-medium text-sm"><%= name %></span>
-    <% else %>
-      <span class="text-sm text-gray-500 font-medium"><%= name %></span>
-    <% end %>
-  <% end %>
-</div>
+<% if breadcrumbs.present? %>
+  <%# Convert old array format to new hash format if needed %>
+  <% normalized_items = breadcrumbs.map.with_index do |item, index|
+    is_last = (index == breadcrumbs.size - 1)
+
+    # Handle new hash format
+    if item.is_a?(Hash)
+      item.merge(current: is_last)
+    # Handle old array format [name, path]
+    elsif item.is_a?(Array)
+      {
+        text: item[0],
+        href: item[1],
+        current: is_last
+      }
+    else
+      # Handle plain string (shouldn't happen but be defensive)
+      {
+        text: item.to_s,
+        current: is_last
+      }
+    end
+  end %>
+
+  <%= render BreadcrumbComponent.new(items: normalized_items) %>
+<% end %>

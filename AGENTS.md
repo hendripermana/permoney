@@ -1165,3 +1165,94 @@ A modern floating AI chat widget that provides access to the AI assistant from a
 - Touch-friendly button sizing
 - Optimized for mobile performance
 - Works offline with cached chat history
+
+## Breadcrumb Component
+
+A modern breadcrumb navigation component built with ViewComponent for Rails 8.1.
+
+### Usage
+
+```erb
+<%# Block syntax with icons %>
+<%= render BreadcrumbComponent.new do |breadcrumb| %>
+  <%= breadcrumb.with_item(text: "Home", href: root_path, icon: "home") %>
+  <%= breadcrumb.with_item(text: "Accounts", href: accounts_path, icon: "wallet") %>
+  <%= breadcrumb.with_item(text: "Details", current: true, icon: "file-text") %>
+<% end %>
+
+<%# Array syntax (programmatic) %>
+<% items = [
+  { text: "Home", href: root_path, icon: "home" },
+  { text: "Accounts", href: accounts_path, icon: "wallet" },
+  { text: "Details", current: true, icon: "file-text" }
+] %>
+<%= render BreadcrumbComponent.new(items: items) %>
+
+<%# From controller using helper %>
+class AccountsController < ApplicationController
+  before_action :set_breadcrumbs
+
+  private
+  def set_breadcrumbs
+    helper.set_breadcrumbs([
+      { text: "Home", href: root_path, icon: "home" },
+      { text: "Accounts", href: accounts_path, icon: "wallet" },
+      { text: @account.name, icon: "landmark" }
+    ])
+  end
+end
+```
+
+### Features
+- **Icon Support**: Add Lucide icons to any breadcrumb item
+- **Semantic HTML**: Proper `<nav>` element with ARIA attributes
+- **Accessible**: Screen reader friendly with proper roles and labels
+- **Design System Integration**: Uses Permoney design tokens and colors
+- **Backward Compatible**: Works with existing array format `[["Name", "/path"], ...]`
+- **Dark Mode**: Fully supports theme switching
+- **ViewComponent Architecture**: Modern Rails 8.1 component pattern
+
+### Component Structure
+- `BreadcrumbComponent` - Main breadcrumb container
+- `BreadcrumbItemComponent` - Individual breadcrumb items
+- Auto-renders separators between items
+- Smart current page detection
+
+### Item Properties
+- `text` (String, required): Display text for the breadcrumb item
+- `href` (String, optional): URL for link items
+- `icon` (String, optional): Lucide icon name (e.g., "home", "folder", "file-text")
+- `current` (Boolean, optional): Whether this is the current page (default: false)
+
+### Configuration
+- `aria_label` (String): Accessible label for navigation (default: "Breadcrumb")
+- `separator_icon` (String): Icon name for separator (default: "chevron-right")
+
+### Backward Compatibility
+Existing breadcrumb format still works:
+```ruby
+@breadcrumbs = [
+  ["Home", root_path],
+  ["Accounts", accounts_path],
+  ["Show", nil]
+]
+```
+The partial automatically converts to new format.
+
+### Recommended Icons
+- `home` - Home page
+- `layout-dashboard` - Dashboard
+- `folder` - Category/folder
+- `file-text` - Document/details
+- `wallet` - Financial accounts
+- `landmark` - Bank/institution
+- `receipt` - Transactions
+- `settings` - Settings
+- `user` - Profile
+
+### Styling
+Uses design system tokens:
+- Links: `text-gray-500` with `hover:text-primary`
+- Current page: `text-primary`
+- Icons: Auto-sized with proper spacing
+- Separators: Subtle gray with dark mode support
