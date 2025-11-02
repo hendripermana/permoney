@@ -1,0 +1,96 @@
+<div
+  class="<%= card_classes %>"
+  role="article"
+  aria-label="<%= aria_label %>"
+  data-controller="kpi-card"
+  <% if privacy_toggle_enabled? %>
+    data-kpi-card-storage-key-value="<%= privacy_storage_key %>"
+  <% end %>>
+
+  <div class="relative overflow-hidden flex flex-col justify-end py-6 px-0 pb-0">
+    <%# Icon Section with Privacy Toggle %>
+    <div class="px-6 mb-3.5 flex items-center justify-between">
+      <% if icon.present? %>
+        <%= helpers.icon(icon, size: "lg", class: "text-white/60") %>
+      <% end %>
+
+      <% if privacy_toggle_enabled? %>
+        <button
+          type="button"
+          data-action="click->kpi-card#togglePrivacy"
+          data-kpi-card-target="toggleButton"
+          class="text-white/60 hover:text-white transition-colors p-1 rounded-md hover:bg-white/10"
+          aria-label="Toggle value visibility">
+          <%= helpers.icon("eye", size: "md", class: "hidden", data: { kpi_card_target: "showIcon" }) %>
+          <%= helpers.icon("eye-off", size: "md", class: "hidden", data: { kpi_card_target: "hideIcon" }) %>
+        </button>
+      <% end %>
+    </div>
+
+    <%# Main Content %>
+    <div class="flex-1 flex flex-col justify-center items-start px-6 mb-6">
+      <%# Value with Previous Value Context %>
+      <div class="flex items-baseline gap-2 mb-4" data-kpi-card-target="value">
+        <span class="text-white text-3xl lg:text-4xl font-bold transition-all">
+          <%= value %>
+        </span>
+        <% if show_previous_value? %>
+          <span class="text-white/60 text-sm font-medium">
+            from <%= previous_value %>
+          </span>
+        <% end %>
+      </div>
+
+      <% if privacy_toggle_enabled? %>
+        <%# Hidden value placeholder %>
+        <div class="hidden flex items-baseline gap-2 mb-4" data-kpi-card-target="hiddenValue">
+          <span class="text-white text-3xl lg:text-4xl font-bold tracking-wider transition-all">
+            ••••••
+          </span>
+        </div>
+      <% end %>
+
+      <%# Title %>
+      <div class="text-white text-base lg:text-lg font-semibold mb-1">
+        <%= title %>
+      </div>
+
+      <%# Description %>
+      <% if description.present? %>
+        <div class="text-white/80 text-xs lg:text-sm mb-2">
+          <%= description %>
+        </div>
+      <% end %>
+
+      <%# Change Indicator - Badge Style (2025 Modern) %>
+      <% if show_change? %>
+        <div class="flex items-center gap-2 mt-2">
+          <div class="<%= change_badge_classes %>">
+            <%= helpers.icon(
+              trend_indicator[:icon],
+              size: "sm",
+              class: "w-3.5 h-3.5"
+            ) %>
+            <span class="font-semibold">
+              <%= formatted_change %>
+            </span>
+          </div>
+          <span class="text-white/70 text-xs">
+            <%= period %>
+          </span>
+        </div>
+      <% end %>
+    </div>
+
+    <%# CTA Bottom Bar %>
+    <%= link_to cta_path,
+      class: "group/card w-full bg-black/20 hover:bg-black/30 backdrop-blur-sm px-6 py-4 flex items-center justify-between transition-colors duration-300",
+      data: { turbo_frame: "_top" } do %>
+      <span class="text-white text-sm font-medium"><%= cta_text %></span>
+      <%= helpers.icon("arrow-right",
+        size: "sm",
+        class: "text-white group-hover/card:translate-x-1 transition-transform duration-300"
+      ) %>
+    <% end %>
+  </div>
+</div>

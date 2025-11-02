@@ -29,6 +29,13 @@
 
 <div class="w-full space-y-6 pb-24">
   <% if Current.family.accounts.any? %>
+    <%# KPI Cards Section - Overview Metrics %>
+    <%= render "pages/dashboard/kpi_cards", 
+      kpi_net_worth: @kpi_net_worth,
+      kpi_monthly_income: @kpi_monthly_income,
+      kpi_monthly_expenses: @kpi_monthly_expenses,
+      kpi_savings_rate: @kpi_savings_rate %>
+
     <%= turbo_frame_tag "cashflow_sankey_section" do %>
       <section class="bg-container py-4 rounded-xl shadow-border-xs mb-6">
         <%= render partial: "pages/dashboard/cashflow_sankey", locals: {

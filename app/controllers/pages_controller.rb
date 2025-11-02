@@ -7,6 +7,12 @@ class PagesController < ApplicationController
     @balance_sheet = Current.family.balance_sheet
     @accounts = Current.family.accounts.visible.with_attached_logo
 
+    # Calculate KPI Metrics with real data
+    @kpi_net_worth = Current.family.kpi_net_worth
+    @kpi_monthly_income = Current.family.kpi_monthly_income
+    @kpi_monthly_expenses = Current.family.kpi_monthly_expenses
+    @kpi_savings_rate = Current.family.kpi_savings_rate
+
     # Handle cashflow period
     cashflow_period_param = params[:cashflow_period]
     @cashflow_period = if cashflow_period_param.present?
@@ -42,7 +48,10 @@ class PagesController < ApplicationController
     outflows_expense_totals = Current.family.income_statement.expense_totals(period: @outflows_period)
     @outflows_data = build_outflows_donut_data(outflows_expense_totals)
 
-    @breadcrumbs = [ [ "Home", root_path ], [ "Dashboard", nil ] ]
+    @breadcrumbs = [
+      { text: "Home", href: root_path, icon: "home" },
+      { text: "Dashboard", icon: "layout-dashboard" }
+    ]
   end
 
   def changelog

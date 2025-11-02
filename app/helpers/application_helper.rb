@@ -74,7 +74,14 @@ module ApplicationHelper
   def format_money(number_or_money, options = {})
     return nil unless number_or_money
 
-    Money.new(number_or_money).format(options)
+    # Handle Money objects directly to preserve currency
+    # Money objects already have correct currency from family/account
+    if number_or_money.is_a?(Money)
+      number_or_money.format(options)
+    else
+      # For numbers, create Money object (will use default currency)
+      Money.new(number_or_money).format(options)
+    end
   end
 
   def totals_by_currency(collection:, money_method:, separator: " | ", negate: false)
