@@ -34,8 +34,10 @@ class BreadcrumbItemComponent < ApplicationComponent
   end
 
   # Text classes based on item state
+  # Includes flex layout for horizontal icon + text alignment (Tailwind v4 best practice)
   def text_classes
-    base_classes = "text-sm font-medium"
+    # Base: flex container with vertical centering and gap between icon and text
+    base_classes = "flex items-center gap-1.5 text-sm font-medium"
 
     if current
       # Current page - use primary color

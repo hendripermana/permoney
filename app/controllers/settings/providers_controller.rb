@@ -7,8 +7,8 @@ class Settings::ProvidersController < ApplicationController
 
   def show
     @breadcrumbs = [
-      [ "Home", root_path ],
-      [ "Bank Sync Providers", nil ]
+      { text: "Home", href: root_path, icon: "home" },
+      { text: "Bank Sync Providers", icon: "plug" }
     ]
 
     # Load all provider configurations

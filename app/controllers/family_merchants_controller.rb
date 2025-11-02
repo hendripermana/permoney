@@ -2,7 +2,10 @@ class FamilyMerchantsController < ApplicationController
   before_action :set_merchant, only: %i[edit update destroy]
 
   def index
-    @breadcrumbs = [ [ "Home", root_path ], [ "Merchants", nil ] ]
+    @breadcrumbs = [
+      { text: "Home", href: root_path, icon: "home" },
+      { text: "Merchants", icon: "store" }
+    ]
 
     # Show all merchants assigned to transactions (both FamilyMerchant and ProviderMerchant)
     @family_merchants = Current.family.assigned_merchants.alphabetically

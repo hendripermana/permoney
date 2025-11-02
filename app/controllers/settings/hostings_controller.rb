@@ -7,8 +7,8 @@ class Settings::HostingsController < ApplicationController
 
   def show
     @breadcrumbs = [
-      [ "Home", root_path ],
-      [ "Self-Hosting", nil ]
+      { text: "Home", href: root_path, icon: "home" },
+      { text: "Self-Hosting", icon: "server" }
     ]
     twelve_data_provider = Provider::Registry.get_provider(:twelve_data)
     @twelve_data_usage = twelve_data_provider&.usage

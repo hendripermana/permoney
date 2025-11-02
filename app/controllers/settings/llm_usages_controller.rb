@@ -3,8 +3,8 @@ class Settings::LlmUsagesController < ApplicationController
 
   def show
     @breadcrumbs = [
-      [ "Home", root_path ],
-      [ "LLM Usage", nil ]
+      { text: "Home", href: root_path, icon: "home" },
+      { text: "LLM Usage", icon: "bar-chart" }
     ]
     @family = Current.family
 
