@@ -18,7 +18,7 @@
 
 # Note: In Rails 8.1, we cannot fully suppress deprecations, but we can document them
 # The warning will still appear during boot, but this documents why and what to do
-# 
+#
 # Current status: Tracking gem updates
 # - rails-settings-cached: Check for Rails 8.1 compatibility
 # - langfuse-ruby: Check for Rails 8.1 compatibility

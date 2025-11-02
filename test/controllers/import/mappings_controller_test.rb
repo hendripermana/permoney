@@ -32,10 +32,10 @@ class Import::MappingsControllerTest < ActionDispatch::IntegrationTest
     import = imports(:account)
     import.rows.create!(entity_type: "Checking", name: "Test", amount: "1000", currency: "USD")
     import.sync_mappings
-    
+
     mapping = import.mappings.account_types.first
     assert_not_nil mapping, "Account type mapping should exist after sync_mappings"
-    
+
     patch import_mapping_path(import, mapping), params: {
       import_mapping: {
         type: "Import::AccountTypeMapping",

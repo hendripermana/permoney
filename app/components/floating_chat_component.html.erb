@@ -1,8 +1,8 @@
-<div 
+<div
   data-controller="floating-chat"
   data-floating-chat-open-value="false"
   class="fixed bottom-4 right-4 z-50 lg:bottom-6 lg:right-6">
-  
+
   <%# Chat Trigger Button %>
   <button
     data-action="click->floating-chat#toggle"
@@ -11,7 +11,7 @@
     aria-label="Open AI Chat"
     class="flex items-center justify-center w-14 h-14 rounded-full bg-surface text-primary shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 focus:outline-none focus:ring-4 focus:ring-alpha-black-200 theme-dark:focus:ring-alpha-white-300">
     <%= helpers.icon("message-circle", size: "lg") %>
-    
+
     <%# Notification Badge (if needed) %>
     <span class="absolute -top-1 -right-1 w-5 h-5 bg-destructive text-white text-xs font-bold rounded-full hidden items-center justify-center" data-floating-chat-target="badge">
       1
@@ -31,7 +31,7 @@
     role="dialog"
     aria-modal="true"
     aria-labelledby="floating-chat-title">
-    
+
     <%# Chat Header %>
     <div class="flex items-center justify-between p-4 border-b border-primary bg-surface">
       <div class="flex items-center gap-3">
@@ -43,7 +43,7 @@
           <p class="text-xs text-secondary">Ask me anything about your finances</p>
         </div>
       </div>
-      
+
       <button
         data-action="click->floating-chat#close"
         type="button"
@@ -56,7 +56,7 @@
     <%# Chat Content - Turbo Frame %>
     <div class="flex-1 overflow-hidden">
       <% if @user.ai_enabled? %>
-        <%= turbo_frame_tag "floating_chat_content", 
+        <%= turbo_frame_tag "floating_chat_content",
           src: new_chat? ? new_chat_path(floating: true) : chat_path(chat, floating: true),
           loading: "lazy",
           class: "h-full flex flex-col" do %>

@@ -851,16 +851,16 @@ ActiveRecord::Schema[8.1].define(version: 2025_10_31_132654) do
   end
 
   create_table "recurring_transactions", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
-    t.uuid "family_id", null: false
-    t.uuid "merchant_id", null: false
     t.decimal "amount", precision: 19, scale: 4, null: false
+    t.datetime "created_at", null: false
     t.string "currency", null: false
     t.integer "expected_day_of_month", null: false
+    t.uuid "family_id", null: false
     t.date "last_occurrence_date", null: false
+    t.uuid "merchant_id", null: false
     t.date "next_expected_date", null: false
-    t.string "status", default: "active", null: false
     t.integer "occurrence_count", default: 0, null: false
-    t.datetime "created_at", null: false
+    t.string "status", default: "active", null: false
     t.datetime "updated_at", null: false
     t.index ["family_id", "merchant_id", "amount", "currency"], name: "idx_recurring_txns_on_family_merchant_amount_currency", unique: true
     t.index ["family_id", "status"], name: "index_recurring_transactions_on_family_id_and_status"
