@@ -118,9 +118,9 @@ jobs:
             org.opencontainers.image.version=${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
             org.opencontainers.image.created=${{ steps.date.outputs.date }}
             org.opencontainers.image.ref.name=${{ github.ref_name }}
-            org.opencontainers.image.vendor=we-promise
-            org.opencontainers.image.title=Sure
-            org.opencontainers.image.description=A multi-arch Docker image for the Sure Rails app
+            org.opencontainers.image.vendor=hendripermana
+            org.opencontainers.image.title=Permoney
+            org.opencontainers.image.description=A multi-arch Docker image for the Permoney personal finance app
 
       - name: Publish 'linux/${{ matrix.platform }}' image by digest
         uses: docker/build-push-action@v6.16.0
@@ -207,10 +207,10 @@ jobs:
             'index:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}'
             'index:org.opencontainers.image.revision=${{ github.sha }}'
             'index:org.opencontainers.image.ref.name=${{ github.ref_name }}'
-            'index:org.opencontainers.image.vendor=we-promise'
+            'index:org.opencontainers.image.vendor=hendripermana'
             'index:org.opencontainers.image.licenses=AGPL-3.0'
-            'index:org.opencontainers.image.title=Sure'
-            'index:org.opencontainers.image.description=A multi-arch Docker image for the Sure Rails app'
+            'index:org.opencontainers.image.title=Permoney'
+            'index:org.opencontainers.image.description=A multi-arch Docker image for the Permoney personal finance app'
           )
           annotation_args=()
           for annotation in "${annotations[@]}"; do
