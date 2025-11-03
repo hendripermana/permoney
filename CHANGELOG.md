@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.0](https://github.com/hendripermana/permoney/compare/v0.7.0...v0.8.0) (2025-11-03)
+
+
+### Features
+
+* Add modern Breadcrumb component with icon support ([c001bbe](https://github.com/hendripermana/permoney/commit/c001bbeec2b4f1e3f831a533e2bc15c0fefee1d0))
+* Add modern KPI cards to dashboard with real-time metrics ([937ea76](https://github.com/hendripermana/permoney/commit/937ea767663555df7030203378ec4b8ac2a4421f))
+* Enhance breadcrumb navigation with icon support ([b049316](https://github.com/hendripermana/permoney/commit/b0493169756663eb40002e25dc2175387ae302c3))
+* Sync upstream sure updates and configure CI/CD ([bd67e61](https://github.com/hendripermana/permoney/commit/bd67e613e4e8a08cc078530c9703e6e804530ed0))
+
+
+### Bug Fixes
+
+* Improve import system security and personal loan handling ([559d0f6](https://github.com/hendripermana/permoney/commit/559d0f602c0e37d9c4032c5c9792d02eb6d652a9))
+
 ## [0.7.0](https://github.com/hendripermana/permoney/compare/v0.6.0...v0.7.0) (2025-10-31)
 
 
