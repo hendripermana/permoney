@@ -130,7 +130,7 @@
     {
       "warning_type": "Mass Assignment",
       "warning_code": 105,
-      "fingerprint": "PLACEHOLDER_UPDATE_FROM_BRAKEMAN_OUTPUT_1",
+      "fingerprint": "b75216e42fd8727de22d64668738941846bc012a69c58f9a2502bc6ce89b1b4f",
       "check_name": "PermitAttributes",
       "message": "Potentially dangerous key allowed for mass assignment",
       "file": "app/controllers/api/v1/debt/pay_later_controller.rb",
@@ -153,7 +153,7 @@
     {
       "warning_type": "Mass Assignment",
       "warning_code": 105,
-      "fingerprint": "PLACEHOLDER_UPDATE_FROM_BRAKEMAN_OUTPUT_2",
+      "fingerprint": "d57ea95b1bd7db88c6d9ec0b668bc492e8c06f45ef10d6d261a0951b6aa73d6f",
       "check_name": "PermitAttributes",
       "message": "Potentially dangerous key allowed for mass assignment",
       "file": "app/controllers/api/v1/debt/pay_later_controller.rb",
