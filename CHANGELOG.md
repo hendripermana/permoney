@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.2](https://github.com/hendripermana/permoney/compare/v0.8.1...v0.8.2) (2025-11-03)
+
+
+### Bug Fixes
+
+* Correct database names from 'sure' to 'permoney' ([1793119](https://github.com/hendripermana/permoney/commit/1793119edad4a07bbd3f1c9036c724699c291fca))
+* database setup and migrations ([baadad5](https://github.com/hendripermana/permoney/commit/baadad5fca7dc7745210c4b87c7d689d1d6873fc))
+* mass assignment security warnings in PayLaterController ([3a70bcc](https://github.com/hendripermana/permoney/commit/3a70bcc0f494ef62564a008fc92d1ef82818920d))
+* Replace deprecated Windows platforms with :windows ([0e5f747](https://github.com/hendripermana/permoney/commit/0e5f747dd7902314b78b8c4434ba4e5ea7ed5fd4))
+* Replace deprecated Windows platforms with :windows ([f04f62f](https://github.com/hendripermana/permoney/commit/f04f62fa360bce3c40aa0e3989a509f81c2255f9))
+* Update database schema after running migrations ([23feb9c](https://github.com/hendripermana/permoney/commit/23feb9cedd593fabce2016f50b5f93b42c3b3a52))
+
 ## [0.8.1](https://github.com/hendripermana/permoney/compare/v0.8.0...v0.8.1) (2025-11-03)
 
 
