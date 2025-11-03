@@ -119,11 +119,11 @@
     {
       "warning_type": "Mass Assignment",
       "warning_code": 105,
-      "fingerprint": "b75216e42fd8727de22d64668738941846bc012a69c58f9a2502bc6ce89b1b4f",
+      "fingerprint": "025036157d17223d972486df7a87fee8fb9daaae34c39d3b724c10801110f4a2",
       "check_name": "PermitAttributes",
       "message": "Potentially dangerous key allowed for mass assignment",
       "file": "app/controllers/api/v1/debt/pay_later_controller.rb",
-      "line": 98,
+      "line": 104,
       "link": "https://brakemanscanner.org/docs/warning_types/mass_assignment/",
       "code": "params.permit(:account_id, :name, :amount, :currency, :date, :category_id, :merchant_id, :tenor_months, :manual_monthly_rate, :expense_exchange_rate_to_idr)",
       "render_path": null,
@@ -135,16 +135,16 @@
       "user_input": ":expense_exchange_rate_to_idr",
       "confidence": "High",
       "cwe_id": [ 915 ],
-      "note": "expense_exchange_rate_to_idr is safe: 1) account_id is validated via validate_account_ownership before_action (line 63-83) which ensures account belongs to user's family, 2) Service layer validates account belongs to family (family.accounts.find), 3) This parameter is only used for currency conversion calculations in RecordExpense service, not direct model assignment"
+      "note": "expense_exchange_rate_to_idr is safe: 1) account_id is validated via validate_account_ownership before_action which ensures account belongs to user's family, 2) Service layer always validates ownership via family.accounts.find (defense-in-depth), 3) This parameter is only used for currency conversion calculations in RecordExpense service, not direct model assignment"
     },
     {
       "warning_type": "Mass Assignment",
       "warning_code": 105,
-      "fingerprint": "d57ea95b1bd7db88c6d9ec0b668bc492e8c06f45ef10d6d261a0951b6aa73d6f",
+      "fingerprint": "70cb02914286fa2d01e541676c0085941e2e193bf5b9052796ad104dcc299626",
       "check_name": "PermitAttributes",
       "message": "Potentially dangerous key allowed for mass assignment",
       "file": "app/controllers/api/v1/debt/pay_later_controller.rb",
-      "line": 107,
+      "line": 113,
       "link": "https://brakemanscanner.org/docs/warning_types/mass_assignment/",
       "code": "params.permit(:account_id, :installment_no, :payment_date, :source_account_id, :early_payoff)",
       "render_path": null,
@@ -156,7 +156,7 @@
       "user_input": ":early_payoff",
       "confidence": "High",
       "cwe_id": [ 915 ],
-      "note": "early_payoff is safe: 1) account_id is validated via validate_account_ownership before_action (line 63-83) which ensures account belongs to user's family, 2) Service layer validates account belongs to family (family.accounts.find), 3) This is a boolean flag used for business logic in PayInstallment service, not direct model assignment"
+      "note": "early_payoff is safe: 1) account_id is validated via validate_account_ownership before_action which ensures account belongs to user's family, 2) Service layer always validates ownership via family.accounts.find (defense-in-depth), 3) This is a boolean flag used for business logic in PayInstallment service, not direct model assignment"
     }
   ],
   "brakeman_version": "7.1.0"
