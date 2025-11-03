@@ -2,13 +2,14 @@ module PayLaterServices
   class PayInstallment
     Result = Struct.new(:success?, :transfer, :installment, :error, keyword_init: true)
 
-    def initialize(family:, params:)
+    def initialize(family:, params:, account: nil)
       @family = family
       @params = params.deep_symbolize_keys
+      @account = account
     end
 
     def call
-      account = family.accounts.find(params.fetch(:account_id))
+      account = @account || family.accounts.find(params.fetch(:account_id))
       raise ArgumentError, "Account is not PayLater" unless account.accountable_type == "PayLater"
 
       early_payoff = ActiveModel::Type::Boolean.new.cast(params[:early_payoff])

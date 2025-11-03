@@ -24,7 +24,8 @@ class Api::V1::Debt::PayLaterController < Api::V1::BaseController
   def expense
     service = ::PayLaterServices::RecordExpense.new(
       family: current_resource_owner.family,
-      params: expense_params.to_h
+      params: expense_params.to_h,
+      account: @validated_account
     )
 
     result = service.call
@@ -41,7 +42,8 @@ class Api::V1::Debt::PayLaterController < Api::V1::BaseController
   def pay_installment
     service = ::PayLaterServices::PayInstallment.new(
       family: current_resource_owner.family,
-      params: pay_params.to_h
+      params: pay_params.to_h,
+      account: @validated_account
     )
 
     result = service.call
@@ -62,7 +64,11 @@ class Api::V1::Debt::PayLaterController < Api::V1::BaseController
     # This prevents account_id hijacking attacks
     def validate_account_ownership
       account_id = params[:account_id]
-      return if account_id.blank?
+
+      unless account_id.present?
+        render json: { error: "validation_failed", message: "account_id is required" }, status: :unprocessable_entity
+        return
+      end
 
       family = current_resource_owner.family
       account = family.accounts.find_by(id: account_id)

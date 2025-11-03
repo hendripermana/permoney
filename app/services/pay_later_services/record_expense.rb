@@ -2,13 +2,14 @@ module PayLaterServices
   class RecordExpense
     Result = Struct.new(:success?, :entry, :installments, :error, keyword_init: true)
 
-    def initialize(family:, params:)
+    def initialize(family:, params:, account: nil)
       @family = family
       @params = params.deep_symbolize_keys
+      @account = account
     end
 
     def call
-      account = family.accounts.find(params.fetch(:account_id))
+      account = @account || family.accounts.find(params.fetch(:account_id))
       raise ArgumentError, "Account is not PayLater" unless account.accountable_type == "PayLater"
 
       name = params[:name].presence || "PayLater Purchase"
