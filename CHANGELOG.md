@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/hendripermana/permoney/compare/v0.8.1...v0.8.2) (2025-11-03)
+
+
+### Bug Fixes
+
+* mass assignment security warnings in PayLaterController ([3a70bcc](https://github.com/hendripermana/permoney/commit/3a70bcc0f494ef62564a008fc92d1ef82818920d))
+
 ## [0.8.1](https://github.com/hendripermana/permoney/compare/v0.8.0...v0.8.1) (2025-11-03)
 
 
