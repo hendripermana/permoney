@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/hendripermana/permoney/compare/v0.8.0...v0.8.1) (2025-11-03)
+
+
+### Bug Fixes
+
+* Remove empty matrix strategy from reusable workflows ([a2a862e](https://github.com/hendripermana/permoney/commit/a2a862e6c93ec8871e55a3d7a0f3b90d3ca3d30a))
+
 ## [0.8.0](https://github.com/hendripermana/permoney/compare/v0.7.0...v0.8.0) (2025-11-03)
 
 
