@@ -35,7 +35,7 @@
 
     <%# Lunchflow Link %>
     <% if show_lunchflow_link %>
-      <%= link_to select_accounts_lunchflow_items_path(accountable_type: accountable_type, return_to: params[:return_to]),
+      <%= link_to select_accounts_lunchflow_items_path(accountable_type: accountable_type, return_to: (params[:return_to] if params[:return_to].to_s.start_with?("/") && !params[:return_to].to_s.start_with?("//"))),
                   class: "text-primary flex items-center gap-4 w-full text-center focus:outline-hidden focus:bg-surface border border-transparent focus:border focus:border-primary px-2 hover:bg-surface rounded-lg p-2",
                   data: {
                     turbo_frame: "modal",

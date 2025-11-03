@@ -38,7 +38,7 @@ class DS::SplitButton < DesignSystemComponent
     primary_frame: :modal,
     menu_placement: "bottom-end",
     menu_offset: 12,
-    class: nil,
+    html_class: nil,
     **primary_opts
   )
     @primary_text = primary_text
@@ -49,7 +49,7 @@ class DS::SplitButton < DesignSystemComponent
     @primary_opts = primary_opts
     @menu_placement = menu_placement
     @menu_offset = menu_offset
-    @class_name = binding.local_variable_get(:class)
+    @class_name = html_class
 
     validate_menu_items_requirement
   end

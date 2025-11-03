@@ -34,7 +34,11 @@ x-db-env: &db_env
 
 x-rails-env: &rails_env
   <<: *db_env
-  SECRET_KEY_BASE: ${SECRET_KEY_BASE:-a7523c3d0ae56415046ad8abae168d71074a79534a7062258f8d1d51ac2f76d3c3bc86d86b6b0b307df30d9a6a90a2066a3fa9e67c5e6f374dbd7dd4e0778e13}
+  # SECURITY: You MUST generate a unique secret key for your deployment.
+  # Run `openssl rand -hex 64` to generate one, then set it in your .env file:
+  # SECRET_KEY_BASE=your_generated_key_here
+  # If SECRET_KEY_BASE is not set, the application will fail to start.
+  SECRET_KEY_BASE: ${SECRET_KEY_BASE:?SECRET_KEY_BASE is not set. Please generate one and add it to your .env file.}
   SELF_HOSTED: "true"
   RAILS_FORCE_SSL: "false"
   RAILS_ASSUME_SSL: "false"

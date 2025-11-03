@@ -19,7 +19,7 @@ class Family::AutoMerchantDetector
     result = llm_provider.auto_detect_merchants(
       transactions: transactions_input,
       user_merchants: user_merchants_input,
-      family: family
+      family: { id: family.id }
     )
 
     unless result.success?

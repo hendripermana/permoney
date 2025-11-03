@@ -342,8 +342,9 @@ class LunchflowItemsController < ApplicationController
         # Only allow relative paths
         return nil if uri.scheme.present?
 
-        # Ensure the path starts with / (is a relative path)
+        # Ensure the path starts with / but not // (to prevent protocol-relative URLs)
         return nil unless return_to.start_with?("/")
+        return nil if return_to.start_with?("//")
 
         return_to
       rescue URI::InvalidURIError

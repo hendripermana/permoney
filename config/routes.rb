@@ -153,12 +153,13 @@ Rails.application.routes.draw do
 
   resources :recurring_transactions, only: %i[index destroy] do
     collection do
-      match :identify, via: [ :get, :post ]
-      match :cleanup, via: [ :get, :post ]
+      get :identify
+      post :identify
+      post :cleanup
     end
 
     member do
-      match :toggle_status, via: [ :get, :post ]
+      post :toggle_status
     end
   end
 

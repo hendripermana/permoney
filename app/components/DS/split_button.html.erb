@@ -30,7 +30,7 @@
           icon: item.icon,
           href: item.href,
           frame: item.frame,
-          **item.instance_variable_get(:@opts)
+          **(item.opts || {})
         ) %>
       <% end %>
     <% end %>
