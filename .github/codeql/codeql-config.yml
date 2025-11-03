@@ -8,4 +8,8 @@ paths-ignore:
   - "**/vendor"
   - "**/tmp"
   - "**/log"
-
+  - "**/db/migrate"
+  - "**/test/fixtures"
+packs:
+  - codeql/ruby-queries:security-and-quality
+  - codeql/javascript-queries:security-and-quality

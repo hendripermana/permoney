@@ -1,78 +1,120 @@
-# Docker Compose configuration for Permoney
-# 
-# This file allows you to run Permoney on your local machine or on a cloud VPS.
-# 
-# Quick start:
-# 1. Download this file: curl -o compose.yml https://raw.githubusercontent.com/hendripermana/permoney/main/compose.example.yml
-# 2. Create .env file: cp .env.example .env
-# 3. Start the app: docker-compose up -d
-# 
-# For detailed instructions, see:
+# ===========================================================================
+# Example Docker Compose file
+# ===========================================================================
+#
+# Purpose:
+# --------
+#
+# This file is an example Docker Compose configuration for self hosting
+# Permoney on your local machine or on a cloud VPS.
+#
+# The configuration below is a "standard" setup that works out of the box,
+# but if you're running this outside of a local network, it is recommended
+# to set the environment variables for extra security.
+#
+# Setup:
+# ------
+#
+# To run this, you should read the setup guide:
+#
 # https://github.com/hendripermana/permoney/blob/main/docs/hosting/docker.md
-# 
-# For support and questions:
-# https://github.com/hendripermana/permoney/discussions/categories/general
+#
+# Troubleshooting:
+# ----------------
+#
+# If you run into problems, please open an issue on GitHub:
+#
+# https://github.com/hendripermana/permoney/issues
+#
 
-version: "3.8"
+x-db-env: &db_env
+  POSTGRES_USER: ${POSTGRES_USER:-permoney_user}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-permoney_password}
+  POSTGRES_DB: ${POSTGRES_DB:-permoney_production}
+
+x-rails-env: &rails_env
+  <<: *db_env
+  # SECURITY: You MUST generate a unique secret key for your deployment.
+  # Run `openssl rand -hex 64` to generate one, then set it in your .env file:
+  # SECRET_KEY_BASE=your_generated_key_here
+  # If SECRET_KEY_BASE is not set, the application will fail to start.
+  SECRET_KEY_BASE: ${SECRET_KEY_BASE:?SECRET_KEY_BASE is not set. Please generate one and add it to your .env file.}
+  SELF_HOSTED: "true"
+  RAILS_FORCE_SSL: "false"
+  RAILS_ASSUME_SSL: "false"
+  DB_HOST: db
+  DB_PORT: 5432
+  REDIS_URL: redis://redis:6379/1
+# NOTE: enabling OpenAI will incur costs when you use AI-related features in the app (chat, rules).  Make sure you have set appropriate spend limits on your account before adding this.
+  OPENAI_ACCESS_TOKEN: ${OPENAI_ACCESS_TOKEN}
 
 services:
-  # Main web application
   web:
-    # NOTE: enabling OpenAI will incur costs when you use AI-related features in the app (chat, rules).  Make sure you have set appropriate spend limits on your account before adding this.
     image: ghcr.io/hendripermana/permoney:latest
+    volumes:
+      - app-storage:/rails/storage
     ports:
-      - "3000:3000"
-    depends_on:
-      - db
-      - redis
+      - 3000:3000
+    restart: unless-stopped
     environment:
-      - OPENAI_ACCESS_TOKEN=${OPENAI_ACCESS_TOKEN:-}
-      - TWELVE_DATA_API_KEY=${TWELVE_DATA_API_KEY:-}
-      - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY:-}
-      - BRAND_FETCH_CLIENT_ID=${BRAND_FETCH_CLIENT_ID:-}
-      - DATABASE_URL=postgresql://postgres:postgres@db:5432/permoney_production
-      - REDIS_URL=redis://redis:6379/1
-      - RAILS_ENV=production
-      - RAILS_SERVE_STATIC_FILES=true
-      - RAILS_LOG_TO_STDOUT=true
+      <<: *rails_env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - permoney_net
 
-  # Background job processor
   worker:
     image: ghcr.io/hendripermana/permoney:latest
     command: bundle exec sidekiq
-    depends_on:
-      - db
-      - redis
-    environment:
-      - DATABASE_URL=postgresql://postgres:postgres@db:5432/permoney_production
-      - REDIS_URL=redis://redis:6379/1
-      - RAILS_ENV=production
-      - RAILS_LOG_TO_STDOUT=true
-    networks:
-      - permoney_net
-
-  # PostgreSQL database
-  db:
-    image: postgres:17
-    environment:
-      - POSTGRES_DB=permoney_production
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - app-storage:/rails/storage
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *rails_env
     networks:
       - permoney_net
 
-  # Redis for caching and background jobs
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    environment:
+      <<: *db_env
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - permoney_net
+
   redis:
     image: redis:latest
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     networks:
       - permoney_net
 
 volumes:
-  postgres_data:
+  app-storage:
+  postgres-data:
+  redis-data:
 
 networks:
   permoney_net:
+    driver: bridge

@@ -1,14 +1,13 @@
 module ApplicationHelper
   include Pagy::Frontend
 
-  def brand_name
-    "Permoney"
+  # Upstream: Dynamic branding from Rails config (better approach)
+  def product_name
+    Rails.configuration.x.product_name
   end
 
-  def full_title
-    base = brand_name
-    page = content_for?(:title) ? content_for(:title) : nil
-    page ? "#{page} · #{base}" : base
+  def brand_name
+    Rails.configuration.x.brand_name
   end
 
   def styled_form_with(**options, &block)
@@ -75,7 +74,14 @@ module ApplicationHelper
   def format_money(number_or_money, options = {})
     return nil unless number_or_money
 
-    Money.new(number_or_money).format(options)
+    # Handle Money objects directly to preserve currency
+    # Money objects already have correct currency from family/account
+    if number_or_money.is_a?(Money)
+      number_or_money.format(options)
+    else
+      # For numbers, create Money object (will use default currency)
+      Money.new(number_or_money).format(options)
+    end
   end
 
   def totals_by_currency(collection:, money_method:, separator: " | ", negate: false)
@@ -93,9 +99,9 @@ module ApplicationHelper
     cookies[:admin] == "true"
   end
 
+  # Permoney: Time-based greeting (custom feature)
   def time_based_greeting
     hour = Time.current.hour
-
     if hour >= 5 && hour < 12
       "Good morning"
     elsif hour >= 12 && hour < 18
@@ -103,6 +109,13 @@ module ApplicationHelper
     else
       "Good evening"
     end
+  end
+
+  # Upstream: Default AI model helper
+  def default_ai_model
+    # Always return a valid model, never nil or empty
+    # Delegates to Chat.default_model for consistency
+    Chat.default_model
   end
 
   # Renders Markdown text using Redcarpet and sanitizes the output
@@ -138,6 +151,22 @@ module ApplicationHelper
     allowed_attributes = %w[href title target rel class]
 
     sanitize(markdown.render(text), tags: allowed_tags, attributes: allowed_attributes)
+  end
+
+  # Helper to set breadcrumbs from controllers or views
+  # Supports both old array format and new hash format with icons
+  #
+  # Old format (backward compatible):
+  #   set_breadcrumbs([["Home", root_path], ["Accounts", accounts_path], ["Show", nil]])
+  #
+  # New format with icons:
+  #   set_breadcrumbs([
+  #     { text: "Home", href: root_path, icon: "home" },
+  #     { text: "Accounts", href: accounts_path, icon: "folder" },
+  #     { text: "Show", icon: "file-text" }
+  #   ])
+  def set_breadcrumbs(breadcrumbs)
+    @breadcrumbs = breadcrumbs
   end
 
   private

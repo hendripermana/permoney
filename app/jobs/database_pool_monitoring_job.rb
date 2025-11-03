@@ -60,4 +60,3 @@ class DatabasePoolMonitoringJob < ApplicationJob
     end
   end
 end
-

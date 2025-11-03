@@ -1,0 +1,69 @@
+<%# KPI Cards Section - Dashboard Overview Metrics %>
+<%# Based on 2025 financial dashboard best practices %>
+<%# Real-time data with live updates via Turbo %>
+
+<%= turbo_frame_tag "dashboard_kpi_cards",
+  class: "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4 lg:gap-6 mb-8",
+  data: { turbo_action: "advance" } do %>
+
+  <%# Net Worth Card %>
+  <%= render UI::KpiCard.new(
+    title: "Net Worth",
+    value: format_money(kpi_net_worth.value),
+    previous_value: format_money(kpi_net_worth.previous_value),
+    change_percent: kpi_net_worth.change_percent,
+    change_direction: kpi_net_worth.change_direction,
+    icon: "trending-up",
+    color: :blue,
+    description: "Total assets minus liabilities",
+    cta_text: "View accounts",
+    cta_path: accounts_path,
+    period: "vs last month",
+    show_privacy_toggle: true
+  ) %>
+
+  <%# Monthly Income Card %>
+  <%= render UI::KpiCard.new(
+    title: "Monthly Income",
+    value: format_money(kpi_monthly_income.value),
+    previous_value: format_money(kpi_monthly_income.previous_value),
+    change_percent: kpi_monthly_income.change_percent,
+    change_direction: kpi_monthly_income.change_direction,
+    icon: "arrow-down-to-line",
+    color: :emerald,
+    description: "Total income this month",
+    cta_text: "View income",
+    cta_path: transactions_path(search: { income_expense: "income" }),
+    period: "vs last month"
+  ) %>
+
+  <%# Monthly Expenses Card %>
+  <%= render UI::KpiCard.new(
+    title: "Monthly Expenses",
+    value: format_money(kpi_monthly_expenses.value),
+    previous_value: format_money(kpi_monthly_expenses.previous_value),
+    change_percent: kpi_monthly_expenses.change_percent,
+    change_direction: kpi_monthly_expenses.change_direction,
+    icon: "arrow-up-from-line",
+    color: :rose,
+    description: "Total expenses this month",
+    cta_text: "View expenses",
+    cta_path: transactions_path(search: { income_expense: "expense" }),
+    period: "vs last month"
+  ) %>
+
+  <%# Savings Rate Card %>
+  <%= render UI::KpiCard.new(
+    title: "Savings Rate",
+    value: "#{kpi_savings_rate.value.round(1)}%",
+    change_percent: kpi_savings_rate.change_percent,
+    change_direction: kpi_savings_rate.change_direction,
+    icon: "percent",
+    color: :amber,
+    description: "Income saved this month",
+    cta_text: "View budget",
+    cta_path: budgets_path,
+    period: "vs last month"
+  ) %>
+
+<% end %>

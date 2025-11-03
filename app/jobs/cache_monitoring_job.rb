@@ -40,4 +40,3 @@ class CacheMonitoringJob < ApplicationJob
     end
   end
 end
-

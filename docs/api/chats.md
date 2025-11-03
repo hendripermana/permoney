@@ -1,6 +1,6 @@
-# Chat API
+# Chat API Documentation
 
-The Chat API allows external applications to interact with Permoney's AI chat functionality.
+The Chat API allows external applications to interact with Sure's AI chat functionality.
 
 ## Authentication
 

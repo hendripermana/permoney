@@ -1,5 +1,5 @@
 # Dependabot configuration for Permoney
-# This file configures automatic dependency updates
+# Automatically updates Ruby gems, npm packages, GitHub Actions, and Docker images
 
 version: 2
 updates:
@@ -12,10 +12,6 @@ updates:
       time: "09:00"
       timezone: "UTC"
     open-pull-requests-limit: 10
-    reviewers:
-      - "hendripermana"
-    assignees:
-      - "hendripermana"
     commit-message:
       prefix: "deps"
       prefix-development: "deps-dev"
@@ -32,9 +28,13 @@ updates:
           - "activejob*"
           - "actioncable*"
           - "activestorage*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
       testing:
         patterns:
           - "rspec*"
+          - "minitest*"
           - "factory_bot*"
           - "capybara*"
           - "selenium*"
@@ -45,6 +45,7 @@ updates:
           - "omniauth*"
           - "rack*"
           - "puma*"
+          - "bcrypt*"
 
   # JavaScript dependencies (package.json)
   - package-ecosystem: "npm"
@@ -55,10 +56,6 @@ updates:
       time: "09:00"
       timezone: "UTC"
     open-pull-requests-limit: 10
-    reviewers:
-      - "hendripermana"
-    assignees:
-      - "hendripermana"
     commit-message:
       prefix: "deps"
       prefix-development: "deps-dev"
@@ -70,12 +67,19 @@ updates:
           - "webpack*"
           - "esbuild*"
           - "vite*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
       ui-framework:
         patterns:
           - "tailwindcss*"
           - "@tailwindcss/*"
           - "stimulus*"
           - "turbo*"
+          - "@hotwired/*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
       testing:
         patterns:
           - "jest*"
@@ -85,17 +89,13 @@ updates:
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
-    directory: "/.github/workflows"
+    directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"
       time: "09:00"
       timezone: "UTC"
     open-pull-requests-limit: 5
-    reviewers:
-      - "hendripermana"
-    assignees:
-      - "hendripermana"
     commit-message:
       prefix: "ci"
       include: "scope"
@@ -109,10 +109,6 @@ updates:
       time: "09:00"
       timezone: "UTC"
     open-pull-requests-limit: 5
-    reviewers:
-      - "hendripermana"
-    assignees:
-      - "hendripermana"
     commit-message:
       prefix: "docker"
       include: "scope"

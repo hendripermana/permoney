@@ -7,9 +7,8 @@
              accountable_type: "Loan" %>
 <% else %>
   <%= render DS::Dialog.new do |dialog| %>
-    <% dialog.with_header(title: "Create a new loan") %>
+    <% dialog.with_header(title: "Create a new loan", subtitle: "Track loans from banks, friends, or other sources") %>
     <% dialog.with_body do %>
-      <p class="text-sm text-subtle mb-4">Track loans from banks, friends, or other sources</p>
       <%= render "loans/form", account: @account, url: loans_path %>
     <% end %>
   <% end %>

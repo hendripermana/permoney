@@ -60,9 +60,11 @@ jobs:
       - name: Dependency Review
         uses: actions/dependency-review-action@v4
         with:
-          fail-on-severity: moderate
-          allow-licenses: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, GPL-3.0, AGPL-3.0, Ruby, Artistic-2.0, CC0-1.0, Unlicense, WTFPL
+          fail-on-severity: high
+          warn-only: false
+          allow-licenses: MIT,Apache-2.0,BSD-2-Clause,BSD-3-Clause,ISC,GPL-3.0,AGPL-3.0,Ruby,Artistic-2.0,CC0-1.0,Unlicense,WTFPL
           comment-summary-in-pr: always
+          retry-on-snapshot-warnings: true
 
   # PR size check
   pr_size_check:

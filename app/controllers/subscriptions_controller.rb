@@ -30,10 +30,6 @@ class SubscriptionsController < ApplicationController
   def create
     if Current.family.can_start_trial?
       Current.family.start_trial_subscription!
-
-      # Mark user as onboarded when they start their trial
-      Current.user.mark_onboarded! if Current.user.needs_onboarding?
-
       redirect_to root_path, notice: "Welcome to Permoney!"
     else
       redirect_to root_path, alert: "You have already started or completed a trial. Please upgrade to continue."

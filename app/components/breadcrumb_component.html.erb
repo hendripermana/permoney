@@ -1,0 +1,14 @@
+<nav aria-label="<%= aria_label %>" class="<%= container_classes %>">
+  <ol class="flex items-center gap-2 flex-wrap list-none m-0 p-0" role="list">
+    <% items.each_with_index do |item, index| %>
+      <%= item %>
+
+      <%# Render separator after each item except the last one %>
+      <% if index < items.size - 1 %>
+        <li class="flex items-center" role="presentation" aria-hidden="true">
+          <%= helpers.icon(separator_icon, size: "sm", color: "default", class: "text-gray-400 theme-dark:text-gray-600") %>
+        </li>
+      <% end %>
+    <% end %>
+  </ol>
+</nav>

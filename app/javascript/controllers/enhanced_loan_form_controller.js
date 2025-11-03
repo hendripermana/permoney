@@ -29,6 +29,28 @@ export default class extends Controller {
     "interestSection",
     "disbursementSection",
     "advancedSection",
+    "step1Indicator",
+    "step2Indicator",
+    "step3Indicator",
+    "step4Indicator",
+    "progressStep1",
+    "progressStep2",
+    "progressStep3",
+    "progressStep4",
+    "progressConnector1",
+    "progressConnector2",
+    "progressConnector3",
+    "connectorFill1",
+    "connectorFill2",
+    "connectorFill3",
+    "pulseRing1",
+    "pulseRing2",
+    "pulseRing3",
+    "pulseRing4",
+    "stepLabel1",
+    "stepLabel2",
+    "stepLabel3",
+    "stepLabel4",
   ];
 
   static values = {
@@ -45,6 +67,12 @@ export default class extends Controller {
 
     // Set up smart defaults
     this.setSmartDefaults();
+    
+    // Initialize progress indicator (start at step 0 - no steps completed yet)
+    this.updateProgress(0);
+    
+    // Add form field listeners for real-time progress tracking
+    this.setupProgressTracking();
   }
 
   selectPersonal() {
@@ -61,6 +89,12 @@ export default class extends Controller {
 
     // Set smart defaults for personal loans
     this.setPersonalDefaults();
+
+    // UX Enhancement: Update progress and smooth scroll to next section
+    this.updateProgress(1);
+    this.smoothScrollToSection("essentialSection");
+    this.updateStepIndicator(1, true);
+    this.updateStepIndicator(2, false);
   }
 
   selectInstitutional() {
@@ -77,16 +111,31 @@ export default class extends Controller {
 
     // Set smart defaults for institutional loans
     this.setInstitutionalDefaults();
+
+    // UX Enhancement: Update progress and smooth scroll to next section
+    this.updateProgress(1);
+    this.smoothScrollToSection("essentialSection");
+    this.updateStepIndicator(1, true);
+    this.updateStepIndicator(2, false);
   }
 
   updateCardSelection(selectedCard, unselectedCard) {
-    // Add selected styling
-    selectedCard.classList.add("ring-2", "ring-primary", "bg-primary/5");
-    selectedCard.classList.remove("border-secondary");
+    // Use data attributes for state management (best practice 2025)
+    // This ensures consistent styling via CSS data-* selectors
+    // Optimized: Cache selector results to avoid multiple DOM queries
+    const selectedCardDiv =
+      selectedCard?.querySelector?.(".loan-type-card") || selectedCard;
+    const unselectedCardDiv =
+      unselectedCard?.querySelector?.(".loan-type-card") || unselectedCard;
 
-    // Remove selected styling
-    unselectedCard.classList.remove("ring-2", "ring-primary", "bg-primary/5");
-    unselectedCard.classList.add("border-secondary");
+    // Batch DOM updates for better performance (Rails 8.1 optimization)
+    if (selectedCardDiv) {
+      selectedCardDiv.setAttribute("data-selected", "true");
+    }
+
+    if (unselectedCardDiv) {
+      unselectedCardDiv.setAttribute("data-selected", "false");
+    }
   }
 
   showPersonalFields() {
@@ -143,12 +192,15 @@ export default class extends Controller {
 
   setInstitutionalDefaults() {
     // Smart defaults for institutional loans
+    // Optimized: Cache currency meta tag query (Rails 8.1 performance best practice)
     if (!this.interestRateTarget.value) {
-      // Set based on currency (Indonesian context)
-      const currency =
-        document.querySelector('meta[name="family-currency"]')?.content ||
-        "IDR";
-      this.interestRateTarget.value = currency === "IDR" ? "12" : "6";
+      // Cache meta tag query to avoid repeated DOM lookups
+      if (!this._cachedCurrency) {
+        const currencyMeta =
+          document.querySelector('meta[name="family-currency"]');
+        this._cachedCurrency = currencyMeta?.content || "IDR";
+      }
+      this.interestRateTarget.value = this._cachedCurrency === "IDR" ? "12" : "6";
     }
 
     if (!this.termMonthsTarget.value) {
@@ -162,16 +214,21 @@ export default class extends Controller {
   }
 
   setSmartDefaults() {
-    // Set smart date defaults
-    const nextMonth = new Date();
+    // Set smart date defaults - optimized date calculations (Rails 8.1 best practice)
+    // Cache current date to avoid multiple Date() calls
+    const now = new Date();
+    const nextMonth = new Date(now);
     nextMonth.setMonth(nextMonth.getMonth() + 1);
 
+    const todayISO = now.toISOString().split("T")[0];
+    const nextMonthISO = nextMonth.toISOString().split("T")[0];
+
     if (this.startDateTarget && !this.startDateTarget.value) {
-      this.startDateTarget.value = nextMonth.toISOString().split("T")[0];
+      this.startDateTarget.value = nextMonthISO;
     }
 
     if (this.originationDateTarget && !this.originationDateTarget.value) {
-      this.originationDateTarget.value = new Date().toISOString().split("T")[0];
+      this.originationDateTarget.value = todayISO;
     }
   }
 
@@ -576,5 +633,252 @@ export default class extends Controller {
         Unable to load the schedule preview. Please double-check the inputs and try again.
       </div>
     `;
+  }
+
+  // UX Enhancement Methods (Modern Progress Indicator with Smooth Animations)
+
+  // Update progress indicator based on completed steps with modern animations
+  updateProgress(completedStep) {
+    // Update progress steps (1-based) with smooth animations
+    for (let step = 1; step <= 4; step++) {
+      const stepTarget = this[`progressStep${step}Target`];
+      const stepNumber = stepTarget?.querySelector(".step-number");
+      const connectorFill = this[`connectorFill${step}Target`];
+      const pulseRing = this[`pulseRing${step}Target`];
+
+      if (stepTarget) {
+        // Remove all state classes first for clean transitions
+        stepTarget.classList.remove(
+          "bg-primary",
+          "bg-primary/10",
+          "bg-secondary/10",
+          "text-primary",
+          "text-secondary",
+          "text-white",
+          "border-primary",
+          "border-secondary/30",
+          "ring-2",
+          "ring-4",
+          "ring-primary/30",
+          "ring-primary/50",
+          "scale-110",
+          "shadow-lg",
+          "shadow-md"
+        );
+
+        if (step <= completedStep) {
+          // Completed step - Modern checkmark animation
+          stepTarget.className =
+            "progress-step relative w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold transition-all duration-500 ease-out transform-gpu bg-primary text-white border-2 border-primary shadow-lg scale-110";
+          
+          // Animated checkmark with scale-in effect
+          stepTarget.innerHTML = `
+            <svg class="w-5 h-5 animate-scale-in" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="animation-delay: 0.1s;">
+              <path d="M5 13l4 4L19 7"></path>
+            </svg>
+          `;
+          
+          // Hide pulse ring for completed
+          if (pulseRing) pulseRing.style.opacity = "0";
+          
+        } else if (step === completedStep + 1) {
+          // Current step - Active state with pulse animation
+          stepTarget.className =
+            "progress-step relative w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold transition-all duration-500 ease-out transform-gpu bg-primary/10 text-primary border-2 border-primary ring-4 ring-primary/30 shadow-lg scale-110";
+          
+          // Show step number
+          if (stepNumber) {
+            stepNumber.textContent = step;
+            stepNumber.className = "step-number transition-all duration-300 ease-out scale-100";
+          } else {
+            stepTarget.innerHTML = `<span class="step-number transition-all duration-300 ease-out">${step}</span>`;
+          }
+          
+          // Show pulse ring with animation
+          if (pulseRing) {
+            pulseRing.style.opacity = "1";
+            pulseRing.classList.add("animate-pulse");
+          }
+          
+        } else {
+          // Future step - Subtle inactive state
+          stepTarget.className =
+            "progress-step relative w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold transition-all duration-500 ease-out transform-gpu bg-secondary/10 text-secondary border-2 border-secondary/30 shadow-sm";
+          
+          // Show step number
+          if (stepNumber) {
+            stepNumber.textContent = step;
+            stepNumber.className = "step-number transition-all duration-300 ease-out opacity-60";
+          } else {
+            stepTarget.innerHTML = `<span class="step-number transition-all duration-300 ease-out opacity-60">${step}</span>`;
+          }
+          
+          // Hide pulse ring
+          if (pulseRing) pulseRing.style.opacity = "0";
+        }
+      }
+
+      // Animated connector fill with smooth transition
+      if (connectorFill) {
+        if (step <= completedStep) {
+          // Completed connector - full fill
+          requestAnimationFrame(() => {
+            connectorFill.style.transform = "translateX(0)";
+            connectorFill.style.transition = "transform 700ms cubic-bezier(0.4, 0, 0.2, 1)";
+          });
+        } else if (step === completedStep + 1) {
+          // Current connector - partial fill (50%)
+          requestAnimationFrame(() => {
+            connectorFill.style.transform = "translateX(-50%)";
+            connectorFill.style.transition = "transform 700ms cubic-bezier(0.4, 0, 0.2, 1)";
+          });
+        } else {
+          // Future connector - empty
+          requestAnimationFrame(() => {
+            connectorFill.style.transform = "translateX(-100%)";
+            connectorFill.style.transition = "transform 300ms ease-out";
+          });
+        }
+      }
+    }
+  }
+
+  // Smooth scroll to section with offset for better UX
+  smoothScrollToSection(sectionTargetName) {
+    const section = this[`${sectionTargetName}Target`];
+    if (!section) return;
+
+    // Use requestAnimationFrame for smooth scroll (Rails 8.1 best practice)
+    requestAnimationFrame(() => {
+      const offset = 20; // Small offset for visual breathing room
+      const elementPosition =
+        section.getBoundingClientRect().top + window.pageYOffset;
+      const offsetPosition = elementPosition - offset;
+
+      window.scrollTo({
+        top: offsetPosition,
+        behavior: "smooth",
+      });
+    });
+  }
+
+  // Update step indicator with completion state
+  updateStepIndicator(stepNumber, isCompleted) {
+    const indicator = this[`step${stepNumber}IndicatorTarget`];
+    if (!indicator) return;
+
+    if (isCompleted) {
+      // Show checkmark for completed steps
+      indicator.className =
+        "step-indicator w-8 h-8 rounded-full bg-success/10 flex items-center justify-center transition-all duration-300 ring-2 ring-success/20";
+      indicator.innerHTML = `<svg class="w-4 h-4 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"></path></svg>`;
+    } else {
+      // Active step - primary styling
+      indicator.className =
+        "step-indicator w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center transition-all duration-300";
+      indicator.innerHTML = `<span class="text-sm font-semibold text-primary">${stepNumber}</span>`;
+    }
+  }
+
+  // Setup real-time progress tracking based on form completion
+  setupProgressTracking() {
+    // Track step 1 completion (loan type selection)
+    const personalCard = this.personalCardTarget;
+    const institutionalCard = this.institutionalCardTarget;
+    
+    const checkLoanTypeSelected = () => {
+      const personalSelected = personalCard?.querySelector('[data-selected="true"]');
+      const institutionalSelected = institutionalCard?.querySelector('[data-selected="true"]');
+      return !!(personalSelected || institutionalSelected);
+    };
+
+    // Track step 2 completion (essential fields)
+    const checkEssentialFields = () => {
+      const lenderName = this.lenderNameTarget?.value?.trim();
+      const institutionName = this.institutionNameTarget?.value?.trim();
+      const loanAmount = this.loanAmountTarget?.value;
+      const termMonths = this.termMonthsTarget?.value;
+      
+      const nameFilled = lenderName || institutionName;
+      const amountFilled = loanAmount && parseFloat(loanAmount) > 0;
+      
+      return nameFilled && amountFilled && termMonths;
+    };
+
+    // Track step 3 completion (interest & terms)
+    const checkInterestFields = () => {
+      const interestFree = this.interestFreeTarget?.checked;
+      const interestRate = this.interestRateTarget?.value;
+      const paymentFrequency = this.paymentFrequencyTarget?.value;
+      
+      if (interestFree) return true; // If interest-free, other fields optional
+      return interestRate && paymentFrequency;
+    };
+
+    // Calculate current progress
+    const calculateProgress = () => {
+      let completedSteps = 0;
+      
+      if (checkLoanTypeSelected()) {
+        completedSteps = 1;
+        if (checkEssentialFields()) {
+          completedSteps = 2;
+          if (checkInterestFields()) {
+            completedSteps = 3;
+          }
+        }
+      }
+      
+      return completedSteps;
+    };
+
+    // Update progress on field changes
+    const updateProgressDebounced = this.debounce(() => {
+      const progress = calculateProgress();
+      if (progress > 0) {
+        this.updateProgress(progress);
+      }
+    }, 300);
+
+    // Add listeners to form fields
+    const fieldsToWatch = [
+      this.lenderNameTarget,
+      this.institutionNameTarget,
+      this.loanAmountTarget,
+      this.termMonthsTarget,
+      this.interestRateTarget,
+      this.paymentFrequencyTarget,
+      this.interestFreeTarget,
+    ].filter(Boolean);
+
+    fieldsToWatch.forEach((field) => {
+      field?.addEventListener("input", updateProgressDebounced);
+      field?.addEventListener("change", updateProgressDebounced);
+    });
+
+    // Watch for loan type selection changes
+    if (personalCard) {
+      personalCard.addEventListener("click", () => {
+        setTimeout(() => this.updateProgress(1), 100);
+      });
+    }
+    if (institutionalCard) {
+      institutionalCard.addEventListener("click", () => {
+        setTimeout(() => this.updateProgress(1), 100);
+      });
+    }
+  }
+
+  // Debounce helper for performance
+  debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+      const later = () => {
+        clearTimeout(timeout);
+        func(...args);
+      };
+      clearTimeout(timeout);
+      timeout = setTimeout(later, wait);
+    };
   }
 }

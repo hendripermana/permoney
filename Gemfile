@@ -73,6 +73,11 @@ gem "rqrcode", "~> 3.0"
 gem "activerecord-import"
 gem "rubyzip", "~> 3.2"
 
+# OpenID Connect authentication
+gem "omniauth", "~> 2.1"
+gem "omniauth-rails_csrf_protection"
+gem "omniauth_openid_connect"
+
 # State machines
 gem "aasm"
 gem "after_commit_everywhere", "~> 1.0"

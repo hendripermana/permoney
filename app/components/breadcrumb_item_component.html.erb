@@ -1,0 +1,19 @@
+<li class="<%= container_classes %>" role="listitem">
+  <% if link? %>
+    <%# Link item - navigable breadcrumb %>
+    <%= link_to href, class: text_classes do %>
+      <% if icon.present? %>
+        <%= helpers.icon(icon, size: "sm", color: icon_color, class: "shrink-0") %>
+      <% end %>
+      <span><%= text %></span>
+    <% end %>
+  <% else %>
+    <%# Current page or plain text item - not clickable %>
+    <span class="<%= text_classes %>" <%= tag.attributes("aria-current": aria_current) if aria_current.present? %>>
+      <% if icon.present? %>
+        <%= helpers.icon(icon, size: "sm", color: icon_color, class: "shrink-0") %>
+      <% end %>
+      <span><%= text %></span>
+    </span>
+  <% end %>
+</li>

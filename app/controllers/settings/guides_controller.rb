@@ -3,8 +3,8 @@ class Settings::GuidesController < ApplicationController
 
   def show
     @breadcrumbs = [
-      [ "Home", root_path ],
-      [ "Guides", nil ]
+      { text: "Home", href: root_path, icon: "home" },
+      { text: "Guides", icon: "book-open" }
     ]
     markdown = Redcarpet::Markdown.new(Redcarpet::Render::HTML,
       autolink: true,

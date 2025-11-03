@@ -12,6 +12,26 @@
 @import "./components/box_carousel.css";
 @import "./components/floating_chat.css";
 
+@import "./google-sign-in.css";
+
+@layer utilities {
+  /* Modern Progress Indicator Animations */
+  @keyframes scaleIn {
+    from {
+      transform: scale(0);
+      opacity: 0;
+    }
+    to {
+      transform: scale(1);
+      opacity: 1;
+    }
+  }
+  
+  .animate-scale-in {
+    animation: scaleIn 0.3s ease-out forwards;
+  }
+}
+
 @layer components {
   .pcr-app{
     position: static !important;

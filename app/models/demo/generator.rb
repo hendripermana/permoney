@@ -40,7 +40,7 @@ class Demo::Generator
       end
 
       puts "👥 Creating empty family..."
-      create_family_and_users!("Demo Family", "user@sure.local", onboarded: true, subscribed: true)
+      create_family_and_users!("Demo Family", "user@example.com", onboarded: true, subscribed: true)
 
       puts "✅ Empty demo data loaded successfully!"
     end
@@ -55,7 +55,7 @@ class Demo::Generator
       end
 
       puts "👥 Creating new user family..."
-      create_family_and_users!("Demo Family", "user@sure.local", onboarded: false, subscribed: false)
+      create_family_and_users!("Demo Family", "user@example.com", onboarded: false, subscribed: false)
 
       puts "✅ New user demo data loaded successfully!"
     end
@@ -81,7 +81,7 @@ class Demo::Generator
   end
 
   # Generate comprehensive realistic demo data with multi-currency
-  def generate_default_data!(skip_clear: false, email: "user@sure.local")
+  def generate_default_data!(skip_clear: false, email: "user@example.com")
     if skip_clear
       puts "⏭️  Skipping data clearing (appending new family)..."
     else
@@ -146,10 +146,6 @@ class Demo::Generator
       raise ActiveRecord::RecordNotFound, "No admin user with email #{email} found in family ##{family.id}"
     end
 
-    def partner_email_for(email)
-      "partner_#{email}"
-    end
-
     def create_family_and_users!(family_name, email, onboarded:, subscribed:)
       family = Family.create!(
         name: family_name,
@@ -165,20 +161,20 @@ class Demo::Generator
       # Admin user
       family.users.create!(
         email: email,
-        first_name: "Demo (admin)",
-        last_name: "Permoney",
+        first_name: "Jack",
+        last_name: "Bogle",
         role: "admin",
-        password: "password",
+        password: "Password1!",
         onboarded_at: onboarded ? Time.current : nil
       )
 
       # Member user
       family.users.create!(
         email: "partner_#{email}",
-        first_name: "Demo (member)",
-        last_name: "Permoney",
+        first_name: "Eve",
+        last_name: "Bogle",
         role: "member",
-        password: "password",
+        password: "Password1!",
         onboarded_at: onboarded ? Time.current : nil
       )
 

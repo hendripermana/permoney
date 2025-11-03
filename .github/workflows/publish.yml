@@ -1,224 +1,101 @@
-# Reference: https://docs.docker.com/build/ci/github-actions/multi-platform/#distribute-build-across-multiple-runners
-
-# Conditions for pushing the image to GHCR:
-#   - Triggered by push to default branch (`main`)
-#   - Triggered by push to a version tag (`v*`)
-#   - Triggered by a scheduled run
-#   - Triggered manually via `workflow_dispatch` with `push: true`
-#
-# Conditional expression:
-#   github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'schedule' || github.event.inputs.push
-
 name: Publish Docker image
 
 on:
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: 'Git ref (tag or commit SHA) to build'
-        required: true
-        type: string 
-        default: 'main'
-      push:
-        description: 'Push the image to container registry'
-        required: false
-        type: boolean
-        default: false
+  # Only trigger on push to main (after PR merge) or tags
   push:
     tags:
       - 'v*'
     branches:
       - main
-  schedule:
-    - cron: '30 1 * * *'
+  # Manual trigger option
+  workflow_dispatch:
+    inputs:
+      push:
+        description: 'Push the image to container registry'
+        required: false
+        type: boolean
+        default: true
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-  # Allows overriding the target image namespace/repo via GitHub Actions Variables
-  # Set Repository variable DOCKER_IMAGE_NAME to e.g. "hendripermana/permoney" if pushing to a different namespace
-  PUBLISH_IMAGE: ${{ vars.DOCKER_IMAGE_NAME || github.repository }}
+  IMAGE_NAME: hendripermana/permoney
 
 permissions:
   contents: read
   packages: write
 
 jobs:
-  # Run CI first to ensure code quality
   ci:
     uses: ./.github/workflows/ci.yml
-    secrets: inherit
-
-  # Security scan before building
-  security_scan:
-    name: Security Scan
-    runs-on: ubuntu-latest
-    needs: [ci]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.ref || github.ref }}
-
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-
-      - name: Upload Trivy scan results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: 'trivy-results.sarif'
 
   build:
-    name: Build Docker image
-    needs: [ci, security_scan]
-
+    name: Build Docker image (${{ matrix.platform }})
+    needs: [ci]
     strategy:
       fail-fast: false
       matrix:
         platform: [amd64, arm64]
-
-    timeout-minutes: 60
     runs-on: ubuntu-latest
-
-    env:
-      DO_PUSH: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.push) }}
-
-    outputs:
-      tags: ${{ steps.meta.outputs.tags }}
-      digest: ${{ steps.build.outputs.digest }}
-
-    permissions:
-      contents: read
-      packages: write
-      security-events: write
+    timeout-minutes: 45
 
     steps:
-      - name: Check out the repo
+      - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.ref || github.ref }}
 
-      - name: Normalize PUBLISH_IMAGE to lowercase
-        shell: bash
-        run: |
-          norm=$(echo "${{ env.PUBLISH_IMAGE }}" | tr '[:upper:]' '[:lower:]')
-          echo "PUBLISH_IMAGE=${norm}" >> "$GITHUB_ENV"
-
-      - name: Log in to GHCR with PAT (override)
-        if: ${{ secrets.GHCR_PAT != '' }}
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.GHCR_USERNAME || github.repository_owner }}
-          password: ${{ secrets.GHCR_PAT }}
-
-      - name: Set up QEMU (cross-arch emulation)
+      - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver-opts: |
-            image=moby/buildkit:v0.12.0
-            network=host
 
-      - name: Log in to GHCR with GITHUB_TOKEN
-        if: ${{ secrets.GHCR_PAT == '' && env.PUBLISH_IMAGE == github.repository }}
+      - name: Log in to the Container registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: "Preflight: require PAT for cross-namespace push"
-        if: ${{ env.DO_PUSH == 'true' && env.PUBLISH_IMAGE != github.repository && secrets.GHCR_PAT == '' }}
-        run: |
-          echo "Cross-namespace publish to ghcr.io/${{ env.PUBLISH_IMAGE }} requires GHCR_PAT (write:packages) and optional GHCR_USERNAME." >&2
-          exit 1
-
-      - name: Configure image tags
-        id: tag_config
-        shell: bash
-        run: |
-          BASE_CONFIG="type=sha,format=long"
-          if [[ $GITHUB_EVENT_NAME == "schedule" ]]; then
-            BASE_CONFIG+=$'\n'"type=schedule,pattern=nightly"
-            BASE_CONFIG+=$'\n'"type=schedule,pattern=nightly-{{date 'ddd'}}"
-          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            BASE_CONFIG="type=semver,pattern={{version}}"
-            BASE_CONFIG+=$'\n'"type=raw,value=stable"
-          elif [[ "$GITHUB_REF" == "refs/heads/main" && "$GITHUB_EVENT_NAME" == "push" ]]; then
-            BASE_CONFIG=${BASE_CONFIG:-}
-            BASE_CONFIG+=$'\n'"type=raw,value=latest"
-          elif [[ "$GITHUB_REF" == "refs/heads/develop" && "$GITHUB_EVENT_NAME" == "push" ]]; then
-            BASE_CONFIG=${BASE_CONFIG:-}
-            BASE_CONFIG+=$'\n'"type=raw,value=edge"
-          fi
-          {
-            echo 'TAGS_SPEC<<EOF'
-            echo "$BASE_CONFIG"
-            echo EOF
-          } >> $GITHUB_ENV
-
-      - name: Get current date (RFC 3339 format)
-        id: date
-        run: echo "date=$(date -Iseconds)" >> $GITHUB_OUTPUT
-
-      - name: Extract metadata for Docker
+      - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.PUBLISH_IMAGE }}
-          flavor: latest=false
-          tags: ${{ env.TAGS_SPEC }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
           labels: |
-            org.opencontainers.image.version=${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
-            org.opencontainers.image.created=${{ steps.date.outputs.date }}
-            org.opencontainers.image.ref.name=${{ github.ref_name }}
-            org.opencontainers.image.vendor=hendripermana
             org.opencontainers.image.title=Permoney
-            org.opencontainers.image.description=A multi-arch Docker image for the Permoney Rails app
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.description=Personal finance application
+            org.opencontainers.image.vendor=hendripermana
+            org.opencontainers.image.licenses=AGPL-3.0
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+      - name: Build and push Docker image (${{ matrix.platform }})
         id: build
+        uses: docker/build-push-action@v6
         with:
           context: .
-          build-args: |
-            BUILD_COMMIT_SHA=${{ github.sha }}
-            RAILS_ENV=production
-          platforms: 'linux/${{ matrix.platform }}'
-          cache-from: |
-            type=registry,ref=${{ env.REGISTRY }}/${{ env.PUBLISH_IMAGE }}:cache-${{ matrix.platform }}
-            type=gha,scope=${{ matrix.platform }}
-          cache-to: |
-            type=registry,ref=${{ env.REGISTRY }}/${{ env.PUBLISH_IMAGE }}:cache-${{ matrix.platform }},mode=max
-            type=gha,mode=max,scope=${{ matrix.platform }}
+          build-args: BUILD_COMMIT_SHA=${{ github.sha }}
+          platforms: linux/${{ matrix.platform }}
+          # Always push since this workflow only runs on push to main/tags or manual trigger
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          provenance: mode=max
-          sbom: true
-          push: ${{ env.DO_PUSH == 'true' }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.PUBLISH_IMAGE }},name-canonical=true,push-by-digest=true,oci-mediatypes=true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,oci-mediatypes=true
 
-      - name: Export the Docker image digest
-        if: ${{ env.DO_PUSH == 'true' }}
+      - name: Export digest
         run: |
-          mkdir -p "${RUNNER_TEMP}"/digests
-          echo "${DIGEST#sha256:}" > "${RUNNER_TEMP}/digests/digest-${PLATFORM}"
+          mkdir -p "${{ runner.temp }}/digests"
+          echo "${DIGEST#sha256:}" > "${{ runner.temp }}/digests/digest-${{ matrix.platform }}"
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-          PLATFORM: ${{ matrix.platform }}
 
-      - name: Upload the Docker image digest
-        if: ${{ env.DO_PUSH == 'true' }}
+      - name: Upload digest
         uses: actions/upload-artifact@v4
         with:
           name: digest-${{ matrix.platform }}
@@ -226,163 +103,55 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      # Scan the built image for vulnerabilities
-      - name: Scan Docker image with Trivy
-        if: ${{ env.DO_PUSH == 'true' }}
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.PUBLISH_IMAGE }}@${{ steps.build.outputs.digest }}
-          format: 'sarif'
-          output: 'trivy-image-results.sarif'
-
-      - name: Upload Trivy image scan results
-        if: ${{ env.DO_PUSH == 'true' }}
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: 'trivy-image-results.sarif'
-          category: 'trivy-image-${{ matrix.platform }}'
-
   merge:
-    name: Merge multi-platform images
+    name: Merge multi-arch manifest & push multi-arch tag
     needs: [build]
-    if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'schedule' || github.event.inputs.push }}
-
-    timeout-minutes: 10
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
-      packages: write
-      security-events: write
+    timeout-minutes: 10
 
     steps:
-      - name: Download the Docker image digests
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Download digests
         uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/digests
           pattern: digest-*
           merge-multiple: true
 
-      - name: Log in to GHCR with PAT (override)
-        if: ${{ secrets.GHCR_PAT != '' }}
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.GHCR_USERNAME || github.repository_owner }}
-          password: ${{ secrets.GHCR_PAT }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR with GITHUB_TOKEN
-        if: ${{ secrets.GHCR_PAT == '' && env.PUBLISH_IMAGE == github.repository }}
+      - name: Log in to the Container registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure image tags
-        id: tag_config
-        shell: bash
-        run: |
-          BASE_CONFIG="type=sha,format=long"
-          if [[ $GITHUB_EVENT_NAME == "schedule" ]]; then
-            BASE_CONFIG+=$'\n'"type=schedule,pattern=nightly"
-            BASE_CONFIG+=$'\n'"type=schedule,pattern=nightly-{{date 'ddd'}}"
-          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            TAG_NAME="${GITHUB_REF#refs/tags/}"
-            if [[ "$TAG_NAME" == v* ]]; then
-              BASE_CONFIG="type=semver,pattern={{version}}"
-              if [[ "$TAG_NAME" == v*-alpha* ]]; then
-                BASE_CONFIG+=$'\n'"type=raw,value=latest"
-              else
-                BASE_CONFIG+=$'\n'"type=raw,value=stable"
-              fi
-            fi
-          elif [[ "$GITHUB_REF" == "refs/heads/main" && "$GITHUB_EVENT_NAME" == "push" ]]; then
-            BASE_CONFIG=${BASE_CONFIG:-}
-            BASE_CONFIG+=$'\n'"type=raw,value=latest"
-          elif [[ "$GITHUB_REF" == "refs/heads/develop" && "$GITHUB_EVENT_NAME" == "push" ]]; then
-            BASE_CONFIG=${BASE_CONFIG:-}
-            BASE_CONFIG+=$'\n'"type=raw,value=edge"
-          fi
-          {
-            echo 'TAGS_SPEC<<EOF'
-            echo "$BASE_CONFIG"
-            echo EOF
-          } >> $GITHUB_ENV
-
-      - name: Get current date (RFC 3339 format)
-        id: date
-        run: echo "date=$(date -Iseconds)" >> $GITHUB_OUTPUT
-
-      - name: Extract metadata for Docker
+      - name: Extract metadata for tags
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.PUBLISH_IMAGE }}
-          flavor: latest=false
-          tags: ${{ env.TAGS_SPEC }}
-          labels: |
-            org.opencontainers.image.version=${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
-            org.opencontainers.image.created=${{ steps.date.outputs.date }}
-            org.opencontainers.image.ref.name=${{ github.ref_name }}
-            org.opencontainers.image.vendor=hendripermana
-            org.opencontainers.image.title=Permoney
-            org.opencontainers.image.description=A multi-arch Docker image for the Permoney Rails app
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Create the multi-platform image manifest and push it
+      - name: Create and push manifest
         run: |
-          docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.REGISTRY }}/${{ env.PUBLISH_IMAGE }}@sha256:%s ' $(cat ${{ runner.temp }}/digests/digest-*))
+          tag_args=()
+          while IFS= read -r tag; do
+            [[ -n "$tag" ]] && tag_args+=("--tag=$tag")
+          done <<< "${{ steps.meta.outputs.tags }}"
 
-      - name: Inspect the multi-platform image
-        shell: bash
-        run: |
-          MAIN_TAG="$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
-          if [[ -z "$MAIN_TAG" || "$MAIN_TAG" == "null" ]]; then
-            echo "Error: Could not determine main tag from metadata" >&2
-            exit 1
-          fi
-          docker buildx imagetools inspect "${MAIN_TAG}"
+          image_args=()
+          for platform in amd64 arm64; do
+            digest=$(cat "${{ runner.temp }}/digests/digest-$platform" 2>/dev/null || echo "")
+            [[ -n "$digest" ]] && image_args+=("${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:$digest")
+          done
 
-      # Final security scan of the merged image
-      - name: Final security scan of merged image
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
-          format: 'sarif'
-          output: 'trivy-final-results.sarif'
-
-      - name: Upload final Trivy scan results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: 'trivy-final-results.sarif'
-          category: 'trivy-final-image'
-
-  # Notification job for deployment status
-  notify:
-    name: Notify deployment status
-    needs: [merge]
-    if: always() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-    runs-on: ubuntu-latest
-    steps:
-      - name: Deployment Success Notification
-        if: needs.merge.result == 'success'
-        run: |
-          echo "✅ Docker image successfully built and published!"
-          echo "📦 Image: ${{ env.REGISTRY }}/${{ env.PUBLISH_IMAGE }}"
-          echo "🏷️ Tags: ${{ needs.build.outputs.tags }}"
-          echo "🔍 Digest: ${{ needs.build.outputs.digest }}"
-
-      - name: Deployment Failure Notification
-        if: needs.merge.result != 'success'
-        run: |
-          echo "❌ Docker image build/publish failed!"
-          echo "Please check the workflow logs for details."
-          exit 1
+          docker buildx imagetools create "${tag_args[@]}" "${image_args[@]}"
+        env:
+          TAG_OUTPUT: ${{ steps.meta.outputs.tags }}

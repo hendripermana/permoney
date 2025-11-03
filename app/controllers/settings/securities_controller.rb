@@ -3,8 +3,8 @@ class Settings::SecuritiesController < ApplicationController
 
   def show
     @breadcrumbs = [
-      [ "Home", root_path ],
-      [ "Security", nil ]
+      { text: "Home", href: root_path, icon: "home" },
+      { text: "Security", icon: "shield" }
     ]
   end
 end

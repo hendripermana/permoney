@@ -1,10 +1,63 @@
-/* 
-  COMPATIBILITY SHIM - DEPRECATED
-  
-  This file provides backward compatibility for the old maybe-design-system/foreground-utils.css path.
-  Please update your imports to use permoney-design-system/foreground-utils.css instead.
-  
-  This shim will be removed in a future version.
-*/
+@utility fg-gray {
+  @apply text-gray-500;
 
-@import "../permoney-design-system/foreground-utils.css";
+  @variant theme-dark {
+    @apply text-gray-400;
+  }
+}
+
+@utility fg-contrast {
+  @apply text-gray-400;
+
+  @variant theme-dark {
+    @apply text-gray-500;
+  }
+}
+
+@utility fg-inverse {
+  @apply text-white;
+
+  @variant theme-dark {
+    @apply text-gray-900;
+  }
+}
+
+@utility fg-primary {
+  @apply text-gray-900;
+
+  @variant theme-dark {
+    @apply text-white;
+  }
+}
+
+@utility fg-primary-variant {
+  @apply text-gray-800;
+
+  @variant theme-dark {
+    @apply text-gray-50;
+  }
+}
+
+@utility fg-secondary {
+  @apply text-gray-50;
+
+  @variant theme-dark {
+    @apply text-gray-400;
+  }
+}
+
+@utility fg-secondary-variant {
+  @apply text-gray-100;
+
+  @variant theme-dark {
+    @apply text-gray-500;
+  }
+}
+
+@utility fg-subdued {
+  @apply text-gray-400;
+
+  @variant theme-dark {
+    @apply text-gray-500;
+  }
+}

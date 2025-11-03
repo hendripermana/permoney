@@ -1,10 +1,39 @@
-/* 
-  COMPATIBILITY SHIM - DEPRECATED
-  
-  This file provides backward compatibility for the old maybe-design-system/text-utils.css path.
-  Please update your imports to use permoney-design-system/text-utils.css instead.
-  
-  This shim will be removed in a future version.
-*/
+@utility text-primary {
+  @apply text-gray-900;
 
-@import "../permoney-design-system/text-utils.css";
+  @variant theme-dark {
+   @apply text-white;
+  }
+}
+
+@utility text-inverse {
+  @apply text-white;
+
+  @variant theme-dark {
+    @apply text-gray-900;
+  }
+}
+
+@utility text-secondary {
+  @apply text-gray-500;
+
+  @variant theme-dark {
+    @apply text-gray-300;
+  }
+}
+
+@utility text-subdued {
+  @apply text-gray-400;
+
+  @variant theme-dark {
+    @apply text-gray-500;
+  }
+}
+
+@utility text-link {
+  @apply text-blue-600;
+
+  @variant theme-dark {
+    @apply text-blue-500;
+  }
+}
