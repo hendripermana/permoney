@@ -6,7 +6,7 @@
 # --------
 #
 # This file is an example Docker Compose configuration for self hosting
-# Sure on your local machine or on a cloud VPS.
+# Permoney on your local machine or on a cloud VPS.
 #
 # The configuration below is a "standard" setup that works out of the box,
 # but if you're running this outside of a local network, it is recommended
@@ -17,20 +17,20 @@
 #
 # To run this, you should read the setup guide:
 #
-# https://github.com/we-promise/sure/blob/main/docs/hosting/docker.md
+# https://github.com/hendripermana/permoney/blob/main/docs/hosting/docker.md
 #
 # Troubleshooting:
 # ----------------
 #
-# If you run into problems, you should open a Discussion here:
+# If you run into problems, please open an issue on GitHub:
 #
-# https://github.com/we-promise/sure/discussions/categories/general
+# https://github.com/hendripermana/permoney/issues
 #
 
 x-db-env: &db_env
-  POSTGRES_USER: ${POSTGRES_USER:-sure_user}
-  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sure_password}
-  POSTGRES_DB: ${POSTGRES_DB:-sure_production}
+  POSTGRES_USER: ${POSTGRES_USER:-permoney_user}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-permoney_password}
+  POSTGRES_DB: ${POSTGRES_DB:-permoney_production}
 
 x-rails-env: &rails_env
   <<: *db_env
@@ -50,7 +50,7 @@ x-rails-env: &rails_env
 
 services:
   web:
-    image: ghcr.io/we-promise/sure:latest
+    image: ghcr.io/hendripermana/permoney:latest
     volumes:
       - app-storage:/rails/storage
     ports:
@@ -64,10 +64,10 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - sure_net
+      - permoney_net
 
   worker:
-    image: ghcr.io/we-promise/sure:latest
+    image: ghcr.io/hendripermana/permoney:latest
     command: bundle exec sidekiq
     volumes:
       - app-storage:/rails/storage
@@ -80,7 +80,7 @@ services:
     environment:
       <<: *rails_env
     networks:
-      - sure_net
+      - permoney_net
 
   db:
     image: postgres:16
@@ -95,7 +95,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - sure_net
+      - permoney_net
 
   redis:
     image: redis:latest
@@ -108,7 +108,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - sure_net
+      - permoney_net
 
 volumes:
   app-storage:
@@ -116,5 +116,5 @@ volumes:
   redis-data:
 
 networks:
-  sure_net:
+  permoney_net:
     driver: bridge
