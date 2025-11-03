@@ -114,11 +114,6 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     timeout-minutes: 15
     
-    # Use the project's pinned Ruby from .ruby-version to avoid Bundler mismatch
-    strategy:
-      matrix: {}
-      fail-fast: true
-    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

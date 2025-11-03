@@ -22,8 +22,6 @@ jobs:
       statuses: write
     
     # Use the project's pinned Ruby version for coverage
-    strategy:
-      matrix: {}
     
     services:
       postgres:
