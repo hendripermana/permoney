@@ -1,11 +1,10 @@
 # frozen_string_literal: true
 
-module Loan
-  class InsightsService
-    attr_reader :user, :family
+class Loan::InsightsService
+  attr_reader :user, :family
 
-    def initialize(user_or_family)
-      if user_or_family.is_a?(User)
+  def initialize(user_or_family)
+    if user_or_family.is_a?(::User)
         @user = user_or_family
         @family = user_or_family.family
       else
@@ -347,5 +346,4 @@ module Loan
 
         recommendations
       end
-  end
 end

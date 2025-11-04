@@ -1,11 +1,10 @@
 # frozen_string_literal: true
 
-module Loan
-  class CalculatorService
-    attr_reader :principal, :rate, :term_months, :payment_frequency, :schedule_method, :currency
+class Loan::CalculatorService
+  attr_reader :principal, :rate, :term_months, :payment_frequency, :schedule_method, :currency
 
-    def initialize(loan_or_params)
-      if loan_or_params.is_a?(Loan)
+  def initialize(loan_or_params)
+    if loan_or_params.is_a?(::Loan)
         initialize_from_loan(loan_or_params)
       else
         initialize_from_params(loan_or_params)
@@ -229,5 +228,4 @@ module Loan
 
         schedule
       end
-  end
 end
