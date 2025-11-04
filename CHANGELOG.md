@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.1](https://github.com/hendripermana/permoney/compare/v0.9.0...v0.9.1) (2025-11-04)
+
+
+### Bug Fixes
+
+* Apply linting fixes for CI/CD pipeline ([ba7b28f](https://github.com/hendripermana/permoney/commit/ba7b28f707da1b27db517c610a245748c862bd88))
+* Update brakeman ignore and fix Sentry mock for tests ([03f5978](https://github.com/hendripermana/permoney/commit/03f5978a39add0c6b70d4fc9cf8588dd797db58b))
+
 ## [0.9.0](https://github.com/hendripermana/permoney/compare/v0.8.2...v0.9.0) (2025-11-04)
 
 
