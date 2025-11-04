@@ -18,6 +18,9 @@ module PayLaterHelpers
       installments = []
 
       ActiveRecord::Base.transaction do
+        # Lock the record to prevent race conditions on credit checks
+        @pay_later.lock!
+
         # 1. Check available credit
         purchase_amount = params[:amount].to_d
         unless @pay_later.can_purchase?(purchase_amount)

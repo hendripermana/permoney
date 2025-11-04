@@ -25,7 +25,9 @@ module PayLaterServices
       Result.new(success?: true, account: account)
     rescue => e
       Rails.logger.error("PayLater creation failed: #{e.message}")
-      Rails.logger.error("Params: #{params.inspect}")
+      # Filter sensitive params before logging
+      filtered_params = params.except(:credit_limit, :available_credit, :contract_url, :notes)
+      Rails.logger.error("Params: #{filtered_params.inspect}")
       Rails.logger.error(e.backtrace.join("\n"))
       Result.new(success?: false, error: e.message)
     end

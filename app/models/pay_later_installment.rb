@@ -159,6 +159,8 @@ class PayLaterInstallment < ApplicationRecord
 
     # Update status based on payment amount
     def update_status_based_on_payment
+      # Do not interfere with explicit cancellation
+      return if status == "cancelled"
       return unless paid_amount.present?
 
       if paid_amount.to_d >= total_due.to_d

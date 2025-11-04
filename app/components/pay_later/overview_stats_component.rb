@@ -7,7 +7,7 @@ class PayLater::OverviewStatsComponent < ApplicationComponent
   end
 
   def credit_utilization_percentage
-    pay_later.utilization_percentage
+    @credit_utilization_percentage ||= (pay_later.utilization_percentage || 0.0)
   end
 
   def credit_utilization_color

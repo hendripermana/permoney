@@ -97,17 +97,17 @@
                 <% end %>
               </td>
               <td class="px-6 py-4 whitespace-nowrap text-sm text-primary">
-                <%= Money.new(installment.principal_amount, account.currency).format %>
+                <%= Money.new(installment.principal_amount || 0, account.currency).format %>
               </td>
               <td class="px-6 py-4 whitespace-nowrap text-sm text-primary">
-                <%= Money.new(installment.interest_amount, account.currency).format %>
+                <%= Money.new(installment.interest_amount || 0, account.currency).format %>
                 <% if installment.applied_rate && installment.applied_rate > 0 %>
                   <div class="text-xs text-secondary"><%= (installment.applied_rate * 100).round(2) %>%</div>
                 <% end %>
               </td>
               <td class="px-6 py-4 whitespace-nowrap">
                 <div class="text-sm font-semibold text-primary">
-                  <%= Money.new(installment.total_due, account.currency).format %>
+                  <%= Money.new(installment.total_due || 0, account.currency).format %>
                 </div>
                 <% if installment.overdue? %>
                   <div class="text-xs text-red-600">
