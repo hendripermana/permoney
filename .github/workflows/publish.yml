@@ -25,12 +25,44 @@ permissions:
   packages: write
 
 jobs:
-  ci:
-    uses: ./.github/workflows/ci.yml
+  lint-and-security:
+    name: Lint and Security Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.node-version'
+          cache: 'npm'
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: JavaScript Lint
+        run: npm run lint
+
+      - name: JavaScript Security Scan
+        run: npm audit --audit-level=moderate
+
+      - name: Ruby Lint
+        run: bundle exec rubocop -f github
+
+      - name: Ruby Security Scan
+        run: bundle exec brakeman --no-pager -q
 
   build:
     name: Build Docker image (${{ matrix.platform }})
-    needs: [ci]
+    needs: [lint-and-security]
     strategy:
       fail-fast: false
       matrix:
