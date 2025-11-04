@@ -119,7 +119,7 @@
     {
       "warning_type": "Mass Assignment",
       "warning_code": 105,
-      "fingerprint": "025036157d17223d972486df7a87fee8fb9daaae34c39d3b724c10801110f4a2",
+      "fingerprint": "f1f8460285f0a93f047d15b08b64aaabdfd06f6f925cf4689f1ea3b4505c3020",
       "check_name": "PermitAttributes",
       "message": "Potentially dangerous key allowed for mass assignment",
       "file": "app/controllers/api/v1/debt/pay_later_controller.rb",
@@ -132,15 +132,15 @@
         "class": "Api::V1::Debt::PayLaterController",
         "method": "expense_params"
       },
-      "user_input": ":expense_exchange_rate_to_idr",
+      "user_input": ":account_id",
       "confidence": "High",
       "cwe_id": [ 915 ],
-      "note": "expense_exchange_rate_to_idr is safe: 1) account_id is validated via validate_account_ownership before_action which ensures account belongs to user's family, 2) Service layer always validates ownership via family.accounts.find (defense-in-depth), 3) This parameter is only used for currency conversion calculations in RecordExpense service, not direct model assignment"
+      "note": "account_id is validated via validate_account_ownership before_action which ensures account belongs to user's family. Service layer also validates ownership via family.accounts.find (defense-in-depth). expense_exchange_rate_to_idr is only used for currency conversion calculations, not direct model assignment"
     },
     {
       "warning_type": "Mass Assignment",
       "warning_code": 105,
-      "fingerprint": "70cb02914286fa2d01e541676c0085941e2e193bf5b9052796ad104dcc299626",
+      "fingerprint": "3857e5cffac5d7be17917d121bf07b0c377b3c4678ffe617668691abe724d473",
       "check_name": "PermitAttributes",
       "message": "Potentially dangerous key allowed for mass assignment",
       "file": "app/controllers/api/v1/debt/pay_later_controller.rb",
@@ -153,10 +153,10 @@
         "class": "Api::V1::Debt::PayLaterController",
         "method": "pay_params"
       },
-      "user_input": ":early_payoff",
+      "user_input": ":account_id",
       "confidence": "High",
       "cwe_id": [ 915 ],
-      "note": "early_payoff is safe: 1) account_id is validated via validate_account_ownership before_action which ensures account belongs to user's family, 2) Service layer always validates ownership via family.accounts.find (defense-in-depth), 3) This is a boolean flag used for business logic in PayInstallment service, not direct model assignment"
+      "note": "account_id is validated via validate_account_ownership before_action which ensures account belongs to user's family. Service layer also validates ownership via family.accounts.find (defense-in-depth). early_payoff is a boolean flag used for business logic, not direct model assignment"
     }
   ],
   "brakeman_version": "7.1.0"

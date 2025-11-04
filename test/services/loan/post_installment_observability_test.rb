@@ -29,6 +29,7 @@ class LoanPostInstallmentObservabilityTest < ActiveSupport::TestCase
         self.span_called = true
         span = Object.new
         span.define_singleton_method(:set_data) { |_k, _v| }
+        span.define_singleton_method(:set_description) { |_desc| }
         yield span
       end
       def add_breadcrumb(*)
