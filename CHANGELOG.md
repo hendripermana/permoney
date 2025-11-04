@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.4](https://github.com/hendripermana/permoney/compare/v0.9.3...v0.9.4) (2025-11-04)
+
+
+### Bug Fixes
+
+* Simplify Docker build and fix asset precompilation ([785bc83](https://github.com/hendripermana/permoney/commit/785bc83cacb18cede7a7b3375f7bdfbfc03af432))
+* Suppress database warnings during asset precompilation ([892d1cd](https://github.com/hendripermana/permoney/commit/892d1cd18371b74fece285defc775e6a3dfc359c))
+
 ## [0.9.3](https://github.com/hendripermana/permoney/compare/v0.9.2...v0.9.3) (2025-11-04)
 
 
