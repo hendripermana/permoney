@@ -116,7 +116,7 @@ class PayLatersController < ApplicationController
       @error_message = result.error
       @purchase = OpenStruct.new(purchase_params)
       @categories = Current.family.categories.expenses.alphabetically
-      
+
       render :new_purchase, status: :unprocessable_entity
     end
   end

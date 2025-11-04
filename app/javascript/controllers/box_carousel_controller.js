@@ -75,7 +75,7 @@ export default class extends Controller {
     }, 0);
   }
 
-  renderFace(faceIndex, transform, itemIndex) {
+  renderFace(_faceIndex, transform, itemIndex) {
     const item = this.itemsValue[itemIndex];
     if (!item) return "";
 

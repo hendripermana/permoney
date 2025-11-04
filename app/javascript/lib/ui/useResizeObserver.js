@@ -157,7 +157,7 @@ export class ResizeObserverManager {
   /**
    * Generate unique observer ID
    */
-  generateObserverId(element) {
+  generateObserverId(_element) {
     return `observer_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
 
@@ -165,7 +165,9 @@ export class ResizeObserverManager {
    * Clean up all observers
    */
   cleanup() {
-    this.observers.forEach(({ cleanup }) => cleanup());
+    this.observers.forEach(({ cleanup }) => {
+      cleanup();
+    });
     this.observers.clear();
   }
 

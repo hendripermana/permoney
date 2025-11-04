@@ -44,7 +44,7 @@ export default class extends Controller {
     this.rateInputTargets.forEach(input => {
       const tenor = input.dataset.tenor
       const rate = parseFloat(input.value) / 100 // Convert percentage to decimal
-      rates[tenor] = isNaN(rate) ? 0 : rate
+      rates[tenor] = Number.isNaN(rate) ? 0 : rate
     })
     
     const rateTable = {
@@ -100,7 +100,7 @@ export default class extends Controller {
     }
 
     // Populate interest rate table AND user-friendly inputs
-    if (provider.interest_rate_table && provider.interest_rate_table.default) {
+    if (provider.interest_rate_table?.default) {
       const rates = provider.interest_rate_table.default
       
       // Update hidden JSON field

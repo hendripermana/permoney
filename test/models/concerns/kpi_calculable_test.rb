@@ -15,7 +15,7 @@ class KpiCalculableTest < ActiveSupport::TestCase
     assert_not_nil kpi.previous_value
     assert_not_nil kpi.change_percent
     assert_not_nil kpi.change_direction
-    assert_includes [:up, :down, :neutral], kpi.change_direction
+    assert_includes [ :up, :down, :neutral ], kpi.change_direction
   end
 
   test "kpi_monthly_income returns KpiMetric with required fields" do

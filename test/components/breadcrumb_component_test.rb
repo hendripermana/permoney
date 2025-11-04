@@ -77,7 +77,7 @@ class BreadcrumbComponentTest < ViewComponent::TestCase
   end
 
   test "accepts custom aria label" do
-    items = [{ text: "Home", href: "/" }]
+    items = [ { text: "Home", href: "/" } ]
 
     render_inline(BreadcrumbComponent.new(items: items, aria_label: "Custom Navigation"))
 
@@ -99,9 +99,9 @@ class BreadcrumbComponentTest < ViewComponent::TestCase
   test "backward compatibility with array format" do
     # Old format: [name, path]
     items = [
-      ["Home", "/"],
-      ["Components", "/components"],
-      ["Breadcrumb", nil]
+      [ "Home", "/" ],
+      [ "Components", "/components" ],
+      [ "Breadcrumb", nil ]
     ]
 
     # This would be converted in the partial, but we test direct component usage

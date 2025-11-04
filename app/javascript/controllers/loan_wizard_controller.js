@@ -113,15 +113,15 @@ export default class extends Controller {
     // Update any additional containers that rely on data attributes
     this.element
       .querySelectorAll('[data-loan-wizard-target="personalFields"]')
-      .forEach((container) =>
-        this.toggleFieldSection(container, type === "personal"),
-      );
+      .forEach((container) => {
+        this.toggleFieldSection(container, type === "personal");
+      });
 
     this.element
       .querySelectorAll('[data-loan-wizard-target="institutionalFields"]')
-      .forEach((container) =>
-        this.toggleFieldSection(container, type === "institutional"),
-      );
+      .forEach((container) => {
+        this.toggleFieldSection(container, type === "institutional");
+      });
 
     this.markSelectedCard(type);
   }
@@ -141,41 +141,41 @@ export default class extends Controller {
     this.loanTypeCardTargets.forEach((card) => {
       const isSelected = card.dataset.loanType === activeType;
 
-      CARD_SELECTED_CLASSES.forEach((klass) =>
-        card.classList.toggle(klass, isSelected),
-      );
-      CARD_UNSELECTED_CLASSES.forEach((klass) =>
-        card.classList.toggle(klass, !isSelected),
-      );
+      CARD_SELECTED_CLASSES.forEach((klass) => {
+        card.classList.toggle(klass, isSelected);
+      });
+      CARD_UNSELECTED_CLASSES.forEach((klass) => {
+        card.classList.toggle(klass, !isSelected);
+      });
 
       const iconContainer = card.querySelector('[data-loan-type-role="icon"]');
       if (iconContainer) {
-        ICON_SELECTED_CLASSES.forEach((klass) =>
-          iconContainer.classList.toggle(klass, isSelected),
-        );
-        ICON_UNSELECTED_CLASSES.forEach((klass) =>
-          iconContainer.classList.toggle(klass, !isSelected),
-        );
+        ICON_SELECTED_CLASSES.forEach((klass) => {
+          iconContainer.classList.toggle(klass, isSelected);
+        });
+        ICON_UNSELECTED_CLASSES.forEach((klass) => {
+          iconContainer.classList.toggle(klass, !isSelected);
+        });
       }
 
       const iconSvg = iconContainer?.querySelector("svg");
       if (iconSvg) {
-        ICON_SVG_SELECTED_CLASSES.forEach((klass) =>
-          iconSvg.classList.toggle(klass, isSelected),
-        );
-        ICON_SVG_UNSELECTED_CLASSES.forEach((klass) =>
-          iconSvg.classList.toggle(klass, !isSelected),
-        );
+        ICON_SVG_SELECTED_CLASSES.forEach((klass) => {
+          iconSvg.classList.toggle(klass, isSelected);
+        });
+        ICON_SVG_UNSELECTED_CLASSES.forEach((klass) => {
+          iconSvg.classList.toggle(klass, !isSelected);
+        });
       }
 
       const indicator = card.querySelector('[data-loan-type-role="indicator"]');
       if (indicator) {
-        INDICATOR_SELECTED_CLASSES.forEach((klass) =>
-          indicator.classList.toggle(klass, isSelected),
-        );
-        INDICATOR_UNSELECTED_CLASSES.forEach((klass) =>
-          indicator.classList.toggle(klass, !isSelected),
-        );
+        INDICATOR_SELECTED_CLASSES.forEach((klass) => {
+          indicator.classList.toggle(klass, isSelected);
+        });
+        INDICATOR_UNSELECTED_CLASSES.forEach((klass) => {
+          indicator.classList.toggle(klass, !isSelected);
+        });
       }
     });
   }
@@ -461,7 +461,7 @@ export default class extends Controller {
           this.showError("Please enter a valid loan amount");
           return false;
         }
-        if (!termMonths?.value || parseInt(termMonths.value) <= 0) {
+        if (!termMonths?.value || parseInt(termMonths.value, 10) <= 0) {
           this.showError("Please enter the loan term");
           return false;
         }
@@ -489,7 +489,9 @@ export default class extends Controller {
   showError(message) {
     // Remove existing error notifications
     const existingErrors = document.querySelectorAll(".loan-wizard-error");
-    existingErrors.forEach((error) => error.remove());
+    existingErrors.forEach((error) => {
+      error.remove();
+    });
 
     const notification = document.createElement("div");
     notification.className =
@@ -641,7 +643,7 @@ export default class extends Controller {
 
     const principal = parseFloat(this.principalAmountTarget?.value || 0);
     const rate = parseFloat(this.interestRateTarget?.value || 0);
-    const months = parseInt(this.termMonthsTarget?.value || 0);
+    const months = parseInt(this.termMonthsTarget?.value || 0, 10);
 
     if (principal <= 0 || months <= 0) {
       this.updatePaymentDisplay(0, 0, 0);

@@ -154,7 +154,7 @@ export default class extends Controller {
       .on("mouseleave", () => {
         clearTimeout(hoverTimeout);
       })
-      .on("click", (event, d) => {
+      .on("click", (_event, d) => {
         if (this.enableClickValue) {
           this.#handleClick(d.data);
         }

@@ -265,7 +265,7 @@ export default class extends Controller {
 
     if (
       !this.termMonthsTarget.value ||
-      parseInt(this.termMonthsTarget.value) <= 0
+      parseInt(this.termMonthsTarget.value, 10) <= 0
     ) {
       errors.push("Repayment period must be at least 1 month");
     }
@@ -330,7 +330,7 @@ export default class extends Controller {
   // Calculate estimated monthly payment
   calculateMonthlyPayment() {
     const amount = parseFloat(this.loanAmountTarget?.value || 0);
-    const term = parseInt(this.termMonthsTarget?.value || 0);
+    const term = parseInt(this.termMonthsTarget?.value || 0, 10);
     const rate = parseFloat(this.interestRateTarget?.value || 0) / 100;
 
     if (amount > 0 && term > 0) {
@@ -579,7 +579,7 @@ export default class extends Controller {
         return new Date().toISOString().split("T")[0];
       }
       return d.toISOString().split("T")[0];
-    } catch (error) {
+    } catch (_error) {
       return new Date().toISOString().split("T")[0];
     }
   }

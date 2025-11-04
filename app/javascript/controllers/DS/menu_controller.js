@@ -81,7 +81,7 @@ export default class extends Controller {
 
   // Rails 8.1: Close menu when menu item is clicked
   // Called explicitly via data-action on menu items
-  closeOnItemClick(event) {
+  closeOnItemClick(_event) {
     // Close menu immediately when item is clicked
     // Don't prevent default - let the link/button work normally
     this.close();

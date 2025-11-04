@@ -1,6 +1,6 @@
 import { Controller } from "@hotwired/stimulus";
 import * as d3 from "d3";
-import { sankey, sankeyLinkHorizontal } from "d3-sankey";
+import { sankey, } from "d3-sankey";
 
 // Connects to data-controller="sankey-chart"
 export default class extends Controller {
@@ -215,8 +215,8 @@ export default class extends Controller {
       .style("max-height", "100%");
 
     // Use dynamic margins calculated above
-    const sankeyWidth = width - margin.left - margin.right;
-    const sankeyHeight = height - margin.top - margin.bottom;
+    const _sankeyWidth = width - margin.left - margin.right;
+    const _sankeyHeight = height - margin.top - margin.bottom;
 
     // Ensure the Sankey uses the available space while preventing text cutoff
     const sankeyGenerator = sankey()
@@ -424,7 +424,7 @@ export default class extends Controller {
 
         // Dynamic text handling based on available space
         const maxTextWidth = Math.min(150, width * 0.25);
-        const isLeftSide = d.x0 < width / 2;
+        const _isLeftSide = d.x0 < width / 2;
 
         // Smart text truncation based on available space
         const maxChars = Math.max(

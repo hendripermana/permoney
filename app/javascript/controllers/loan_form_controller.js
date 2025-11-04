@@ -240,9 +240,9 @@ export default class LoanFormController extends Controller {
 
     let isValid = true;
 
-    if (!isNaN(min) && value < min) isValid = false;
-    if (!isNaN(max) && value > max) isValid = false;
-    if (isNaN(value) && field.required) isValid = false;
+    if (!Number.isNaN(min) && value < min) isValid = false;
+    if (!Number.isNaN(max) && value > max) isValid = false;
+    if (Number.isNaN(value) && field.required) isValid = false;
 
     this.toggleFieldError(field, !isValid);
   }
@@ -266,7 +266,9 @@ export default class LoanFormController extends Controller {
       "focus:ring-destructive/20",
     ];
 
-    errorClasses.forEach((cls) => field.classList.toggle(cls, hasError));
+    errorClasses.forEach((cls) => {
+      field.classList.toggle(cls, hasError);
+    });
   }
 
   // Utility method for debouncing

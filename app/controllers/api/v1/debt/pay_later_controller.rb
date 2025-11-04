@@ -1,6 +1,6 @@
 class Api::V1::Debt::PayLaterController < Api::V1::BaseController
   before_action :ensure_write_scope
-  before_action :validate_account_ownership, only: [:expense, :pay_installment]
+  before_action :validate_account_ownership, only: [ :expense, :pay_installment ]
 
   # POST /api/v1/debt/paylater
   # Params: { name, currency, provider_name, credit_limit, available_credit, ... }

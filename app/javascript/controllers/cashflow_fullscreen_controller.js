@@ -594,7 +594,7 @@ export default class extends Controller {
       const exportBtn = this.fullscreenModal?.querySelector(
         "#fullscreen-export-btn",
       );
-      const originalContent = exportBtn?.innerHTML;
+      const _originalContent = exportBtn?.innerHTML;
       if (exportBtn) {
         exportBtn.disabled = true;
         exportBtn.innerHTML = `
@@ -656,7 +656,7 @@ export default class extends Controller {
       const exportBtn = this.fullscreenModal?.querySelector(
         "#fullscreen-export-btn",
       );
-      const originalContent = exportBtn?.innerHTML;
+      const _originalContent = exportBtn?.innerHTML;
       if (exportBtn) {
         exportBtn.disabled = false;
         exportBtn.innerHTML = `
@@ -779,9 +779,9 @@ export default class extends Controller {
       // Convert to RGB and check if it's dark
       const rgb = backgroundColor.match(/\d+/g);
       if (rgb && rgb.length >= 3) {
-        const r = Number.parseInt(rgb[0]);
-        const g = Number.parseInt(rgb[1]);
-        const b = Number.parseInt(rgb[2]);
+        const r = Number.parseInt(rgb[0], 10);
+        const g = Number.parseInt(rgb[1], 10);
+        const b = Number.parseInt(rgb[2], 10);
         const brightness = (r * 299 + g * 587 + b * 114) / 1000;
         if (brightness < 128) {
           return true;

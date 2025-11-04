@@ -52,7 +52,7 @@ export default class extends Controller {
       }
 
       return parsed;
-    } catch (e) {
+    } catch (_e) {
       return { title: rawData };
     }
   }

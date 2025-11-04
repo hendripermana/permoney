@@ -9,7 +9,7 @@ export default class extends Controller {
     this.updateSubtype();
   }
 
-  updateSubtype(event) {
+  updateSubtype(_event) {
     const selectElement = this.element.querySelector(
       'select[name^="account_types"]',
     );
