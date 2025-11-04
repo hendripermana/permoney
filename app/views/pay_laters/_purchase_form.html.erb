@@ -1,0 +1,138 @@
+<%# Reusable Purchase Form Partial %>
+<% pay_later = account.accountable %>
+
+<%= form_with url: create_purchase_pay_later_path(account), 
+    method: :post,
+    data: { 
+      controller: "pay-later-purchase",
+      pay_later_purchase_preview_url_value: preview_installments_pay_later_path(account),
+      turbo_frame: "purchase_form"
+    },
+    class: "space-y-6" do |f| %>
+
+  <%# Error Messages %>
+  <% if error.present? %>
+    <div class="bg-red-50 theme-dark:bg-red-900/20 border border-red-200 theme-dark:border-red-800 rounded-lg p-4">
+      <div class="flex items-start">
+        <%= icon("alert-triangle", class: "w-5 h-5 text-red-600 mt-0.5 mr-2") %>
+        <div>
+          <h3 class="text-sm font-semibold text-red-900 theme-dark:text-red-100">Error Recording Purchase</h3>
+          <p class="text-sm text-red-600 theme-dark:text-red-400 mt-1"><%= error %></p>
+        </div>
+      </div>
+    </div>
+  <% end %>
+
+  <%# Merchant Name %>
+  <div>
+    <%= f.label :merchant_name, "Merchant/Store Name", class: "block text-sm font-medium text-primary mb-2" %>
+    <%= f.text_field :merchant_name,
+        placeholder: "e.g., Tokopedia, Lazada, Amazon",
+        required: true,
+        class: "w-full px-4 py-2 border border-primary rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" %>
+    <p class="text-xs text-secondary mt-1">Where did you make this purchase?</p>
+  </div>
+
+  <%# Amount %>
+  <div>
+    <%= f.label :amount, "Purchase Amount", class: "block text-sm font-medium text-primary mb-2" %>
+    <div class="relative">
+      <span class="absolute left-3 top-1/2 -translate-y-1/2 text-secondary">
+        <%= account.currency %>
+      </span>
+      <%= f.number_field :amount,
+          placeholder: "0.00",
+          step: "0.01",
+          min: "0",
+          required: true,
+          data: { 
+            action: "blur->pay-later-purchase#previewSchedule",
+            pay_later_purchase_target: "amountInput"
+          },
+          class: "w-full pl-16 pr-4 py-2 border border-primary rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" %>
+    </div>
+    <p class="text-xs text-secondary mt-1">
+      Available: <%= pay_later.available_credit_money.format %>
+    </p>
+  </div>
+
+  <%# Tenor Selection %>
+  <div>
+    <%= f.label :tenor_months, "Installment Period", class: "block text-sm font-medium text-primary mb-2" %>
+    <%= f.select :tenor_months,
+        options_for_select([
+          ["1 Month", 1],
+          ["3 Months", 3],
+          ["6 Months", 6],
+          ["12 Months", 12]
+        ].select { |_, months| months <= pay_later.max_tenor }, purchase.tenor_months || 3),
+        {},
+        {
+          data: { 
+            action: "change->pay-later-purchase#previewSchedule",
+            pay_later_purchase_target: "tenorInput"
+          },
+          class: "w-full px-4 py-2 border border-primary rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+        } %>
+    <p class="text-xs text-secondary mt-1">
+      <% if pay_later.free_interest_months > 0 %>
+        <%= icon("zap", class: "inline-block w-3 h-3") %>
+        First <%= pay_later.free_interest_months %> month(s) interest-free!
+      <% end %>
+    </p>
+  </div>
+
+  <%# Category - Integrated with existing Category system %>
+  <div>
+    <%= f.label :category_id, "Category", class: "block text-sm font-medium text-primary mb-2" %>
+    <%= f.collection_select :category_id,
+        account.family.categories.expenses.alphabetically,
+        :id,
+        :name,
+        { selected: purchase.category_id },
+        {
+          class: "w-full px-4 py-2 border border-primary rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-container text-primary"
+        } %>
+    <p class="text-xs text-secondary mt-1">Uses your existing expense categories for better reporting</p>
+  </div>
+
+  <%# Purchase Date %>
+  <div>
+    <%= f.label :purchase_date, "Purchase Date", class: "block text-sm font-medium text-primary mb-2" %>
+    <%= f.date_field :purchase_date,
+        value: purchase.purchase_date || Date.current,
+        max: Date.current,
+        required: true,
+        class: "w-full px-4 py-2 border border-primary rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" %>
+  </div>
+
+  <%# Notes %>
+  <div>
+    <%= f.label :notes, "Notes (Optional)", class: "block text-sm font-medium text-primary mb-2" %>
+    <%= f.text_area :notes,
+        placeholder: "Add any additional details about this purchase...",
+        rows: 3,
+        class: "w-full px-4 py-2 border border-primary rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" %>
+  </div>
+
+  <%# Preview Button %>
+  <div class="flex items-center justify-between pt-4 border-t border-primary">
+    <button type="button"
+            data-action="click->pay-later-purchase#previewSchedule"
+            class="inline-flex items-center px-4 py-2 bg-surface-inset text-primary rounded-lg hover:bg-gray-200 transition">
+      <%= icon("eye", class: "w-4 h-4 mr-2") %>
+      Preview Installments
+    </button>
+
+    <div class="flex gap-3">
+      <%= link_to "Cancel",
+          account_path(account),
+          class: "inline-flex items-center px-6 py-2 bg-surface-inset text-primary rounded-lg hover:bg-gray-200 transition",
+          data: { turbo_frame: "_top" } %>
+
+      <%= f.submit "Record Purchase",
+          class: "inline-flex items-center px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed",
+          data: { pay_later_purchase_target: "submitButton" } %>
+    </div>
+  </div>
+<% end %>

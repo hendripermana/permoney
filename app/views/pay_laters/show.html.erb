@@ -1,0 +1,14 @@
+<%# Main PayLater Account Show Page %>
+<%# This view is rendered through UI::AccountPage component which handles tabs %>
+<%= render UI::AccountPage.new(
+  account: @account,
+  chart_view: nil, # PayLater doesn't use chart views like investments
+  chart_period: nil,
+  active_tab: @tab
+) do |account_page| %>
+  <%= account_page.with_activity_feed(
+    feed_data: @account.activity_feed_data(period: Period.last_30_days),
+    pagy: nil,
+    search: nil
+  ) %>
+<% end %>

@@ -1,59 +1,353 @@
 <%# locals: (account:, url:) %>
+<% providers_data = PayLaterProviders.all_providers %>
 
 <%= render "accounts/form", account: account, url: url do |form| %>
   <%= render "shared/ruler", classes: "my-4" %>
 
-  <div class="space-y-2">
+  <div data-controller="pay-later-form" 
+       data-pay-later-form-providers-value="<%= providers_data.to_json %>"
+       class="space-y-6">
+    
     <%= form.fields_for :accountable do |pl_form| %>
-      <div class="flex items-center gap-2">
-        <%= pl_form.text_field :provider_name, label: "Provider", placeholder: "e.g., GoPayLater, Kredivo" %>
-        <%= pl_form.money_field :credit_limit, label: "Credit Limit", default_currency: Current.family.currency %>
-        <%= pl_form.money_field :available_credit, label: "Available Credit", default_currency: Current.family.currency %>
+      
+      <%# SECTION 1: Provider Selection %>
+      <div class="bg-blue-50 theme-dark:bg-blue-900/20 rounded-lg p-4 border border-blue-200 theme-dark:border-blue-800">
+        <h3 class="text-sm font-semibold text-blue-900 theme-dark:text-blue-100 mb-3 flex items-center">
+          <%= icon("building-2", class: "w-4 h-4 mr-2") %>
+          PayLater Provider
+        </h3>
+        
+        <div class="space-y-4">
+          <%# Provider Preset Dropdown %>
+          <div>
+            <label class="block text-sm font-medium text-primary mb-2">
+              Choose Provider
+              <span class="text-xs text-secondary ml-1">(Select to auto-fill settings)</span>
+            </label>
+            <select data-pay-later-form-target="providerSelect"
+                    data-action="change->pay-later-form#providerChanged"
+                    class="w-full px-4 py-2 border border-primary rounded-lg bg-container text-primary focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+              <option value="">-- Select a provider --</option>
+              <optgroup label="🇮🇩 Popular Indonesian Providers">
+                <option value="kredivo">Kredivo (0% promo available)</option>
+                <option value="akulaku">Akulaku (Cashback program)</option>
+                <option value="atome">Atome (Premium shopping)</option>
+                <option value="indodana">Indodana</option>
+                <option value="shopee_paylater">SPayLater (Shopee)</option>
+                <option value="gopay_later">GoPayLater (Gojek)</option>
+                <option value="traveloka_paylater">Traveloka PayLater</option>
+                <option value="ovo_paylater">OVO PayLater</option>
+              </optgroup>
+              <optgroup label="☪️ Sharia-Compliant">
+                <option value="alami_syariah">Alami Syariah (Islamic financing)</option>
+              </optgroup>
+              <optgroup label="Other">
+                <option value="custom">Custom Provider (Manual entry)</option>
+              </optgroup>
+            </select>
+          </div>
+
+          <%# Provider Name (auto-filled) %>
+          <%= pl_form.text_field :provider_name, 
+              label: "Provider Name",
+              placeholder: "e.g., Kredivo, GoPayLater",
+              required: true,
+              data: { pay_later_form_target: "providerName" },
+              wrapper: { class: "mb-0" } %>
+          
+          <%# Compliance Type %>
+          <div>
+            <%= pl_form.label :compliance_type, "Compliance Type", class: "block text-sm font-medium text-primary mb-2" %>
+            <%= pl_form.select :compliance_type,
+                [
+                  ["Conventional (Standard interest)", "conventional"],
+                  ["Sharia-Compliant (Islamic financing)", "sharia"]
+                ],
+                { selected: pl_form.object.compliance_type || "conventional" },
+                {
+                  data: { pay_later_form_target: "complianceType" },
+                  class: "w-full px-4 py-2 border border-primary rounded-lg bg-container text-primary placeholder:text-subdued focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                } %>
+            <p class="text-xs text-secondary mt-1">
+              Sharia-compliant uses profit-sharing (margin) instead of interest
+            </p>
+          </div>
+        </div>
       </div>
 
-      <div class="flex items-center gap-2">
-        <%= pl_form.number_field :free_interest_months, label: "Free-Interest Months", min: 0, step: 1 %>
-        <%= pl_form.money_field :late_fee_first7, label: "Late Fee (1-7 days)", default_currency: Current.family.currency %>
-        <%= pl_form.money_field :late_fee_per_day, label: "Late Fee (per extra day)", default_currency: Current.family.currency %>
+      <%# SECTION 2: Credit Terms %>
+      <div class="bg-green-50 theme-dark:bg-green-900/20 rounded-lg p-4 border border-green-200 theme-dark:border-green-800">
+        <h3 class="text-sm font-semibold text-green-900 theme-dark:text-green-100 mb-3 flex items-center">
+          <%= icon("credit-card", class: "w-4 h-4 mr-2") %>
+          Credit Terms
+        </h3>
+        
+        <div class="space-y-4">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <%= pl_form.money_field :credit_limit, 
+                label: "Credit Limit",
+                placeholder: "e.g., 5000000",
+                required: true,
+                default_currency: Current.family.currency,
+                data: { pay_later_form_target: "creditLimit" },
+                wrapper: { class: "mb-0" } %>
+            
+            <%= pl_form.money_field :available_credit, 
+                label: "Available Credit",
+                placeholder: "Same as credit limit initially",
+                default_currency: Current.family.currency,
+                wrapper: { class: "mb-0" } %>
+          </div>
+          
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <%= pl_form.number_field :max_tenor, 
+                label: "Max Installment Period",
+                min: 1, 
+                step: 1,
+                value: pl_form.object.max_tenor || 12,
+                data: { pay_later_form_target: "maxTenor" },
+                wrapper: { class: "mb-0" } %>
+            
+            <%= pl_form.number_field :free_interest_months, 
+                label: "Free Interest Months",
+                min: 0, 
+                step: 1,
+                value: pl_form.object.free_interest_months || 0,
+                data: { pay_later_form_target: "freeInterestMonths" },
+                wrapper: { class: "mb-0" } %>
+            
+            <%= pl_form.number_field :grace_days, 
+                label: "Grace Days",
+                min: 0, 
+                step: 1,
+                value: pl_form.object.grace_days || 0,
+                data: { pay_later_form_target: "graceDays" },
+                wrapper: { class: "mb-0" } %>
+          </div>
+          
+          <p class="text-xs text-secondary bg-container rounded px-3 py-2 border border-primary">
+            <%= icon("info", class: "inline-block w-3 h-3 mr-1") %>
+            <strong>Max tenor</strong> is the longest installment period allowed. 
+            <strong>Free interest months</strong> apply to first installment(s).
+            <strong>Grace days</strong> before late fees apply.
+          </p>
+        </div>
       </div>
 
-      <div class="flex items-center gap-2">
-        <%= pl_form.text_area :interest_rate_table, label: "Interest Rate Table (JSON)", placeholder: '{"default":{"1":0.0,"3":0.03,"6":0.05,"12":0.0263},"overrides":{"electronics":{"12":0.0300}}}' %>
+      <%# SECTION 3: Fees & Interest %>
+      <div class="bg-orange-50 theme-dark:bg-orange-900/20 rounded-lg p-4 border border-orange-200 theme-dark:border-orange-800">
+        <h3 class="text-sm font-semibold text-orange-900 theme-dark:text-orange-100 mb-3 flex items-center">
+          <%= icon("percent", class: "w-4 h-4 mr-2") %>
+          Fees & Interest Rates
+        </h3>
+        
+        <div class="space-y-4">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <%= pl_form.money_field :late_fee_first7, 
+                label: "Late Fee (First 7 days)",
+                default_currency: Current.family.currency,
+                data: { pay_later_form_target: "lateFeeFirst7" },
+                wrapper: { class: "mb-0" } %>
+            
+            <%= pl_form.money_field :late_fee_per_day, 
+                label: "Late Fee (Per day after)",
+                default_currency: Current.family.currency,
+                data: { pay_later_form_target: "lateFeePerDay" },
+                wrapper: { class: "mb-0" } %>
+          </div>
+          
+          <div>
+            <label class="block text-sm font-medium text-primary mb-2">
+              Interest Rates by Installment Period
+            </label>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <%# User-friendly rate inputs %>
+              <div>
+                <label class="text-xs text-secondary block mb-1">1 Month</label>
+                <div class="relative">
+                  <input type="number" 
+                         step="0.01" 
+                         min="0" 
+                         max="100"
+                         value="0"
+                         data-tenor="1"
+                         data-pay-later-form-target="rateInput"
+                         data-action="input->pay-later-form#updateInterestTable"
+                         class="w-full px-3 py-2 pr-8 border border-primary rounded-lg bg-container text-primary placeholder:text-subdued focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                         placeholder="0.00">
+                  <span class="absolute right-3 top-1/2 -translate-y-1/2 text-secondary text-sm">%</span>
+                </div>
+              </div>
+              <div>
+                <label class="text-xs text-secondary block mb-1">3 Months</label>
+                <div class="relative">
+                  <input type="number" 
+                         step="0.01" 
+                         min="0" 
+                         max="100"
+                         value="3"
+                         data-tenor="3"
+                         data-pay-later-form-target="rateInput"
+                         data-action="input->pay-later-form#updateInterestTable"
+                         class="w-full px-3 py-2 pr-8 border border-primary rounded-lg bg-container text-primary placeholder:text-subdued focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                         placeholder="0.00">
+                  <span class="absolute right-3 top-1/2 -translate-y-1/2 text-secondary text-sm">%</span>
+                </div>
+              </div>
+              <div>
+                <label class="text-xs text-secondary block mb-1">6 Months</label>
+                <div class="relative">
+                  <input type="number" 
+                         step="0.01" 
+                         min="0" 
+                         max="100"
+                         value="5"
+                         data-tenor="6"
+                         data-pay-later-form-target="rateInput"
+                         data-action="input->pay-later-form#updateInterestTable"
+                         class="w-full px-3 py-2 pr-8 border border-primary rounded-lg bg-container text-primary placeholder:text-subdued focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                         placeholder="0.00">
+                  <span class="absolute right-3 top-1/2 -translate-y-1/2 text-secondary text-sm">%</span>
+                </div>
+              </div>
+              <div>
+                <label class="text-xs text-secondary block mb-1">12 Months</label>
+                <div class="relative">
+                  <input type="number" 
+                         step="0.01" 
+                         min="0" 
+                         max="100"
+                         value="2.63"
+                         data-tenor="12"
+                         data-pay-later-form-target="rateInput"
+                         data-action="input->pay-later-form#updateInterestTable"
+                         class="w-full px-3 py-2 pr-8 border border-primary rounded-lg bg-container text-primary placeholder:text-subdued focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                         placeholder="0.00">
+                  <span class="absolute right-3 top-1/2 -translate-y-1/2 text-secondary text-sm">%</span>
+                </div>
+              </div>
+            </div>
+            <%# Hidden field for actual JSON storage %>
+            <%= pl_form.hidden_field :interest_rate_table, 
+                value: '{"default":{"1":0.0,"3":0.03,"6":0.05,"12":0.0263}}',
+                data: { pay_later_form_target: "interestRateTable" } %>
+            <p class="text-xs text-secondary mt-2">
+              <%= icon("info", class: "inline-block w-3 h-3 mr-1") %>
+              Monthly interest rate per installment period. Use 0% for interest-free periods.
+            </p>
+          </div>
+          
+          <div class="flex items-center gap-4">
+            <%= pl_form.check_box :is_compound, 
+                label: "Compound Interest",
+                data: { pay_later_form_target: "isCompound" } %>
+            <p class="text-xs text-secondary">
+              Enable if interest compounds over time (rare for PayLater)
+            </p>
+          </div>
+        </div>
       </div>
 
-      <%= render "shared/ruler", classes: "my-2" %>
-
-      <div class="flex items-center gap-2">
-        <%= pl_form.text_field :currency_code, label: "Currency (ISO-3)", placeholder: "IDR", value: pl_form.object.currency_code || "IDR" %>
-        <%= pl_form.number_field :exchange_rate_to_idr, label: "Rate → IDR (override)", step: 0.000001, placeholder: "auto" %>
-        <%= pl_form.number_field :max_tenor, label: "Max Tenor (months)", min: 1, step: 1, value: pl_form.object.max_tenor || 12 %>
+      <%# SECTION 4: Early Settlement %>
+      <div class="bg-purple-50 theme-dark:bg-purple-900/20 rounded-lg p-4 border border-purple-200 theme-dark:border-purple-800">
+        <h3 class="text-sm font-semibold text-purple-900 theme-dark:text-purple-100 mb-3 flex items-center">
+          <%= icon("zap", class: "w-4 h-4 mr-2") %>
+          Early Settlement
+        </h3>
+        
+        <div class="space-y-4">
+          <div class="flex items-start gap-3">
+            <%= pl_form.check_box :early_settlement_allowed, 
+                label: "Allow Early Settlement",
+                checked: true,
+                data: { pay_later_form_target: "earlySettlementAllowed" } %>
+            <div class="flex-1">
+              <p class="text-xs text-secondary">
+                Allow users to pay off all remaining installments at once
+              </p>
+            </div>
+          </div>
+          
+          <%= pl_form.money_field :early_settlement_fee, 
+              label: "Early Settlement Fee",
+              default_currency: Current.family.currency,
+              data: { pay_later_form_target: "earlySettlementFee" },
+              wrapper: { class: "mb-0" } %>
+          
+          <p class="text-xs text-secondary bg-container rounded px-3 py-2 border border-primary">
+            <%= icon("info", class: "inline-block w-3 h-3 mr-1") %>
+            Some providers charge a fee for early settlement. Set to 0 if no fee applies.
+          </p>
+        </div>
       </div>
 
-      <div class="flex items-center gap-2">
-        <%= pl_form.date_field :approved_date, label: "Approved Date" %>
-        <%= pl_form.date_field :expiry_date, label: "Expiry Date" %>
-        <%= pl_form.select :status, [["ACTIVE","ACTIVE"],["CLOSED","CLOSED"],["SUSPENDED","SUSPENDED"]], { label: "Status" } %>
+      <%# SECTION 5: Account Details %>
+      <div class="bg-container-inset rounded-lg p-4 border border-primary">
+        <h3 class="text-sm font-semibold text-primary mb-3 flex items-center">
+          <%= icon("file-text", class: "w-4 h-4 mr-2") %>
+          Account Details
+        </h3>
+        
+        <div class="space-y-4">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <%= pl_form.date_field :approved_date, 
+                label: "Approved Date",
+                value: pl_form.object.approved_date || Date.current,
+                wrapper: { class: "mb-0" } %>
+            
+            <%= pl_form.date_field :expiry_date, 
+                label: "Expiry Date (Optional)",
+                wrapper: { class: "mb-0" } %>
+          </div>
+          
+          <%= pl_form.select :status, 
+              [["Active", "ACTIVE"], ["Closed", "CLOSED"], ["Suspended", "SUSPENDED"]], 
+              { label: "Status", selected: "ACTIVE" },
+              { class: "w-full px-4 py-2 border border-primary rounded-lg bg-container text-primary placeholder:text-subdued focus:ring-2 focus:ring-gray-500 focus:border-transparent" } %>
+          
+          <div>
+            <%= pl_form.label :notes, "Notes (Optional)", class: "block text-sm font-medium text-primary mb-2" %>
+            <%= pl_form.text_area :notes,
+                rows: 4,
+                placeholder: "Add any additional information about this account...",
+                class: "w-full px-4 py-3 border border-primary rounded-lg bg-container text-primary placeholder:text-subdued focus:ring-2 focus:ring-gray-500 focus:border-transparent resize-y" %>
+            <p class="text-xs text-secondary mt-1">
+              <%= icon("info", class: "inline-block w-3 h-3 mr-1") %>
+              Optional: Add notes about credit terms, special conditions, or reminders.
+            </p>
+          </div>
+        </div>
       </div>
 
-      <div class="flex items-center gap-2">
-        <%= pl_form.check_box :auto_update_rate, label: "Auto update rate", checked: true %>
-        <%= pl_form.check_box :is_compound, label: "Compound interest?" %>
-        <%= pl_form.number_field :grace_days, label: "Grace Days", min: 0, step: 1 %>
+      <%# SECTION 6: Advanced Settings (Hidden by default, shown for custom) %>
+      <div data-pay-later-form-target="customFieldsSection" class="hidden bg-yellow-50 theme-dark:bg-yellow-900/20 rounded-lg p-4 border border-yellow-200 theme-dark:border-yellow-800">
+        <h3 class="text-sm font-semibold text-yellow-900 theme-dark:text-yellow-100 mb-3 flex items-center">
+          <%= icon("settings", class: "w-4 h-4 mr-2") %>
+          Advanced Settings
+        </h3>
+        
+        <div class="space-y-4">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <%= pl_form.text_field :currency_code, 
+                label: "Currency Code",
+                placeholder: "IDR",
+                value: pl_form.object.currency_code || Current.family.currency,
+                wrapper: { class: "mb-0" } %>
+            
+            <%= pl_form.text_field :contract_url, 
+                label: "Contract URL (Optional)",
+                placeholder: "https://...",
+                wrapper: { class: "mb-0" } %>
+          </div>
+          
+          <div class="flex items-center gap-4">
+            <%= pl_form.check_box :auto_update_rate, 
+                label: "Auto-update exchange rates",
+                checked: true %>
+          </div>
+        </div>
       </div>
 
-      <div class="flex items-center gap-2">
-        <%= pl_form.check_box :early_settlement_allowed, label: "Allow early repayment", checked: true %>
-        <%= pl_form.money_field :early_settlement_fee, label: "Early settlement fee", default_currency: Current.family.currency %>
-      </div>
-
-      <div class="flex items-center gap-2">
-        <%= pl_form.text_field :contract_url, label: "Contract URL" %>
-        <%= pl_form.text_field :updated_by, label: "Updated By" %>
-      </div>
-
-      <div>
-        <%= pl_form.text_area :notes, label: "Notes", rows: 3 %>
-      </div>
     <% end %>
   </div>
 <% end %>

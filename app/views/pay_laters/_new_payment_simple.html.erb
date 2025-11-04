@@ -1,0 +1,43 @@
+<%= render DS::Dialog.new(width: :md) do |dialog| %>
+  <% dialog.with_header(
+    title: "Make Payment",
+    subtitle: "#{@pay_later.provider_name} • #{@pay_later.outstanding_balance_money.format} outstanding"
+  ) %>
+  
+  <% dialog.with_body do %>
+    <%= styled_form_with url: process_payment_pay_later_path(@account), method: :post, class: "space-y-4" do |f| %>
+      <section class="space-y-2">
+        <%= f.money_field :amount,
+            label: "Payment Amount",
+            required: true,
+            default_currency: @account.currency,
+            value: @suggested_amount,
+            hint: @pay_later.next_due_installment ? "Next due: #{Money.new(@pay_later.next_due_installment.total_due, @account.currency).format}" : nil %>
+
+        <%= f.collection_select :source_account_id,
+            @source_accounts,
+            :id,
+            :name,
+            { prompt: "Select account", label: "Pay from" },
+            required: true %>
+
+        <%= f.date_field :payment_date,
+            label: "Payment Date",
+            required: true,
+            value: Date.current,
+            max: Date.current %>
+      </section>
+
+      <%= render DS::Disclosure.new(title: "Details") do %>
+        <%= f.text_area :notes,
+            label: "Notes (Optional)",
+            placeholder: "Add any notes about this payment...",
+            rows: 5 %>
+      <% end %>
+
+      <section>
+        <%= f.submit "Process Payment" %>
+      </section>
+    <% end %>
+  <% end %>
+<% end %>

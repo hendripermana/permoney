@@ -1,0 +1,213 @@
+<div class="space-y-6">
+  <%# Provider Information %>
+  <div class="bg-container rounded-lg border border-primary p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-lg font-semibold text-primary">
+        <%= helpers.icon("building", class: "inline-block w-5 h-5 mr-2") %>
+        Account Information
+      </h3>
+      <span class="px-3 py-1 rounded-full text-sm font-medium <%= account_status_badge_color %>">
+        <%= provider_info[:status] %>
+      </span>
+    </div>
+    
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <p class="text-sm text-secondary">Provider</p>
+        <p class="font-semibold text-primary"><%= provider_info[:name] %></p>
+      </div>
+      <div>
+        <p class="text-sm text-secondary">Type</p>
+        <p class="font-semibold text-primary">
+          <%= provider_info[:compliance] %>
+          <% if pay_later.sharia_compliant? %>
+            <%= helpers.icon("check-circle", class: "inline-block w-4 h-4 text-green-600 ml-1") %>
+          <% end %>
+        </p>
+      </div>
+      <div>
+        <p class="text-sm text-secondary">Max Tenor</p>
+        <p class="font-semibold text-primary"><%= provider_info[:max_tenor] %></p>
+      </div>
+      <div>
+        <p class="text-sm text-secondary">Free Interest Period</p>
+        <p class="font-semibold text-primary"><%= pay_later.free_interest_months %> month(s)</p>
+      </div>
+    </div>
+  </div>
+
+  <%# Credit Overview %>
+  <div class="bg-container rounded-lg border border-primary p-6">
+    <h3 class="text-lg font-semibold text-primary mb-4">
+      <%= helpers.icon("credit-card", class: "inline-block w-5 h-5 mr-2") %>
+      Credit Overview
+    </h3>
+    
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <% stats.each do |stat| %>
+        <div class="bg-container-inset rounded-lg p-4">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-sm text-secondary"><%= stat[:label] %></span>
+            <span class="<%= stat[:bg_color] %> <%= stat[:color] %> p-2 rounded-lg">
+              <%= helpers.icon(stat[:icon], class: "w-4 h-4") %>
+            </span>
+          </div>
+          <p class="text-2xl font-bold <%= stat[:color] %>"><%= stat[:value] %></p>
+        </div>
+      <% end %>
+    </div>
+
+    <%# Credit Utilization Bar %>
+    <div class="mt-4">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-sm font-medium text-primary">Credit Utilization</span>
+        <span class="text-sm font-semibold <%= credit_utilization_color %>">
+          <%= credit_utilization_percentage.round(1) %>%
+        </span>
+      </div>
+      <div class="w-full bg-gray-200 rounded-full h-3">
+        <div class="<%= credit_utilization_percentage >= 80 ? 'bg-red-600' : 'bg-blue-600' %> h-3 rounded-full transition-all duration-300" 
+             style="width: <%= [credit_utilization_percentage, 100].min %>%"></div>
+      </div>
+      <% if credit_utilization_percentage >= 80 %>
+        <p class="text-sm text-red-600 mt-2 flex items-center">
+          <%= helpers.icon("alert-triangle", class: "w-4 h-4 mr-1") %>
+          High utilization - consider making a payment
+        </p>
+      <% end %>
+    </div>
+  </div>
+
+  <%# Payment Statistics %>
+  <div class="bg-container rounded-lg border border-primary p-6">
+    <h3 class="text-lg font-semibold text-primary mb-4">
+      <%= helpers.icon("bar-chart", class: "inline-block w-5 h-5 mr-2") %>
+      Payment Statistics
+    </h3>
+    
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+      <% payment_stats.each do |stat| %>
+        <div class="text-center">
+          <div class="flex items-center justify-center mb-2">
+            <%= helpers.icon(stat[:icon], class: "w-5 h-5 #{stat[:color]}") %>
+          </div>
+          <p class="text-2xl font-bold <%= stat[:color] %>"><%= stat[:value] %></p>
+          <p class="text-sm text-secondary"><%= stat[:label] %></p>
+        </div>
+      <% end %>
+    </div>
+
+    <%# On-Time Payment Rate %>
+    <div class="bg-container-inset rounded-lg p-4">
+      <div class="flex items-center justify-between">
+        <span class="text-sm font-medium text-primary">On-Time Payment Rate</span>
+        <span class="text-2xl font-bold <%= on_time_rate_color %>">
+          <%= on_time_payment_rate %>%
+        </span>
+      </div>
+      <div class="w-full bg-gray-200 rounded-full h-2 mt-2">
+        <div class="bg-green-600 h-2 rounded-full transition-all duration-300" 
+             style="width: <%= on_time_payment_rate %>%"></div>
+      </div>
+    </div>
+  </div>
+
+  <%# Next Payment Due %>
+  <% if next_due_installment %>
+    <div class="bg-blue-50 theme-dark:bg-blue-900/20 border border-blue-200 theme-dark:border-blue-800 rounded-lg p-6">
+      <div class="flex items-start">
+        <div class="flex-shrink-0">
+          <%= helpers.icon("calendar", class: "w-6 h-6 text-blue-600") %>
+        </div>
+        <div class="ml-3 flex-1">
+          <h3 class="text-lg font-semibold text-blue-900 theme-dark:text-blue-100 mb-2">Next Payment Due</h3>
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <p class="text-sm text-blue-600 theme-dark:text-blue-400">Due Date</p>
+              <p class="font-semibold text-blue-900 theme-dark:text-blue-100"><%= next_due_installment.due_date.strftime("%B %d, %Y") %></p>
+            </div>
+            <div>
+              <p class="text-sm text-blue-600 theme-dark:text-blue-400">Amount Due</p>
+              <p class="font-semibold text-blue-900 theme-dark:text-blue-100"><%= Money.new(next_due_installment.total_due, account.currency).format %></p>
+            </div>
+            <div>
+              <p class="text-sm text-blue-600 theme-dark:text-blue-400">Installment</p>
+              <p class="font-semibold text-blue-900 theme-dark:text-blue-100">#<%= next_due_installment.installment_no %></p>
+            </div>
+          </div>
+          <div class="mt-4 flex gap-2">
+            <%= link_to new_payment_pay_later_path(account), 
+                class: "inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition",
+                data: { turbo_frame: "_top" } do %>
+              <%= helpers.icon("credit-card", class: "w-4 h-4 mr-2") %>
+              Make Payment
+            <% end %>
+          </div>
+        </div>
+      </div>
+    </div>
+  <% end %>
+
+  <%# Overdue Alert %>
+  <% if has_overdue? %>
+    <div class="bg-red-50 theme-dark:bg-red-900/20 border border-red-200 theme-dark:border-red-800 rounded-lg p-6">
+      <div class="flex items-start">
+        <div class="flex-shrink-0">
+          <%= helpers.icon("alert-triangle", class: "w-6 h-6 text-red-600") %>
+        </div>
+        <div class="ml-3 flex-1">
+          <h3 class="text-lg font-semibold text-red-900 theme-dark:text-red-100 mb-2">Overdue Payment Alert</h3>
+          <p class="text-red-600 theme-dark:text-red-400 mb-3">
+            You have <%= pay_later.overdue_installments.count %> overdue installment(s) totaling <%= overdue_amount %>.
+            Late fees may apply. Please make a payment as soon as possible.
+          </p>
+          <div class="flex gap-2">
+            <%= link_to new_payment_pay_later_path(account), 
+                class: "inline-flex items-center px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition",
+                data: { turbo_frame: "_top" } do %>
+              <%= helpers.icon("credit-card", class: "w-4 h-4 mr-2") %>
+              Pay Now
+            <% end %>
+            <%= link_to schedule_pay_later_path(account), 
+                class: "inline-flex items-center px-4 py-2 bg-container text-red-600 border border-red-600 rounded-lg hover:bg-red-50 theme-dark:bg-red-900/20 transition",
+                data: { turbo_frame: "_top" } do %>
+              <%= helpers.icon("calendar", class: "w-4 h-4 mr-2") %>
+              View Schedule
+            <% end %>
+          </div>
+        </div>
+      </div>
+    </div>
+  <% end %>
+
+  <%# Quick Actions %>
+  <div class="bg-container rounded-lg border border-primary p-6">
+    <h3 class="text-lg font-semibold text-primary mb-4">
+      <%= helpers.icon("zap", class: "inline-block w-5 h-5 mr-2") %>
+      Quick Actions
+    </h3>
+    
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <%= link_to new_purchase_pay_later_path(account),
+          class: "flex items-center justify-center px-6 py-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition",
+          data: { turbo_frame: :modal } do %>
+        <%= helpers.icon("shopping-cart", class: "w-5 h-5 mr-2") %>
+        Record Purchase
+      <% end %>
+
+      <%= link_to new_payment_pay_later_path(account),
+          class: "flex items-center justify-center px-6 py-4 bg-green-600 text-white rounded-lg hover:bg-green-700 transition",
+          data: { turbo_frame: :modal } do %>
+        <%= helpers.icon("credit-card", class: "w-5 h-5 mr-2") %>
+        Make Payment
+      <% end %>
+
+      <%= link_to schedule_pay_later_path(account),
+          class: "flex items-center justify-center px-6 py-4 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition",
+          data: { turbo_frame: "_top" } do %>
+        <%= helpers.icon("calendar", class: "w-5 h-5 mr-2") %>
+        View Schedule
+      <% end %>
+    </div>
+  </div>
+</div>

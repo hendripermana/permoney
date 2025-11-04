@@ -1,0 +1,206 @@
+<%# Early Settlement View %>
+<div class="max-w-4xl mx-auto px-4 py-8">
+  <%= render "accounts/show/header", 
+      account: @account, 
+      title: "Early Settlement", 
+      subtitle: @pay_later.provider_name %>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
+    <%# Main Settlement Form - Left Side %>
+    <div class="lg:col-span-2">
+      <div class="bg-container rounded-lg border border-primary p-6">
+        <div class="mb-6">
+          <h2 class="text-2xl font-bold text-primary mb-2">Pay Off All Installments</h2>
+          <p class="text-secondary">
+            Settle all remaining installments in one payment.
+            <% if @pay_later.early_settlement_fee && @pay_later.early_settlement_fee > 0 %>
+              An early settlement fee of <%= @pay_later.early_settlement_fee_money.format %> will be applied.
+            <% else %>
+              No additional fees for early settlement!
+            <% end %>
+          </p>
+        </div>
+
+        <%= turbo_frame_tag "settlement_form" do %>
+          <%= render "pay_laters/settlement_form", 
+              account: @account, 
+              source_accounts: @source_accounts,
+              settlement_amount: @settlement_amount,
+              error: @error_message %>
+        <% end %>
+      </div>
+    </div>
+
+    <%# Settlement Summary - Right Sidebar %>
+    <div class="lg:col-span-1">
+      <div class="space-y-4">
+        <%# Settlement Amount Card %>
+        <div class="bg-gradient-to-br from-green-50 to-green-100 rounded-lg border border-green-200 theme-dark:border-green-800 p-6">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-sm font-medium text-green-900 theme-dark:text-green-100">Total Settlement Amount</span>
+            <%= icon("check-circle", class: "w-5 h-5 text-green-600") %>
+          </div>
+          <p class="text-3xl font-bold text-green-900 theme-dark:text-green-100 mb-2">
+            <%= @settlement_amount.format %>
+          </p>
+          <div class="space-y-1 text-xs text-green-600 theme-dark:text-green-400">
+            <div class="flex justify-between">
+              <span>Outstanding Balance</span>
+              <span><%= @pay_later.outstanding_balance_money.format %></span>
+            </div>
+            <% if @pay_later.early_settlement_fee && @pay_later.early_settlement_fee > 0 %>
+              <div class="flex justify-between">
+                <span>Early Settlement Fee</span>
+                <span><%= @pay_later.early_settlement_fee_money.format %></span>
+              </div>
+            <% end %>
+          </div>
+        </div>
+
+        <%# Savings Card %>
+        <div class="bg-container rounded-lg border border-primary p-4">
+          <p class="text-sm font-medium text-primary mb-3 flex items-center">
+            <%= icon("trending-down", class: "w-4 h-4 mr-2 text-blue-600") %>
+            Potential Savings
+          </p>
+          <% 
+            total_if_continue = @unpaid_installments.sum(&:total_due)
+            savings = total_if_continue - @settlement_amount.amount
+          %>
+          <% if savings > 0 %>
+            <p class="text-2xl font-bold text-blue-600 mb-1">
+              <%= Money.new(savings, @account.currency).format %>
+            </p>
+            <p class="text-xs text-secondary">
+              Save on future interest by settling now
+            </p>
+          <% else %>
+            <p class="text-sm text-secondary">
+              Early settlement fee applies, but you gain peace of mind
+            </p>
+          <% end %>
+        </div>
+
+        <%# Installments to be Settled %>
+        <div class="bg-container rounded-lg border border-primary p-4">
+          <p class="text-sm font-medium text-primary mb-3">
+            Installments to be Paid Off
+          </p>
+          <div class="space-y-2">
+            <% @unpaid_installments.first(3).each do |installment| %>
+              <div class="flex justify-between text-sm">
+                <span class="text-secondary">#<%= installment.installment_no %></span>
+                <span class="font-semibold text-primary">
+                  <%= Money.new(installment.remaining_amount_decimal, @account.currency).format %>
+                </span>
+              </div>
+            <% end %>
+            <% if @unpaid_installments.count > 3 %>
+              <p class="text-xs text-secondary text-center pt-1">
+                ... and <%= @unpaid_installments.count - 3 %> more
+              </p>
+            <% end %>
+            <div class="pt-2 border-t border-primary flex justify-between text-sm font-semibold">
+              <span class="text-primary">Total (<%= @unpaid_installments.count %> installments)</span>
+              <span class="text-primary"><%= @settlement_amount.format %></span>
+            </div>
+          </div>
+        </div>
+
+        <%# Benefits List %>
+        <div class="bg-blue-50 theme-dark:bg-blue-900/20 rounded-lg border border-blue-200 theme-dark:border-blue-800 p-4">
+          <p class="text-sm font-semibold text-blue-900 theme-dark:text-blue-100 mb-3">Benefits of Early Settlement</p>
+          <ul class="space-y-2 text-sm text-blue-800">
+            <li class="flex items-start">
+              <%= icon("check", class: "w-4 h-4 mr-2 mt-0.5 flex-shrink-0") %>
+              <span>No more monthly payments</span>
+            </li>
+            <li class="flex items-start">
+              <%= icon("check", class: "w-4 h-4 mr-2 mt-0.5 flex-shrink-0") %>
+              <span>Save on future interest charges</span>
+            </li>
+            <li class="flex items-start">
+              <%= icon("check", class: "w-4 h-4 mr-2 mt-0.5 flex-shrink-0") %>
+              <span>Restore full credit limit</span>
+            </li>
+            <li class="flex items-start">
+              <%= icon("check", class: "w-4 h-4 mr-2 mt-0.5 flex-shrink-0") %>
+              <span>Improve payment history</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <%# Unpaid Installments Breakdown %>
+  <div class="bg-container rounded-lg border border-primary p-6 mt-6">
+    <h3 class="text-lg font-semibold text-primary mb-4">
+      <%= icon("list", class: "inline-block w-5 h-5 mr-2") %>
+      Installments Being Settled
+    </h3>
+    
+    <div class="overflow-x-auto">
+      <table class="min-w-full divide-y divide-gray-200">
+        <thead class="bg-gray-50">
+          <tr>
+            <th class="px-4 py-3 text-left text-xs font-medium text-secondary uppercase">#</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-secondary uppercase">Due Date</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-secondary uppercase">Principal</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-secondary uppercase">
+              <%= @pay_later.sharia_compliant? ? "Profit" : "Interest" %>
+            </th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-secondary uppercase">Amount Due</th>
+          </tr>
+        </thead>
+        <tbody class="bg-container divide-y divide-gray-200">
+          <% @unpaid_installments.each do |installment| %>
+            <tr class="hover:bg-gray-50">
+              <td class="px-4 py-3 text-sm font-medium text-primary">#<%= installment.installment_no %></td>
+              <td class="px-4 py-3 text-sm text-primary">
+                <%= installment.due_date.strftime("%b %d, %Y") %>
+              </td>
+              <td class="px-4 py-3 text-sm text-primary">
+                <%= Money.new(installment.principal_amount, @account.currency).format %>
+              </td>
+              <td class="px-4 py-3 text-sm text-primary">
+                <%= Money.new(installment.interest_amount, @account.currency).format %>
+              </td>
+              <td class="px-4 py-3 text-sm font-semibold text-primary">
+                <%= Money.new(installment.total_due, @account.currency).format %>
+              </td>
+            </tr>
+          <% end %>
+        </tbody>
+        <tfoot class="bg-gray-50">
+          <tr>
+            <th colspan="4" class="px-4 py-3 text-left text-sm font-semibold text-primary">
+              Subtotal
+            </th>
+            <th class="px-4 py-3 text-left text-sm font-bold text-primary">
+              <%= @pay_later.outstanding_balance_money.format %>
+            </th>
+          </tr>
+          <% if @pay_later.early_settlement_fee && @pay_later.early_settlement_fee > 0 %>
+            <tr>
+              <th colspan="4" class="px-4 py-3 text-left text-sm font-semibold text-primary">
+                Early Settlement Fee
+              </th>
+              <th class="px-4 py-3 text-left text-sm font-bold text-primary">
+                <%= @pay_later.early_settlement_fee_money.format %>
+              </th>
+            </tr>
+          <% end %>
+          <tr class="bg-green-50 theme-dark:bg-green-900/20">
+            <th colspan="4" class="px-4 py-3 text-left text-base font-bold text-green-900 theme-dark:text-green-100">
+              Total Settlement Amount
+            </th>
+            <th class="px-4 py-3 text-left text-xl font-bold text-green-600">
+              <%= @settlement_amount.format %>
+            </th>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </div>
+</div>

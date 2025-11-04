@@ -4,7 +4,7 @@ module PayLaterServices
 
     def initialize(family:, params:)
       @family = family
-      @params = params.deep_symbolize_keys
+      @params = params.is_a?(ActionController::Parameters) ? params.to_h.symbolize_keys : params.symbolize_keys
     end
 
     def call
@@ -24,6 +24,11 @@ module PayLaterServices
 
       Result.new(success?: true, account: account)
     rescue => e
+      Rails.logger.error("PayLater creation failed: #{e.message}")
+      # Filter sensitive params before logging
+      filtered_params = params.except(:credit_limit, :available_credit, :contract_url, :notes)
+      Rails.logger.error("Params: #{filtered_params.inspect}")
+      Rails.logger.error(e.backtrace.join("\n"))
       Result.new(success?: false, error: e.message)
     end
 

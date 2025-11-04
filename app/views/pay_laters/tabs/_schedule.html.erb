@@ -1,41 +1,28 @@
-<%# locals: (account:) %>
-
-<% installments = PayLaterInstallment.for_account(account.id).order(:installment_no) %>
-
-<div class="space-y-4">
-  <h3 class="text-lg font-medium">Schedule</h3>
+<%# PayLater Schedule Tab %>
+<%= turbo_frame_tag "pay_later_schedule", data: { turbo_action: "advance" } do %>
+  <% pay_later = account.accountable %>
+  <% installments = pay_later.installments.by_installment_no %>
 
   <% if installments.any? %>
-    <div class="divide-y divide-gray-200 rounded-lg border">
-      <% installments.each do |inst| %>
-        <div class="p-3 flex items-center justify-between">
-          <div>
-            <div class="font-medium">Installment <%= inst.installment_no %> — due <%= inst.due_date %></div>
-            <div class="text-xs text-subtle">
-              Principal: <%= Money.new(inst.principal_amount, account.currency).format %>
-              · Interest: <%= Money.new(inst.interest_amount, account.currency).format %>
-              · Fee: <%= Money.new(inst.fee_amount, account.currency).format %>
-            </div>
-          </div>
-          <div class="flex items-center gap-2">
-            <span class="text-xs px-2 py-1 rounded bg-alpha-black-50"><%= inst.status %></span>
-            <% if inst.status == "pending" %>
-              <%= button_to "Pay Now",
-                           api_v1_debt_paylater_installment_pay_path(
-                             account_id: account.id,
-                             installment_no: inst.installment_no,
-                             payment_date: Date.current,
-                             source_account_id: Current.family.accounts.assets.first&.id
-                           ),
-                           method: :post,
-                           class: "btn btn-primary" %>
-            <% end %>
-          </div>
-        </div>
+    <%= render PayLater::InstallmentScheduleComponent.new(
+      installments: installments,
+      account: account,
+      show_actions: true
+    ) %>
+  <% else %>
+    <%# Empty State %>
+    <div class="text-center py-12">
+      <div class="inline-flex items-center justify-center w-16 h-16 bg-gray-100 rounded-full mb-4">
+        <%= icon("calendar", class: "w-8 h-8 text-gray-400") %>
+      </div>
+      <h3 class="text-lg font-semibold text-gray-900 mb-2">No Installments Yet</h3>
+      <p class="text-gray-600 mb-6">Record your first purchase to see installments here.</p>
+      <%= link_to new_purchase_pay_later_path(account),
+          class: "inline-flex items-center px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition",
+          data: { turbo_frame: "_top" } do %>
+        <%= icon("shopping-cart", class: "w-5 h-5 mr-2") %>
+        Record Purchase
       <% end %>
     </div>
-  <% else %>
-    <p class="text-sm text-subtle">No installments scheduled.</p>
   <% end %>
-</div>
-
+<% end %>
