@@ -6,7 +6,7 @@ class Loan::FormComponentTest < ViewComponent::TestCase
   include LoanFormHelper
 
   def test_renders_wizard_for_new_loan
-    loan = Loan.new
+    loan = Loan.new(default_loan_attributes)
     account = Account.new
 
     render_inline(Loan::FormComponent.new(loan: loan, account: account, wizard: true))
@@ -16,7 +16,7 @@ class Loan::FormComponentTest < ViewComponent::TestCase
   end
 
   def test_renders_traditional_form_for_existing_loan
-    loan = Loan.new(id: 1, counterparty_name: "Test Bank")
+    loan = Loan.new(default_loan_attributes.merge(id: 1, counterparty_name: "Test Bank"))
     account = Account.new(id: 1)
 
     render_inline(Loan::FormComponent.new(loan: loan, account: account))
@@ -26,7 +26,7 @@ class Loan::FormComponentTest < ViewComponent::TestCase
   end
 
   def test_wizard_has_step_indicators
-    loan = Loan.new
+    loan = Loan.new(default_loan_attributes)
     account = Account.new
 
     render_inline(Loan::FormComponent.new(
@@ -45,7 +45,7 @@ class Loan::FormComponentTest < ViewComponent::TestCase
   end
 
   def test_wizard_type_step_shows_loan_type_selection
-    loan = Loan.new
+    loan = Loan.new(default_loan_attributes)
     account = Account.new
 
     render_inline(Loan::FormComponent.new(
@@ -60,7 +60,7 @@ class Loan::FormComponentTest < ViewComponent::TestCase
   end
 
   def test_wizard_basic_step_shows_counterparty_field
-    loan = Loan.new
+    loan = Loan.new(default_loan_attributes)
     account = Account.new
 
     render_inline(Loan::FormComponent.new(
@@ -75,7 +75,7 @@ class Loan::FormComponentTest < ViewComponent::TestCase
   end
 
   def test_wizard_terms_step_shows_loan_terms
-    loan = Loan.new
+    loan = Loan.new(default_loan_attributes)
     account = Account.new
 
     render_inline(Loan::FormComponent.new(
@@ -91,7 +91,7 @@ class Loan::FormComponentTest < ViewComponent::TestCase
   end
 
   def test_wizard_review_step_shows_summary
-    loan = Loan.new(
+    loan = Loan.new(default_loan_attributes.merge(
       counterparty_name: "Test Bank",
       initial_balance: 1000000,
       tenor_months: 12
@@ -111,7 +111,7 @@ class Loan::FormComponentTest < ViewComponent::TestCase
   end
 
   def test_wizard_has_navigation_buttons
-    loan = Loan.new
+    loan = Loan.new(default_loan_attributes)
     account = Account.new
 
     render_inline(Loan::FormComponent.new(
@@ -126,7 +126,7 @@ class Loan::FormComponentTest < ViewComponent::TestCase
   end
 
   def test_wizard_smart_suggestions
-    loan = Loan.new
+    loan = Loan.new(default_loan_attributes)
     account = Account.new
 
     render_inline(Loan::FormComponent.new(
@@ -143,7 +143,7 @@ class Loan::FormComponentTest < ViewComponent::TestCase
   end
 
   def test_wizard_rate_suggestions
-    loan = Loan.new(compliance_type: "sharia")
+    loan = Loan.new(default_loan_attributes.merge(compliance_type: "sharia"))
     account = Account.new
 
     render_inline(Loan::FormComponent.new(
@@ -158,7 +158,7 @@ class Loan::FormComponentTest < ViewComponent::TestCase
   end
 
   def test_conditional_fields_based_on_loan_type
-    loan = Loan.new(debt_kind: "personal")
+    loan = Loan.new(default_loan_attributes.merge(debt_kind: "personal"))
     account = Account.new
 
     render_inline(Loan::FormComponent.new(
@@ -173,7 +173,7 @@ class Loan::FormComponentTest < ViewComponent::TestCase
   end
 
   def test_form_validation_classes
-    loan = Loan.new
+    loan = Loan.new(default_loan_attributes)
     account = Account.new
 
     render_inline(Loan::FormComponent.new(

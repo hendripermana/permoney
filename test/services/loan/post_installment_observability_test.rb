@@ -35,10 +35,13 @@ class LoanPostInstallmentObservabilityTest < ActiveSupport::TestCase
       def add_breadcrumb(*)
       end
       def configure_scope
-        yield Object.new
+        scope = Object.new
+        scope.define_singleton_method(:set_transaction_name) { |_name| }
+        yield scope
       end
       def get_current_scope
         scope = Object.new
+        scope.define_singleton_method(:set_transaction_name) { |_name| }
         tx = Object.new
         tx.define_singleton_method(:set_measurement) { |_name, _value, _unit| }
         scope.define_singleton_method(:get_transaction) { tx }

@@ -8,7 +8,7 @@ class PlaidAccount::Liabilities::MortgageProcessorTest < ActiveSupport::TestCase
       plaid_subtype: "mortgage"
     )
 
-    @plaid_account.current_account.update!(accountable: Loan.new)
+    @plaid_account.current_account.update!(accountable: Loan.new(lender_name: "Test Lender", loan_type: "mortgage"))
   end
 
   test "updates loan interest rate and type from Plaid data" do

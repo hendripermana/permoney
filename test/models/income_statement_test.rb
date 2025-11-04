@@ -12,7 +12,7 @@ class IncomeStatementTest < ActiveSupport::TestCase
 
     @checking_account = @family.accounts.create! name: "Checking", currency: @family.currency, balance: 5000, accountable: Depository.new
     @credit_card_account = @family.accounts.create! name: "Credit Card", currency: @family.currency, balance: 1000, accountable: CreditCard.new
-    @loan_account = @family.accounts.create! name: "Mortgage", currency: @family.currency, balance: 50000, accountable: Loan.new
+    @loan_account = @family.accounts.create! name: "Mortgage", currency: @family.currency, balance: 50000, accountable: Loan.new(lender_name: "Test Lender", loan_type: "mortgage")
 
     create_transaction(account: @checking_account, amount: -1000, category: @income_category)
     create_transaction(account: @checking_account, amount: 200, category: @groceries_category)
