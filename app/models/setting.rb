@@ -2,6 +2,14 @@
 class Setting < RailsSettings::Base
   class ValidationError < StandardError; end
 
+  # Skip database checks during asset precompilation
+  def self.table_exists?
+    return false if ENV["SECRET_KEY_BASE_DUMMY"] == "1"
+    super
+  rescue StandardError
+    false
+  end
+
   cache_prefix { "v1" }
 
   # Third-party API keys (upstream: better comment)
