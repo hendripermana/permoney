@@ -44,14 +44,9 @@ COPY . .
 # Precompile bootsnap code for faster boot times
 RUN bundle exec bootsnap precompile -j 0 app/ lib/
 
-# Precompiling assets for production without requiring secret RAILS_MASTER_KEY or database
-# DISABLE_DATABASE_ENVIRONMENT_CHECK=1 allows precompile without DB connection
-# Using nulldb adapter prevents any actual database operations
-RUN SECRET_KEY_BASE_DUMMY=1 \
-    RAILS_ENV=production \
-    DATABASE_URL=nulldb://localhost \
-    DISABLE_DATABASE_ENVIRONMENT_CHECK=1 \
-    ./bin/rails assets:precompile
+# Precompiling assets for production without requiring secret RAILS_MASTER_KEY
+# SECRET_KEY_BASE_DUMMY=1 is the Rails 8 standard approach
+RUN SECRET_KEY_BASE_DUMMY=1 ./bin/rails assets:precompile
 
 # Final stage for app image
 FROM base
