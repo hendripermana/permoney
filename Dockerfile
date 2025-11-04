@@ -44,8 +44,12 @@ COPY . .
 # Precompile bootsnap code for faster boot times
 RUN bundle exec bootsnap precompile -j 0 app/ lib/
 
-# Precompiling assets for production without requiring secret RAILS_MASTER_KEY
-RUN SECRET_KEY_BASE_DUMMY=1 ./bin/rails assets:precompile
+# Precompiling assets for production without requiring secret RAILS_MASTER_KEY or database
+# RAILS_GROUPS=assets prevents database connections during asset compilation
+RUN SECRET_KEY_BASE_DUMMY=1 \
+    RAILS_GROUPS=assets \
+    DATABASE_URL=postgresql://dummy:dummy@localhost:5432/dummy \
+    ./bin/rails assets:precompile
 
 # Final stage for app image
 FROM base
