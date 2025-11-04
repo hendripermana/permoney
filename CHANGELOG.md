@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.3](https://github.com/hendripermana/permoney/compare/v0.9.2...v0.9.3) (2025-11-04)
+
+
+### Bug Fixes
+
+* Update Ruby to 3.4.7 and Bundler to 2.7.2 in Dockerfile ([e0eecde](https://github.com/hendripermana/permoney/commit/e0eecdec74144e2d02b244161bf06d5333cd5150))
+
 ## [0.9.2](https://github.com/hendripermana/permoney/compare/v0.9.1...v0.9.2) (2025-11-04)
 
 
