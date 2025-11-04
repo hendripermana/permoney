@@ -1,0 +1,7 @@
+<%# PayLater Overview Tab %>
+<%= turbo_frame_tag "pay_later_overview", data: { turbo_action: "advance" } do %>
+  <%= render PayLater::OverviewStatsComponent.new(
+    pay_later: account.accountable,
+    account: account
+  ) %>
+<% end %>

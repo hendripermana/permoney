@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2025_10_31_132654) do
+ActiveRecord::Schema[8.1].define(version: 2025_11_04_001102) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -754,6 +754,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_10_31_132654) do
     t.date "approved_date"
     t.boolean "auto_update_rate", default: true, null: false
     t.decimal "available_credit", precision: 19, scale: 4
+    t.string "compliance_type", default: "conventional"
     t.string "contract_url"
     t.datetime "created_at", null: false
     t.decimal "credit_limit", precision: 19, scale: 4
@@ -776,6 +777,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_10_31_132654) do
     t.string "subtype"
     t.datetime "updated_at", null: false
     t.string "updated_by"
+    t.index ["compliance_type"], name: "index_pay_laters_on_compliance_type"
   end
 
   create_table "personal_lendings", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|

@@ -1,0 +1,176 @@
+<%# Use simple modal version %>
+<%= render "pay_laters/new_payment_simple" and return %>
+<div class="max-w-4xl mx-auto px-4 py-8">
+  <%= render "accounts/show/header", 
+      account: @account, 
+      title: "Make Payment", 
+      subtitle: @pay_later.provider_name %>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
+    <%# Main Payment Form - Left Side %>
+    <div class="lg:col-span-2">
+      <div class="bg-container rounded-lg border border-primary p-6">
+        <div class="mb-6">
+          <h2 class="text-2xl font-bold text-primary mb-2">Make Payment</h2>
+          <p class="text-secondary">
+            Pay your installments using any of your asset accounts.
+          </p>
+        </div>
+
+        <%= turbo_frame_tag "payment_form" do %>
+          <%= render "pay_laters/payment_form", 
+              account: @account, 
+              source_accounts: @source_accounts,
+              error: @error_message %>
+        <% end %>
+      </div>
+    </div>
+
+    <%# Payment Summary - Right Sidebar %>
+    <div class="lg:col-span-1">
+      <div class="space-y-4">
+        <%# Outstanding Balance Card %>
+        <div class="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg border border-blue-200 theme-dark:border-blue-800 p-6">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-sm font-medium text-blue-900 theme-dark:text-blue-100">Outstanding Balance</span>
+            <%= icon("trending-up", class: "w-5 h-5 text-blue-600") %>
+          </div>
+          <p class="text-3xl font-bold text-blue-900 theme-dark:text-blue-100 mb-1">
+            <%= @pay_later.outstanding_balance_money.format %>
+          </p>
+          <p class="text-xs text-blue-600 theme-dark:text-blue-400">
+            <%= @pending_installments.count %> pending installment(s)
+          </p>
+        </div>
+
+        <%# Next Due Card %>
+        <% if @pay_later.next_due_installment %>
+          <% next_due = @pay_later.next_due_installment %>
+          <div class="bg-container rounded-lg border border-primary p-4">
+            <p class="text-sm font-medium text-primary mb-3 flex items-center">
+              <%= icon("calendar", class: "w-4 h-4 mr-2") %>
+              Next Due Installment
+            </p>
+            <div class="space-y-2 text-sm">
+              <div class="flex justify-between">
+                <span class="text-secondary">Installment #</span>
+                <span class="font-semibold text-primary"><%= next_due.installment_no %></span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-secondary">Due Date</span>
+                <span class="font-semibold text-primary">
+                  <%= next_due.due_date.strftime("%b %d, %Y") %>
+                </span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-secondary">Amount</span>
+                <span class="font-semibold text-blue-600">
+                  <%= Money.new(next_due.total_due, @account.currency).format %>
+                </span>
+              </div>
+              <% if next_due.overdue? %>
+                <div class="pt-2 border-t border-primary">
+                  <div class="flex justify-between items-center text-red-600">
+                    <%= icon("alert-triangle", class: "w-4 h-4") %>
+                    <span class="font-semibold">+ <%= next_due.calculate_late_fee.format %> late fee</span>
+                  </div>
+                </div>
+              <% end %>
+            </div>
+          </div>
+        <% end %>
+
+        <%# Overdue Alert %>
+        <% if @pay_later.has_overdue_installments? %>
+          <div class="bg-red-50 theme-dark:bg-red-900/20 rounded-lg border border-red-200 theme-dark:border-red-800 p-4">
+            <div class="flex items-start mb-2">
+              <%= icon("alert-triangle", class: "w-5 h-5 text-red-600 mt-0.5 mr-2") %>
+              <div class="flex-1">
+                <p class="text-sm font-semibold text-red-900 theme-dark:text-red-100">Overdue Payment</p>
+              </div>
+            </div>
+            <p class="text-sm text-red-600 theme-dark:text-red-400 mb-2">
+              <%= @pay_later.overdue_installments.count %> installment(s) overdue
+            </p>
+            <p class="text-xs text-red-600">
+              Total: <%= @pay_later.total_overdue_amount_money.format %>
+            </p>
+          </div>
+        <% end %>
+
+        <%# Quick Links %>
+        <div class="bg-container-inset rounded-lg border border-primary p-4">
+          <p class="text-sm font-medium text-primary mb-3">Quick Links</p>
+          <div class="space-y-2">
+            <%= link_to schedule_pay_later_path(@account),
+                class: "flex items-center text-sm text-primary hover:text-blue-600 transition",
+                data: { turbo_frame: "_top" } do %>
+              <%= icon("calendar", class: "w-4 h-4 mr-2") %>
+              View Full Schedule
+            <% end %>
+            
+            <%= link_to account_path(@account),
+                class: "flex items-center text-sm text-primary hover:text-blue-600 transition",
+                data: { turbo_frame: "_top" } do %>
+              <%= icon("arrow-left", class: "w-4 h-4 mr-2") %>
+              Back to Account
+            <% end %>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <%# Pending Installments List %>
+  <% if @pending_installments.any? %>
+    <div class="bg-container rounded-lg border border-primary p-6 mt-6">
+      <h3 class="text-lg font-semibold text-primary mb-4">
+        <%= icon("list", class: "inline-block w-5 h-5 mr-2") %>
+        Pending Installments
+      </h3>
+      
+      <div class="space-y-3">
+        <% @pending_installments.first(5).each do |installment| %>
+          <div class="flex items-center justify-between p-4 bg-container-inset rounded-lg hover:bg-surface-inset transition">
+            <div class="flex items-center gap-4">
+              <div class="flex items-center justify-center w-10 h-10 bg-container rounded-full border border-primary">
+                <span class="text-sm font-semibold text-primary">#<%= installment.installment_no %></span>
+              </div>
+              <div>
+                <p class="text-sm font-medium text-primary">
+                  <%= installment.due_date.strftime("%B %d, %Y") %>
+                </p>
+                <p class="text-xs text-secondary">
+                  <% if installment.overdue? %>
+                    <span class="text-red-600 font-semibold">
+                      <%= installment.days_overdue %> days overdue
+                    </span>
+                  <% else %>
+                    <% days_until = (installment.due_date - Date.current).to_i %>
+                    Due in <%= days_until %> day(s)
+                  <% end %>
+                </p>
+              </div>
+            </div>
+            <div class="text-right">
+              <p class="text-lg font-bold text-primary">
+                <%= Money.new(installment.total_due, @account.currency).format %>
+              </p>
+              <% if installment.overdue? %>
+                <p class="text-xs text-red-600">
+                  + <%= installment.calculate_late_fee.format %> late fee
+                </p>
+              <% end %>
+            </div>
+          </div>
+        <% end %>
+        
+        <% if @pending_installments.count > 5 %>
+          <p class="text-sm text-secondary text-center pt-2">
+            ... and <%= @pending_installments.count - 5 %> more
+          </p>
+        <% end %>
+      </div>
+    </div>
+  <% end %>
+</div>

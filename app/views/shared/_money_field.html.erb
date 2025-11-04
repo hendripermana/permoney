@@ -71,7 +71,8 @@
                         Money::Currency.as_options.map(&:iso_code),
                         { inline: true, selected: currency.iso_code },
                         {
-                          class: "w-fit pr-5 disabled:text-subdued form-field__input",
+                          id: "#{form.object_name}_#{amount_method}_#{currency_method}",
+                          class: "w-fit pr-5 disabled:text-subdued form-field__input bg-container text-primary",
                           disabled: options[:disable_currency],
                           data: {
                             "money-field-target": "currency",

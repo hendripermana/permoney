@@ -1,0 +1,58 @@
+<%# locals: (account:, purchase:, categories:, error: nil) %>
+
+<%= styled_form_with url: create_purchase_pay_later_path(account), method: :post, class: "space-y-4" do |f| %>
+  <% if error.present? %>
+    <div class="bg-red-50 theme-dark:bg-red-900/20 border border-red-200 theme-dark:border-red-800 rounded-lg p-4">
+      <div class="flex items-start">
+        <%= icon("alert-triangle", class: "w-5 h-5 text-red-600 mt-0.5 mr-2") %>
+        <div>
+          <h3 class="text-sm font-semibold text-red-900 theme-dark:text-red-100">Error</h3>
+          <p class="text-sm text-red-600 theme-dark:text-red-400 mt-1"><%= error %></p>
+        </div>
+      </div>
+    </div>
+  <% end %>
+
+  <section class="space-y-2">
+    <%= f.text_field :merchant_name, 
+        label: "Merchant/Store",
+        placeholder: "e.g., Tokopedia, Lazada, Shopee",
+        required: true %>
+
+    <%= f.money_field :amount,
+        label: "Amount",
+        required: true,
+        default_currency: account.currency,
+        hint: "Available: #{account.accountable.available_credit_money.format}" %>
+
+    <%= f.collection_select :category_id,
+        categories,
+        :id,
+        :name,
+        { prompt: "Select category", label: "Category" },
+        required: true %>
+
+    <%= f.select :tenor_months,
+        options_for_select((1..account.accountable.max_tenor).to_a, purchase.tenor_months),
+        { label: "Installment Period" },
+        required: true,
+        hint: account.accountable.free_interest_months > 0 ? "First #{account.accountable.free_interest_months} month(s) interest-free!" : nil %>
+
+    <%= f.date_field :purchase_date,
+        label: "Purchase Date",
+        required: true,
+        value: purchase.purchase_date || Date.current,
+        max: Date.current %>
+  </section>
+
+  <%= render DS::Disclosure.new(title: "Details") do %>
+    <%= f.text_area :notes,
+        label: "Notes (Optional)",
+        placeholder: "Add any notes about this purchase...",
+        rows: 5 %>
+  <% end %>
+
+  <section>
+    <%= f.submit "Record Purchase" %>
+  </section>
+<% end %>

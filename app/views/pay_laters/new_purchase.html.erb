@@ -1,0 +1,14 @@
+<%= render DS::Dialog.new(width: :md) do |dialog| %>
+  <% dialog.with_header(
+    title: "Record Purchase",
+    subtitle: "#{@pay_later&.provider_name || 'PayLater'} • #{@pay_later&.available_credit_money&.format || 'N/A'} available"
+  ) %>
+  
+  <% dialog.with_body do %>
+    <%= render "pay_laters/purchase_form_simple", 
+        account: @account, 
+        purchase: @purchase,
+        categories: @categories,
+        error: @error_message %>
+  <% end %>
+<% end %>

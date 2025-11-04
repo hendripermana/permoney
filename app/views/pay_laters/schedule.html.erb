@@ -1,0 +1,24 @@
+<%# PayLater Installment Schedule Page %>
+<div class="max-w-6xl mx-auto px-4 py-8">
+  <%= render "accounts/show/header", 
+      account: @account, 
+      title: "Installment Schedule", 
+      subtitle: @pay_later.provider_name %>
+
+  <div class="mt-6">
+    <%= render PayLater::InstallmentScheduleComponent.new(
+      installments: @installments,
+      account: @account,
+      show_actions: true
+    ) %>
+  </div>
+
+  <div class="mt-6">
+    <%= link_to account_path(@account), 
+        class: "inline-flex items-center text-primary hover:text-blue-600 transition",
+        data: { turbo_frame: "_top" } do %>
+      <%= icon("arrow-left", class: "w-4 h-4 mr-2") %>
+      Back to Account
+    <% end %>
+  </div>
+</div>

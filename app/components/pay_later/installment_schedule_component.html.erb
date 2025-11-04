@@ -1,0 +1,204 @@
+<div class="space-y-6">
+  <%# Schedule Summary %>
+  <div class="bg-container rounded-lg border border-primary p-6">
+    <h3 class="text-lg font-semibold text-primary mb-4">
+      <%= helpers.icon("calendar", class: "inline-block w-5 h-5 mr-2") %>
+      Installment Summary
+    </h3>
+
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+      <div class="bg-container-inset rounded-lg p-4">
+        <p class="text-sm text-secondary mb-1">Total Installments</p>
+        <p class="text-2xl font-bold text-primary"><%= summary[:total] %></p>
+      </div>
+      <div class="bg-green-50 theme-dark:bg-green-900/20 rounded-lg p-4">
+        <p class="text-sm text-green-600 theme-dark:text-green-400 mb-1">Paid</p>
+        <p class="text-2xl font-bold text-green-600"><%= summary[:paid] %></p>
+      </div>
+      <div class="bg-blue-50 theme-dark:bg-blue-900/20 rounded-lg p-4">
+        <p class="text-sm text-blue-600 theme-dark:text-blue-400 mb-1">Pending</p>
+        <p class="text-2xl font-bold text-blue-600"><%= summary[:pending] %></p>
+      </div>
+      <div class="bg-red-50 theme-dark:bg-red-900/20 rounded-lg p-4">
+        <p class="text-sm text-red-600 theme-dark:text-red-400 mb-1">Overdue</p>
+        <p class="text-2xl font-bold text-red-600"><%= summary[:overdue] %></p>
+      </div>
+    </div>
+
+    <%# Progress Bar %>
+    <div>
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-sm font-medium text-primary">Payment Progress</span>
+        <span class="text-sm font-semibold text-primary"><%= progress_percentage %>%</span>
+      </div>
+      <div class="w-full bg-gray-200 rounded-full h-3">
+        <div class="bg-green-600 h-3 rounded-full transition-all duration-300" 
+             style="width: <%= progress_percentage %>%"></div>
+      </div>
+      <div class="flex items-center justify-between mt-2 text-sm text-secondary">
+        <span>Paid: <%= Money.new(summary[:total_paid], account.currency).format %></span>
+        <span>Remaining: <%= Money.new(summary[:total_remaining], account.currency).format %></span>
+      </div>
+    </div>
+  </div>
+
+  <%# Installment Table %>
+  <div class="bg-container rounded-lg border border-primary overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="min-w-full divide-y divide-gray-200">
+        <thead class="bg-gray-50">
+          <tr>
+            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-secondary uppercase tracking-wider">
+              #
+            </th>
+            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-secondary uppercase tracking-wider">
+              Due Date
+            </th>
+            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-secondary uppercase tracking-wider">
+              Principal
+            </th>
+            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-secondary uppercase tracking-wider">
+              <%= pay_later.sharia_compliant? ? "Profit" : "Interest" %>
+            </th>
+            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-secondary uppercase tracking-wider">
+              Total Due
+            </th>
+            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-secondary uppercase tracking-wider">
+              Paid Amount
+            </th>
+            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-secondary uppercase tracking-wider">
+              Status
+            </th>
+            <% if show_actions %>
+              <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-secondary uppercase tracking-wider">
+                Actions
+              </th>
+            <% end %>
+          </tr>
+        </thead>
+        <tbody class="bg-container divide-y divide-gray-200">
+          <% installments.each do |installment| %>
+            <tr class="<%= row_bg_color(installment) %> hover:bg-container-inset transition">
+              <td class="px-6 py-4 whitespace-nowrap">
+                <div class="flex items-center">
+                  <%= helpers.icon(status_icon(installment.status), class: "w-4 h-4 mr-2 #{installment.status_paid? ? 'text-green-600' : installment.overdue? ? 'text-red-600' : 'text-subdued'}") %>
+                  <span class="text-sm font-medium text-primary">#<%= installment.installment_no %></span>
+                </div>
+              </td>
+              <td class="px-6 py-4 whitespace-nowrap">
+                <div class="text-sm text-primary"><%= installment.due_date.strftime("%b %d, %Y") %></div>
+                <% if installment.overdue? %>
+                  <div class="text-xs text-red-600"><%= installment.days_overdue %> days overdue</div>
+                <% elsif !installment.status_paid? %>
+                  <% days_until = (installment.due_date - Date.current).to_i %>
+                  <% if days_until <= 7 && days_until >= 0 %>
+                    <div class="text-xs text-yellow-600">Due in <%= days_until %> day(s)</div>
+                  <% end %>
+                <% end %>
+              </td>
+              <td class="px-6 py-4 whitespace-nowrap text-sm text-primary">
+                <%= Money.new(installment.principal_amount, account.currency).format %>
+              </td>
+              <td class="px-6 py-4 whitespace-nowrap text-sm text-primary">
+                <%= Money.new(installment.interest_amount, account.currency).format %>
+                <% if installment.applied_rate && installment.applied_rate > 0 %>
+                  <div class="text-xs text-secondary"><%= (installment.applied_rate * 100).round(2) %>%</div>
+                <% end %>
+              </td>
+              <td class="px-6 py-4 whitespace-nowrap">
+                <div class="text-sm font-semibold text-primary">
+                  <%= Money.new(installment.total_due, account.currency).format %>
+                </div>
+                <% if installment.overdue? %>
+                  <div class="text-xs text-red-600">
+                    + <%= installment.calculate_late_fee.format %> late fee
+                  </div>
+                <% end %>
+              </td>
+              <td class="px-6 py-4 whitespace-nowrap">
+                <% if installment.paid_amount && installment.paid_amount > 0 %>
+                  <div class="text-sm text-primary">
+                    <%= Money.new(installment.paid_amount, account.currency).format %>
+                  </div>
+                  <% if installment.status_partially_paid? %>
+                    <div class="text-xs text-yellow-600">
+                      <%= installment.payment_progress_percentage.round(0) %>% paid
+                    </div>
+                  <% elsif installment.paid_on %>
+                    <div class="text-xs text-secondary">
+                      <%= installment.paid_on.strftime("%b %d") %>
+                    </div>
+                  <% end %>
+                <% else %>
+                  <span class="text-sm text-subdued">—</span>
+                <% end %>
+              </td>
+              <td class="px-6 py-4 whitespace-nowrap">
+                <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full <%= status_badge_color(installment.status) %>">
+                  <%= installment.status_with_context %>
+                </span>
+              </td>
+              <% if show_actions %>
+                <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                  <% if installment.can_be_paid? %>
+                    <%= link_to new_payment_pay_later_path(account, installment_no: installment.installment_no),
+                        class: "text-blue-600 hover:text-blue-900 theme-dark:text-blue-100 inline-flex items-center",
+                        data: { turbo_frame: "_top" } do %>
+                      <%= helpers.icon("credit-card", class: "w-4 h-4 mr-1") %>
+                      Pay
+                    <% end %>
+                  <% else %>
+                    <span class="text-subdued">—</span>
+                  <% end %>
+                </td>
+              <% end %>
+            </tr>
+          <% end %>
+        </tbody>
+        <tfoot class="bg-gray-50">
+          <tr>
+            <th colspan="2" class="px-6 py-4 text-left text-sm font-semibold text-primary">
+              Total
+            </th>
+            <th class="px-6 py-4 text-left text-sm font-semibold text-primary">
+              <%= Money.new(installments.sum(&:principal_amount), account.currency).format %>
+            </th>
+            <th class="px-6 py-4 text-left text-sm font-semibold text-primary">
+              <%= Money.new(installments.sum(&:interest_amount), account.currency).format %>
+            </th>
+            <th class="px-6 py-4 text-left text-sm font-semibold text-primary">
+              <%= Money.new(summary[:total_amount], account.currency).format %>
+            </th>
+            <th class="px-6 py-4 text-left text-sm font-semibold text-primary">
+              <%= Money.new(summary[:total_paid], account.currency).format %>
+            </th>
+            <th colspan="<%= show_actions ? 2 : 1 %>"></th>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </div>
+
+  <%# Legend %>
+  <div class="bg-container-inset rounded-lg p-4">
+    <p class="text-sm font-medium text-primary mb-2">Status Legend:</p>
+    <div class="flex flex-wrap gap-4 text-sm">
+      <div class="flex items-center">
+        <%= helpers.icon("check-circle", class: "w-4 h-4 text-green-600 mr-1") %>
+        <span class="text-primary">Paid</span>
+      </div>
+      <div class="flex items-center">
+        <%= helpers.icon("clock", class: "w-4 h-4 text-blue-600 mr-1") %>
+        <span class="text-primary">Pending</span>
+      </div>
+      <div class="flex items-center">
+        <%= helpers.icon("clock", class: "w-4 h-4 text-yellow-600 mr-1") %>
+        <span class="text-primary">Partially Paid</span>
+      </div>
+      <div class="flex items-center">
+        <%= helpers.icon("alert-triangle", class: "w-4 h-4 text-red-600 mr-1") %>
+        <span class="text-primary">Overdue</span>
+      </div>
+    </div>
+  </div>
+</div>

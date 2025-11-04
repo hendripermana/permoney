@@ -216,7 +216,23 @@ Rails.application.routes.draw do
   end
   resources :vehicles, only: %i[new create edit update]
   resources :credit_cards, only: %i[new create edit update]
-  resources :pay_laters, only: %i[new create edit update]
+  resources :pay_laters, only: %i[new create edit update show] do
+    member do
+      # Purchase flow
+      get :new_purchase
+      post :create_purchase
+      get :preview_installments
+
+      # Payment flow
+      get :new_payment
+      post :process_payment
+
+      # Schedule and early settlement
+      get :schedule
+      get :early_settlement
+      post :process_early_settlement
+    end
+  end
   resources :loans, only: %i[new create edit update] do
     collection do
       get :schedule_preview

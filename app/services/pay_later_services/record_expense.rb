@@ -4,7 +4,7 @@ module PayLaterServices
 
     def initialize(family:, params:, account: nil)
       @family = family
-      @params = params.deep_symbolize_keys
+      @params = params.is_a?(ActionController::Parameters) ? params.to_h.symbolize_keys : params.symbolize_keys
       @account = account
     end
 
