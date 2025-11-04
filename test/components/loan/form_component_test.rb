@@ -95,7 +95,7 @@ class Loan::FormComponentTest < ViewComponent::TestCase
       counterparty_name: "Test Bank",
       initial_balance: 1000000,
       tenor_months: 12
-    )
+    ))
     account = Account.new
 
     render_inline(Loan::FormComponent.new(
