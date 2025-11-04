@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.9.0](https://github.com/hendripermana/permoney/compare/v0.8.2...v0.9.0) (2025-11-04)
+
+
+### Features
+
+* Add comprehensive PayLater/BNPL system with Indonesian provider support ([da0d923](https://github.com/hendripermana/permoney/commit/da0d923feb4d176c50017830d722942387783e83))
+* Add comprehensive PayLater/BNPL system with Indonesian provider… ([c002b42](https://github.com/hendripermana/permoney/commit/c002b429685c34f1e6d1a1fd53cc150bf34987a5))
+
+
+### Bug Fixes
+
+* Address Kodus AI bot review feedback for PayLater system ([3c1809e](https://github.com/hendripermana/permoney/commit/3c1809edb27bd7df3d669a0c9c706748cf36276f))
+
 ## [0.8.2](https://github.com/hendripermana/permoney/compare/v0.8.1...v0.8.2) (2025-11-03)
 
 
