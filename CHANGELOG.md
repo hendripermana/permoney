@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.9.2](https://github.com/hendripermana/permoney/compare/v0.9.1...v0.9.2) (2025-11-04)
+
+
+### Bug Fixes
+
+* Add missing Sentry mock methods and loan validations ([e00b485](https://github.com/hendripermana/permoney/commit/e00b485f4901efa1cd6f779ccabbf9f7a167472e))
+* Correct syntax error in loan form component test ([6fa9cad](https://github.com/hendripermana/permoney/commit/6fa9cada2fe0d6e76e4207ab5876a078b05d4eca))
+* Decouple Docker build from test suite ([dcdfd13](https://github.com/hendripermana/permoney/commit/dcdfd13fa95e3c57d7f00253aae05fbe3907bfe4))
+* Use hardcoded Node version instead of node-version-file ([538eeb9](https://github.com/hendripermana/permoney/commit/538eeb97379eccb284a26d667f329a6646d0d31f))
+
 ## [0.9.1](https://github.com/hendripermana/permoney/compare/v0.9.0...v0.9.1) (2025-11-04)
 
 
