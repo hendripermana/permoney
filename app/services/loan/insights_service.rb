@@ -5,125 +5,125 @@ class Loan::InsightsService
 
   def initialize(user_or_family)
     if user_or_family.is_a?(::User)
-        @user = user_or_family
-        @family = user_or_family.family
-      else
-        @family = user_or_family
-        @user = nil
-      end
+      @user = user_or_family
+      @family = user_or_family.family
+    else
+      @family = user_or_family
+      @user = nil
     end
+  end
 
-    # Get comprehensive loan portfolio overview
-    def portfolio_overview
-      loans = family.accounts.joins(:loan).where.not(loans: { id: nil })
+  # Get comprehensive loan portfolio overview
+  def portfolio_overview
+    loans = family.accounts.joins(:loan).where.not(loans: { id: nil })
 
-      {
-        total_loans: loans.count,
-        total_debt: calculate_total_debt(loans),
-        monthly_payments: calculate_monthly_payments(loans),
-        by_type: loans_by_type(loans),
-        by_status: loans_by_status(loans),
-        health_score: calculate_health_score(loans),
-        recommendations: generate_recommendations(loans)
-      }
-    end
+    {
+      total_loans: loans.count,
+      total_debt: calculate_total_debt(loans),
+      monthly_payments: calculate_monthly_payments(loans),
+      by_type: loans_by_type(loans),
+      by_status: loans_by_status(loans),
+      health_score: calculate_health_score(loans),
+      recommendations: generate_recommendations(loans)
+    }
+  end
 
-    # Analyze individual loan performance
-    def loan_analysis(loan)
+  # Analyze individual loan performance
+  def loan_analysis(loan)
+    calculator = CalculatorService.new(loan)
+
+    {
+      loan_details: {
+        type: loan.debt_kind,
+        counterparty: loan.counterparty_name,
+        principal: loan.principal_amount_money,
+        rate: loan.effective_rate,
+        term: loan.term_months
+      },
+      payment_info: {
+        monthly_payment: calculator.monthly_payment,
+        total_interest: calculator.total_interest,
+        total_payment: calculator.total_payment,
+        effective_apr: calculator.effective_apr
+      },
+      progress: calculate_loan_progress(loan),
+      early_payoff: calculator.early_payoff_scenarios(
+        extra_payment: Money.new(100_00, loan.account.currency)
+      ),
+      refinance_opportunity: check_refinance_opportunity(loan)
+    }
+  end
+
+  # Get payment calendar for all loans
+  def payment_calendar(months_ahead: 12)
+    loans = family.accounts.joins(:loan).where.not(loans: { id: nil })
+    calendar = {}
+
+    loans.each do |account|
+      loan = account.loan
+      next unless loan.active?
+
       calculator = CalculatorService.new(loan)
+      schedule = calculator.amortization_schedule.first(months_ahead)
 
-      {
-        loan_details: {
-          type: loan.debt_kind,
-          counterparty: loan.counterparty_name,
-          principal: loan.principal_amount_money,
-          rate: loan.effective_rate,
-          term: loan.term_months
-        },
-        payment_info: {
-          monthly_payment: calculator.monthly_payment,
-          total_interest: calculator.total_interest,
-          total_payment: calculator.total_payment,
-          effective_apr: calculator.effective_apr
-        },
-        progress: calculate_loan_progress(loan),
-        early_payoff: calculator.early_payoff_scenarios(
-          extra_payment: Money.new(100_00, loan.account.currency)
-        ),
-        refinance_opportunity: check_refinance_opportunity(loan)
-      }
-    end
-
-    # Get payment calendar for all loans
-    def payment_calendar(months_ahead: 12)
-      loans = family.accounts.joins(:loan).where.not(loans: { id: nil })
-      calendar = {}
-
-      loans.each do |account|
-        loan = account.loan
-        next unless loan.active?
-
-        calculator = CalculatorService.new(loan)
-        schedule = calculator.amortization_schedule.first(months_ahead)
-
-        schedule.each do |payment|
-          date_key = payment[:payment_date].to_s
-          calendar[date_key] ||= []
-          calendar[date_key] << {
-            loan_id: loan.id,
-            loan_name: account.name,
-            payment_amount: payment[:payment_amount],
-            principal: payment[:principal_payment],
-            interest: payment[:interest_payment]
-          }
-        end
+      schedule.each do |payment|
+        date_key = payment[:payment_date].to_s
+        calendar[date_key] ||= []
+        calendar[date_key] << {
+          loan_id: loan.id,
+          loan_name: account.name,
+          payment_amount: payment[:payment_amount],
+          principal: payment[:principal_payment],
+          interest: payment[:interest_payment]
+        }
       end
-
-      calendar.sort.to_h
     end
 
-    # Debt snowball vs avalanche comparison
-    def debt_optimization_strategies
-      loans = family.accounts.joins(:loan)
-                    .where.not(loans: { id: nil })
-                    .where(loans: { status: "active" })
+    calendar.sort.to_h
+  end
 
-      {
-        snowball: calculate_snowball_strategy(loans),
-        avalanche: calculate_avalanche_strategy(loans),
-        recommendation: recommend_strategy(loans)
-      }
+  # Debt snowball vs avalanche comparison
+  def debt_optimization_strategies
+    loans = family.accounts.joins(:loan)
+                  .where.not(loans: { id: nil })
+                  .where(loans: { status: "active" })
+
+    {
+      snowball: calculate_snowball_strategy(loans),
+      avalanche: calculate_avalanche_strategy(loans),
+      recommendation: recommend_strategy(loans)
+    }
+  end
+
+  # Check for refinancing opportunities
+  def refinancing_opportunities
+    loans = family.accounts.joins(:loan)
+                  .where.not(loans: { id: nil })
+                  .where(loans: { status: "active" })
+
+    opportunities = []
+
+    loans.each do |account|
+      loan = account.loan
+      opportunity = check_refinance_opportunity(loan)
+      opportunities << opportunity if opportunity[:worth_refinancing]
     end
 
-    # Check for refinancing opportunities
-    def refinancing_opportunities
-      loans = family.accounts.joins(:loan)
-                    .where.not(loans: { id: nil })
-                    .where(loans: { status: "active" })
+    opportunities
+  end
 
-      opportunities = []
+  # Islamic finance compliance check
+  def sharia_compliance_report
+    loans = family.accounts.joins(:loan).where.not(loans: { id: nil })
 
-      loans.each do |account|
-        loan = account.loan
-        opportunity = check_refinance_opportunity(loan)
-        opportunities << opportunity if opportunity[:worth_refinancing]
-      end
-
-      opportunities
-    end
-
-    # Islamic finance compliance check
-    def sharia_compliance_report
-      loans = family.accounts.joins(:loan).where.not(loans: { id: nil })
-
-      {
-        compliant_loans: loans.where(loans: { compliance_type: "sharia" }).count,
-        conventional_loans: loans.where(loans: { compliance_type: "conventional" }).count,
-        total_sharia_value: loans.where(loans: { compliance_type: "sharia" })
-                                  .sum { |a| a.loan.principal_amount_money },
-        recommendations: generate_sharia_recommendations(loans)
-      }
-    end
+    {
+      compliant_loans: loans.where(loans: { compliance_type: "sharia" }).count,
+      conventional_loans: loans.where(loans: { compliance_type: "conventional" }).count,
+      total_sharia_value: loans.where(loans: { compliance_type: "sharia" })
+                                .sum { |a| a.loan.principal_amount_money },
+      recommendations: generate_sharia_recommendations(loans)
+    }
+  end
 
     private
 
