@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.5](https://github.com/hendripermana/permoney/compare/v0.9.4...v0.9.5) (2025-11-04)
+
+
+### Bug Fixes
+
+* Resolve production blockers for Rails 8 + Puma 6 ([c102840](https://github.com/hendripermana/permoney/commit/c1028407e7023260255c0ab4fcde800a2487a510))
+
 ## [0.9.4](https://github.com/hendripermana/permoney/compare/v0.9.3...v0.9.4) (2025-11-04)
 
 
