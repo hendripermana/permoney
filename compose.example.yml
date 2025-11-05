@@ -79,6 +79,12 @@ services:
         condition: service_healthy
     environment:
       <<: *rails_env
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'sidekiq' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     networks:
       - permoney_net
 

@@ -13,6 +13,7 @@
 @import "./components/floating_chat.css";
 
 @import "./google-sign-in.css";
+@import "./date-picker-dark-mode.css";
 
 @layer utilities {
   /* Modern Progress Indicator Animations */
