@@ -16,7 +16,8 @@
 
 # Timeout Configuration
 # Maximum time a job can run before being terminated
-:timeout: 30
+# Increased from 30s to 90s for balance sync operations
+:timeout: <%= ENV.fetch("SIDEKIQ_TIMEOUT", 90).to_i %>
 
 # Retry Configuration
 # Maximum number of retries for failed jobs

@@ -16,9 +16,10 @@ class Balance::Materializer
 
       purge_stale_balances
 
-      if strategy == :forward
-        update_account_info
-      end
+      # CRITICAL FIX: Update account balance for BOTH forward and reverse strategies
+      # Previously only forward strategy updated the account, causing balances to not
+      # update for linked/synced accounts (which use reverse strategy)
+      update_account_info
     end
   end
 

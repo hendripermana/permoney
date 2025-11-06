@@ -3,10 +3,11 @@ class AccountsController < ApplicationController
   include Periodable
 
   def index
-    @manual_accounts = family.accounts.manual.alphabetically
-    @plaid_items = family.plaid_items.ordered
-    @simplefin_items = family.simplefin_items.ordered
-    @lunchflow_items = family.lunchflow_items.ordered
+    # PERFORMANCE: Eager load associations to prevent N+1 queries
+    @manual_accounts = family.accounts.manual.alphabetically.includes(:accountable)
+    @plaid_items = family.plaid_items.ordered.includes(:plaid_accounts)
+    @simplefin_items = family.simplefin_items.ordered.includes(:simplefin_accounts)
+    @lunchflow_items = family.lunchflow_items.ordered.includes(:lunchflow_accounts)
 
     render layout: "settings"
   end
@@ -20,7 +21,13 @@ class AccountsController < ApplicationController
     @chart_view = params[:chart_view] || "balance"
     @tab = params[:tab]
     @q = params.fetch(:q, {}).permit(:search)
-    entries = @account.entries.search(@q).reverse_chronological
+    
+    # PERFORMANCE: Eager load associations for entries
+    # Note: Cannot use .includes(:entryable) on polymorphic - Rails will load automatically
+    entries = @account.entries
+                      .search(@q)
+                      .reverse_chronological
+                      .includes(:account)
 
     @pagy, @entries = pagy(entries, limit: params[:per_page] || "10")
 

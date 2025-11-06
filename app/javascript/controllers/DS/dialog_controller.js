@@ -14,6 +14,25 @@ export default class extends Controller {
     if (this.autoOpenValue) {
       this.element.showModal();
     }
+
+    // CRITICAL FIX: Listen for turbo:before-visit to auto-close modal on redirects
+    // This fixes the issue where transaction form modal stays open after submission
+    this.boundBeforeVisitHandler = this.handleBeforeVisit.bind(this);
+    document.addEventListener("turbo:before-visit", this.boundBeforeVisitHandler);
+  }
+
+  disconnect() {
+    // Clean up event listener when controller is disconnected
+    if (this.boundBeforeVisitHandler) {
+      document.removeEventListener("turbo:before-visit", this.boundBeforeVisitHandler);
+    }
+  }
+
+  handleBeforeVisit(event) {
+    // Close dialog before navigation if it's open
+    if (this.element.open) {
+      this.element.close();
+    }
   }
   
   // If the user clicks anywhere outside of the visible content, close the dialog

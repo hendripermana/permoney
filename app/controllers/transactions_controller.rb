@@ -13,6 +13,7 @@ class TransactionsController < ApplicationController
     @q = search_params
     @search = Transaction::Search.new(Current.family, filters: @q)
 
+    # PERFORMANCE: Eager load all associations to prevent N+1 queries
     base_scope = @search.transactions_scope
                        .reverse_chronological
                        .includes(
@@ -20,16 +21,23 @@ class TransactionsController < ApplicationController
                          :category, :merchant, :tags,
                          :transfer_as_inflow, :transfer_as_outflow
                        )
+                       .references(:entries, :accounts) # Force join for better performance
 
     @pagy, @transactions = pagy(base_scope, limit: per_page)
 
-    # Load projected recurring transactions for next month
-    @projected_recurring = Current.family.recurring_transactions
-                                  .active
-                                  .where("next_expected_date <= ? AND next_expected_date >= ?",
-                                         1.month.from_now.to_date,
-                                         Date.current)
-                                  .includes(:merchant)
+    # PERFORMANCE: Cache projected recurring transactions for 5 minutes
+    @projected_recurring = Rails.cache.fetch(
+      "family:#{Current.family.id}:projected_recurring:#{Date.current}",
+      expires_in: 5.minutes
+    ) do
+      Current.family.recurring_transactions
+                    .active
+                    .where("next_expected_date <= ? AND next_expected_date >= ?",
+                           1.month.from_now.to_date,
+                           Date.current)
+                    .includes(:merchant)
+                    .to_a # Materialize to cache
+    end
   end
 
   def clear_filter

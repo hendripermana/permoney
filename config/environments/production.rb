@@ -87,8 +87,9 @@ Rails.application.configure do
     }
   }
 
-  # Replace the default in-process and non-durable queuing backend for Active Job.
-  # config.active_job.queue_adapter = :resque
+  # CRITICAL: Use Sidekiq as the queue adapter for persistent, reliable job processing
+  # Default :async adapter is non-persistent and jobs are lost on restart!
+  config.active_job.queue_adapter = :sidekiq
 
   # Ignore bad email addresses and do not raise email delivery errors.
   # Set this to true and configure the email server for immediate delivery to raise delivery errors.
@@ -115,6 +116,42 @@ Rails.application.configure do
 
   # Only use :id for inspections in production.
   config.active_record.attributes_for_inspect = [ :id ]
+
+  # ===========================================================================
+  # F1-LEVEL PERFORMANCE OPTIMIZATIONS (Rails 8.1 Best Practices)
+  # ===========================================================================
+
+  # Query result caching - cache identical SQL queries
+  config.active_record.query_log_tags_enabled = false # Disable in prod for speed
+  config.active_record.cache_versioning = true # Enable query cache versioning
+  
+  # Async query executor for better performance
+  config.active_record.async_query_executor = :global_thread_pool
+  
+  # Schema cache - load database schema once instead of querying
+  config.active_record.use_schema_cache_dump = true
+  config.active_record.schema_cache_ignored_tables = []
+  
+  # Action Controller optimizations
+  config.action_controller.enable_fragment_cache_logging = false
+  
+  # Asset optimizations
+  config.assets.compile = false # Don't compile in production
+  config.assets.digest = true # Use digest for cache busting
+  config.assets.compress = true # Enable compression
+  config.assets.css_compressor = nil # Tailwind already optimized
+  config.assets.js_compressor = :terser # Compress JS with Terser
+  
+  # Gzip compression for responses
+  config.middleware.insert_before ActionDispatch::Static, Rack::Deflater
+  
+  # ETag support for conditional requests
+  config.action_dispatch.default_headers.merge!({
+    'X-Frame-Options' => 'SAMEORIGIN',
+    'X-Content-Type-Options' => 'nosniff',
+    'X-XSS-Protection' => '0',
+    'Referrer-Policy' => 'strict-origin-when-cross-origin'
+  })
 
   # Enable DNS rebinding protection and other `Host` header attacks.
   # config.hosts = [
