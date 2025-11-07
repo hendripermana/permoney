@@ -413,6 +413,15 @@ document.addEventListener("turbo:before-visit", () => {
   - `app/components/DS/menu_item.rb`: Added automatic `_top` frame for link items
   - `app/javascript/controllers/DS/menu_controller.js`: Added `turbo:before-visit` handler for clean menu close
 
+**Issue 4: ActiveSupport::Configurable Deprecation Flood**
+- **Problem**: Rails 8.1 logs a warning every time `ActiveSupport::Configurable` autoloads (removed in 8.2)
+- **Root Cause**: Dependencies (ViewComponent, OmniAuth helpers, etc.) still reference the deprecated module
+- **Solution**: Provide our own drop-in implementation at `lib/active_support/configurable.rb` using `class_attribute` + `ActiveSupport::InheritableOptions`, and load it before `Bundler.require`
+- **Files Changed**:
+  - `config/boot.rb`: Adds `lib` to `$LOAD_PATH` so our shim wins `require "active_support/configurable"`
+  - `config/application.rb`: Requires the shim before other gems boot
+  - `lib/active_support/configurable.rb`: Shim implementation maintained until upstream gems remove the dependency
+
 **Key Learnings:**
 - Rails 8.1 requires stricter Stimulus controller location conventions
 - Turbo Frames need explicit `_top` target to break out for full page navigation

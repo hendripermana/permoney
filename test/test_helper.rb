@@ -13,6 +13,7 @@ ENV["RAILS_ENV"] ||= "test"
 ENV["PLAID_ENV"] = "sandbox"
 ENV["PLAID_CLIENT_ID"] ||= "test_client_id"
 ENV["PLAID_SECRET"] ||= "test_secret"
+ENV["API_RATE_LIMITING_ENABLED"] ||= "true"
 
 # Fixes Segfaults on M1 Macs when running tests in parallel (temporary workaround)
 ENV["PGGSSENCMODE"] = "disable"
@@ -69,9 +70,20 @@ module ActiveSupport
       ClimateControl.modify(**overrides, &block)
     end
 
-    def with_self_hosting
-      Rails.configuration.stubs(:app_mode).returns("self_hosted".inquiry)
+    def with_app_mode(mode)
+      original_mode = Rails.configuration.app_mode
+      Rails.configuration.app_mode = mode.inquiry
       yield
+    ensure
+      Rails.configuration.app_mode = original_mode
+    end
+
+    def with_self_hosting(&block)
+      with_app_mode("self_hosted", &block)
+    end
+
+    def without_self_hosting(&block)
+      with_app_mode("managed", &block)
     end
 
     def user_password_test

@@ -19,34 +19,59 @@ class LoanPostInstallmentObservabilityTest < ActiveSupport::TestCase
     events = []
     sub = ActiveSupport::Notifications.subscribe("permoney.loan.installment.posted") { |*args| events << ActiveSupport::Notifications::Event.new(*args) }
 
-    # Provide a minimal Sentry shim if not present
+    # Provide a minimal Sentry shim if not present and ensure the shim is API-compatible
     unless defined?(::Sentry)
       Object.const_set(:Sentry, Module.new)
     end
+
     ::Sentry.singleton_class.class_eval do
-      attr_accessor :span_called
-      def with_child_span(op:, description: nil, **_kwargs)
+      attr_accessor :span_called unless method_defined?(:span_called)
+
+      def with_child_span(*_args, **_kwargs)
         self.span_called = true
-        span = Object.new
-        span.define_singleton_method(:set_data) { |_k, _v| }
-        span.define_singleton_method(:set_description) { |_desc| }
-        yield span
+        span = __permoney_test_span
+        if block_given?
+          yield span
+        else
+          span
+        end
       end
-      def add_breadcrumb(*)
-      end
-      def configure_scope
-        scope = Object.new
-        scope.define_singleton_method(:set_transaction_name) { |_name| }
-        yield scope
-      end
-      def get_current_scope
-        scope = Object.new
-        scope.define_singleton_method(:set_transaction_name) { |_name| }
-        tx = Object.new
-        tx.define_singleton_method(:set_measurement) { |_name, _value, _unit| }
-        scope.define_singleton_method(:get_transaction) { tx }
+
+      def add_breadcrumb(*); end
+
+      def configure_scope(*_args, **_kwargs)
+        scope = __permoney_test_scope
+        yield scope if block_given?
         scope
       end
+
+      def get_current_scope(*_args, **_kwargs)
+        scope = __permoney_test_scope
+        yield scope if block_given?
+        scope
+      end
+
+      private
+
+        def __permoney_test_span
+          Object.new.tap do |span|
+            span.define_singleton_method(:set_data) { |*_args, **_kwargs| }
+            span.define_singleton_method(:set_description) { |*_args, **_kwargs| }
+          end
+        end
+
+        def __permoney_test_scope
+          tx = Object.new
+          tx.define_singleton_method(:set_measurement) { |*_args| }
+
+          Object.new.tap do |scope|
+            scope.define_singleton_method(:set_transaction_name) { |*_args, **_kwargs| }
+            scope.define_singleton_method(:set_tags) { |*_args, **_kwargs| }
+            scope.define_singleton_method(:set_context) { |*_args, **_kwargs| }
+            scope.define_singleton_method(:set_user) { |*_args, **_kwargs| }
+            scope.define_singleton_method(:get_transaction) { tx }
+          end
+        end
     end
 
     ::Sentry.span_called = false

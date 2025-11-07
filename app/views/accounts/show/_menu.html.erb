@@ -1,7 +1,7 @@
 <%# locals: (account:) %>
 
 <%= render DS::Menu.new(testid: "account-menu") do |menu| %>
-  <% menu.with_item(variant: "link", text: "Edit", href: edit_account_path(account), icon: "pencil-line", data: { turbo_frame: :modal }) %>
+  <% menu.with_item(variant: "link", text: "Edit", href: edit_account_path(account), icon: "pencil-line", frame: "modal") %>
 
   <% unless account.crypto? %>
     <% menu.with_item(

@@ -83,14 +83,15 @@ class TransactionsController < ApplicationController
           flash[:notice] = "Transaction created"
           redirect_back_or_to account_path(@entry.account)
         end
-        
+
         # TURBO STREAM: Modal stays on page, just close modal and show success
         # This matches the pattern used by valuations, trades, etc.
         format.turbo_stream do
+          flash[:notice] = "Transaction created"
           render turbo_stream: [
             turbo_stream.update("modal", ""),
             turbo_stream.replace(@entry),
-            *flash_notification_stream_items("Transaction created")
+            *flash_notification_stream_items
           ]
         end
       end

@@ -46,20 +46,27 @@ class DS::MenuItem < DesignSystemComponent
     end
 
     def merged_opts
-      merged_opts = opts.dup || {}
+      # Rails 8.1: Fix nil handling - use safe navigation to prevent NoMethodError
+      merged_opts = (opts || {}).dup
       data = merged_opts.delete(:data) || {}
 
       if confirm.present?
         data = data.merge(turbo_confirm: confirm.to_data_attribute)
       end
 
+      # Rails 8.1: Frame parameter takes precedence over everything
+      # Explicitly check for nil/false/empty to ensure frame parameter is respected
       if frame.present?
-        data = data.merge(turbo_frame: frame)
+        # Convert symbol to string for consistency (Rails expects string for turbo_frame)
+        frame_value = frame.to_s
+        data = data.merge(turbo_frame: frame_value)
       else
         # Rails 8.1: Default to _top frame for menu items to break out of any parent frames
         # This ensures navigation works correctly when menu is inside a Turbo Frame
-        # Apply to both links and buttons (especially for logout which uses button_to)
-        data = data.merge(turbo_frame: "_top") if variant == :link || (variant == :button && method == :delete)
+        # Only apply default if no frame is explicitly set AND no turbo_frame in data
+        unless data.key?(:turbo_frame) || data.key?("turbo_frame")
+          data = data.merge(turbo_frame: "_top") if variant == :link || (variant == :button && method == :delete)
+        end
       end
 
       merged_opts.merge(data: data)

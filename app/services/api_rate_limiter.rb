@@ -71,13 +71,18 @@ class ApiRateLimiter
   end
 
   def self.limit(api_key)
-    if Rails.application.config.app_mode.self_hosted?
-      # Use NoopApiRateLimiter for self-hosted mode
-      # This means no rate limiting is applied
-      NoopApiRateLimiter.new(api_key)
-    else
+    if enabled?
       new(api_key)
+    else
+      NoopApiRateLimiter.new(api_key)
     end
+  end
+
+  def self.enabled?
+    override = ENV["API_RATE_LIMITING_ENABLED"]
+    return ActiveModel::Type::Boolean.new.cast(override) if override.present?
+
+    !Rails.application.config.app_mode.self_hosted?
   end
 
   private

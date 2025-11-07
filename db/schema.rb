@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2025_11_04_001102) do
+ActiveRecord::Schema[8.1].define(version: 2025_11_07_090000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -31,13 +31,17 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_04_001102) do
   end
 
   create_table "accounts", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.text "access_token_encrypted"
     t.uuid "accountable_id"
     t.string "accountable_type"
     t.decimal "balance", precision: 19, scale: 4
+    t.integer "balances_count", default: 0, null: false
     t.decimal "cash_balance", precision: 19, scale: 4, default: "0.0"
     t.virtual "classification", type: :string, as: "\nCASE\n    WHEN ((accountable_type)::text = ANY (ARRAY[('Loan'::character varying)::text, ('CreditCard'::character varying)::text, ('OtherLiability'::character varying)::text])) THEN 'liability'::text\n    ELSE 'asset'::text\nEND", stored: true
     t.datetime "created_at", null: false
     t.string "currency"
+    t.integer "entries_count", default: 0, null: false
+    t.string "external_id"
     t.uuid "family_id", null: false
     t.uuid "import_id"
     t.jsonb "locked_attributes", default: {}
@@ -51,6 +55,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_04_001102) do
     t.index ["accountable_id", "accountable_type"], name: "index_accounts_on_accountable_id_and_accountable_type"
     t.index ["accountable_type"], name: "index_accounts_on_accountable_type"
     t.index ["currency"], name: "index_accounts_on_currency"
+    t.index ["external_id"], name: "index_accounts_on_external_id"
     t.index ["family_id", "accountable_type"], name: "index_accounts_on_family_id_and_accountable_type"
     t.index ["family_id", "id"], name: "index_accounts_on_family_id_and_id"
     t.index ["family_id", "status"], name: "index_accounts_on_family_id_and_status"
@@ -199,6 +204,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_04_001102) do
     t.datetime "updated_at", null: false
     t.index ["family_id", "key"], name: "idx_categories_family_key", unique: true, where: "(key IS NOT NULL)"
     t.index ["family_id"], name: "index_categories_on_family_id"
+    t.index ["parent_id"], name: "index_categories_on_parent_id"
   end
 
   create_table "chats", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -209,6 +215,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_04_001102) do
     t.string "title", null: false
     t.datetime "updated_at", null: false
     t.uuid "user_id", null: false
+    t.index ["latest_assistant_response_id"], name: "index_chats_on_latest_assistant_response_id"
     t.index ["user_id"], name: "index_chats_on_user_id"
   end
 
@@ -278,8 +285,10 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_04_001102) do
     t.index ["account_id", "source", "external_id"], name: "index_entries_on_account_source_and_external_id", unique: true, where: "((external_id IS NOT NULL) AND (source IS NOT NULL))"
     t.index ["account_id"], name: "index_entries_on_account_id"
     t.index ["date"], name: "index_entries_on_date"
+    t.index ["entryable_id"], name: "index_entries_on_entryable_id"
     t.index ["entryable_type"], name: "index_entries_on_entryable_type"
     t.index ["import_id"], name: "index_entries_on_import_id"
+    t.index ["plaid_id"], name: "index_entries_on_plaid_id"
   end
 
   create_table "exchange_rate_histories", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -318,6 +327,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_04_001102) do
     t.string "stripe_customer_id"
     t.string "timezone"
     t.datetime "updated_at", null: false
+    t.index ["stripe_customer_id"], name: "index_families_on_stripe_customer_id"
   end
 
   create_table "family_exports", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -435,6 +445,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_04_001102) do
     t.string "ticker_col_label"
     t.string "type", null: false
     t.datetime "updated_at", null: false
+    t.index ["account_id"], name: "index_imports_on_account_id"
     t.index ["family_id"], name: "index_imports_on_family_id"
   end
 
@@ -508,6 +519,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_04_001102) do
     t.index ["account_id", "status"], name: "index_loan_installments_on_account_id_and_status"
     t.index ["account_id"], name: "index_loan_installments_on_account_id"
     t.index ["last_payment_date"], name: "index_loan_installments_on_last_payment_date"
+    t.index ["transfer_id"], name: "index_loan_installments_on_transfer_id"
   end
 
   create_table "loans", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -561,6 +573,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_04_001102) do
     t.index ["institution_type"], name: "index_loans_on_institution_type"
     t.index ["islamic_product_type"], name: "index_loans_on_islamic_product_type"
     t.index ["lender_name"], name: "index_loans_on_lender_name"
+    t.index ["linked_contact_id"], name: "index_loans_on_linked_contact_id"
   end
 
   create_table "lunchflow_accounts", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -598,6 +611,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_04_001102) do
     t.datetime "sync_start_date"
     t.datetime "updated_at", null: false
     t.index ["family_id"], name: "index_lunchflow_items_on_family_id"
+    t.index ["institution_id"], name: "index_lunchflow_items_on_institution_id"
     t.index ["status"], name: "index_lunchflow_items_on_status"
   end
 
@@ -631,6 +645,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_04_001102) do
     t.string "type", null: false
     t.datetime "updated_at", null: false
     t.index ["chat_id"], name: "index_messages_on_chat_id"
+    t.index ["provider_id"], name: "index_messages_on_provider_id"
   end
 
   create_table "mobile_devices", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -738,6 +753,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_04_001102) do
     t.datetime "updated_at", null: false
     t.index ["account_id", "installment_no"], name: "idx_paylater_installments_acct_no", unique: true
     t.index ["account_id"], name: "index_pay_later_installments_on_account_id"
+    t.index ["transfer_id"], name: "index_pay_later_installments_on_transfer_id"
   end
 
   create_table "pay_later_rates", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -839,6 +855,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_04_001102) do
     t.string "status", default: "good", null: false
     t.datetime "updated_at", null: false
     t.index ["family_id"], name: "index_plaid_items_on_family_id"
+    t.index ["institution_id"], name: "index_plaid_items_on_institution_id"
     t.index ["plaid_id"], name: "index_plaid_items_on_plaid_id", unique: true
   end
 
@@ -1022,6 +1039,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_04_001102) do
     t.datetime "trial_ends_at"
     t.datetime "updated_at", null: false
     t.index ["family_id"], name: "index_subscriptions_on_family_id", unique: true
+    t.index ["stripe_id"], name: "index_subscriptions_on_stripe_id"
   end
 
   create_table "syncs", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -1075,6 +1093,8 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_04_001102) do
     t.string "type", null: false
     t.datetime "updated_at", null: false
     t.index ["message_id"], name: "index_tool_calls_on_message_id"
+    t.index ["provider_call_id"], name: "index_tool_calls_on_provider_call_id"
+    t.index ["provider_id"], name: "index_tool_calls_on_provider_id"
   end
 
   create_table "trades", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|

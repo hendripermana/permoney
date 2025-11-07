@@ -13,7 +13,7 @@
               text: "New balance",
               icon: "circle-dollar-sign",
               href: new_valuation_path(account_id: @account.id),
-              data: { turbo_frame: :modal }) %>
+              frame: "modal") %>
 
           <% unless @account.crypto? %>
             <% href = @account.investment? ? new_trade_path(account_id: @account.id) : new_transaction_path(account_id: @account.id) %>
@@ -22,7 +22,7 @@
                 text: "New transaction",
                 icon: "credit-card",
                 href: href,
-                data: { turbo_frame: :modal }) %>
+                frame: "modal") %>
           <% end %>
         <% end %>
       <% end %>
