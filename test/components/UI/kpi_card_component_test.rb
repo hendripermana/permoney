@@ -109,11 +109,17 @@ class UI::KpiCardComponentTest < ViewComponent::TestCase
     render_inline(UI::KpiCard.new(
       title: "Test",
       value: "$100",
-      icon: nil
+      icon: nil,
+      show_privacy_toggle: false
     ))
 
-    # Should not have icon in the icon section
-    assert_selector ".px-6.mb-3\\.5" # Icon container exists
+    # When no icon and privacy toggle disabled, icon section should be completely absent
+    assert_no_selector ".px-6.pt-6.pb-3\\.5"
+
+    # But there might be other icons (like in change indicator)
+    # So check specifically that no privacy toggle icons exist
+    assert_no_selector "[data-kpi-card-target='showIcon']"
+    assert_no_selector "[data-kpi-card-target='hideIcon']"
   end
 
   test "renders CTA link with proper turbo frame" do
@@ -135,5 +141,43 @@ class UI::KpiCardComponentTest < ViewComponent::TestCase
     ))
 
     assert_selector "div[class*='hover:scale']"
+  end
+
+  test "renders privacy toggle when enabled" do
+    render_inline(UI::KpiCard.new(
+      title: "Income",
+      value: "$5,000",
+      icon: "trending-up",
+      show_privacy_toggle: true
+    ))
+
+    # Check privacy toggle button
+    assert_selector "button[data-kpi-card-target='toggleButton']"
+    assert_selector "button[data-action*='togglePrivacy']"
+
+    # Check icons for privacy toggle
+    assert_selector "svg[data-kpi-card-target='showIcon']"
+    assert_selector "svg[data-kpi-card-target='hideIcon']"
+
+    # Check storage key attribute
+    assert_selector "div[data-kpi-card-storage-key-value='kpi_card_privacy_income']"
+
+    # Check hidden value placeholder
+    assert_selector "div[data-kpi-card-target='hiddenValue']"
+    assert_text "••••••"
+  end
+
+  test "does not render privacy toggle when disabled" do
+    render_inline(UI::KpiCard.new(
+      title: "Income",
+      value: "$5,000",
+      icon: "trending-up",
+      show_privacy_toggle: false
+    ))
+
+    # Should not have privacy toggle elements
+    assert_no_selector "button[data-action*='togglePrivacy']"
+    assert_no_selector "div[data-kpi-card-target='hiddenValue']"
+    assert_no_selector "div[data-kpi-card-storage-key-value]"
   end
 end

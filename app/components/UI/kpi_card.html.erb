@@ -1,5 +1,5 @@
 <div
-  class="<%= card_classes %>"
+  class="<%= card_classes %> h-full flex flex-col"
   role="article"
   aria-label="<%= aria_label %>"
   data-controller="kpi-card"
@@ -7,11 +7,15 @@
     data-kpi-card-storage-key-value="<%= privacy_storage_key %>"
   <% end %>>
 
-  <div class="relative overflow-hidden flex flex-col justify-end py-6 px-0 pb-0">
+  <div class="relative overflow-hidden flex flex-col flex-1 min-h-0 kpi-card-container">
     <%# Icon Section with Privacy Toggle %>
-    <div class="px-6 mb-3.5 flex items-center justify-between">
+    <% if icon.present? || privacy_toggle_enabled? %>
+    <div class="px-6 pt-6 pb-3.5 flex items-center justify-between flex-shrink-0">
       <% if icon.present? %>
-        <%= helpers.icon(icon, size: "lg", class: "text-white/60") %>
+        <%= helpers.icon(icon, size: "lg", class: "text-white/60 flex-shrink-0") %>
+      <% elsif privacy_toggle_enabled? %>
+        <%# Empty spacer when icon is missing but privacy toggle is present %>
+        <div class="w-8"></div>
       <% end %>
 
       <% if privacy_toggle_enabled? %>
@@ -19,77 +23,82 @@
           type="button"
           data-action="click->kpi-card#togglePrivacy"
           data-kpi-card-target="toggleButton"
-          class="text-white/60 hover:text-white transition-colors p-1 rounded-md hover:bg-white/10"
+          class="text-white/60 hover:text-white transition-colors p-1 rounded-md hover:bg-white/10 flex-shrink-0"
           aria-label="Toggle value visibility">
           <%= helpers.icon("eye", size: "md", class: "hidden", data: { kpi_card_target: "showIcon" }) %>
-          <%= helpers.icon("eye-off", size: "md", class: "hidden", data: { kpi_card_target: "hideIcon" }) %>
+          <%= helpers.icon("eye-off", size: "md", data: { kpi_card_target: "hideIcon" }) %>
         </button>
       <% end %>
     </div>
+    <% end %>
 
-    <%# Main Content %>
-    <div class="flex-1 flex flex-col justify-center items-start px-6 mb-6">
-      <%# Value with Previous Value Context %>
-      <div class="flex items-baseline gap-2 mb-4" data-kpi-card-target="value">
-        <span class="text-white text-3xl lg:text-4xl font-bold transition-all">
-          <%= value %>
-        </span>
-        <% if show_previous_value? %>
-          <span class="text-white/60 text-sm font-medium">
-            from <%= previous_value %>
+    <%# Main Content - Flexible section that grows to fill space %>
+    <div class="flex-1 flex flex-col px-6 pb-4 min-h-0">
+      <%# Value with Previous Value Context - Fluid typography that auto-adjusts to container width %>
+      <div class="flex flex-col gap-1.5 mb-3 min-w-0" data-kpi-card-target="value">
+        <div class="w-full min-w-0">
+          <span class="text-white font-bold transition-all whitespace-nowrap inline-block kpi-value-fluid">
+            <%= value %>
           </span>
+        </div>
+        <% if show_previous_value? %>
+          <div class="w-full min-w-0">
+            <span class="text-white/60 font-medium whitespace-nowrap inline-block kpi-value-fluid-small">
+              from <%= previous_value %>
+            </span>
+          </div>
         <% end %>
       </div>
 
       <% if privacy_toggle_enabled? %>
         <%# Hidden value placeholder %>
-        <div class="hidden flex items-baseline gap-2 mb-4" data-kpi-card-target="hiddenValue">
-          <span class="text-white text-3xl lg:text-4xl font-bold tracking-wider transition-all">
+        <div class="hidden flex flex-col gap-1.5 mb-3 min-w-0" data-kpi-card-target="hiddenValue">
+          <span class="text-white font-bold tracking-wider transition-all whitespace-nowrap inline-block kpi-value-fluid">
             ••••••
           </span>
         </div>
       <% end %>
 
       <%# Title %>
-      <div class="text-white text-base lg:text-lg font-semibold mb-1">
+      <div class="text-white text-base lg:text-lg font-semibold mb-1.5 break-words min-w-0">
         <%= title %>
       </div>
 
       <%# Description %>
       <% if description.present? %>
-        <div class="text-white/80 text-xs lg:text-sm mb-2">
+        <div class="text-white/80 text-xs lg:text-sm mb-3 break-words min-w-0 line-clamp-2">
           <%= description %>
         </div>
       <% end %>
 
-      <%# Change Indicator - Badge Style (2025 Modern) %>
+      <%# Change Indicator - Badge Style (2025 Modern) - Positioned above CTA %>
       <% if show_change? %>
-        <div class="flex items-center gap-2 mt-2">
-          <div class="<%= change_badge_classes %>">
+        <div class="flex items-center gap-2 flex-wrap mt-auto mb-2">
+          <div class="<%= change_badge_classes %> flex-shrink-0">
             <%= helpers.icon(
               trend_indicator[:icon],
               size: "sm",
-              class: "w-3.5 h-3.5"
+              class: "w-3.5 h-3.5 flex-shrink-0"
             ) %>
-            <span class="font-semibold">
+            <span class="font-semibold whitespace-nowrap">
               <%= formatted_change %>
             </span>
           </div>
-          <span class="text-white/70 text-xs">
+          <span class="text-white/70 text-xs whitespace-nowrap">
             <%= period %>
           </span>
         </div>
       <% end %>
     </div>
 
-    <%# CTA Bottom Bar %>
+    <%# CTA Bottom Bar - Always at the bottom, fixed position %>
     <%= link_to cta_path,
-      class: "group/card w-full bg-black/20 hover:bg-black/30 backdrop-blur-sm px-6 py-4 flex items-center justify-between transition-colors duration-300",
+      class: "group/card w-full bg-black/20 hover:bg-black/30 backdrop-blur-sm px-6 py-4 flex items-center justify-between transition-colors duration-300 flex-shrink-0",
       data: { turbo_frame: "_top" } do %>
-      <span class="text-white text-sm font-medium"><%= cta_text %></span>
+      <span class="text-white text-sm font-medium truncate"><%= cta_text %></span>
       <%= helpers.icon("arrow-right",
         size: "sm",
-        class: "text-white group-hover/card:translate-x-1 transition-transform duration-300"
+        class: "text-white group-hover/card:translate-x-1 transition-transform duration-300 flex-shrink-0 ml-2"
       ) %>
     <% end %>
   </div>
