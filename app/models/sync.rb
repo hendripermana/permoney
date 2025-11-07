@@ -57,13 +57,13 @@ class Sync < ApplicationRecord
     def clean
       # Clean syncs yang sudah terlalu lama (24 jam)
       incomplete.where("syncs.created_at < ?", STALE_AFTER.ago).find_each(&:mark_stale!)
-      
+
       # Clean syncs yang stuck di syncing state lebih dari 10 menit (lebih agresif)
       # Ini untuk menangani kasus dimana sync job crash atau timeout tapi state tidak ter-update
-      stuck_syncing = where(status: 'syncing')
+      stuck_syncing = where(status: "syncing")
         .where("syncs.syncing_at < ?", 10.minutes.ago)
         .where("syncs.created_at < ?", 1.hour.ago) # Hanya sync yang sudah lebih dari 1 jam total
-      
+
       stuck_count = stuck_syncing.count
       if stuck_count > 0
         Rails.logger.warn("Found #{stuck_count} stuck syncing syncs. Marking as stale.")
@@ -127,7 +127,7 @@ class Sync < ApplicationRecord
         # PostgreSQL akan acquire locks dalam urutan yang sama untuk semua transactions
         # NOWAIT prevents indefinite waiting - akan raise error jika lock tidak bisa diambil
         reload.lock!("FOR UPDATE NOWAIT")
-        
+
         # Double-check state setelah lock (idempotency)
         return unless syncing? || pending?
         return unless all_children_finalized?
@@ -153,7 +153,7 @@ class Sync < ApplicationRecord
       raise
     rescue ActiveRecord::Deadlocked => e
       Rails.logger.warn("Deadlock detected for sync #{id} finalization: #{e.message}. Will retry on next attempt.")
-      return
+      nil
     end
 
     def finalize_parent_safely
@@ -164,28 +164,28 @@ class Sync < ApplicationRecord
       parent.finalize_if_all_children_finalized
     end
 
-  # If a sync is pending, we can adjust the window if new syncs are created with a wider window.
-  def expand_window_if_needed(new_window_start_date, new_window_end_date)
-    return unless pending?
-    return if self.window_start_date.nil? && self.window_end_date.nil? # already as wide as possible
+    # If a sync is pending, we can adjust the window if new syncs are created with a wider window.
+    def expand_window_if_needed(new_window_start_date, new_window_end_date)
+      return unless pending?
+      return if self.window_start_date.nil? && self.window_end_date.nil? # already as wide as possible
 
-    earliest_start_date = if self.window_start_date && new_window_start_date
-      [ self.window_start_date, new_window_start_date ].min
-    else
-      nil
+      earliest_start_date = if self.window_start_date && new_window_start_date
+        [ self.window_start_date, new_window_start_date ].min
+      else
+        nil
+      end
+
+      latest_end_date = if self.window_end_date && new_window_end_date
+        [ self.window_end_date, new_window_end_date ].max
+      else
+        nil
+      end
+
+      update(
+        window_start_date: earliest_start_date,
+        window_end_date: latest_end_date
+      )
     end
-
-    latest_end_date = if self.window_end_date && new_window_end_date
-      [ self.window_end_date, new_window_end_date ].max
-    else
-      nil
-    end
-
-    update(
-      window_start_date: earliest_start_date,
-      window_end_date: latest_end_date
-    )
-  end
 
   private
     def log_status_change

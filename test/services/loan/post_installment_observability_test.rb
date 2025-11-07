@@ -53,25 +53,25 @@ class LoanPostInstallmentObservabilityTest < ActiveSupport::TestCase
 
       private
 
-        def __permoney_test_span
-          Object.new.tap do |span|
-            span.define_singleton_method(:set_data) { |*_args, **_kwargs| }
-            span.define_singleton_method(:set_description) { |*_args, **_kwargs| }
-          end
+      def __permoney_test_span
+        Object.new.tap do |span|
+          span.define_singleton_method(:set_data) { |*_args, **_kwargs| }
+          span.define_singleton_method(:set_description) { |*_args, **_kwargs| }
         end
+      end
 
-        def __permoney_test_scope
-          tx = Object.new
-          tx.define_singleton_method(:set_measurement) { |*_args| }
+      def __permoney_test_scope
+        tx = Object.new
+        tx.define_singleton_method(:set_measurement) { |*_args| }
 
-          Object.new.tap do |scope|
-            scope.define_singleton_method(:set_transaction_name) { |*_args, **_kwargs| }
-            scope.define_singleton_method(:set_tags) { |*_args, **_kwargs| }
-            scope.define_singleton_method(:set_context) { |*_args, **_kwargs| }
-            scope.define_singleton_method(:set_user) { |*_args, **_kwargs| }
-            scope.define_singleton_method(:get_transaction) { tx }
-          end
+        Object.new.tap do |scope|
+          scope.define_singleton_method(:set_transaction_name) { |*_args, **_kwargs| }
+          scope.define_singleton_method(:set_tags) { |*_args, **_kwargs| }
+          scope.define_singleton_method(:set_context) { |*_args, **_kwargs| }
+          scope.define_singleton_method(:set_user) { |*_args, **_kwargs| }
+          scope.define_singleton_method(:get_transaction) { tx }
         end
+      end
     end
 
     ::Sentry.span_called = false

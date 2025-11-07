@@ -1,4 +1,4 @@
-require 'timeout'
+require "timeout"
 
 # PERMANENT SOLUTION: Production-ready SyncJob dengan idempotency, error handling, dan performance optimization
 # Best Practices:
@@ -66,14 +66,14 @@ class SyncJob < ApplicationJob
     def handle_timeout(sync_record, error)
       Rails.logger.error("Sync #{sync_record.id} timed out after #{TIMEOUT_THRESHOLD} seconds")
       sync_record.reload
-      
+
       # IDEMPOTENCY: Hanya update jika masih dalam state yang bisa di-update
       if sync_record.syncing? && sync_record.may_fail?
         sync_record.fail!
         sync_record.update(error: "Sync timed out after #{TIMEOUT_THRESHOLD} seconds")
         sync_record.report_error(error) if sync_record.respond_to?(:report_error)
       end
-      
+
       # Re-raise untuk Sidekiq retry mechanism
       raise error
     end
@@ -81,18 +81,18 @@ class SyncJob < ApplicationJob
     def handle_error(sync_record, error)
       Rails.logger.error("Sync #{sync_record.id} failed: #{error.class} - #{error.message}")
       Rails.logger.error(error.backtrace.first(5).join("\n")) if error.backtrace
-      
+
       # Reload untuk mendapatkan state terbaru
       sync_record = Sync.find_by(id: sync_record.id)
       return unless sync_record
-      
+
       # IDEMPOTENCY: Hanya update jika masih dalam state yang bisa di-update
       if sync_record.syncing? && sync_record.may_fail?
         sync_record.fail!
         sync_record.update(error: "#{error.class}: #{error.message}")
         sync_record.report_error(error) if sync_record.respond_to?(:report_error)
       end
-      
+
       # Re-raise untuk Sidekiq retry mechanism
       raise error
     end

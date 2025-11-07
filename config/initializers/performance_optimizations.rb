@@ -38,18 +38,18 @@ Rails.application.configure do
   # -------------------------------------------------------------------------
   # Install bullet gem and enable in development to catch N+1 queries
   # Then fix them before deploying to production
-  
+
   # -------------------------------------------------------------------------
   # 6. MEMORY OPTIMIZATION
   # -------------------------------------------------------------------------
   # Enable Ruby 3.4 YJIT (Just-In-Time Compiler)
   # This is enabled by default in Ruby 3.4+
-  
+
   # -------------------------------------------------------------------------
   # 7. REDIS CONNECTION POOLING
   # -------------------------------------------------------------------------
   # Already configured in production.rb cache_store settings
-  
+
   # -------------------------------------------------------------------------
   # 8. RACK ATTACK RATE LIMITING (Optional - enable for API protection)
   # -------------------------------------------------------------------------

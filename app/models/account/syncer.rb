@@ -14,10 +14,10 @@ class Account::Syncer
 
   def perform_sync(sync)
     Rails.logger.info("Processing balances (#{account.linked? ? 'reverse' : 'forward'}) for account #{account.id}")
-    
+
     # Error isolation: Market data import tidak boleh fail entire sync
     import_market_data
-    
+
     # Core sync operation
     materialize_balances
   end
@@ -38,7 +38,7 @@ class Account::Syncer
     # This is a *supplemental* sync.  The daily market data sync should have already populated
     # a majority or all of this data, so this is often a no-op.
     #
-    # ERROR ISOLATION: We rescue errors here because if this operation fails, we don't want to fail 
+    # ERROR ISOLATION: We rescue errors here because if this operation fails, we don't want to fail
     # the entire sync since we have reasonable fallbacks for missing market data.
     def import_market_data
       Account::MarketDataImporter.new(account).import_all

@@ -71,15 +71,15 @@ class Balance::Materializer
       return if @balances.empty?
 
       current_time = Time.current
-      
+
       # PERFORMANCE: Batch size 1000 balances optimal untuk memory vs network roundtrips
       # Larger batches risk hitting max_allowed_packet, smaller batches waste network roundtrips
       batch_size = 1000
-      
+
       @balances.each_slice(batch_size) do |balance_batch|
         # RAILS 8.1 FIX: Do NOT include updated_at in data - Rails will handle it automatically
         # Only include created_at for INSERT operations (ignored during UPDATE)
-        upsert_data = balance_batch.map { |b| 
+        upsert_data = balance_batch.map { |b|
           attrs = b.attributes
             .except("id", "created_at", "updated_at", "account_id")
             .slice("date", "balance", "cash_balance", "currency",
@@ -94,7 +94,7 @@ class Balance::Materializer
           # CRITICAL: Do NOT set updated_at here - Rails 8.1 will add it automatically
           attrs
         }
-        
+
         # RAILS 8.1 BEST PRACTICE: Use record_timestamps: true (default)
         # This tells Rails to automatically handle updated_at in ON CONFLICT DO UPDATE clause
         # No need to manually add it to upsert_data or update_only
@@ -104,7 +104,7 @@ class Balance::Materializer
           # record_timestamps: true is the default, handles updated_at automatically
         )
       end
-      
+
       Rails.logger.info("Successfully persisted #{@balances.size} balances in #{(@balances.size.to_f / batch_size).ceil} batches")
     end
 
