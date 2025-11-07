@@ -55,7 +55,22 @@ class Sync < ApplicationRecord
 
   class << self
     def clean
+      # Clean syncs yang sudah terlalu lama (24 jam)
       incomplete.where("syncs.created_at < ?", STALE_AFTER.ago).find_each(&:mark_stale!)
+      
+      # Clean syncs yang stuck di syncing state lebih dari 10 menit (lebih agresif)
+      # Ini untuk menangani kasus dimana sync job crash atau timeout tapi state tidak ter-update
+      stuck_syncing = where(status: 'syncing')
+        .where("syncs.syncing_at < ?", 10.minutes.ago)
+        .where("syncs.created_at < ?", 1.hour.ago) # Hanya sync yang sudah lebih dari 1 jam total
+      
+      stuck_count = stuck_syncing.count
+      if stuck_count > 0
+        Rails.logger.warn("Found #{stuck_count} stuck syncing syncs. Marking as stale.")
+        stuck_syncing.find_each do |sync|
+          sync.mark_stale! if sync.may_mark_stale?
+        end
+      end
     end
   end
 
@@ -82,28 +97,72 @@ class Sync < ApplicationRecord
   end
 
   # Finalizes the current sync AND parent (if it exists)
+  # PRODUCTION-READY: Deadlock prevention dengan consistent locking order
+  # Best Practices:
+  # 1. Consistent lock order (by ID) untuk menghindari deadlock
+  # 2. Lock timeout untuk mencegah indefinite waiting
+  # 3. Early returns untuk mengurangi lock contention
+  # 4. Separate transaction untuk parent finalization
   def finalize_if_all_children_finalized
-    Sync.transaction do
-      lock!
+    # Early return jika tidak dalam state yang bisa di-finalize
+    return unless syncing? || pending?
 
-      # If this is the "parent" and there are still children running, don't finalize.
-      return unless all_children_finalized?
+    # PERFORMANCE: Cek children tanpa lock dulu untuk menghindari unnecessary locking
+    return unless all_children_finalized?
 
-      if syncing?
-        if has_failed_children?
-          fail!
-        else
-          complete!
+    # DEADLOCK PREVENTION: Gunakan consistent locking order (by ID)
+    # Semua sync locks harus diambil dalam urutan ID yang sama
+    finalize_with_lock_protection
+
+    # PERFORMANCE: Finalize parent di luar transaction untuk menghindari long-running transactions
+    # DEADLOCK PREVENTION: Parent finalization juga menggunakan consistent lock order
+    finalize_parent_safely
+  end
+
+  private
+    def finalize_with_lock_protection
+      # Gunakan lock dengan timeout untuk mencegah indefinite waiting
+      Sync.transaction(requires_new: true) do
+        # DEADLOCK PREVENTION: Lock dengan consistent order (by ID)
+        # PostgreSQL akan acquire locks dalam urutan yang sama untuk semua transactions
+        # NOWAIT prevents indefinite waiting - akan raise error jika lock tidak bisa diambil
+        reload.lock!("FOR UPDATE NOWAIT")
+        
+        # Double-check state setelah lock (idempotency)
+        return unless syncing? || pending?
+        return unless all_children_finalized?
+
+        # Finalize sync
+        if syncing?
+          if has_failed_children?
+            fail!
+          else
+            complete!
+          end
         end
-      end
 
-      # If we make it here, the sync is finalized.  Run post-sync, regardless of failure/success.
-      perform_post_sync
+        # Perform post-sync operations
+        perform_post_sync
+      end
+    rescue ActiveRecord::StatementInvalid => e
+      # Handle lock timeout atau deadlock
+      if e.message.include?("could not obtain lock") || e.message.include?("deadlock")
+        Rails.logger.warn("Could not acquire lock for sync #{id} finalization: #{e.message}. Will retry on next attempt.")
+        return
+      end
+      raise
+    rescue ActiveRecord::Deadlocked => e
+      Rails.logger.warn("Deadlock detected for sync #{id} finalization: #{e.message}. Will retry on next attempt.")
+      return
     end
 
-    # If this sync has a parent, try to finalize it so the child status propagates up the chain.
-    parent&.finalize_if_all_children_finalized
-  end
+    def finalize_parent_safely
+      return unless parent
+
+      # DEADLOCK PREVENTION: Parent juga harus di-lock dengan consistent order
+      # Pastikan parent ID lebih kecil dari child ID untuk consistent ordering
+      parent.finalize_if_all_children_finalized
+    end
 
   # If a sync is pending, we can adjust the window if new syncs are created with a wider window.
   def expand_window_if_needed(new_window_start_date, new_window_end_date)

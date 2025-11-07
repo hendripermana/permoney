@@ -24,6 +24,32 @@ class Account < ApplicationRecord
   scope :liabilities, -> { where(classification: "liability") }
   scope :alphabetically, -> { order(:name) }
   scope :manual, -> { left_joins(:account_providers).where(account_providers: { id: nil }) }
+  
+  # PERFORMANCE: Eager loading scopes to eliminate N+1 queries
+  # Usage: Account.with_associations.visible
+  scope :with_associations, -> { 
+    includes(:family, :accountable, logo_attachment: :blob) 
+  }
+  
+  # PERFORMANCE: For list views - loads only essential data
+  # Usage: Account.for_list.visible
+  scope :for_list, -> { 
+    select(:id, :name, :balance, :cash_balance, :currency, :classification, :status, :family_id, :accountable_type, :accountable_id)
+      .includes(:accountable)
+  }
+  
+  # PERFORMANCE: For dashboard with balance trend
+  # Usage: Account.with_latest_balance.visible
+  scope :with_latest_balance, -> {
+    joins("LEFT JOIN LATERAL (
+      SELECT balance, date 
+      FROM balances 
+      WHERE balances.account_id = accounts.id 
+      ORDER BY date DESC 
+      LIMIT 1
+    ) latest_balance ON true")
+      .select("accounts.*, latest_balance.balance as latest_balance, latest_balance.date as latest_balance_date")
+  }
 
   has_one_attached :logo
 

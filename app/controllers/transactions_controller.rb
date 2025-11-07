@@ -78,13 +78,26 @@ class TransactionsController < ApplicationController
       @entry.lock_saved_attributes!
       @entry.transaction.lock_attr!(:tag_ids) if @entry.transaction.tags.any?
 
-      flash[:notice] = "Transaction created"
-
       respond_to do |format|
-        format.html { redirect_back_or_to account_path(@entry.account) }
-        format.turbo_stream { stream_redirect_back_or_to(account_path(@entry.account)) }
+        format.html do
+          flash[:notice] = "Transaction created"
+          redirect_back_or_to account_path(@entry.account)
+        end
+        
+        # TURBO STREAM: Modal stays on page, just close modal and show success
+        # This matches the pattern used by valuations, trades, etc.
+        format.turbo_stream do
+          render turbo_stream: [
+            turbo_stream.update("modal", ""),
+            turbo_stream.replace(@entry),
+            *flash_notification_stream_items("Transaction created")
+          ]
+        end
       end
     else
+      # Re-render form with errors (stays in modal)
+      @income_categories = Current.family.categories.incomes.alphabetically
+      @expense_categories = Current.family.categories.expenses.alphabetically
       render :new, status: :unprocessable_entity
     end
   end

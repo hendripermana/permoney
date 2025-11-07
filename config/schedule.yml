@@ -11,7 +11,16 @@ clean_syncs:
   cron: "0 * * * *" # every hour
   class: "SyncCleanerJob"
   queue: "scheduled"
-  description: "Cleans up stale syncs"
+  description: "Cleans up stale syncs (24+ hours old)"
+
+# PRODUCTION-CRITICAL: Fast stuck sync detection and recovery
+# Runs every 5 minutes to quickly detect and recover from stuck syncs
+# This prevents balance updates from being blocked for long periods
+sync_cleanup:
+  cron: "*/5 * * * *" # every 5 minutes
+  class: "SyncCleanupJob"
+  queue: "low_priority"
+  description: "Detects and cleans stuck syncs (syncing > 10 min, pending > 15 min)"
 
 run_security_health_checks:
   cron: "0 2 * * 1-5" # 2:00 AM EST / 3:00 AM EDT (NY time) Monday through Friday

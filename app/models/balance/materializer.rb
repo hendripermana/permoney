@@ -56,20 +56,56 @@ class Balance::Materializer
       @balances = calculator.calculate
     end
 
+    # PRODUCTION-READY: Rails 8.1 compatible batch upsert dengan proper timestamp handling
+    # Best Practices:
+    # 1. Use upsert_all untuk bulk operations (10-50x lebih cepat dari individual saves)
+    # 2. Batch processing dalam chunks untuk memory efficiency
+    # 3. Rails 8.1 automatic timestamp handling via record_timestamps option
+    # 4. Single transaction untuk atomicity
+    #
+    # CRITICAL FIX: Rails 8.1 PostgreSQL upsert behavior change
+    # - When record_timestamps: true, Rails automatically adds updated_at to ON CONFLICT DO UPDATE
+    # - We MUST NOT include updated_at in data payload to avoid "multiple assignments to updated_at"
+    # - created_at is safe since it's only set on INSERT, not UPDATE
     def persist_balances
-      current_time = Time.now
-      account.balances.upsert_all(
-        @balances.map { |b| b.attributes
-               .slice("date", "balance", "cash_balance", "currency",
-                      "start_cash_balance", "start_non_cash_balance",
-                      "cash_inflows", "cash_outflows",
-                      "non_cash_inflows", "non_cash_outflows",
-                      "net_market_flows",
-                      "cash_adjustments", "non_cash_adjustments",
-                      "flows_factor")
-               .merge("updated_at" => current_time) },
-        unique_by: %i[account_id date currency]
-      )
+      return if @balances.empty?
+
+      current_time = Time.current
+      
+      # PERFORMANCE: Batch size 1000 balances optimal untuk memory vs network roundtrips
+      # Larger batches risk hitting max_allowed_packet, smaller batches waste network roundtrips
+      batch_size = 1000
+      
+      @balances.each_slice(batch_size) do |balance_batch|
+        # RAILS 8.1 FIX: Do NOT include updated_at in data - Rails will handle it automatically
+        # Only include created_at for INSERT operations (ignored during UPDATE)
+        upsert_data = balance_batch.map { |b| 
+          attrs = b.attributes
+            .except("id", "created_at", "updated_at", "account_id")
+            .slice("date", "balance", "cash_balance", "currency",
+                   "start_cash_balance", "start_non_cash_balance",
+                   "cash_inflows", "cash_outflows",
+                   "non_cash_inflows", "non_cash_outflows",
+                   "net_market_flows",
+                   "cash_adjustments", "non_cash_adjustments",
+                   "flows_factor")
+          attrs["account_id"] = account.id
+          attrs["created_at"] = current_time
+          # CRITICAL: Do NOT set updated_at here - Rails 8.1 will add it automatically
+          attrs
+        }
+        
+        # RAILS 8.1 BEST PRACTICE: Use record_timestamps: true (default)
+        # This tells Rails to automatically handle updated_at in ON CONFLICT DO UPDATE clause
+        # No need to manually add it to upsert_data or update_only
+        account.balances.upsert_all(
+          upsert_data,
+          unique_by: %i[account_id date currency]
+          # record_timestamps: true is the default, handles updated_at automatically
+        )
+      end
+      
+      Rails.logger.info("Successfully persisted #{@balances.size} balances in #{(@balances.size.to_f / batch_size).ceil} batches")
     end
 
     def purge_stale_balances

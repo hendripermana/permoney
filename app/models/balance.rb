@@ -1,7 +1,9 @@
 class Balance < ApplicationRecord
   include Monetizable
 
-  belongs_to :account
+  # PERFORMANCE: Counter cache for blazing fast account.balances.count
+  # Also touch account to invalidate cache when balances change
+  belongs_to :account, counter_cache: true, touch: true
 
   validates :account, :date, :balance, presence: true
   validates :flows_factor, inclusion: { in: [ -1, 1 ] }
