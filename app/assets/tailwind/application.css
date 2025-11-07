@@ -208,3 +208,65 @@
   pointer-events: none;
   position: absolute;
 }
+
+/* KPI Card Value - Fluid Typography (2025 Best Practice) */
+/* Automatically adjusts font size based on container width using CSS clamp() */
+/* Uses container queries (cqi) when available, falls back to viewport units (vw) */
+/* Formula: clamp(min-size, preferred-size, max-size) */
+
+/* Enable container queries on KPI card */
+.kpi-card-container {
+  container-type: inline-size;
+  container-name: kpi-card;
+}
+
+/* Container query approach - scales based on card width, not viewport */
+@container kpi-card (min-width: 0px) {
+  .kpi-value-fluid {
+    /* Fluid typography using container query inline units (cqi) */
+    /* Scales from 1.25rem (20px) to 2.5rem (40px) based on container width */
+    /* 1cqi = 1% of container's inline size (width in horizontal writing) */
+    font-size: clamp(1.25rem, 8cqi + 0.5rem, 2.5rem);
+    line-height: 1.2;
+  }
+
+  .kpi-value-fluid-small {
+    /* Smaller fluid typography for previous value text */
+    /* Scales from 0.75rem (12px) to 1rem (16px) */
+    font-size: clamp(0.75rem, 2cqi + 0.5rem, 1rem);
+    line-height: 1.4;
+  }
+}
+
+/* Fallback for browsers without container query support */
+/* Uses viewport units (vw) as fallback */
+@supports not (container-type: inline-size) {
+  .kpi-value-fluid {
+    /* Viewport-based fluid typography fallback */
+    /* Scales from 1.5rem (24px) to 2.5rem (40px) */
+    font-size: clamp(1.5rem, 4vw + 0.5rem, 2.5rem);
+    line-height: 1.2;
+  }
+
+  .kpi-value-fluid-small {
+    font-size: clamp(0.875rem, 1.5vw + 0.5rem, 1rem);
+    line-height: 1.4;
+  }
+}
+
+/* Responsive adjustments for larger screens */
+@media (min-width: 1280px) {
+  @supports not (container-type: inline-size) {
+    .kpi-value-fluid {
+      font-size: clamp(1.75rem, 4.5vw + 0.5rem, 2.75rem);
+    }
+  }
+}
+
+@media (min-width: 1536px) {
+  @supports not (container-type: inline-size) {
+    .kpi-value-fluid {
+      font-size: clamp(2rem, 5vw + 0.5rem, 3rem);
+    }
+  }
+}
