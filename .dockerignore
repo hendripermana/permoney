@@ -1,45 +1,74 @@
 # See https://docs.docker.com/engine/reference/builder/#dockerignore-file for more about ignoring files.
 
-# Ignore git directory.
-/.git/
-/.gitignore
+# Development and testing files
+.git/
+.gitignore
+.rspec*
+test/
+spec/
+coverage/
+.byebug_history
+.rubocop-*
 
-# Ignore bundler config.
-/.bundle
-
-# Ignore all environment files (except templates).
-/.env*
+# Environment and configuration files (except templates)
+.env*
 !/.env*.erb
+.envrc.*
 
-# Ignore all default key files.
+# Security files
 /config/master.key
 /config/credentials/*.key
+/config/secrets.yml
 
-# Ignore all logfiles and tempfiles.
+# Log and temporary files
 /log/*
 /tmp/*
 !/log/.keep
 !/tmp/.keep
 
-# Ignore pidfiles, but keep the directory.
-/tmp/pids/*
-!/tmp/pids/.keep
-
-# Ignore storage (uploaded files in development and any SQLite databases).
+# Storage and uploads
 /storage/*
 !/storage/.keep
 /tmp/storage/*
 !/tmp/storage/.keep
 
-# Ignore assets.
-/node_modules/
+# Assets (will be built in container)
+/frontend/
+node_modules/
 /app/assets/builds/*
 !/app/assets/builds/.keep
 /public/assets
 
-# Ignore CI service files.
-/.github
+# CI/CD files
+.github/
+.gitlab-ci.yml
+.travis.yml
+circle.yml
 
-# Ignore Docker-related files
-/.dockerignore
-/Dockerfile*
+# Docker files (except production Dockerfile)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Development tools
+.ruby-gemset
+.ruby-version
+
+# Documentation (not needed in production)
+README.md
+CHANGELOG*
+CONTRIBUTING.md
+LICENSE
+docs/
+*.md
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db

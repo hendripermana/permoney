@@ -11,7 +11,11 @@
 # The configuration below is a "standard" setup that works out of the box,
 # but if you're running this outside of a local network, it is recommended
 # to set the environment variables for extra security.
-#
+
+version: '3.9'
+
+services:
+  web:
 # Setup:
 # ------
 #
@@ -48,16 +52,23 @@ x-rails-env: &rails_env
 # NOTE: enabling OpenAI will incur costs when you use AI-related features in the app (chat, rules).  Make sure you have set appropriate spend limits on your account before adding this.
   OPENAI_ACCESS_TOKEN: ${OPENAI_ACCESS_TOKEN}
 
-services:
-  web:
+web:
     image: ghcr.io/hendripermana/permoney:latest
     volumes:
       - app-storage:/rails/storage
+      - ./log:/rails/log
     ports:
-      - 3000:3000
+      - "3000:3000"
     restart: unless-stopped
     environment:
       <<: *rails_env
+      # Performance optimizations
+      RUBY_YJIT_ENABLE: "1"
+      MALLOC_ARENA_MAX: "2"
+      # Optional: Enable StackProf for production profiling
+      ENABLE_STACK_PROF: "true"
+      # Optional: Skylight monitoring (set your token)
+      SKYLIGHT_AUTHENTICATION_TOKEN: "${SKYLIGHT_TOKEN:-}"
     depends_on:
       db:
         condition: service_healthy
@@ -65,12 +76,20 @@ services:
         condition: service_healthy
     networks:
       - permoney_net
+    # Health check for web service
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/up || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   worker:
     image: ghcr.io/hendripermana/permoney:latest
     command: bundle exec sidekiq
     volumes:
       - app-storage:/rails/storage
+      - ./log:/rails/log
     restart: unless-stopped
     depends_on:
       db:
@@ -79,6 +98,13 @@ services:
         condition: service_healthy
     environment:
       <<: *rails_env
+      # Performance optimizations
+      RUBY_YJIT_ENABLE: "1"
+      MALLOC_ARENA_MAX: "2"
+      REDIS_URL: redis://redis:6379/0
+      SIDEKIQ_CONCURRENCY: "5"
+      # Optional: StackProf for performance monitoring
+      ENABLE_STACK_PROF: "true"
     healthcheck:
       test: ["CMD-SHELL", "pgrep -f 'sidekiq' || exit 1"]
       interval: 30s

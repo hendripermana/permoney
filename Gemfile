@@ -17,7 +17,7 @@ gem "bootsnap", require: false
 gem "importmap-rails"
 gem "propshaft"
 gem "tailwindcss-rails"
-gem "lucide-rails", github: "hendripermana/lucide-rails"
+gem "lucide-rails", "~> 0.5.1"
 
 # Hotwire + UI
 gem "stimulus-rails"
@@ -107,7 +107,6 @@ group :development do
   gem "web-console"
   gem "faker"
   gem "benchmark-ips"
-  gem "stackprof"
   gem "derailed_benchmarks"
   gem "foreman"
 end
