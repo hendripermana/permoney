@@ -12,24 +12,19 @@
 # but if you're running this outside of a local network, it is recommended
 # to set the environment variables for extra security.
 
-version: '3.9'
+version: "3.9"
 
-services:
-  web:
 # Setup:
 # ------
 #
-# To run this, you should read the setup guide:
-#
+# To run this, read the setup guide:
 # https://github.com/hendripermana/permoney/blob/main/docs/hosting/docker.md
 #
 # Troubleshooting:
 # ----------------
 #
 # If you run into problems, please open an issue on GitHub:
-#
 # https://github.com/hendripermana/permoney/issues
-#
 
 x-db-env: &db_env
   POSTGRES_USER: ${POSTGRES_USER:-permoney_user}
@@ -38,45 +33,45 @@ x-db-env: &db_env
 
 x-rails-env: &rails_env
   <<: *db_env
-  # SECURITY: You MUST generate a unique secret key for your deployment.
-  # Run `openssl rand -hex 64` to generate one, then set it in your .env file:
-  # SECRET_KEY_BASE=your_generated_key_here
-  # If SECRET_KEY_BASE is not set, the application will fail to start.
-  SECRET_KEY_BASE: ${SECRET_KEY_BASE:?SECRET_KEY_BASE is not set. Please generate one and add it to your .env file.}
+  SECRET_KEY_BASE: ${SECRET_KEY_BASE:?SECRET_KEY_BASE is required (generate via openssl rand -hex 64).}
+  RAILS_ENV: production
+  RACK_ENV: production
+  RAILS_SERVE_STATIC_FILES: "true"
+  RAILS_LOG_TO_STDOUT: "true"
   SELF_HOSTED: "true"
   RAILS_FORCE_SSL: "false"
   RAILS_ASSUME_SSL: "false"
   DB_HOST: db
   DB_PORT: 5432
   REDIS_URL: redis://redis:6379/1
-# NOTE: enabling OpenAI will incur costs when you use AI-related features in the app (chat, rules).  Make sure you have set appropriate spend limits on your account before adding this.
+  DB_POOL: ${DB_POOL:-52}
+  DB_CHECKOUT_TIMEOUT: ${DB_CHECKOUT_TIMEOUT:-5}
+  SIDEKIQ_CONCURRENCY: ${SIDEKIQ_CONCURRENCY:-15}
+  SIDEKIQ_TIMEOUT: ${SIDEKIQ_TIMEOUT:-90}
+  WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
+  RAILS_MAX_THREADS: ${RAILS_MAX_THREADS:-8}
   OPENAI_ACCESS_TOKEN: ${OPENAI_ACCESS_TOKEN}
 
-web:
-    image: ghcr.io/hendripermana/permoney:latest
-    volumes:
-      - app-storage:/rails/storage
-      - ./log:/rails/log
+x-app-base: &app_base
+  image: ${PERMONEY_IMAGE:-ghcr.io/hendripermana/permoney:latest}
+  restart: unless-stopped
+  volumes:
+    - app-storage:/rails/storage
+  environment:
+    <<: *rails_env
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  networks:
+    - permoney_net
+
+services:
+  web:
+    <<: *app_base
     ports:
       - "3000:3000"
-    restart: unless-stopped
-    environment:
-      <<: *rails_env
-      # Performance optimizations
-      RUBY_YJIT_ENABLE: "1"
-      MALLOC_ARENA_MAX: "2"
-      # Optional: Enable StackProf for production profiling
-      ENABLE_STACK_PROF: "true"
-      # Optional: Skylight monitoring (set your token)
-      SKYLIGHT_AUTHENTICATION_TOKEN: "${SKYLIGHT_TOKEN:-}"
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - permoney_net
-    # Health check for web service
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:3000/up || exit 1"]
       interval: 30s
@@ -85,44 +80,25 @@ web:
       start_period: 40s
 
   worker:
-    image: ghcr.io/hendripermana/permoney:latest
+    <<: *app_base
     command: bundle exec sidekiq
-    volumes:
-      - app-storage:/rails/storage
-      - ./log:/rails/log
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      <<: *rails_env
-      # Performance optimizations
-      RUBY_YJIT_ENABLE: "1"
-      MALLOC_ARENA_MAX: "2"
-      REDIS_URL: redis://redis:6379/0
-      SIDEKIQ_CONCURRENCY: "5"
-      # Optional: StackProf for performance monitoring
-      ENABLE_STACK_PROF: "true"
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'sidekiq' || exit 1"]
+      test: ["CMD-SHELL", "pgrep -f sidekiq || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-    networks:
-      - permoney_net
 
   db:
-    image: postgres:16
+    image: postgres:18
     restart: unless-stopped
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/18/docker
     environment:
       <<: *db_env
+      PGDATA: /var/lib/postgresql/18/docker
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -130,12 +106,17 @@ web:
       - permoney_net
 
   redis:
-    image: redis:latest
+    image: redis:8.2.2
     restart: unless-stopped
     volumes:
       - redis-data:/data
+    command: >
+      redis-server \
+      --maxmemory 512mb \
+      --maxmemory-policy allkeys-lru \
+      --save 60 1000
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5

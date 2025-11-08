@@ -140,13 +140,19 @@ If you find bugs or have a feature request, be sure to open an issue on the [Git
 The mechanism that updates your self-hosted Permoney app is the GHCR (Github Container Registry) Docker image that you see in the `compose.yml` file:
 
 ```yml
-image: ghcr.io/hendripermana/permoney:latest
+image: ${PERMONEY_IMAGE:-ghcr.io/hendripermana/permoney:latest}
 ```
 
 We recommend using one of the following images, but you can pin your app to whatever version you'd like (see [packages](https://github.com/hendripermana/permoney/pkgs/container/permoney)):
 
 - `ghcr.io/hendripermana/permoney:latest` (latest commit)
 - `ghcr.io/hendripermana/permoney:stable` (latest release)
+
+Set the `PERMONEY_IMAGE` variable in your `.env` file to control which tag is used when running `docker compose`:
+
+```env
+PERMONEY_IMAGE=ghcr.io/hendripermana/permoney:stable
+```
 
 By default, your app _will NOT_ automatically update. To update your self-hosted app, run the following commands in your terminal:
 
@@ -159,13 +165,7 @@ docker compose up --no-deps -d web worker # This restarts the app using the newe
 
 ## How to change which updates your app receives
 
-If you'd like to pin the app to a specific version or tag, all you need to do is edit the `compose.yml` file:
-
-```yml
-image: ghcr.io/hendripermana/permoney:stable
-```
-
-After doing this, make sure and restart the app:
+If you'd like to pin the app to a specific version or tag, just update the `PERMONEY_IMAGE` value in your `.env` file and restart the app:
 
 ```bash
 docker compose pull # This pulls the "latest" published image from GHCR
