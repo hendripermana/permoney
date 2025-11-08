@@ -1,6 +1,4 @@
 # frozen_string_literal: true
 
-module API
+module Api
 end
-
-Api = API unless defined?(Api)

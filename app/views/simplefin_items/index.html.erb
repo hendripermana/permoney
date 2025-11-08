@@ -1,5 +1,8 @@
 <% content_for :title, "SimpleFin Connections" %>
 
+<!-- Turbo Frame for modal dialogs (Add/Edit SimpleFin connections) -->
+<turbo-frame id="modal"></turbo-frame>
+
 <div class="space-y-6">
   <div class="flex items-center justify-between">
     <div>
@@ -11,7 +14,8 @@
       text: "Add Connection",
       icon: "plus",
       variant: "primary",
-      href: new_simplefin_item_path
+      href: new_simplefin_item_path,
+      frame: "modal"
     ) %>
   </div>
 
@@ -34,7 +38,8 @@
         <%= render DS::Link.new(
           text: "Add your first connection",
           variant: "primary",
-          href: new_simplefin_item_path
+          href: new_simplefin_item_path,
+          frame: "modal"
         ) %>
       </div>
     </div>

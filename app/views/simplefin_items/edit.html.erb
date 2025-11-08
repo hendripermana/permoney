@@ -1,7 +1,9 @@
 <% content_for :title, "Update SimpleFin Connection" %>
 
-<%= render DS::Dialog.new do |dialog| %>
-  <% dialog.with_header(title: "Update SimpleFin Connection") do %>
+<turbo-frame id="modal">
+  <div data-controller="modal-handler" data-modal-handler-close-path="<%= accounts_path %>">
+    <%= render DS::Dialog.new do |dialog| %>
+      <% dialog.with_header(title: "Update SimpleFin Connection") do %>
     <div class="flex items-center gap-2">
       <%= icon "building-2", class: "text-primary" %>
       <span class="text-primary">Get a new setup token to reconnect your SimpleFin account</span>
@@ -59,4 +61,6 @@
       </div>
     <% end %>
   <% end %>
-<% end %>
+    <% end %>
+  </div>
+</turbo-frame>

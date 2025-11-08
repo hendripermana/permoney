@@ -4,6 +4,14 @@ module Permoney
       Semver.new(semver)
     end
 
+    def latest_version_available?
+      VersionChecker.update_available?
+    end
+
+    def latest_release_url
+      VersionChecker.release_url
+    end
+
     def commit_sha
       if Rails.env.production?
         ENV["BUILD_COMMIT_SHA"]
@@ -14,7 +22,7 @@ module Permoney
 
     private
       def semver
-        "0.6.5-alpha.6"  # Upstream version
+        "0.96"  # Current version (fallback for offline/disconnected environments)
       end
   end
 end

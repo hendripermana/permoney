@@ -5,13 +5,13 @@
 # Named 000_zeitwerk_setup.rb to ensure it runs before other initializers
 
 # Configure Zeitwerk inflectors for non-standard acronyms/naming
+# Rails 8.1 requires proper inflection for directory structure
 if defined?(Rails.autoloaders) && Rails.autoloaders.main.respond_to?(:inflector)
   Rails.autoloaders.main.inflector.inflect(
-    "api" => "API",
+    "api" => "Api",
     "csv" => "CSV",
     "idr" => "IDR",
     "llm" => "LLM",
-    "url" => "URL",
     "bnpl" => "BNPL",
     "ojk" => "OJK"
   )

@@ -7,7 +7,7 @@
 # PORT=3000 ensures Rails uses port 3000 (foreman defaults to 5000)
 web: OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES RUBY_YJIT_ENABLE=1 WEB_CONCURRENCY=0 PORT=3000 bundle exec ${DEBUG:+rdbg -O -n -c --} bin/rails server -b 0.0.0.0
 
-# CSS watcher
+# CSS watcher - use [always] to keep watching even with no changes
 css: bundle exec bin/rails tailwindcss:watch[always]
 
 # Background worker with YJIT enabled

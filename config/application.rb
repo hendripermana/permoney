@@ -10,6 +10,14 @@ require_relative "../lib/active_support/configurable"
 # you've limited to :test, :development, or :production.
 Bundler.require(*Rails.groups)
 
+# Load Pagy early for controller integration in Rails 8.1
+# This ensures Pagy::Method is available before controllers are loaded
+begin
+  require "pagy"
+rescue LoadError
+  # Pagy not available in this environment
+end
+
 module Permoney
   class Application < Rails::Application
     # Initialize configuration defaults for Rails 8.1
