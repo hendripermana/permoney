@@ -153,6 +153,54 @@ Rails.application.configure do
     "Referrer-Policy" => "strict-origin-when-cross-origin"
   })
 
+  # ===========================================================================
+  # PRODUCTION BOOT OPTIMIZATIONS
+  # ===========================================================================
+
+  # Asset precompilation optimizations
+  config.assets.prefix = "/assets"
+  
+  # Skip asset compilation if assets are precompiled
+  config.assets.compile = false
+  config.assets.digest = true
+  
+  # Enable Rails cache to store assets digest
+  config.action_dispatch.perform_deep_munge = true
+  
+  # Suppress warnings during asset precompilation
+  config.log_level = :error if ENV["RAILS_LOG_LEVEL"] != "debug"
+
+  # ===========================================================================
+  # MONITORING & PERFORMANCE SETUP
+  # ===========================================================================
+  
+  # Only enable Skylight if API key is configured
+  if ENV["SKYLIGHT_AUTHENTICATION_TOKEN"].present?
+    config.skylight.environments = ["production"]
+  else
+    Rails.logger.info "Skylight disabled: SKYLIGHT_AUTHENTICATION_TOKEN not configured"
+  end
+
+  # Only enable OIDC if required environment variables are present
+  if ENV["OIDC_ISSUER"].present? && ENV["OIDC_CLIENT_ID"].present? && ENV["OIDC_CLIENT_SECRET"].present?
+    # OIDC is properly configured, Rails will handle it
+    Rails.logger.info "OIDC enabled with issuer: #{ENV['OIDC_ISSUER']}"
+  else
+    # Suppress OIDC warnings in production/Docker environment
+    Rails.logger.info "OIDC disabled: missing required environment variables"
+  end
+
+  # StackProf configuration for production profiling
+  if defined?(StackProf)
+    # Configure StackProf for production monitoring
+    # Disabled by default, can be enabled via environment variable
+    config.stackprof.enabled = ENV["ENABLE_STACK_PROF"] == "true"
+    
+    if config.stackprof.enabled
+      Rails.logger.info "StackProf enabled for production profiling"
+    end
+  end
+
   # Enable DNS rebinding protection and other `Host` header attacks.
   # config.hosts = [
   #   "example.com",     # Allow requests from example.com

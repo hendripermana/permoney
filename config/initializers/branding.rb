@@ -3,70 +3,60 @@
 
 module Branding
   class << self
+    # Helper method to safely access Setting model (handles database not available)
+    def safe_setting_access(setting_method)
+      # During asset precompilation (RAILS_ENV=production but no DB), skip database access
+      return nil if ENV["RAILS_ENV"] == "production" && !database_available?
+      
+      return nil unless defined?(Setting)
+      return nil unless Setting.table_exists?
+      
+      Setting.respond_to?(setting_method) ? Setting.public_send(setting_method) : nil
+    rescue StandardError
+      # Fallback to environment variables if any error occurs
+      nil
+    end
+
+    # Check if database is available (used during asset precompilation)
+    def database_available?
+      return false unless defined?(ActiveRecord::Base)
+      return false unless ActiveRecord::Base.connected?
+      
+      # Simple ping to check database connectivity
+      ActiveRecord::Base.connection.execute("SELECT 1")
+      true
+    rescue StandardError
+      false
+    end
+
     # Get app name from settings or environment
     def app_name
-      @app_name ||= begin
-        if defined?(Setting) && Setting.respond_to?(:app_name)
-          Setting.app_name
-        else
-          ENV.fetch("APP_NAME", "Permoney")
-        end
-      end
+      @app_name ||= safe_setting_access(:app_name) || ENV.fetch("APP_NAME", "Permoney")
     end
 
     # Get app short name from settings or environment
     def app_short_name
-      @app_short_name ||= begin
-        if defined?(Setting) && Setting.respond_to?(:app_short_name)
-          Setting.app_short_name
-        else
-          ENV.fetch("APP_SHORT_NAME", "Permoney")
-        end
-      end
+      @app_short_name ||= safe_setting_access(:app_short_name) || ENV.fetch("APP_SHORT_NAME", "Permoney")
     end
 
     # Get app description from settings or environment
     def app_description
-      @app_description ||= begin
-        if defined?(Setting) && Setting.respond_to?(:app_description)
-          Setting.app_description
-        else
-          ENV.fetch("APP_DESCRIPTION", "The personal finance app for everyone")
-        end
-      end
+      @app_description ||= safe_setting_access(:app_description) || ENV.fetch("APP_DESCRIPTION", "The personal finance app for everyone")
     end
 
     # Get GitHub repository owner from settings or environment
     def github_repo_owner
-      @github_repo_owner ||= begin
-        if defined?(Setting) && Setting.respond_to?(:github_repo_owner)
-          Setting.github_repo_owner
-        else
-          ENV.fetch("GITHUB_REPO_OWNER", "hendripermana")
-        end
-      end
+      @github_repo_owner ||= safe_setting_access(:github_repo_owner) || ENV.fetch("GITHUB_REPO_OWNER", "hendripermana")
     end
 
     # Get GitHub repository name from settings or environment
     def github_repo_name
-      @github_repo_name ||= begin
-        if defined?(Setting) && Setting.respond_to?(:github_repo_name)
-          Setting.github_repo_name
-        else
-          ENV.fetch("GITHUB_REPO_NAME", "permoney")
-        end
-      end
+      @github_repo_name ||= safe_setting_access(:github_repo_name) || ENV.fetch("GITHUB_REPO_NAME", "permoney")
     end
 
     # Get GitHub repository branch from settings or environment
     def github_repo_branch
-      @github_repo_branch ||= begin
-        if defined?(Setting) && Setting.respond_to?(:github_repo_branch)
-          Setting.github_repo_branch
-        else
-          ENV.fetch("GITHUB_REPO_BRANCH", "main")
-        end
-      end
+      @github_repo_branch ||= safe_setting_access(:github_repo_branch) || ENV.fetch("GITHUB_REPO_BRANCH", "main")
     end
 
     # Get full GitHub repository URL
@@ -76,13 +66,7 @@ module Branding
 
     # Get OAuth default scopes from settings or environment
     def oauth_default_scopes
-      @oauth_default_scopes ||= begin
-        if defined?(Setting) && Setting.respond_to?(:oauth_default_scopes)
-          Setting.oauth_default_scopes
-        else
-          ENV.fetch("OAUTH_DEFAULT_SCOPES", "read_accounts read_transactions read_balances")
-        end
-      end
+      @oauth_default_scopes ||= safe_setting_access(:oauth_default_scopes) || ENV.fetch("OAUTH_DEFAULT_SCOPES", "read_accounts read_transactions read_balances")
     end
 
     # Clear cached values (useful for testing or when settings change)

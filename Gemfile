@@ -40,6 +40,7 @@ gem "sentry-rails"
 gem "sentry-sidekiq"
 gem "logtail-rails"
 gem "skylight", groups: [ :production ]
+gem "stackprof", groups: [ :production ]
 
 # Active Storage
 gem "aws-sdk-s3", "~> 1.200.0", require: false
