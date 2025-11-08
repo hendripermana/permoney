@@ -9,26 +9,26 @@ if defined?(Prometheus::Client)
   http_request_duration = Prometheus::Client::Histogram.new(
     :rails_request_duration_seconds,
     docstring: "HTTP request duration in seconds",
-    labels: [:controller, :action, :method, :status],
-    buckets: [0.001, 0.01, 0.1, 0.5, 1.0, 5.0]
+    labels: [ :controller, :action, :method, :status ],
+    buckets: [ 0.001, 0.01, 0.1, 0.5, 1.0, 5.0 ]
   )
 
   http_requests_total = Prometheus::Client::Counter.new(
     :rails_requests_total,
     docstring: "Total HTTP requests",
-    labels: [:method, :status]
+    labels: [ :method, :status ]
   )
 
   rails_errors_total = Prometheus::Client::Counter.new(
     :rails_errors_total,
     docstring: "Total Rails errors",
-    labels: [:error_type]
+    labels: [ :error_type ]
   )
 
   rails_slow_requests_total = Prometheus::Client::Counter.new(
     :rails_slow_requests_total,
     docstring: "Requests exceeding 1 second",
-    labels: [:controller, :action]
+    labels: [ :controller, :action ]
   )
 
   # Database Pool Metrics
