@@ -7,9 +7,9 @@ module Impersonatable
 
   private
     def create_impersonation_session_log
-      return unless Current.session&.active_impersonator_session.present?
+      return unless ::Current.session&.active_impersonator_session.present?
 
-      Current.session.active_impersonator_session.logs.create!(
+      ::Current.session.active_impersonator_session.logs.create!(
         controller: controller_name,
         action: action_name,
         path: request.fullpath,

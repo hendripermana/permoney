@@ -8,7 +8,7 @@ module Onboardable
   private
     # First, we require onboarding, then once that's complete, we require an upgrade for non-subscribed users.
     def require_onboarding_and_upgrade
-      return unless Current.user
+      return unless ::Current.user
       return unless redirectable_path?(request.path)
 
       # Prevent redirect loops by checking if we're already on onboarding pages
@@ -20,7 +20,7 @@ module Onboardable
       return if request.path.starts_with?("/email_confirmation")
 
       # Check if user needs onboarding (both managed and self-hosted)
-      if Current.user.needs_onboarding?
+      if ::Current.user.needs_onboarding?
         redirect_to onboarding_path and return
       end
 
@@ -28,15 +28,15 @@ module Onboardable
       return if self_hosted?
 
       # Subscription checks for managed mode only
-      if Current.family&.needs_subscription?
+      if ::Current.family&.needs_subscription?
         redirect_to trial_onboarding_path and return
-      elsif Current.family&.upgrade_required?
+      elsif ::Current.family&.upgrade_required?
         redirect_to upgrade_subscription_path and return
       end
     end
 
     def onboarding_incomplete?
-      user = Current.user
+      user = ::Current.user
       return true unless user
 
       # Use the comprehensive onboarding completion check from the User model
@@ -44,7 +44,7 @@ module Onboardable
     end
 
     def auto_mark_onboarded!
-      user = Current.user
+      user = ::Current.user
       return unless user && user.onboarded_at.blank?
       # Use update_column to avoid validations and callbacks; this runs once per user
       user.update_column(:onboarded_at, Time.current)
@@ -52,7 +52,7 @@ module Onboardable
 
     def redirectable_path?(path)
       # If self-hosted and family present, allow root to pass without interference
-      return false if self_hosted? && Current.family.present? && (path == "/" || path.blank?)
+      return false if self_hosted? && ::Current.family.present? && (path == "/" || path.blank?)
 
       # Exclude specific paths from onboarding redirects
       excluded_paths = [

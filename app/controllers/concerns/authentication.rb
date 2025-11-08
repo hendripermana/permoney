@@ -17,7 +17,7 @@ module Authentication
   private
     def authenticate_user!
       if session_record = find_session_by_cookie
-        Current.session = session_record
+        ::Current.session = session_record
       else
         if self_hosted_first_login?
           redirect_to new_registration_url
@@ -48,19 +48,19 @@ module Authentication
     end
 
     def set_request_details
-      Current.user_agent = request.user_agent
-      Current.ip_address = request.ip
+      ::Current.user_agent = request.user_agent
+      ::Current.ip_address = request.ip
     end
 
     def set_sentry_user
       return unless defined?(Sentry) && ENV["SENTRY_DSN"].present?
 
-      if Current.user
+      if ::Current.user
         Sentry.set_user(
-          id: Current.user.id,
-          email: Current.user.email,
-          username: Current.user.display_name,
-          ip_address: Current.ip_address
+          id: ::Current.user.id,
+          email: ::Current.user.email,
+          username: ::Current.user.display_name,
+          ip_address: ::Current.ip_address
         )
       end
     end

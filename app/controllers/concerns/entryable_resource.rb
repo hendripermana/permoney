@@ -11,11 +11,11 @@ module EntryableResource
   end
 
   def new
-    account = Current.family.accounts.find_by(id: params[:account_id])
+    account = ::Current.family.accounts.find_by(id: params[:account_id])
 
-    @entry = Current.family.entries.new(
+    @entry = ::Current.family.entries.new(
       account: account,
-      currency: account ? account.currency : Current.family.currency,
+      currency: account ? account.currency : ::Current.family.currency,
       entryable: entryable
     )
   end
@@ -42,6 +42,6 @@ module EntryableResource
     end
 
     def set_entry
-      @entry = Current.family.entries.find(params[:id])
+      @entry = ::Current.family.entries.find(params[:id])
     end
 end

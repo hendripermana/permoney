@@ -7,7 +7,7 @@ module RestoreLayoutPreferences
 
   private
     def restore_active_tabs
-      last_selected_tab = Current.session&.get_preferred_tab("account_sidebar_tab") || "asset"
+      last_selected_tab = ::Current.session&.get_preferred_tab("account_sidebar_tab") || "asset"
 
       @account_group_tab = account_group_tab_param || last_selected_tab
     end

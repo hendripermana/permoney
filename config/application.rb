@@ -1,7 +1,10 @@
 require_relative "boot"
 
 require "rails/all"
-require "active_support/configurable"
+
+# Load our ActiveSupport::Configurable shim before any gems need it
+# This prevents the deprecated constant warning in Rails 8.1
+require_relative "../lib/active_support/configurable"
 
 # Require the gems listed in Gemfile, including any gems
 # you've limited to :test, :development, or :production.
@@ -15,7 +18,9 @@ module Permoney
     # Please, add to the `ignore` list any other `lib` subdirectories that do
     # not contain `.rb` files, or that should not be reloaded or eager loaded.
     # Common ones are `templates`, `generators`, or `middleware`, for example.
-    config.autoload_lib(ignore: %w[assets tasks])
+    # Also ignore active_support since it's a shim loaded before Rails
+    # Money is loaded as a subdirectory with its own structure
+    config.autoload_lib(ignore: %w[assets tasks active_support])
 
     # Configuration for the application, engines, and railties goes here.
     #

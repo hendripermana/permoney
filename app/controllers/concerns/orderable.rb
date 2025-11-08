@@ -7,7 +7,7 @@ module Orderable
 
   private
     def set_order
-      @order = AccountOrder.find(params[:order] || Current.user&.default_account_order)
+      @order = AccountOrder.find(params[:order] || ::Current.user&.default_account_order)
     rescue ArgumentError
       @order = AccountOrder.default
     end

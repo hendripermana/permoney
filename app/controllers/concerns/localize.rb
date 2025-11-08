@@ -8,12 +8,12 @@ module Localize
 
   private
     def switch_locale(&action)
-      locale = Current.family.try(:locale) || I18n.default_locale
+      locale = ::Current.family.try(:locale) || I18n.default_locale
       I18n.with_locale(locale, &action)
     end
 
     def switch_timezone(&action)
-      timezone = Current.family.try(:timezone) || Time.zone
+      timezone = ::Current.family.try(:timezone) || Time.zone
       Time.use_zone(timezone, &action)
     end
 end

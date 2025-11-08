@@ -7,7 +7,7 @@ module Periodable
 
   private
     def set_period
-      @period = Period.from_key(params[:period] || Current.user&.default_period)
+      @period = Period.from_key(params[:period] || ::Current.user&.default_period)
     rescue Period::InvalidKeyError
       @period = Period.last_30_days
     end

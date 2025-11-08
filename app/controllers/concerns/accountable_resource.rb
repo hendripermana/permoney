@@ -18,8 +18,8 @@ module AccountableResource
   end
 
   def new
-    @account = Current.family.accounts.build(
-      currency: Current.family.currency,
+    @account = ::Current.family.accounts.build(
+      currency: ::Current.family.currency,
       accountable: accountable_type.new
     )
   end
@@ -36,7 +36,7 @@ module AccountableResource
   end
 
   def create
-    @account = Current.family.accounts.create_and_sync(account_params.except(:return_to))
+    @account = ::Current.family.accounts.create_and_sync(account_params.except(:return_to))
     @account.lock_saved_attributes!
 
     redirect_to(safe_return_path(account_params[:return_to]) || @account, allow_other_host: false, notice: t("accounts.create.success", type: accountable_type.name.underscore.humanize))
@@ -110,13 +110,13 @@ module AccountableResource
       end
     end
     def set_link_options
-      @show_us_link = Current.family.can_connect_plaid_us?
-      @show_eu_link = Current.family.can_connect_plaid_eu?
-      @show_lunchflow_link = Current.family.can_connect_lunchflow?
+      @show_us_link = ::Current.family.can_connect_plaid_us?
+      @show_eu_link = ::Current.family.can_connect_plaid_eu?
+      @show_lunchflow_link = ::Current.family.can_connect_lunchflow?
 
       # Preload Lunchflow accounts if available and cache them
       if @show_lunchflow_link
-        cache_key = "lunchflow_accounts_#{Current.family.id}"
+        cache_key = "lunchflow_accounts_#{::Current.family.id}"
 
         @lunchflow_accounts = Rails.cache.fetch(cache_key, expires_in: 5.minutes) do
           begin
@@ -145,7 +145,7 @@ module AccountableResource
     end
 
     def set_account
-      @account = Current.family.accounts.find(params[:id])
+      @account = ::Current.family.accounts.find(params[:id])
     end
 
     def account_params
