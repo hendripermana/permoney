@@ -1,5 +1,5 @@
 class Assistant::Function::GetTransactions < Assistant::Function
-  include Pagy::Backend
+  include Pagy::Method
 
   class << self
     def default_page_size
@@ -139,7 +139,8 @@ class Assistant::Function::GetTransactions < Assistant::Function
     pagy_query = params["order"] == "asc" ? transactions_query.chronological : transactions_query.reverse_chronological
 
     # By default, we give a small page size to force the AI to use filters effectively and save on tokens
-    pagy, paginated_transactions = pagy(
+    pagy_object, paginated_transactions = pagy(
+      :offset,
       pagy_query.includes(
         { entry: :account },
         :category, :merchant, :tags,
@@ -170,10 +171,10 @@ class Assistant::Function::GetTransactions < Assistant::Function
 
     {
       transactions: normalized_transactions,
-      total_results: pagy.count,
-      page: pagy.page,
+      total_results: pagy_object.count,
+      page: pagy_object.page,
       page_size: default_page_size,
-      total_pages: pagy.pages,
+      total_pages: pagy_object.pages,
       total_income: totals.income_money.format,
       total_expenses: totals.expense_money.format
     }

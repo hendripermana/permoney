@@ -23,7 +23,7 @@ class TransactionsController < ApplicationController
                        )
                        .references(:entries, :accounts) # Force join for better performance
 
-    @pagy, @transactions = pagy(base_scope, limit: per_page)
+    @pagy, @transactions = pagy(:offset, base_scope, limit: per_page)
 
     # PERFORMANCE: Cache projected recurring transactions for 5 minutes
     @projected_recurring = Rails.cache.fetch(

@@ -29,7 +29,7 @@ class AccountsController < ApplicationController
                       .reverse_chronological
                       .includes(:account)
 
-    @pagy, @entries = pagy(entries, limit: params[:per_page] || "10")
+    @pagy, @entries = pagy(:offset, entries, limit: per_page_param(10))
 
     @activity_feed_data = Account::ActivityFeedData.new(@account, @entries)
 

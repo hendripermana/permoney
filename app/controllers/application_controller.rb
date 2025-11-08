@@ -3,12 +3,19 @@ class ApplicationController < ActionController::Base
           SelfHostable, StoreLocation, Impersonatable, Breadcrumbable,
           FeatureGuardable, Notifiable
 
-  include Pagy::Backend
+  include Pagy::Method
 
   before_action :detect_os
   before_action :set_active_storage_url_options
 
   private
+
+    def per_page_param(default = 10)
+      value = params[:per_page]
+      parsed = value.to_i if value.present?
+      parsed = default unless parsed&.positive?
+      parsed
+    end
 
     def detect_os
       user_agent = request.user_agent

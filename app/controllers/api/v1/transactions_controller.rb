@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 class Api::V1::TransactionsController < Api::V1::BaseController
-  include Pagy::Backend
 
   # Ensure proper scope authorization for read vs write access
   before_action :ensure_read_scope, only: [ :index, :show ]
@@ -28,6 +27,7 @@ class Api::V1::TransactionsController < Api::V1::BaseController
 
     # Handle pagination with Pagy
     @pagy, @transactions = pagy(
+      :offset,
       transactions_query,
       page: safe_page_param,
       limit: safe_per_page_param

@@ -193,7 +193,7 @@ Rails.application.configure do
   end
 
   # StackProf configuration for production profiling
-  if defined?(StackProf)
+  if defined?(StackProf) && config.respond_to?(:stackprof)
     # Configure StackProf for production monitoring
     # Disabled by default, can be enabled via environment variable
     config.stackprof.enabled = ENV["ENABLE_STACK_PROF"] == "true"
@@ -201,6 +201,8 @@ Rails.application.configure do
     if config.stackprof.enabled
       monitoring_logger.info "StackProf enabled for production profiling"
     end
+  elsif ENV["ENABLE_STACK_PROF"] == "true"
+    monitoring_logger.warn "StackProf requested but support module not loaded; ensure the stackprof gem is in the bundle"
   end
 
   # Enable DNS rebinding protection and other `Host` header attacks.

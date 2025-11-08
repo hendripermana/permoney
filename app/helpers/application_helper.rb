@@ -1,5 +1,4 @@
 module ApplicationHelper
-  include Pagy::Frontend
 
   # Upstream: Dynamic branding from Rails config (better approach)
   def product_name
@@ -52,6 +51,10 @@ module ApplicationHelper
 
   def header_description(page_description)
     content_for(:header_description) { page_description }
+  end
+
+  def pagy_series(pagy, **options)
+    pagy.navigation_series(**options) || []
   end
 
   def page_active?(path)
