@@ -1,8 +1,6 @@
 # frozen_string_literal: true
 
-module Api
-  module V1
-    class BaseController < ApplicationController
+class Api::V1::BaseController < ApplicationController
   include Doorkeeper::Rails::Helpers
 
   # Skip regular session-based authentication for API
@@ -159,7 +157,7 @@ module Api
       @current_user
     end
 
-# Get current scopes from either authentication method
+    # Get current scopes from either authentication method
     def current_scopes
       case @authentication_method
       when :oauth
@@ -278,5 +276,4 @@ module Api
         render_json({ error: "feature_disabled", message: "AI features are not enabled for this user" }, status: :forbidden)
       end
     end
-  end
 end

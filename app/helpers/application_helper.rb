@@ -1,5 +1,4 @@
 module ApplicationHelper
-
   # Upstream: Dynamic branding from Rails config (better approach)
   def product_name
     Rails.configuration.x.product_name
