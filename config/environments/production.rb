@@ -174,20 +174,22 @@ Rails.application.configure do
   # MONITORING & PERFORMANCE SETUP
   # ===========================================================================
 
+  monitoring_logger = Rails.logger || ActiveSupport::Logger.new($stdout)
+
   # Only enable Skylight if API key is configured
   if ENV["SKYLIGHT_AUTHENTICATION_TOKEN"].present?
     config.skylight.environments = [ "production" ]
   else
-    Rails.logger.info "Skylight disabled: SKYLIGHT_AUTHENTICATION_TOKEN not configured"
+    monitoring_logger.info "Skylight disabled: SKYLIGHT_AUTHENTICATION_TOKEN not configured"
   end
 
   # Only enable OIDC if required environment variables are present
   if ENV["OIDC_ISSUER"].present? && ENV["OIDC_CLIENT_ID"].present? && ENV["OIDC_CLIENT_SECRET"].present?
     # OIDC is properly configured, Rails will handle it
-    Rails.logger.info "OIDC enabled with issuer: #{ENV['OIDC_ISSUER']}"
+    monitoring_logger.info "OIDC enabled with issuer: #{ENV['OIDC_ISSUER']}"
   else
     # Suppress OIDC warnings in production/Docker environment
-    Rails.logger.info "OIDC disabled: missing required environment variables"
+    monitoring_logger.info "OIDC disabled: missing required environment variables"
   end
 
   # StackProf configuration for production profiling
@@ -197,7 +199,7 @@ Rails.application.configure do
     config.stackprof.enabled = ENV["ENABLE_STACK_PROF"] == "true"
 
     if config.stackprof.enabled
-      Rails.logger.info "StackProf enabled for production profiling"
+      monitoring_logger.info "StackProf enabled for production profiling"
     end
   end
 

@@ -98,8 +98,12 @@ RUN rm -rf \
     log/*.log \
     log/*_test* \
     log/*development* && \
-    find vendor/bundle -name "*.c" -type f -delete && \
-    find vendor/bundle -name "*.o" -type f -delete
+    if [ -d vendor/bundle ]; then \
+      find vendor/bundle -name "*.c" -type f -delete && \
+      find vendor/bundle -name "*.o" -type f -delete; \
+    else \
+      echo "vendor/bundle not present, skipping vendor cleanup"; \
+    fi
 
 # Final stage for app image - minimal runtime
 FROM base
