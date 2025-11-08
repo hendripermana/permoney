@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.9.6](https://github.com/hendripermana/permoney/compare/v0.9.5...v0.9.6) (2025-11-08)
+
+
+### Features
+
+* Add privacy toggle to KPI cards so sensitive metrics can be hidden on shared screens ([a331143](https://github.com/hendripermana/permoney/commit/a331143e5860ee7b36a60d5bbbb1d2f0a32054c4))
+* Add fluid typography to KPI card values for better readability across breakpoints ([f627588](https://github.com/hendripermana/permoney/commit/f627588a09393a6c05befc578f4c50add94b20a3))
+* Deliver F1-level performance tuning on Rails 8.1 (faster queries, leaner Turbo) ([8c57ef9](https://github.com/hendripermana/permoney/commit/8c57ef9334dc9fdf1f1b5b8deb0a7b0c9773e0ee))
+* Comprehensive Docker + Tailwind v4.1.8 optimizations for production builds ([33dc785](https://github.com/hendripermana/permoney/commit/33dc78576d4f9c62c731fc2fd302dd25a9819f27))
+
+
+### Bug Fixes
+
+* Ensure Pagy 43 pagination helpers load correctly on Rails 8.1 ([bd50a56](https://github.com/hendripermana/permoney/commit/bd50a56c7bead410aeb495701a6e23827bab3af9))
+* Upgrade Pagy integration and controllers to the new API to unblock /transactions ([996b643](https://github.com/hendripermana/permoney/commit/996b6436c24022f43a154583f606860cf00e62fb))
+* Fix API namespace autoloading / lint issues that broke CI ([d511cd4](https://github.com/hendripermana/permoney/commit/d511cd46caa844b4db87837022159d64fc467522))
+* Harden Docker logging, cleanup, and image pinning for stable deploys ([ef80cf3](https://github.com/hendripermana/permoney/commit/ef80cf369c664b038c391c820f41210fa332621c), [5a9d117](https://github.com/hendripermana/permoney/commit/5a9d117ecfd9de0b5b6b5d76488ab8f2c0eedc25))
+* Resolve lint/security noise (Rubocop, Brakeman, build warnings) to keep CI green ([fb93039](https://github.com/hendripermana/permoney/commit/fb9303925a5079304cb6fa94bb9573ad710a4623), [2431fa2](https://github.com/hendripermana/permoney/commit/2431fa2e5937fb560ea87aaef06c3cc51656fe49))
+
 ## [0.9.5](https://github.com/hendripermana/permoney/compare/v0.9.4...v0.9.5) (2025-11-04)
 
 
