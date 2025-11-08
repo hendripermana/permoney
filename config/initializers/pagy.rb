@@ -1,4 +1,5 @@
 require "pagy"
+require "pagy/toolbox/helpers/support/series"
 
 # Preserve legacy per_page query parameter in pagination links so our UI keeps
 # the selected page size when navigating.
