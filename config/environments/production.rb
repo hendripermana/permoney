@@ -159,24 +159,24 @@ Rails.application.configure do
 
   # Asset precompilation optimizations
   config.assets.prefix = "/assets"
-  
+
   # Skip asset compilation if assets are precompiled
   config.assets.compile = false
   config.assets.digest = true
-  
+
   # Enable Rails cache to store assets digest
   config.action_dispatch.perform_deep_munge = true
-  
+
   # Suppress warnings during asset precompilation
   config.log_level = :error if ENV["RAILS_LOG_LEVEL"] != "debug"
 
   # ===========================================================================
   # MONITORING & PERFORMANCE SETUP
   # ===========================================================================
-  
+
   # Only enable Skylight if API key is configured
   if ENV["SKYLIGHT_AUTHENTICATION_TOKEN"].present?
-    config.skylight.environments = ["production"]
+    config.skylight.environments = [ "production" ]
   else
     Rails.logger.info "Skylight disabled: SKYLIGHT_AUTHENTICATION_TOKEN not configured"
   end
@@ -195,7 +195,7 @@ Rails.application.configure do
     # Configure StackProf for production monitoring
     # Disabled by default, can be enabled via environment variable
     config.stackprof.enabled = ENV["ENABLE_STACK_PROF"] == "true"
-    
+
     if config.stackprof.enabled
       Rails.logger.info "StackProf enabled for production profiling"
     end

@@ -7,10 +7,10 @@ module Branding
     def safe_setting_access(setting_method)
       # During asset precompilation (RAILS_ENV=production but no DB), skip database access
       return nil if ENV["RAILS_ENV"] == "production" && !database_available?
-      
+
       return nil unless defined?(Setting)
       return nil unless Setting.table_exists?
-      
+
       Setting.respond_to?(setting_method) ? Setting.public_send(setting_method) : nil
     rescue StandardError
       # Fallback to environment variables if any error occurs
@@ -21,7 +21,7 @@ module Branding
     def database_available?
       return false unless defined?(ActiveRecord::Base)
       return false unless ActiveRecord::Base.connected?
-      
+
       # Simple ping to check database connectivity
       ActiveRecord::Base.connection.execute("SELECT 1")
       true

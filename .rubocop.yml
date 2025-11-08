@@ -1,5 +1,12 @@
 inherit_gem:
   rubocop-rails-omakase: rubocop.yml
+
+# Exclude CSS files from Rubocop - they should be linted by CSS-specific tools
+AllCops:
+  Exclude:
+    - 'app/**/*.css'
+    - 'spec/**/*.css'
+    - 'vendor/**/*.css'
   
 Layout/IndentationWidth:
   Enabled: true
