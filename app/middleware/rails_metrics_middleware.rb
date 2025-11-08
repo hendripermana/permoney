@@ -1,91 +1,90 @@
-# Rails Application Metrics Middleware
-# Exports HTTP request metrics to Prometheus
-# Tracks: request duration, status codes, controller/action
+# Rails Metrics Middleware - Prometheus HTTP Instrumentation
+# Tracks: request duration, status codes, errors
 
 class RailsMetricsMiddleware
+  METRICS_ENDPOINT = "/metrics"
+
   def initialize(app)
     @app = app
   end
 
   def call(env)
-    start_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    start_memory = GC.stat(:total_allocated_objects) rescue 0
+    # Handle Prometheus metrics export endpoint
+    if env["PATH_INFO"] == METRICS_ENDPOINT
+      return export_metrics
+    end
 
+    # Track request metrics
+    start_time = Time.now
+    start_monotonic = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+    status = 500
     begin
       status, headers, body = @app.call(env)
-      [ status, headers, body ]
-    rescue => e
-      # Track errors
-      PrometheusExporter.counter(
-        "application_errors_total",
-        1,
-        { type: e.class.name, handler: "middleware" }
-      ) if defined?(PrometheusExporter)
-      raise
+      [status, headers, body]
     ensure
-      # Calculate metrics
-      end_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      duration = end_time - start_time
-      status = env["rack.exception"] ? 500 : status rescue 500
+      # Calculate duration
+      end_monotonic = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      duration = end_monotonic - start_monotonic
 
-      # Extract controller/action information
-      controller = env["action_controller.instance"]
-      if controller
-        controller_name = controller.class.name.sub("Controller", "").underscore
-        action_name = controller.action_name
-      else
-        # Fallback for routes without controller
-        controller_name = extract_controller_from_path(env["PATH_INFO"])
-        action_name = "unknown"
-      end
-
-      # Export metrics to Prometheus
-      if defined?(PrometheusExporter)
-        # Request duration histogram
-        PrometheusExporter.observe(
-          "rails_request_duration_seconds",
-          duration,
-          {
-            method: env["REQUEST_METHOD"],
-            controller: controller_name,
-            action: action_name,
-            status: status
-          }
-        )
-
-        # Request counter
-        PrometheusExporter.counter(
-          "rails_requests_total",
-          1,
-          {
-            method: env["REQUEST_METHOD"],
-            controller: controller_name,
-            action: action_name,
-            status: status
-          }
-        )
-
-        # Track slow requests (> 1 second)
-        if duration > 1.0
-          PrometheusExporter.counter(
-            "rails_slow_requests_total",
-            1,
-            {
-              controller: controller_name,
-              action: action_name,
-              duration_bucket: "#{(duration / 0.5).ceil * 0.5}s"
-            }
-          )
-        end
-      end
+      # Record metrics
+      record_request_metrics(env, status, duration)
     end
   end
 
   private
 
-    def extract_controller_from_path(path)
-      # Extract controller name from path for API/non-controller routes
-      # e.g., /api/v1/accounts => api_accounts
-      path&.split("/")&.compact&.join("_") || "unknown"
+  def record_request_metrics(env, status, duration)
+    return if skip_metrics?(env["PATH_INFO"])
+
+    metrics = Rails.configuration.prometheus_metrics rescue {}
+    return unless metrics.present?
+
+    # Extract controller and action
+    method = env["REQUEST_METHOD"]
+    path = env["PATH_INFO"]
+
+    # Record request duration
+    metrics[:http_request_duration]&.observe(duration, labels: {
+      method: method,
+      status: status.to_s,
+      controller: "rails",
+      action: path
+    }) rescue nil
+
+    # Record request count
+    metrics[:http_requests_total]&.increment(labels: {
+      method: method,
+      status: status.to_s
+    }) rescue nil
+
+    # Record slow requests
+    if duration > 1.0
+      metrics[:rails_slow_requests_total]&.increment(labels: {
+        controller: "rails",
+        action: path
+      }) rescue nil
     end
+  end
+
+  def export_metrics
+    return [404, {}, ["Not found"]] unless defined?(Prometheus::Client)
+
+    registry = Prometheus::Client.registry
+    encoder = Prometheus::Client::Formats::TextEncoder.new
+    metrics_output = encoder.encode(registry)
+
+    [
+      200,
+      { "Content-Type" => Prometheus::Client::Formats::TextEncoder::CONTENT_TYPE },
+      [metrics_output]
+    ]
+  rescue => e
+    Rails.logger.error("Failed to export Prometheus metrics: #{e.message}")
+    [500, {}, ["Error exporting metrics"]]
+  end
+
+  def skip_metrics?(path)
+    path.include?("/health") || path.include?("/up") || path.include?("/assets")
+  end
 end
