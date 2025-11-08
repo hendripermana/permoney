@@ -52,7 +52,7 @@ docker-compose*.yml
 
 # Development tools
 .ruby-gemset
-.ruby-version
+# Keep .ruby-version so Docker builds pick up the correct Ruby toolchain
 
 # Documentation (not needed in production)
 README.md

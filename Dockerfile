@@ -16,9 +16,7 @@ ENV RAILS_ENV="production" \
     BUNDLE_WITHOUT="development" \
     BUILD_COMMIT_SHA=${BUILD_COMMIT_SHA} \
     Ruby_GC_HEAP_OLDOBJECT_LIMIT_FACTOR="1.5" \
-    Ruby_GC_MALLOC_LIMIT="90000000" \
-    RAILS_MASTER_KEY="" \
-    SECRET_KEY_BASE_DUMMY="1"
+    Ruby_GC_MALLOC_LIMIT="90000000"
 
 # Rails app lives here
 WORKDIR /rails
@@ -74,7 +72,7 @@ RUN bundle exec bootsnap precompile --gemfile -j 4
 
 # Precompile assets with optimizations and error handling
 RUN if [ -f "bin/rails" ]; then \
-        SECRET_KEY_BASE_DUMMY=1 \
+        SECRET_KEY_BASE=${SECRET_KEY_BASE:-dummy} \
         RAILS_ENV=production \
         RAILS_LOG_LEVEL=error \
         RAILS_SERVE_STATIC_FILES=true \
