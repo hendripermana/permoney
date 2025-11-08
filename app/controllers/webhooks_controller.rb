@@ -1,5 +1,6 @@
 class WebhooksController < ApplicationController
-  skip_before_action :verify_authenticity_token, only: [:plaid, :plaid_eu, :stripe]
+  # Matikan CSRF hanya untuk endpoint webhook (bukan seluruh controller)
+  skip_before_action :verify_authenticity_token, only: [ :plaid, :plaid_eu, :stripe ]
   skip_authentication
 
   def plaid
@@ -7,7 +8,6 @@ class WebhooksController < ApplicationController
     plaid_verification_header = request.headers["Plaid-Verification"]
 
     client = Provider::Registry.plaid_provider_for_region(:us)
-
     client.validate_webhook!(plaid_verification_header, webhook_body)
 
     PlaidItem::WebhookProcessor.new(webhook_body).process
@@ -23,7 +23,6 @@ class WebhooksController < ApplicationController
     plaid_verification_header = request.headers["Plaid-Verification"]
 
     client = Provider::Registry.plaid_provider_for_region(:eu)
-
     client.validate_webhook!(plaid_verification_header, webhook_body)
 
     PlaidItem::WebhookProcessor.new(webhook_body).process
