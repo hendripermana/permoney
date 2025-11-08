@@ -1,5 +1,5 @@
 class WebhooksController < ApplicationController
-  skip_before_action :verify_authenticity_token
+  skip_before_action :verify_authenticity_token, only: [:plaid, :plaid_eu, :stripe]
   skip_authentication
 
   def plaid
