@@ -17,9 +17,20 @@ class SyncCleanupJob < ApplicationJob
   end
 
   def perform
-    cleanup_stuck_syncing_syncs
-    cleanup_stuck_pending_syncs
-    cleanup_stale_syncs
+    # Ensure database connection is available
+    ActiveRecord::Base.connection_pool.with_connection do
+      cleanup_stuck_syncing_syncs
+      cleanup_stuck_pending_syncs
+      cleanup_stale_syncs
+    end
+  rescue ActiveRecord::ConnectionNotEstablished => e
+    # Gracefully handle database connection errors
+    Rails.logger.warn("SyncCleanupJob: Database not available, will retry on next scheduled run: #{e.message}")
+    Sentry.capture_exception(e, level: :warning, tags: { job: "sync_cleanup", reason: "db_unavailable" }) if defined?(Sentry)
+  rescue => e
+    Rails.logger.error("SyncCleanupJob error: #{e.class} - #{e.message}")
+    Sentry.capture_exception(e, level: :error, tags: { job: "sync_cleanup" }) if defined?(Sentry)
+    raise
   end
 
   private

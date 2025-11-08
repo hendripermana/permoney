@@ -6,6 +6,9 @@ require "rails/all"
 # This prevents the deprecated constant warning in Rails 8.1
 require_relative "../lib/active_support/configurable"
 
+# Load middleware for Prometheus APM (Phase 2 optimization)
+require_relative "../app/middleware/rails_metrics_middleware"
+
 # Require the gems listed in Gemfile, including any gems
 # you've limited to :test, :development, or :production.
 Bundler.require(*Rails.groups)
@@ -60,6 +63,9 @@ module Permoney
     # Compresses responses with Gzip/Brotli for supported clients
     # Improves loading time by 60-80% for text-based assets
     config.middleware.use Rack::Deflater
+
+    # Rails metrics middleware for Prometheus (Phase 2 APM optimization)
+    config.middleware.insert_after Rack::Deflater, RailsMetricsMiddleware
 
     # Permoney: Dynamic branding configuration (used by helpers and mailers)
     config.x.brand_name = ENV.fetch("BRAND_NAME", "Permoney")

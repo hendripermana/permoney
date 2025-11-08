@@ -14,29 +14,52 @@ class CacheMonitoringJob < ApplicationJob
 
     begin
       # Get cache stats if available (Redis)
+      # Rails.cache.redis may return a ConnectionPool, so we need to handle both cases
       if Rails.cache.respond_to?(:redis)
-        redis = Rails.cache.redis
-        info = redis.info
+        redis_client = Rails.cache.redis
 
-        # Track memory usage
-        used_memory_mb = info["used_memory"].to_i / 1024.0 / 1024.0
-
-        Sentry.add_breadcrumb(
-          Sentry::Breadcrumb.new(
-            category: "cache",
-            message: "Cache statistics",
-            data: {
-              used_memory_mb: used_memory_mb.round(2),
-              connected_clients: info["connected_clients"],
-              total_commands_processed: info["total_commands_processed"]
-            },
-            level: "info"
-          )
-        )
+        # Handle both direct Redis client and ConnectionPool
+        if redis_client.is_a?(Redis::ConnectionPool)
+          # Get a connection from the pool temporarily
+          redis_client.with do |conn|
+            info = conn.info
+            track_cache_metrics(info)
+          end
+        elsif redis_client.respond_to?(:info)
+          # Direct Redis client
+          info = redis_client.info
+          track_cache_metrics(info)
+        else
+          Rails.logger.warn("Unexpected Redis client type: #{redis_client.class}")
+        end
       end
     rescue => e
-      Rails.logger.error("Cache statistics error: #{e.message}")
-      Sentry.capture_exception(e) if defined?(Sentry)
+      Rails.logger.error("CacheMonitoringJob error: #{e.class} - #{e.message}")
+      Sentry.capture_exception(e, level: :warning, tags: { job: "cache_monitoring" }) if defined?(Sentry)
     end
   end
+
+  private
+
+    def track_cache_metrics(info)
+      # Track memory usage and other stats
+      used_memory_mb = (info["used_memory"].to_i / 1024.0 / 1024.0).round(2)
+
+      Sentry.add_breadcrumb(
+        Sentry::Breadcrumb.new(
+          category: "cache",
+          message: "Cache statistics",
+          data: {
+            used_memory_mb: used_memory_mb,
+            connected_clients: info["connected_clients"],
+            total_commands_processed: info["total_commands_processed"],
+            evicted_keys: info["evicted_keys"]
+          },
+          level: "info"
+        )
+      )
+
+      # Log for monitoring
+      Rails.logger.info("Cache stats - Memory: #{used_memory_mb}MB, Clients: #{info['connected_clients']}")
+    end
 end

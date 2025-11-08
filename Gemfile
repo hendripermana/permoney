@@ -32,7 +32,7 @@ gem "hotwire_combobox"
 gem "sidekiq"
 gem "sidekiq-cron"
 
-# Monitoring
+# Monitoring & APM
 gem "vernier"
 gem "rack-mini-profiler"
 gem "sentry-ruby"
@@ -41,6 +41,9 @@ gem "sentry-sidekiq"
 gem "logtail-rails"
 gem "skylight", groups: [ :production ]
 gem "stackprof", groups: [ :production ]
+# Prometheus metrics export
+gem "prometheus-client"
+gem "prometheus_exporter"
 
 # Active Storage
 gem "aws-sdk-s3", "~> 1.200.0", require: false
