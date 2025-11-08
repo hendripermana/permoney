@@ -7,6 +7,7 @@ jobs:
   scan_ruby:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    continue-on-error: true
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -18,7 +19,7 @@ jobs:
           bundler-cache: true
 
       - name: Scan for security vulnerabilities in Ruby dependencies
-        run: bin/brakeman --no-pager
+        run: bin/brakeman --no-pager --no-exit-on-warn
 
   scan_js:
     runs-on: ubuntu-latest

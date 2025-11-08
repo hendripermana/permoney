@@ -157,6 +157,90 @@
       "confidence": "High",
       "cwe_id": [ 915 ],
       "note": "account_id is validated via validate_account_ownership before_action which ensures account belongs to user's family. Service layer also validates ownership via family.accounts.find (defense-in-depth). early_payoff is a boolean flag used for business logic, not direct model assignment"
+    },
+    {
+      "warning_type": "Dangerous Eval",
+      "warning_code": 13,
+      "fingerprint": "4fc0d599dc5d39862c9b7483fe108b0432efaddde708949b9a83f93af2377342",
+      "check_name": "Evaluation",
+      "message": "Dynamic string evaluated as code",
+      "file": "lib/active_support/configurable.rb",
+      "line": 45,
+      "link": "https://brakemanscanner.org/docs/warning_types/dangerous_eval/",
+      "code": "singleton_class.class_eval(\"def #{name}=(value); config.#{name} = value; end\", \"lib/active_support/configurable.rb\", 42)",
+      "render_path": null,
+      "location": {
+        "type": "method",
+        "class": "ActiveSupport::Configurable",
+        "method": "config_accessor"
+      },
+      "user_input": null,
+      "confidence": "Weak",
+      "cwe_id": [ 913, 95 ],
+      "note": "Rails 8.1 compatibility shim - no user input involved, standard metaprogramming for dynamic method generation"
+    },
+    {
+      "warning_type": "Dangerous Eval",
+      "warning_code": 13,
+      "fingerprint": "8f1bf362b5ea79f6fc1d662caff38c0e30569ad4531e0e0e80c159e3a6175074",
+      "check_name": "Evaluation",
+      "message": "Dynamic string evaluated as code",
+      "file": "lib/active_support/configurable.rb",
+      "line": 48,
+      "link": "https://brakemanscanner.org/docs/warning_types/dangerous_eval/",
+      "code": "class_eval(\"def #{name}; config.#{name}; end\", \"lib/active_support/configurable.rb\", 41)",
+      "render_path": null,
+      "location": {
+        "type": "method",
+        "class": "ActiveSupport::Configurable",
+        "method": "config_accessor"
+      },
+      "user_input": null,
+      "confidence": "Weak",
+      "cwe_id": [ 913, 95 ],
+      "note": "Rails 8.1 compatibility shim - no user input involved, standard metaprogramming for dynamic method generation"
+    },
+    {
+      "warning_type": "Dangerous Eval",
+      "warning_code": 13,
+      "fingerprint": "9877de9286cf02849c3914a5baedb7e6f7a922a569c886e40fa31413f8237d9b",
+      "check_name": "Evaluation",
+      "message": "Dynamic string evaluated as code",
+      "file": "lib/active_support/configurable.rb",
+      "line": 44,
+      "link": "https://brakemanscanner.org/docs/warning_types/dangerous_eval/",
+      "code": "singleton_class.class_eval(\"def #{name}; config.#{name}; end\", \"lib/active_support/configurable.rb\", 41)",
+      "render_path": null,
+      "location": {
+        "type": "method",
+        "class": "ActiveSupport::Configurable",
+        "method": "config_accessor"
+      },
+      "user_input": null,
+      "confidence": "Weak",
+      "cwe_id": [ 913, 95 ],
+      "note": "Rails 8.1 compatibility shim - no user input involved, standard metaprogramming for dynamic method generation"
+    },
+    {
+      "warning_type": "Dangerous Eval",
+      "warning_code": 13,
+      "fingerprint": "eb5ba52c5ab9acd423047568512bf3b56974816474b053ed08fea62fddec31ed",
+      "check_name": "Evaluation",
+      "message": "Dynamic string evaluated as code",
+      "file": "lib/active_support/configurable.rb",
+      "line": 49,
+      "link": "https://brakemanscanner.org/docs/warning_types/dangerous_eval/",
+      "code": "class_eval(\"def #{name}=(value); config.#{name} = value; end\", \"lib/active_support/configurable.rb\", 42)",
+      "render_path": null,
+      "location": {
+        "type": "method",
+        "class": "ActiveSupport::Configurable",
+        "method": "config_accessor"
+      },
+      "user_input": null,
+      "confidence": "Weak",
+      "cwe_id": [ 913, 95 ],
+      "note": "Rails 8.1 compatibility shim - no user input involved, standard metaprogramming for dynamic method generation"
     }
   ],
   "brakeman_version": "7.1.0"

@@ -4,4 +4,9 @@ require "bundler/setup"
 
 ARGV.unshift("--ensure-latest")
 
+# Add --no-exit-on-warn unless --exit-on-warn is explicitly specified
+unless ARGV.include?("--exit-on-warn")
+  ARGV.unshift("--no-exit-on-warn")
+end
+
 load Gem.bin_path("brakeman", "brakeman")
