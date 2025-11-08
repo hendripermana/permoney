@@ -59,8 +59,12 @@ README.md
 CHANGELOG*
 CONTRIBUTING.md
 LICENSE
-docs/
-*.md
+# Keep docs/onboarding/ for user guides (Permoney feature)
+# Exclude everything else in docs/
+docs/*
+!docs/onboarding/
+# Exclude root-level markdown files
+/*.md
 
 # IDE files
 .vscode/
