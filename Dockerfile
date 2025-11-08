@@ -35,6 +35,8 @@ RUN apt-get update -qq \
         git \
         build-essential \
         libpq-dev \
+        libyaml-dev \
+        pkg-config \
         # Performance optimization
         libjemalloc2 \
     && apt-get clean \
