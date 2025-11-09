@@ -9,6 +9,27 @@ module Syncable
     syncs.visible.any?
   end
 
+  # Debounce window to prevent sync flooding when creating multiple entries rapidly
+  SYNC_DEBOUNCE_WINDOW = 2.seconds
+
+  # Debounced sync: prevents multiple syncs within a short time window
+  # Use this for user-initiated actions (transaction create/update/delete)
+  def sync_later_debounced(**options)
+    cache_key = "sync_debounce:#{self.class.name}:#{id}"
+
+    # Check if sync was recently requested
+    if Rails.cache.exist?(cache_key)
+      Rails.logger.debug("[Sync] Debounced sync for #{self.class.name}##{id} (within #{SYNC_DEBOUNCE_WINDOW}s window)")
+      return syncs.incomplete.first # Return existing incomplete sync
+    end
+
+    # Set debounce flag
+    Rails.cache.write(cache_key, true, expires_in: SYNC_DEBOUNCE_WINDOW)
+
+    # Trigger actual sync
+    sync_later(**options)
+  end
+
   # Schedules a sync for syncable.  If there is an existing sync pending/syncing for this syncable,
   # we do not create a new sync, and attempt to expand the sync window if needed.
   # Detects and recovers from stuck syncs (syncing lebih dari 5 menit tanpa progress)

@@ -49,7 +49,8 @@ class Entry < ApplicationRecord
 
   def sync_account_later
     sync_start_date = [ date_previously_was, date ].compact.min unless destroyed?
-    account.sync_later(window_start_date: sync_start_date)
+    # Use debounced sync to prevent flooding when creating multiple entries rapidly
+    account.sync_later_debounced(window_start_date: sync_start_date)
   end
 
   def entryable_name_short
