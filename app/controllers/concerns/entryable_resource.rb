@@ -43,25 +43,25 @@ module EntryableResource
       # 1. Entry is in account's native currency (avoid complex conversion)
       # 2. Entry is recent (within last 30 days) for safety
       # 3. Account has balances (avoid edge cases with new accounts)
-      if entry_currency == account.currency && 
+      if entry_currency == account.currency &&
          entry_date >= 30.days.ago.to_date &&
          account.balances.any?
-        
+
         # Calculate optimistic new balance (simple subtraction)
         # This is approximate - async sync will calculate exact balance
         new_balance = account.balance - entry_amount
-        
+
         Rails.logger.info(
           "Optimistic balance update for account #{account.id}: " \
           "#{account.balance} - #{entry_amount} = #{new_balance}"
         )
-        
+
         # Update balance immediately (skip validations for speed)
         account.update_columns(
           balance: new_balance,
           updated_at: Time.current
         )
-        
+
         # Broadcast immediate update to UI via Turbo
         account.broadcast_replace_to(
           account.family,
