@@ -28,7 +28,13 @@ Rails.application.configure do
   config.assume_ssl = true
 
   # Force all access to the app over SSL, use Strict-Transport-Security, and use secure cookies.
-  config.force_ssl = true
+  config.force_ssl = false  # Disabled: Caddy handles SSL termination with X-Forwarded-Proto headers
+
+  # Trust X-Forwarded-* headers from reverse proxy (Caddy with Cloudflare IPs)
+  config.ssl_options = {
+    hsts: { max_age: 1.year.to_i, include_subdomains: true, preload: true },
+    redirect: false  # Don't force redirects; Caddy handles this
+  }
 
   # Skip http-to-https redirect for the default health check endpoint.
   # config.ssl_options = { redirect: { exclude: ->(request) { request.path == "/up" } } }

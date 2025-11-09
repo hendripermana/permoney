@@ -18,8 +18,8 @@ class CacheMonitoringJob < ApplicationJob
       if Rails.cache.respond_to?(:redis)
         redis_client = Rails.cache.redis
 
-        # Handle both direct Redis client and ConnectionPool
-        if redis_client.is_a?(Redis::ConnectionPool)
+        # Handle both direct Redis client and ConnectionPool (from connection_pool gem)
+        if redis_client.is_a?(ConnectionPool)
           # Get a connection from the pool temporarily
           redis_client.with do |conn|
             info = conn.info

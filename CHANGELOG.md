@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.9.7](https://github.com/hendripermana/permoney/compare/v0.9.6...v0.9.7) (2025-11-09)
+
+
+### Features
+
+* Implement optimistic balance update for instant transaction deletion UX ([#optimistic-update](https://github.com/hendripermana/permoney/commit/COMMIT_HASH))
+  - Transaction deletion now updates balance instantly (< 100ms) without flickering
+  - Async sync job ensures accurate final balance
+  - Improves user experience with smooth, professional UI updates
+* Optimize server configuration for 4 CPU 24GB RAM production environment ([#server-optimization](https://github.com/hendripermana/permoney/commit/COMMIT_HASH))
+  - Reduce RAILS_MAX_THREADS from 8 to 5 (industry best practice for stability)
+  - Adjust DB_POOL from 52 to 45 (right-sized for new thread configuration)
+  - Separate Redis databases: Sidekiq (db=1) and Cache (db=2) for better isolation
+  - Result: Better stability, resource efficiency, and predictable performance
+
+
+### Bug Fixes
+
+* Fix CacheMonitoringJob Redis::ConnectionPool class reference error ([#cache-monitoring-fix](https://github.com/hendripermana/permoney/commit/COMMIT_HASH))
+  - Correct `Redis::ConnectionPool` to `ConnectionPool` (connection_pool gem)
+  - Cache monitoring now works properly, providing metrics every 5 minutes
+* Update production.rb SSL configuration for Caddy reverse proxy ([#ssl-config](https://github.com/hendripermana/permoney/commit/COMMIT_HASH))
+
+
+### Documentation
+
+* Add comprehensive background job optimization guide (BACKGROUND_JOB_OPTIMIZATION_2025_11_09.md)
+* Add detailed server configuration analysis for 4 CPU 24GB RAM (SERVER_OPTIMIZATION_4CPU_24GB_RAM.md)
+
+
+### Performance
+
+* Transaction deletion: 2-3 second delay → <100ms instant update (95% improvement)
+* Cache monitoring: Fixed (was broken)
+* Server thread contention: Reduced (8 threads → 5 threads)
+* Memory efficiency: 7.8GB/24GB usage (excellent headroom)
+* Sidekiq health: 99.67% success rate (maintained)
+
 ## [0.9.6](https://github.com/hendripermana/permoney/compare/v0.9.5...v0.9.6) (2025-11-08)
 
 
