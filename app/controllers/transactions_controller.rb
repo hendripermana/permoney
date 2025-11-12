@@ -88,20 +88,50 @@ class TransactionsController < ApplicationController
          entry_date >= 30.days.ago.to_date &&
          account.balances.any?
 
-        # Calculate optimistic new balance
-        # This is approximate - async sync will calculate exact balance
-        new_balance = account.balance + entry_amount
+        # CORRECT OPTIMISTIC BALANCE CALCULATION
+        # Entry amount convention:
+        #   - Negative amount = income (increases asset value, decreases liability)
+        #   - Positive amount = expense (decreases asset value, increases liability)
+        #
+        # For ASSET accounts (checking, savings):
+        #   - Expense (+amount): balance should DECREASE → multiply by -1
+        #   - Income (-amount): balance should INCREASE → multiply by -1
+        # For LIABILITY accounts (credit card, loan):
+        #   - Expense (+amount): balance should INCREASE (more debt) → multiply by +1
+        #   - Payment (-amount): balance should DECREASE (less debt) → multiply by +1
+        flows_factor = account.asset? ? -1 : 1
+        balance_change = entry_amount * flows_factor
+        new_balance = account.balance + balance_change
 
         Rails.logger.info(
-          "Optimistic balance update for account #{account.id}: " \
-          "#{account.balance} + #{entry_amount} = #{new_balance}"
+          "[Optimistic Update] Account #{account.id} (#{account.classification}): " \
+          "balance #{account.balance} + (#{entry_amount} * #{flows_factor}) = #{new_balance}"
         )
 
-        # Update balance immediately (skip validations for speed)
-        account.update_columns(
-          balance: new_balance,
-          updated_at: Time.current
-        )
+        # Update both account balance AND latest balance record for consistency
+        ActiveRecord::Base.transaction do
+          # Update account balance immediately
+          account.update_columns(
+            balance: new_balance,
+            updated_at: Time.current
+          )
+
+          # Also update latest Balance record to keep daily snapshots in sync
+          # This ensures balance chart shows correct value immediately
+          latest_balance = account.balances
+                                  .where(currency: account.currency)
+                                  .order(date: :desc)
+                                  .first
+
+          if latest_balance && latest_balance.date >= entry_date - 1.day
+            # Update end_balance to reflect new transaction
+            latest_balance.update_columns(
+              end_balance: new_balance,
+              balance: new_balance,
+              updated_at: Time.current
+            )
+          end
+        end
 
         # Broadcast immediate update to UI via Turbo
         account.broadcast_replace_to(
@@ -125,13 +155,18 @@ class TransactionsController < ApplicationController
           redirect_back_or_to account_path(@entry.account)
         end
 
-        # TURBO STREAM: Modal stays on page, just close modal and show success
-        # This matches the pattern used by valuations, trades, etc.
+        # TURBO STREAM: Close modal, show success, and refresh entries
+        # Optimistic balance update already happened above,
+        # now refresh entries list to show new transaction immediately
         format.turbo_stream do
           flash[:notice] = "Transaction created"
           render turbo_stream: [
             turbo_stream.update("modal", ""),
-            turbo_stream.replace(@entry),
+            # Reload the entries turbo frame to show new transaction
+            # Using Turbo.visit with frame target to reload just that section
+            turbo_stream.append("body", html: %(<script>
+              document.querySelector('[id="#{dom_id(account, "entries")}"]')?.reload();
+            </script>).html_safe),
             *flash_notification_stream_items
           ]
         end
@@ -145,6 +180,12 @@ class TransactionsController < ApplicationController
   end
 
   def update
+    # PERFORMANCE: Store old values before update for optimistic balance calculation
+    old_amount = @entry.amount
+    old_date = @entry.date
+    old_currency = @entry.currency
+    old_account = @entry.account
+
     if @entry.update(entry_params)
       transaction = @entry.transaction
 
@@ -154,6 +195,70 @@ class TransactionsController < ApplicationController
           category_id: transaction.category_id,
           category_name: transaction.category.name
         }
+      end
+
+      # OPTIMISTIC UPDATE: Calculate balance delta for edited transaction
+      # This handles changes to amount, date, currency, and even account changes
+      new_amount = @entry.amount
+      new_date = @entry.date
+      new_currency = @entry.currency
+      new_account = @entry.account
+
+      # Only do optimistic update if transaction stayed in same currency and same account
+      # More complex scenarios (currency change, account change) handled by async sync
+      if old_currency == new_currency &&
+         old_account.id == new_account.id &&
+         new_currency == new_account.currency &&
+         new_date >= 30.days.ago.to_date &&
+         new_account.balances.any?
+
+        # Calculate DELTA between old and new amounts
+        # For editing, we need to:
+        # 1. Remove effect of old amount
+        # 2. Add effect of new amount
+        flows_factor = new_account.asset? ? -1 : 1
+        
+        old_balance_change = old_amount * flows_factor
+        new_balance_change = new_amount * flows_factor
+        balance_delta = new_balance_change - old_balance_change
+        
+        optimistic_balance = new_account.balance + balance_delta
+
+        Rails.logger.info(
+          "[Optimistic Update - Edit] Account #{new_account.id} (#{new_account.classification}): " \
+          "old_amount=#{old_amount}, new_amount=#{new_amount}, " \
+          "balance #{new_account.balance} + delta(#{balance_delta}) = #{optimistic_balance}"
+        )
+
+        # Update account balance immediately
+        ActiveRecord::Base.transaction do
+          new_account.update_columns(
+            balance: optimistic_balance,
+            updated_at: Time.current
+          )
+
+          # Also update latest Balance record to keep daily snapshots in sync
+          latest_balance = new_account.balances
+                                      .where(currency: new_account.currency)
+                                      .order(date: :desc)
+                                      .first
+
+          if latest_balance && latest_balance.date >= new_date - 1.day
+            latest_balance.update_columns(
+              end_balance: optimistic_balance,
+              balance: optimistic_balance,
+              updated_at: Time.current
+            )
+          end
+        end
+
+        # Broadcast immediate update to UI
+        new_account.broadcast_replace_to(
+          new_account.family,
+          target: "account_#{new_account.id}",
+          partial: "accounts/account",
+          locals: { account: new_account.reload }
+        )
       end
 
       @entry.sync_account_later

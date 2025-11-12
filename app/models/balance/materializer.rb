@@ -1,25 +1,77 @@
 class Balance::Materializer
-  attr_reader :account, :strategy
+  attr_reader :account, :strategy, :window_start_date, :window_end_date
 
-  def initialize(account, strategy:)
+  def initialize(account, strategy:, window_start_date: nil, window_end_date: nil)
     @account = account
     @strategy = strategy
+    @window_start_date = window_start_date
+    @window_end_date = window_end_date
   end
 
   def materialize_balances
+    # PERFORMANCE MONITORING: Track sync duration and performance
+    start_time = Time.current
+    Rails.logger.info(
+      "[Balance Sync Start] Account #{account.id}, Strategy: #{strategy}, " \
+      "Window: #{window_start_date || 'full'} to #{window_end_date || 'latest'}"
+    )
+
     Balance.transaction do
+      # Step 1: Materialize holdings
+      holdings_start = Time.current
       materialize_holdings
+      holdings_duration = Time.current - holdings_start
+
+      # Step 2: Calculate balances (most expensive operation)
+      calc_start = Time.current
       calculate_balances
+      calc_duration = Time.current - calc_start
 
-      Rails.logger.info("Persisting #{@balances.size} balances")
+      Rails.logger.info(
+        "[Balance Calc] #{@balances.size} balances calculated in #{calc_duration.round(2)}s " \
+        "(#{(@balances.size / calc_duration).round(1)} balances/sec)"
+      )
+
+      # Step 3: Persist to database
+      persist_start = Time.current
       persist_balances
+      persist_duration = Time.current - persist_start
 
+      # Step 4: Cleanup
+      purge_start = Time.current
       purge_stale_balances
+      purge_duration = Time.current - purge_start
 
-      # CRITICAL FIX: Update account balance for BOTH forward and reverse strategies
-      # Previously only forward strategy updated the account, causing balances to not
-      # update for linked/synced accounts (which use reverse strategy)
+      # Step 5: Update account
+      update_start = Time.current
       update_account_info
+      update_duration = Time.current - update_start
+
+      # Final performance summary
+      total_duration = Time.current - start_time
+      Rails.logger.info(
+        "[Balance Sync Complete] Account #{account.id}: #{total_duration.round(2)}s total " \
+        "(holdings: #{holdings_duration.round(2)}s, calc: #{calc_duration.round(2)}s, " \
+        "persist: #{persist_duration.round(2)}s, purge: #{purge_duration.round(2)}s, " \
+        "update: #{update_duration.round(2)}s)"
+      )
+
+      # MONITORING: Report slow syncs to Sentry for investigation
+      if total_duration > 10.seconds
+        Sentry.capture_message(
+          "Slow balance sync detected",
+          level: :warning,
+          extra: {
+            account_id: account.id,
+            strategy: strategy,
+            total_duration: total_duration.round(2),
+            balance_count: @balances.size,
+            calc_duration: calc_duration.round(2),
+            window_start: window_start_date,
+            window_end: window_end_date
+          }
+        )
+      end
     end
   end
 
@@ -117,10 +169,15 @@ class Balance::Materializer
     end
 
     def calculator
+      # PERFORMANCE: Pass window dates to calculator for incremental calculation
       if strategy == :reverse
-        Balance::ReverseCalculator.new(account)
+        Balance::ReverseCalculator.new(account,
+          window_start_date: window_start_date,
+          window_end_date: window_end_date)
       else
-        Balance::ForwardCalculator.new(account)
+        Balance::ForwardCalculator.new(account,
+          window_start_date: window_start_date,
+          window_end_date: window_end_date)
       end
     end
 end

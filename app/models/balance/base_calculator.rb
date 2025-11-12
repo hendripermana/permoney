@@ -1,8 +1,10 @@
 class Balance::BaseCalculator
-  attr_reader :account
+  attr_reader :account, :window_start_date, :window_end_date
 
-  def initialize(account)
+  def initialize(account, window_start_date: nil, window_end_date: nil)
     @account = account
+    @window_start_date = window_start_date
+    @window_end_date = window_end_date
   end
 
   def calculate

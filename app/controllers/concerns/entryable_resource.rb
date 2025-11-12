@@ -47,16 +47,30 @@ module EntryableResource
          entry_date >= 30.days.ago.to_date &&
          account.balances.any?
 
-        # Calculate optimistic new balance (simple subtraction)
-        # This is approximate - async sync will calculate exact balance
-        new_balance = account.balance - entry_amount
+        # CORRECT OPTIMISTIC BALANCE CALCULATION FOR DELETE
+        # Deleting a transaction should REVERSE its original effect on balance
+        # Entry amount convention:
+        #   - Negative amount = income (originally increased asset, decreased liability)
+        #   - Positive amount = expense (originally decreased asset, increased liability)
+        # 
+        # When DELETING:
+        # - Delete expense (+amount) on asset: should INCREASE balance (reverse the decrease)
+        # - Delete income (-amount) on asset: should DECREASE balance (reverse the increase)
+        # - Delete expense (+amount) on liability: should DECREASE balance (reverse the increase)
+        # - Delete payment (-amount) on liability: should INCREASE balance (reverse the decrease)
+        #
+        # Formula: REVERSE the original flows_factor effect
+        flows_factor = account.asset? ? -1 : 1
+        # When deleting, we reverse the effect, so negate the balance change
+        balance_change = -(entry_amount * flows_factor)
+        new_balance = account.balance + balance_change
 
         Rails.logger.info(
-          "Optimistic balance update for account #{account.id}: " \
-          "#{account.balance} - #{entry_amount} = #{new_balance}"
+          "[Optimistic Update - Delete] Account #{account.id} (#{account.classification}): " \
+          "balance #{account.balance} + reverse(#{entry_amount} * #{flows_factor}) = #{new_balance}"
         )
 
-        # Update balance immediately (skip validations for speed)
+        # Update balance immediately
         account.update_columns(
           balance: new_balance,
           updated_at: Time.current

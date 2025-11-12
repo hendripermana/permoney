@@ -9,25 +9,51 @@ module Syncable
     syncs.visible.any?
   end
 
-  # Debounce window to prevent sync flooding when creating multiple entries rapidly
-  SYNC_DEBOUNCE_WINDOW = 2.seconds
+  # PERFORMANCE: Smarter debounce window to prevent sync flooding
+  # Increased from 2s to 5s for better batching of rapid changes
+  SYNC_DEBOUNCE_WINDOW = 5.seconds
 
-  # Debounced sync: prevents multiple syncs within a short time window
+  # PERFORMANCE: Smarter debounced sync with window merging
+  # Instead of just blocking new syncs, we merge their windows with existing pending sync
   # Use this for user-initiated actions (transaction create/update/delete)
   def sync_later_debounced(**options)
     cache_key = "sync_debounce:#{self.class.name}:#{id}"
 
     # Check if sync was recently requested
-    if Rails.cache.exist?(cache_key)
-      Rails.logger.debug("[Sync] Debounced sync for #{self.class.name}##{id} (within #{SYNC_DEBOUNCE_WINDOW}s window)")
-      return syncs.incomplete.first # Return existing incomplete sync
+    debounce_data = Rails.cache.read(cache_key)
+
+    if debounce_data
+      # Sync recently requested - try to merge with existing sync
+      existing_sync_id = debounce_data[:sync_id]
+      existing_sync = syncs.find_by(id: existing_sync_id)
+
+      if existing_sync&.pending?
+        # SMART MERGE: Expand window of existing sync instead of creating new one
+        Rails.logger.info(
+          "[Sync Debounce] Merging with existing sync #{existing_sync_id}: " \
+          "expanding window to include #{options[:window_start_date]}"
+        )
+
+        existing_sync.expand_window_if_needed(
+          options[:window_start_date],
+          options[:window_end_date]
+        )
+
+        return existing_sync
+      end
     end
 
-    # Set debounce flag
-    Rails.cache.write(cache_key, true, expires_in: SYNC_DEBOUNCE_WINDOW)
+    # Create new sync
+    sync = sync_later(**options)
 
-    # Trigger actual sync
-    sync_later(**options)
+    # Store debounce data with sync ID for smart merging
+    Rails.cache.write(
+      cache_key,
+      { sync_id: sync.id, created_at: Time.current },
+      expires_in: SYNC_DEBOUNCE_WINDOW
+    )
+
+    sync
   end
 
   # Schedules a sync for syncable.  If there is an existing sync pending/syncing for this syncable,

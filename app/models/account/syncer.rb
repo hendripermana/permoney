@@ -18,8 +18,8 @@ class Account::Syncer
     # Error isolation: Market data import tidak boleh fail entire sync
     import_market_data
 
-    # Core sync operation
-    materialize_balances
+    # Core sync operation with window dates for incremental calculation
+    materialize_balances(sync)
   end
 
   def perform_post_sync
@@ -28,9 +28,23 @@ class Account::Syncer
   end
 
   private
-    def materialize_balances
+    # PERFORMANCE: Pass sync window to materializer for incremental calculation
+    # This allows calculator to only recalculate balances from window_start_date
+    # instead of recalculating entire history from opening_anchor_date
+    def materialize_balances(sync)
       strategy = account.linked? ? :reverse : :forward
-      Balance::Materializer.new(account, strategy: strategy).materialize_balances
+
+      Rails.logger.info(
+        "Materializing balances with window: " \
+        "start=#{sync.window_start_date || 'nil'}, end=#{sync.window_end_date || 'nil'}"
+      )
+
+      Balance::Materializer.new(
+        account,
+        strategy: strategy,
+        window_start_date: sync.window_start_date,
+        window_end_date: sync.window_end_date
+      ).materialize_balances
     end
 
     # Syncs all the exchange rates + security prices this account needs to display historical chart data

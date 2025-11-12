@@ -1,13 +1,43 @@
 class Balance::ForwardCalculator < Balance::BaseCalculator
   def calculate
     Rails.logger.tagged("Balance::ForwardCalculator") do
-      start_cash_balance = derive_cash_balance_on_date_from_total(
-        total_balance: account.opening_anchor_balance,
-        date: account.opening_anchor_date
-      )
-      start_non_cash_balance = account.opening_anchor_balance - start_cash_balance
+      # PERFORMANCE: Incremental calculation optimization
+      # Instead of recalculating from opening_anchor_date every time,
+      # start from window_start_date (if provided) or latest calculated balance
+      start_date = determine_start_date
+      end_date = determine_end_date
 
-      calc_start_date.upto(calc_end_date).map do |date|
+      # Get starting balance from previous calculation (if exists)
+      starting_balance_record = account.balances
+        .where(currency: account.currency)
+        .where("date < ?", start_date)
+        .order(date: :desc)
+        .first
+
+      if starting_balance_record
+        # INCREMENTAL: Continue from last calculated balance
+        start_cash_balance = starting_balance_record.end_cash_balance
+        start_non_cash_balance = starting_balance_record.end_non_cash_balance
+
+        Rails.logger.info(
+          "[Incremental Calc] Starting from #{starting_balance_record.date}: " \
+          "cash=#{start_cash_balance}, non_cash=#{start_non_cash_balance}"
+        )
+      else
+        # FULL: No previous balance, start from opening anchor
+        start_cash_balance = derive_cash_balance_on_date_from_total(
+          total_balance: account.opening_anchor_balance,
+          date: account.opening_anchor_date
+        )
+        start_non_cash_balance = account.opening_anchor_balance - start_cash_balance
+
+        Rails.logger.info(
+          "[Full Calc] Starting from opening anchor #{account.opening_anchor_date}: " \
+          "cash=#{start_cash_balance}, non_cash=#{start_non_cash_balance}"
+        )
+      end
+
+      start_date.upto(end_date).map do |date|
         valuation = sync_cache.get_valuation(date)
 
         if valuation
@@ -52,12 +82,49 @@ class Balance::ForwardCalculator < Balance::BaseCalculator
   end
 
   private
+    # PERFORMANCE: Determine optimal start date for calculation
+    # Priority order:
+    # 1. Sync window_start_date (if provided by sync operation)
+    # 2. Latest balance date + 1 (incremental calculation)
+    # 3. Opening anchor date (full recalculation fallback)
+    def determine_start_date
+      if window_start_date
+        # Explicit window provided by sync (e.g., transaction dated in past)
+        window_start_date
+      else
+        # Try incremental calculation from latest balance
+        latest_balance_date = account.balances
+          .where(currency: account.currency)
+          .maximum(:date)
+
+        if latest_balance_date
+          # Start from day after latest balance
+          latest_balance_date + 1.day
+        else
+          # No balances exist, start from opening anchor
+          account.opening_anchor_date
+        end
+      end
+    end
+
+    # Determine end date for calculation
+    # Use window_end_date if provided, otherwise calculate to latest entry/holding
+    def determine_end_date
+      if window_end_date
+        window_end_date
+      else
+        [ account.entries.order(:date).last&.date,
+          account.holdings.order(:date).last&.date ].compact.max || Date.current
+      end
+    end
+
+    # Legacy methods for backward compatibility (if needed by tests)
     def calc_start_date
-      account.opening_anchor_date
+      determine_start_date
     end
 
     def calc_end_date
-      [ account.entries.order(:date).last&.date, account.holdings.order(:date).last&.date ].compact.max || Date.current
+      determine_end_date
     end
 
     # Negative entries amount on an "asset" account means, "account value has increased"
