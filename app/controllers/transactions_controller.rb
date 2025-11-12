@@ -217,11 +217,11 @@ class TransactionsController < ApplicationController
         # 1. Remove effect of old amount
         # 2. Add effect of new amount
         flows_factor = new_account.asset? ? -1 : 1
-        
+
         old_balance_change = old_amount * flows_factor
         new_balance_change = new_amount * flows_factor
         balance_delta = new_balance_change - old_balance_change
-        
+
         optimistic_balance = new_account.balance + balance_delta
 
         Rails.logger.info(
