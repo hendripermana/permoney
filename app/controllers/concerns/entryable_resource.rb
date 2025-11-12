@@ -52,7 +52,7 @@ module EntryableResource
         # Entry amount convention:
         #   - Negative amount = income (originally increased asset, decreased liability)
         #   - Positive amount = expense (originally decreased asset, increased liability)
-        # 
+        #
         # When DELETING:
         # - Delete expense (+amount) on asset: should INCREASE balance (reverse the decrease)
         # - Delete income (-amount) on asset: should DECREASE balance (reverse the increase)
