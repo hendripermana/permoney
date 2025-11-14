@@ -60,7 +60,8 @@ module EntryableResource
         # - Delete payment (-amount) on liability: should INCREASE balance (reverse the decrease)
         #
         # Formula: REVERSE the original flows_factor effect
-        flows_factor = account.asset? ? -1 : 1
+        # CRITICAL: Match flows_factor convention from Balance::ForwardCalculator
+        flows_factor = account.asset? ? 1 : -1
         # When deleting, we reverse the effect, so negate the balance change
         balance_change = -(entry_amount * flows_factor)
         new_balance = account.balance + balance_change

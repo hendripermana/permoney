@@ -99,7 +99,10 @@ class TransactionsController < ApplicationController
         # For LIABILITY accounts (credit card, loan):
         #   - Expense (+amount): balance should INCREASE (more debt) → multiply by +1
         #   - Payment (-amount): balance should DECREASE (less debt) → multiply by +1
-        flows_factor = account.asset? ? -1 : 1
+        # CRITICAL: Match flows_factor convention from Balance::ForwardCalculator
+        # Asset accounts: flows_factor = 1 (inflows increase balance)
+        # Liability accounts: flows_factor = -1 (inflows decrease debt)
+        flows_factor = account.asset? ? 1 : -1
         balance_change = entry_amount * flows_factor
         new_balance = account.balance + balance_change
 
@@ -201,7 +204,8 @@ class TransactionsController < ApplicationController
         # For editing, we need to:
         # 1. Remove effect of old amount
         # 2. Add effect of new amount
-        flows_factor = new_account.asset? ? -1 : 1
+        # CRITICAL: Match flows_factor convention from Balance::ForwardCalculator
+        flows_factor = new_account.asset? ? 1 : -1
 
         old_balance_change = old_amount * flows_factor
         new_balance_change = new_amount * flows_factor
