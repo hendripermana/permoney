@@ -9,91 +9,21 @@ module Syncable
     syncs.visible.any?
   end
 
-  # PERFORMANCE: Smarter debounce window to prevent sync flooding
-  # Increased from 2s to 5s for better batching of rapid changes
-  SYNC_DEBOUNCE_WINDOW = 5.seconds
-
-  # PERFORMANCE: Smarter debounced sync with window merging
-  # Instead of just blocking new syncs, we merge their windows with existing pending sync
-  # Use this for user-initiated actions (transaction create/update/delete)
+  # DEPRECATED: Use sync_later directly instead
+  # Keeping for backwards compatibility during transition
   def sync_later_debounced(**options)
-    cache_key = "sync_debounce:#{self.class.name}:#{id}"
-
-    # Check if sync was recently requested
-    debounce_data = Rails.cache.read(cache_key)
-
-    if debounce_data
-      # Sync recently requested - try to merge with existing sync
-      existing_sync_id = debounce_data[:sync_id]
-      existing_sync = syncs.find_by(id: existing_sync_id)
-
-      if existing_sync&.pending?
-        # SMART MERGE: Expand window of existing sync instead of creating new one
-        Rails.logger.info(
-          "[Sync Debounce] Merging with existing sync #{existing_sync_id}: " \
-          "expanding window to include #{options[:window_start_date]}"
-        )
-
-        existing_sync.expand_window_if_needed(
-          options[:window_start_date],
-          options[:window_end_date]
-        )
-
-        return existing_sync
-      else
-        # CRITICAL FIX: Existing sync not found or already completed
-        # This happens when sync executes faster than debounce window (< 5s)
-        # Clear cache and create new sync instead of silently failing
-        Rails.logger.info(
-          "[Sync Debounce] Existing sync #{existing_sync_id} not found or completed, creating new sync"
-        )
-        Rails.cache.delete(cache_key)
-      end
-    end
-
-    # Create new sync
-    sync = sync_later(**options)
-
-    # Store debounce data with sync ID for smart merging
-    Rails.cache.write(
-      cache_key,
-      { sync_id: sync.id, created_at: Time.current },
-      expires_in: SYNC_DEBOUNCE_WINDOW
-    )
-
-    sync
+    sync_later(**options)
   end
 
-  # Schedules a sync for syncable.  If there is an existing sync pending/syncing for this syncable,
+  # Schedules a sync for syncable. If there is an existing sync pending/syncing for this syncable,
   # we do not create a new sync, and attempt to expand the sync window if needed.
-  # Detects and recovers from stuck syncs (syncing lebih dari 5 menit tanpa progress)
+  #
+  # SIMPLIFIED: Matches Sure community approach - no cache-based debouncing, just DB locks
+  # DB transaction + with_lock ensures race-free sync creation without complex caching
   def sync_later(parent_sync: nil, window_start_date: nil, window_end_date: nil)
     Sync.transaction do
       with_lock do
         sync = self.syncs.incomplete.first
-
-        if sync
-          # Deteksi stuck sync: jika sync sudah syncing lebih dari 5 menit, mark as stale dan buat baru
-          if sync.syncing? && sync.syncing_at && sync.syncing_at < 5.minutes.ago
-            Rails.logger.warn("Detected stuck sync #{sync.id} (syncing since #{sync.syncing_at}). Marking as stale and creating new sync.")
-            sync.mark_stale! if sync.may_mark_stale?
-            sync = nil
-          # Jika sync pending terlalu lama (lebih dari 10 menit), re-enqueue job atau mark as stale
-          elsif sync.pending? && sync.created_at < 10.minutes.ago
-            Rails.logger.warn("Detected stale pending sync #{sync.id} (created at #{sync.created_at}). Re-enqueueing job or marking as stale.")
-            # Cek apakah job sudah pernah di-enqueue dengan melihat apakah ada job di queue untuk sync ini
-            # Jika tidak, re-enqueue job
-            begin
-              SyncJob.perform_later(sync)
-              Rails.logger.info("Re-enqueued sync job for #{sync.id}")
-            rescue => e
-              Rails.logger.error("Failed to re-enqueue sync #{sync.id}: #{e.message}")
-              # Jika gagal re-enqueue, mark as stale dan buat baru
-              sync.mark_stale! if sync.may_mark_stale?
-              sync = nil
-            end
-          end
-        end
 
         if sync
           Rails.logger.info("There is an existing sync, expanding window if needed (#{sync.id})")
