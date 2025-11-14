@@ -108,30 +108,15 @@ class TransactionsController < ApplicationController
           "balance #{account.balance} + (#{entry_amount} * #{flows_factor}) = #{new_balance}"
         )
 
-        # Update both account balance AND latest balance record for consistency
-        ActiveRecord::Base.transaction do
-          # Update account balance immediately
-          account.update_columns(
-            balance: new_balance,
-            updated_at: Time.current
-          )
-
-          # Also update latest Balance record to keep daily snapshots in sync
-          # This ensures balance chart shows correct value immediately
-          latest_balance = account.balances
-                                  .where(currency: account.currency)
-                                  .order(date: :desc)
-                                  .first
-
-          if latest_balance && latest_balance.date >= entry_date - 1.day
-            # Update end_balance to reflect new transaction
-            latest_balance.update_columns(
-              end_balance: new_balance,
-              balance: new_balance,
-              updated_at: Time.current
-            )
-          end
-        end
+        # Update account balance immediately (optimistic update)
+        # ARCHITECTURE: Only update Account.balance (simple column)
+        # Do NOT update Balance records - they have PostgreSQL generated columns
+        # (end_balance, end_cash_balance, etc.) that are auto-calculated from flows
+        # The async sync job will properly recalculate Balance records with detailed flows
+        account.update_columns(
+          balance: new_balance,
+          updated_at: Time.current
+        )
 
         # Broadcast immediate update to UI via Turbo
         account.broadcast_replace_to(
@@ -230,27 +215,13 @@ class TransactionsController < ApplicationController
           "balance #{new_account.balance} + delta(#{balance_delta}) = #{optimistic_balance}"
         )
 
-        # Update account balance immediately
-        ActiveRecord::Base.transaction do
-          new_account.update_columns(
-            balance: optimistic_balance,
-            updated_at: Time.current
-          )
-
-          # Also update latest Balance record to keep daily snapshots in sync
-          latest_balance = new_account.balances
-                                      .where(currency: new_account.currency)
-                                      .order(date: :desc)
-                                      .first
-
-          if latest_balance && latest_balance.date >= new_date - 1.day
-            latest_balance.update_columns(
-              end_balance: optimistic_balance,
-              balance: optimistic_balance,
-              updated_at: Time.current
-            )
-          end
-        end
+        # Update account balance immediately (optimistic update)
+        # ARCHITECTURE: Only update Account.balance (simple column)
+        # Do NOT update Balance records - they have PostgreSQL generated columns
+        new_account.update_columns(
+          balance: optimistic_balance,
+          updated_at: Time.current
+        )
 
         # Broadcast immediate update to UI
         new_account.broadcast_replace_to(
