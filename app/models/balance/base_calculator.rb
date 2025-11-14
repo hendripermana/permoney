@@ -66,6 +66,9 @@ class Balance::BaseCalculator
       non_cash_inflows = 0
       non_cash_outflows = 0
 
+      # CRITICAL FIX: Exclude valuations from flow calculations
+      # Valuations SET balance (handled in ForwardCalculator), NOT applied as flows
+      # Only count transactions and trades in flows
       txn_inflow_sum = entries.select { |e| e.amount < 0 && e.transaction? }.sum(&:amount)
       txn_outflow_sum = entries.select { |e| e.amount >= 0 && e.transaction? }.sum(&:amount)
 
@@ -102,7 +105,10 @@ class Balance::BaseCalculator
       if account.balance_type == :non_cash
         0
       else
-        cash_balance + signed_entry_flows(entries)
+        # CRITICAL FIX: Exclude valuations from cash balance calculation
+        # Valuations SET balance (not apply as flow)
+        non_valuation_entries = entries.reject(&:valuation?)
+        cash_balance + signed_entry_flows(non_valuation_entries)
       end
     end
 
@@ -110,7 +116,10 @@ class Balance::BaseCalculator
       entries = sync_cache.get_entries(date)
       # For non-cash accounts, apply transaction flows to the non-cash balance.
       if account.balance_type == :non_cash
-        non_cash_balance + signed_entry_flows(entries)
+        # CRITICAL FIX: Exclude valuations from non-cash balance calculation
+        # Valuations SET balance (not apply as flow)
+        non_valuation_entries = entries.reject(&:valuation?)
+        non_cash_balance + signed_entry_flows(non_valuation_entries)
       elsif account.balance_type == :investment
         # For reverse calculations, we need the previous day's holdings
         target_date = direction == :forward ? date : date.prev_day
