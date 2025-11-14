@@ -143,13 +143,14 @@ class TransactionsController < ApplicationController
           redirect_back_or_to account_path(@entry.account)
         end
 
-        # TURBO STREAM: Close modal, show success, and redirect to account page
-        # This ensures the entries list is fully reloaded with the new transaction
+        # TURBO STREAM: Close modal FIRST, then redirect to account page
+        # This prevents form glitch where modal briefly stays open during redirect
         # Turbo handles the navigation smoothly without full page reload
         format.turbo_stream do
           flash[:notice] = "Transaction created"
           render turbo_stream: [
-            turbo_stream.action(:redirect, account_path(account)),
+            turbo_stream.update("modal", ""),  # Close modal immediately
+            turbo_stream.action(:redirect, account_path(account)),  # Then redirect
             *flash_notification_stream_items
           ]
         end

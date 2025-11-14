@@ -40,6 +40,14 @@ module Syncable
         )
 
         return existing_sync
+      else
+        # CRITICAL FIX: Existing sync not found or already completed
+        # This happens when sync executes faster than debounce window (< 5s)
+        # Clear cache and create new sync instead of silently failing
+        Rails.logger.info(
+          "[Sync Debounce] Existing sync #{existing_sync_id} not found or completed, creating new sync"
+        )
+        Rails.cache.delete(cache_key)
       end
     end
 
