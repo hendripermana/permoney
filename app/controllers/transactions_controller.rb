@@ -143,18 +143,13 @@ class TransactionsController < ApplicationController
           redirect_back_or_to account_path(@entry.account)
         end
 
-        # TURBO STREAM: Close modal, show success, and refresh entries
-        # Optimistic balance update already happened above,
-        # now refresh entries list to show new transaction immediately
+        # TURBO STREAM: Close modal, show success, and redirect to account page
+        # This ensures the entries list is fully reloaded with the new transaction
+        # Turbo handles the navigation smoothly without full page reload
         format.turbo_stream do
           flash[:notice] = "Transaction created"
           render turbo_stream: [
-            turbo_stream.update("modal", ""),
-            # Reload the entries turbo frame to show new transaction
-            # Using Turbo.visit with frame target to reload just that section
-            turbo_stream.append("body", html: %(<script>
-              document.querySelector('[id="#{dom_id(account, "entries")}"]')?.reload();
-            </script>).html_safe),
+            turbo_stream.action(:redirect, account_path(account)),
             *flash_notification_stream_items
           ]
         end
