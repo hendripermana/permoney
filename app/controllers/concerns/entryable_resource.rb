@@ -49,21 +49,18 @@ module EntryableResource
 
         # CORRECT OPTIMISTIC BALANCE CALCULATION FOR DELETE
         # Deleting a transaction should REVERSE its original effect on balance
-        # Entry amount convention:
+        # Entry amount convention (from Balance::ForwardCalculator):
         #   - Negative amount = income (originally increased asset, decreased liability)
         #   - Positive amount = expense (originally decreased asset, increased liability)
         #
-        # When DELETING:
-        # - Delete expense (+amount) on asset: should INCREASE balance (reverse the decrease)
-        # - Delete income (-amount) on asset: should DECREASE balance (reverse the increase)
-        # - Delete expense (+amount) on liability: should DECREASE balance (reverse the increase)
-        # - Delete payment (-amount) on liability: should INCREASE balance (reverse the decrease)
+        # When CREATING: balance_change = -entry_amount * flows_factor
+        # When DELETING: balance_change = entry_amount * flows_factor (reverses CREATE)
         #
-        # Formula: REVERSE the original flows_factor effect
-        # CRITICAL: Match flows_factor convention from Balance::ForwardCalculator
+        # Examples for ASSET (flows_factor=1):
+        # - Delete expense (+100): balance_change = +100 → balance INCREASES ✓ (reverses decrease)
+        # - Delete income (-200): balance_change = -200 → balance DECREASES ✓ (reverses increase)
         flows_factor = account.asset? ? 1 : -1
-        # When deleting, we reverse the effect, so negate the balance change
-        balance_change = -(entry_amount * flows_factor)
+        balance_change = entry_amount * flows_factor  # Reverses the negated CREATE effect
         new_balance = account.balance + balance_change
 
         Rails.logger.info(

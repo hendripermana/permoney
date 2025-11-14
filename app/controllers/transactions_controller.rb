@@ -89,21 +89,21 @@ class TransactionsController < ApplicationController
          account.balances.any?
 
         # CORRECT OPTIMISTIC BALANCE CALCULATION
-        # Entry amount convention:
+        # Entry amount convention (from Balance::ForwardCalculator):
         #   - Negative amount = income (increases asset value, decreases liability)
         #   - Positive amount = expense (decreases asset value, increases liability)
         #
+        # Balance::ForwardCalculator.signed_entry_flows does:
+        #   account.asset? ? -entry_flows : entry_flows
+        #
         # For ASSET accounts (checking, savings):
-        #   - Expense (+amount): balance should DECREASE → multiply by -1
-        #   - Income (-amount): balance should INCREASE → multiply by -1
+        #   - Expense (+100): signed_flows = -100 → balance DECREASES by 100 ✓
+        #   - Income (-200): signed_flows = -(-200) = +200 → balance INCREASES by 200 ✓
         # For LIABILITY accounts (credit card, loan):
-        #   - Expense (+amount): balance should INCREASE (more debt) → multiply by +1
-        #   - Payment (-amount): balance should DECREASE (less debt) → multiply by +1
-        # CRITICAL: Match flows_factor convention from Balance::ForwardCalculator
-        # Asset accounts: flows_factor = 1 (inflows increase balance)
-        # Liability accounts: flows_factor = -1 (inflows decrease debt)
+        #   - Expense (+100): signed_flows = +100 → balance INCREASES by 100 (more debt) ✓
+        #   - Payment (-200): signed_flows = -200 → balance DECREASES by 200 (less debt) ✓
         flows_factor = account.asset? ? 1 : -1
-        balance_change = entry_amount * flows_factor
+        balance_change = -entry_amount * flows_factor  # CRITICAL: Must negate entry_amount!
         new_balance = account.balance + balance_change
 
         Rails.logger.info(
@@ -204,11 +204,13 @@ class TransactionsController < ApplicationController
         # For editing, we need to:
         # 1. Remove effect of old amount
         # 2. Add effect of new amount
-        # CRITICAL: Match flows_factor convention from Balance::ForwardCalculator
+        # CRITICAL: Match Balance::ForwardCalculator.signed_entry_flows convention
+        #   account.asset? ? -entry_flows : entry_flows
         flows_factor = new_account.asset? ? 1 : -1
 
-        old_balance_change = old_amount * flows_factor
-        new_balance_change = new_amount * flows_factor
+        # CRITICAL: Must negate entry_amount to match Balance calculator
+        old_balance_change = -old_amount * flows_factor
+        new_balance_change = -new_amount * flows_factor
         balance_delta = new_balance_change - old_balance_change
 
         optimistic_balance = new_account.balance + balance_delta
