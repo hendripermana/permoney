@@ -69,6 +69,7 @@ Rails.application.routes.draw do
   namespace :settings do
     resource :profile, only: [ :show, :destroy ]
     resource :preferences, only: :show
+    resource :password, only: [ :edit, :update ]
     resource :hosting, only: %i[show update] do
       delete :clear_cache, on: :collection
     end

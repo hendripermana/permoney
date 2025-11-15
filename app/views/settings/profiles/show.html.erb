@@ -25,6 +25,22 @@
   <% end %>
 <% end %>
 
+<%= settings_section title: "Security", subtitle: "Manage your password and account security" do %>
+  <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+    <div class="w-full md:w-2/3">
+      <h3 class="font-medium text-primary">Password</h3>
+      <p class="text-secondary text-sm">Update your password to keep your account secure</p>
+    </div>
+
+    <%= render DS::Button.new(
+      text: "Change Password",
+      variant: "secondary",
+      href: edit_settings_password_path,
+      icon: "lock"
+    ) %>
+  </div>
+<% end %>
+
 <%= settings_section title: t(".household_title"), subtitle: t(".household_subtitle") do %>
   <div class="space-y-4">
     <%= styled_form_with model: Current.user, class: "space-y-4", data: { controller: "auto-submit-form" } do |form| %>
