@@ -74,15 +74,86 @@ class TransactionsController < ApplicationController
     @entry = account.entries.new(entry_params)
 
     if @entry.save
+      # OPTIMISTIC UPDATE: Immediate balance update for smooth UI experience
+      # This prevents delay while waiting for async sync job
+      entry_amount = @entry.amount
+      entry_date = @entry.date
+      entry_currency = @entry.currency
+
+      # Only do optimistic update if:
+      # 1. Entry is in account's native currency (avoid complex conversion)
+      # 2. Entry is recent (within last 30 days) for safety
+      # 3. Account has balances (avoid edge cases with new accounts)
+      if entry_currency == account.currency &&
+         entry_date >= 30.days.ago.to_date &&
+         account.balances.any?
+
+        # CORRECT OPTIMISTIC BALANCE CALCULATION
+        # Entry amount convention (from Balance::ForwardCalculator):
+        #   - Negative amount = income (increases asset value, decreases liability)
+        #   - Positive amount = expense (decreases asset value, increases liability)
+        #
+        # Balance::ForwardCalculator.signed_entry_flows does:
+        #   account.asset? ? -entry_flows : entry_flows
+        #
+        # For ASSET accounts (checking, savings):
+        #   - Expense (+100): signed_flows = -100 → balance DECREASES by 100 ✓
+        #   - Income (-200): signed_flows = -(-200) = +200 → balance INCREASES by 200 ✓
+        # For LIABILITY accounts (credit card, loan):
+        #   - Expense (+100): signed_flows = +100 → balance INCREASES by 100 (more debt) ✓
+        #   - Payment (-200): signed_flows = -200 → balance DECREASES by 200 (less debt) ✓
+        flows_factor = account.asset? ? 1 : -1
+        balance_change = -entry_amount * flows_factor  # CRITICAL: Must negate entry_amount!
+        new_balance = account.balance + balance_change
+
+        Rails.logger.info(
+          "[Optimistic Update] Account #{account.id} (#{account.classification}): " \
+          "balance #{account.balance} + (#{entry_amount} * #{flows_factor}) = #{new_balance}"
+        )
+
+        # Update account balance immediately (optimistic update)
+        # ARCHITECTURE: Only update Account.balance (simple column)
+        # Do NOT update Balance records - they have PostgreSQL generated columns
+        # (end_balance, end_cash_balance, etc.) that are auto-calculated from flows
+        # The async sync job will properly recalculate Balance records with detailed flows
+        account.update_columns(
+          balance: new_balance,
+          updated_at: Time.current
+        )
+
+        # Broadcast immediate update to UI via Turbo
+        account.broadcast_replace_to(
+          account.family,
+          target: "account_#{account.id}",
+          partial: "accounts/account",
+          locals: { account: account.reload }
+        )
+      end
+
+      # Trigger debounced sync for accurate recalculation
+      # Debouncing prevents sync flooding when creating multiple transactions
       @entry.sync_account_later
+
       @entry.lock_saved_attributes!
       @entry.transaction.lock_attr!(:tag_ids) if @entry.transaction.tags.any?
 
-      flash[:notice] = "Transaction created"
-
       respond_to do |format|
-        format.html { redirect_back_or_to account_path(@entry.account) }
-        format.turbo_stream { stream_redirect_back_or_to(account_path(@entry.account)) }
+        format.html do
+          flash[:notice] = "Transaction created"
+          redirect_back_or_to account_path(@entry.account)
+        end
+
+        # TURBO STREAM: Update specific page elements WITHOUT redirect
+        # This prevents flicker from page reload showing stale balance
+        # Optimistic update already changed balance, just need to update UI
+        format.turbo_stream do
+          flash[:notice] = "Transaction created"
+          render turbo_stream: [
+            turbo_stream.update("modal", ""),  # Close modal
+            turbo_stream.action(:refresh),  # Refresh page to show new transaction
+            *flash_notification_stream_items
+          ]
+        end
       end
     else
       # Re-render form with errors (stays in modal)
