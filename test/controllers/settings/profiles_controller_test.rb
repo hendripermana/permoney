@@ -64,4 +64,12 @@ class Settings::ProfilesControllerTest < ActionDispatch::IntegrationTest
     assert_raises(ActiveRecord::RecordNotFound) { User.find(@member.id) }
     assert_raises(ActiveRecord::RecordNotFound) { Invitation.find(invitation.id) }
   end
+
+  test "profile security section links to change password settings" do
+    sign_in @admin
+
+    get settings_profile_path
+
+    assert_select "a[href='#{edit_settings_password_path}']", text: "Change Password"
+  end
 end
