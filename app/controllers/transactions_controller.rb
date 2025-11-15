@@ -137,20 +137,19 @@ class TransactionsController < ApplicationController
       @entry.lock_saved_attributes!
       @entry.transaction.lock_attr!(:tag_ids) if @entry.transaction.tags.any?
 
+      flash[:notice] = "Transaction created"
+
       respond_to do |format|
         format.html do
-          flash[:notice] = "Transaction created"
           redirect_back_or_to account_path(@entry.account)
         end
 
-        # TURBO STREAM: Update specific page elements WITHOUT redirect
-        # This prevents flicker from page reload showing stale balance
-        # Optimistic update already changed balance, just need to update UI
+        # TURBO STREAM: Close modal + redirect (keeps optimistic balance)
+        # The optimistic update already changed the balance, redirect shows correct value
         format.turbo_stream do
-          flash[:notice] = "Transaction created"
           render turbo_stream: [
-            turbo_stream.update("modal", ""),  # Close modal
-            turbo_stream.action(:refresh),  # Refresh page to show new transaction
+            turbo_stream.update("modal", ""),
+            stream_redirect_back_or_to(account_path(@entry.account)),
             *flash_notification_stream_items
           ]
         end
