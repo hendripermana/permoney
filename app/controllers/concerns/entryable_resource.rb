@@ -30,6 +30,33 @@ module EntryableResource
 
   def destroy
     account = @entry.account
+    
+    # OPTIMISTIC UPDATE: Immediate balance reversal for smooth UI
+    # Calculate the balance change that will be reversed when entry is deleted
+    entry_amount = @entry.amount
+    entry_date = @entry.date
+    entry_currency = @entry.currency
+
+    # Only do optimistic update if entry is recent and in account currency
+    if entry_currency == account.currency &&
+       entry_date >= 30.days.ago.to_date &&
+       account.balances.any?
+
+      # REVERSE the balance change (opposite of create)
+      # Entry being deleted means we UNDO its effect on balance
+      flows_factor = account.asset? ? 1 : -1
+      balance_change = entry_amount * flows_factor  # Note: NO negation (undoing the original change)
+      new_balance = account.balance + balance_change
+
+      Rails.logger.info(
+        "[Optimistic Delete] Account #{account.id}: " \
+        "entry_amount=#{entry_amount}, " \
+        "balance_change=#{balance_change}, " \
+        "old=#{account.balance}, new=#{new_balance}"
+      )
+
+      account.update_column(:balance, new_balance)
+    end
 
     @entry.destroy!
     @entry.sync_account_later
