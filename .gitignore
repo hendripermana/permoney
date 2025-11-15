@@ -101,7 +101,8 @@ tasks.json
 .taskmaster/reports/
 .taskmaster/state.json
 *.mcp.json
-scripts/
+scripts/*
+!scripts/manual_sync_affected_accounts.rb
 .cursor/mcp.json
 .taskmasterconfig
 .windsurfrules

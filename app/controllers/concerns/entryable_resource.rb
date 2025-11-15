@@ -30,7 +30,7 @@ module EntryableResource
 
   def destroy
     account = @entry.account
-    
+
     # OPTIMISTIC UPDATE: Immediate balance reversal for smooth UI
     # Calculate the balance change that will be reversed when entry is deleted
     entry_amount = @entry.amount
