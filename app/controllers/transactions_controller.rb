@@ -149,7 +149,7 @@ class TransactionsController < ApplicationController
         format.turbo_stream do
           render turbo_stream: [
             turbo_stream.update("modal", ""),
-            stream_redirect_back_or_to(account_path(@entry.account)),
+            build_stream_redirect_back_or_to(account_path(@entry.account)),
             *flash_notification_stream_items
           ]
         end
