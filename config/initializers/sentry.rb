@@ -5,6 +5,9 @@ if defined?(Sentry)
     config.enabled_environments = %w[production staging]
     config.environment = Rails.env
 
+    # Sidekiq cron/scheduler auto-discovery (Sentry cron monitoring)
+    config.enabled_patches += [ :sidekiq_cron, :sidekiq_scheduler ]
+
     # Sampling rates (Phase 1 optimization)
     config.sample_rate = 1.0  # 100% error capture
     config.traces_sample_rate = 0.8  # 80% transaction traces
