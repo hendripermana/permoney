@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2025_11_07_090000) do
+ActiveRecord::Schema[8.1].define(version: 2025_11_10_103641) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -876,7 +876,8 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_07_090000) do
     t.integer "expected_day_of_month", null: false
     t.uuid "family_id", null: false
     t.date "last_occurrence_date", null: false
-    t.uuid "merchant_id", null: false
+    t.uuid "merchant_id"
+    t.string "name"
     t.date "next_expected_date", null: false
     t.integer "occurrence_count", default: 0, null: false
     t.string "status", default: "active", null: false
