@@ -64,14 +64,15 @@
                   </td>
                   <td class="text-right py-3 px-4">
                     <span class="font-semibold text-success">
-                      +<%= Money.new(items.sum(&:amount), Current.family.currency).format %>
+                      +<%= Money.new(items.sum { |item| item[:amount] }, Current.family.currency).format %>
                     </span>
                   </td>
                   <td class="text-right py-3 px-4 text-tertiary">
                     <%= items.length %>
                   </td>
                   <td class="text-right py-3 pl-4 text-secondary">
-                    <% avg = items.sum(&:amount) / items.length %>
+                    <% total_amount = items.sum { |item| item[:amount] } %>
+                    <% avg = items.length > 0 ? total_amount / items.length : 0 %>
                     <%= Money.new(avg, Current.family.currency).format %>
                   </td>
                 </tr>
@@ -84,7 +85,7 @@
           <div class="text-right">
             <p class="text-xs text-tertiary mb-1"><%= t("reports.transactions.total_income") %></p>
             <p class="text-lg font-semibold text-success">
-              +<%= Money.new(transactions[:income].sum { |_, items| items.sum(&:amount) }, Current.family.currency).format %>
+              +<%= Money.new(transactions[:income].sum { |_, items| items.sum { |item| item[:amount] } }, Current.family.currency).format %>
             </p>
           </div>
         </div>
@@ -135,14 +136,15 @@
                   </td>
                   <td class="text-right py-3 px-4">
                     <span class="font-semibold text-danger">
-                      -<%= Money.new(items.sum(&:amount).abs, Current.family.currency).format %>
+                      -<%= Money.new(items.sum { |item| item[:amount] }.abs, Current.family.currency).format %>
                     </span>
                   </td>
                   <td class="text-right py-3 px-4 text-tertiary">
                     <%= items.length %>
                   </td>
                   <td class="text-right py-3 pl-4 text-secondary">
-                    <% avg = items.sum(&:amount).abs / items.length %>
+                    <% total_amount = items.sum { |item| item[:amount] } %>
+                    <% avg = items.length > 0 ? (total_amount.abs / items.length) : 0 %>
                     <%= Money.new(avg, Current.family.currency).format %>
                   </td>
                 </tr>
@@ -155,7 +157,7 @@
           <div class="text-right">
             <p class="text-xs text-tertiary mb-1"><%= t("reports.transactions.total_expenses") %></p>
             <p class="text-lg font-semibold text-danger">
-              -<%= Money.new(transactions[:expense].sum { |_, items| items.sum(&:amount).abs }, Current.family.currency).format %>
+              -<%= Money.new(transactions[:expense].sum { |_, items| items.sum { |item| item[:amount] } }.abs, Current.family.currency).format %>
             </p>
           </div>
         </div>
