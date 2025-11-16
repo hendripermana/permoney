@@ -1,54 +1,103 @@
 <%# locals: (budget_category:) %>
 
 <%= turbo_frame_tag dom_id(budget_category), class: "w-full" do %>
-  <%= link_to budget_budget_category_path(budget_category.budget, budget_category), class: "group w-full p-4 flex items-center gap-3 bg-container", data: { turbo_frame: "drawer" } do %>
-
-    <% if budget_category.initialized? %>
-      <div class="w-10 h-10 group-hover:scale-105 transition-all duration-300">
-        <%= render "budget_categories/budget_category_donut", budget_category: budget_category %>
-      </div>
-    <% else %>
-      <div class="w-8 h-8 group-hover:scale-105 transition-all duration-300 rounded-full flex justify-center items-center" style="color: <%= budget_category.category.color %>">
-        <% if budget_category.category.lucide_icon %>
-          <%= icon(budget_category.category.lucide_icon, color: "current") %>
+  <%= link_to budget_budget_category_path(budget_category.budget, budget_category), class: "group w-full p-4 rounded-lg bg-container hover:bg-surface-hover transition-colors", data: { turbo_frame: "drawer" } do %>
+    <div class="flex items-start justify-between gap-4">
+      <%# Left: Icon + Name %>
+      <div class="flex items-start gap-3 flex-1">
+        <% if budget_category.initialized? %>
+          <div class="w-10 h-10 mt-0.5 group-hover:scale-105 transition-all duration-300 flex-shrink-0">
+            <%= render "budget_categories/budget_category_donut", budget_category: budget_category %>
+          </div>
         <% else %>
-          <%= render DS::FilledIcon.new(
-            variant: :text,
-            hex_color: budget_category.category.color,
-            text: budget_category.category.name,
-            size: "sm",
-            rounded: true
-          ) %>
+          <div class="w-10 h-10 mt-0.5 group-hover:scale-105 transition-all duration-300 rounded-full flex justify-center items-center flex-shrink-0" style="color: <%= budget_category.category.color %>">
+            <% if budget_category.category.lucide_icon %>
+              <%= icon(budget_category.category.lucide_icon, color: "current") %>
+            <% else %>
+              <%= render DS::FilledIcon.new(
+                variant: :text,
+                hex_color: budget_category.category.color,
+                text: budget_category.category.name,
+                size: "sm",
+                rounded: true
+              ) %>
+            <% end %>
+          </div>
         <% end %>
+
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 mb-1">
+            <p class="text-sm font-medium text-primary truncate"><%= budget_category.category.name %></p>
+            
+            <%# Status Badge %>
+            <% if budget_category.initialized? %>
+              <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 <%= 
+                budget_category.over_budget? ? "bg-danger/10 text-danger" : 
+                budget_category.near_limit? ? "bg-warning/10 text-warning" : 
+                "bg-success/10 text-success"
+              %>">
+                <% if budget_category.over_budget? %>
+                  <%= icon("alert-circle", class: "w-3 h-3") %>
+                  <%= t("budget_category.over_budget") %>
+                <% elsif budget_category.near_limit? %>
+                  <%= icon("alert-triangle", class: "w-3 h-3") %>
+                  <%= t("budget_category.near_limit") %>
+                <% else %>
+                  <%= icon("check-circle-2", class: "w-3 h-3") %>
+                  <%= t("budget_category.on_track") %>
+                <% end %>
+              </span>
+            <% end %>
+          </div>
+
+          <% if budget_category.initialized? %>
+            <%# Suggested Daily Spending %>
+            <% if budget_category.suggested_daily_spending %>
+              <p class="text-xs text-secondary">
+                <%= t("budget_category.suggested_daily", 
+                  amount: format_money(budget_category.suggested_daily_spending[:amount]),
+                  days: budget_category.suggested_daily_spending[:days_remaining]
+                ) %>
+              </p>
+            <% elsif budget_category.available_to_spend.negative? %>
+              <p class="text-xs font-medium text-danger">
+                <%= format_money(budget_category.available_to_spend_money.abs) %> <%= t("budget_category.over") %>
+              </p>
+            <% elsif budget_category.available_to_spend.zero? %>
+              <p class="text-xs font-medium text-warning">
+                <%= format_money(budget_category.available_to_spend_money) %> <%= t("budget_category.remaining") %>
+              </p>
+            <% else %>
+              <p class="text-xs text-secondary">
+                <%= format_money(budget_category.available_to_spend_money) %> <%= t("budget_category.remaining") %>
+              </p>
+            <% end %>
+          <% else %>
+            <p class="text-xs text-secondary">
+              <%= budget_category.median_monthly_expense_money.format %> avg
+            </p>
+          <% end %>
+        </div>
       </div>
-    <% end %>
 
-    <div>
-      <p class="text-sm font-medium text-primary"><%= budget_category.category.name %></p>
+      <%# Right: Progress + Amount %>
+      <div class="text-right flex-shrink-0">
+        <p class="text-sm font-medium text-primary mb-1"><%= format_money(budget_category.actual_spending_money) %></p>
 
-      <% if budget_category.initialized? %>
-        <% if budget_category.available_to_spend.negative? %>
-          <p class="text-sm font-medium text-red-500"><%= format_money(budget_category.available_to_spend_money.abs) %> over</p>
-        <% elsif budget_category.available_to_spend.zero? %>
-          <p class="text-sm font-medium <%= budget_category.budgeted_spending.positive? ? "text-orange-500" : "text-secondary" %>">
-            <%= format_money(budget_category.available_to_spend_money) %> left
+        <% if budget_category.initialized? %>
+          <% percent = budget_category.bar_width_percent %>
+          <div class="w-16 h-1 bg-tertiary/20 rounded-full overflow-hidden mb-1">
+            <div class="h-full transition-all duration-300 <%= 
+              percent >= 100 ? "bg-danger" : 
+              percent >= 80 ? "bg-warning" : 
+              "bg-success"
+            %>" style="width: <%= [percent, 100].min %>%"></div>
+          </div>
+          <p class="text-xs text-secondary">
+            <%= percent.round(0) %>% of <%= format_money(budget_category.budgeted_spending_money) %>
           </p>
-        <% else %>
-          <p class="text-sm text-secondary font-medium"><%= format_money(budget_category.available_to_spend_money) %> left</p>
         <% end %>
-      <% else %>
-        <p class="text-sm text-secondary font-medium">
-          <%= budget_category.median_monthly_expense_money.format %> avg
-        </p>
-      <% end %>
-    </div>
-
-    <div class="ml-auto text-right">
-      <p class="text-sm font-medium text-primary"><%= format_money(budget_category.actual_spending_money) %></p>
-
-      <% if budget_category.initialized? %>
-        <p class="text-sm text-secondary">from <%= format_money(budget_category.budgeted_spending_money) %></p>
-      <% end %>
+      </div>
     </div>
   <% end %>
 <% end %>

@@ -1,0 +1,17 @@
+<div class="text-center py-12">
+  <%= icon("info", class: "w-12 h-12 text-tertiary mx-auto mb-4") %>
+  <h3 class="font-medium text-primary mb-2">
+    <%= t("reports.empty_state.title") %>
+  </h3>
+  <p class="text-tertiary text-sm mb-4 max-w-md mx-auto">
+    <%= t("reports.empty_state.description") %>
+  </p>
+  <div class="flex items-center justify-center gap-3 mt-6">
+    <%= link_to t("reports.empty_state.add_transaction"),
+                new_transaction_path,
+                class: "inline-flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:opacity-90 transition-opacity" %>
+    <%= link_to t("reports.empty_state.add_account"),
+                new_account_path,
+                class: "inline-flex items-center gap-2 px-4 py-2 bg-surface-inset text-secondary rounded-lg text-sm font-medium hover:bg-surface-hover transition-colors" %>
+  </div>
+</div>

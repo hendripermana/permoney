@@ -1,0 +1,180 @@
+<div>
+  <h2 class="text-lg font-medium text-primary mb-6">
+    <%= t("reports.transactions.title") %>
+  </h2>
+
+  <% if Current.family.transactions.any? %>
+    <%# Export Options Bar %>
+    <div class="flex gap-3 mb-6 flex-wrap">
+      <a href="<%= export_transactions_reports_path(params.permit(:start_date, :end_date, :period_type)) %>"
+         class="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-container border border-tertiary hover:bg-surface-hover text-sm font-medium text-primary transition-colors"
+         data-turbo="false">
+        <%= icon("download", class: "w-4 h-4") %>
+        <%= t("reports.transactions.export_csv") %>
+      </a>
+
+      <button data-action="click->reports-transactions#openGoogleSheets"
+              class="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-container border border-tertiary hover:bg-surface-hover text-sm font-medium text-primary transition-colors">
+        <%= icon("sheet", class: "w-4 h-4") %>
+        <%= t("reports.transactions.export_sheets") %>
+      </button>
+    </div>
+
+    <%# Income Transactions %>
+    <% if transactions[:income].present? %>
+      <div class="mb-8">
+        <div class="flex items-center gap-2 mb-4">
+          <%= icon("trending-up", class: "w-5 h-5 text-success") %>
+          <h3 class="text-sm font-medium text-primary">
+            <%= t("reports.transactions.income_title") %>
+          </h3>
+          <span class="ml-auto text-xs text-tertiary">
+            <%= pluralize(transactions[:income].sum { |_, items| items.length }, "transaction") %>
+          </span>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-tertiary">
+                <th class="text-left py-2 pr-4 font-medium text-secondary">
+                  <%= t("reports.transactions.category") %>
+                </th>
+                <th class="text-right py-2 px-4 font-medium text-secondary">
+                  <%= t("reports.transactions.amount") %>
+                </th>
+                <th class="text-right py-2 px-4 font-medium text-secondary">
+                  <%= t("reports.transactions.count") %>
+                </th>
+                <th class="text-right py-2 pl-4 font-medium text-secondary">
+                  <%= t("reports.transactions.avg_amount") %>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <% transactions[:income].each do |category, items| %>
+                <tr class="border-b border-tertiary/50 hover:bg-surface-hover transition-colors">
+                  <td class="py-3 pr-4">
+                    <div class="flex items-center gap-2">
+                      <span class="w-2 h-2 rounded-full bg-success"></span>
+                      <span class="text-primary font-medium">
+                        <%= category.name %>
+                      </span>
+                    </div>
+                  </td>
+                  <td class="text-right py-3 px-4">
+                    <span class="font-semibold text-success">
+                      +<%= Money.new(items.sum(&:amount), Current.family.currency).format %>
+                    </span>
+                  </td>
+                  <td class="text-right py-3 px-4 text-tertiary">
+                    <%= items.length %>
+                  </td>
+                  <td class="text-right py-3 pl-4 text-secondary">
+                    <% avg = items.sum(&:amount) / items.length %>
+                    <%= Money.new(avg, Current.family.currency).format %>
+                  </td>
+                </tr>
+              <% end %>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="mt-4 flex justify-end">
+          <div class="text-right">
+            <p class="text-xs text-tertiary mb-1"><%= t("reports.transactions.total_income") %></p>
+            <p class="text-lg font-semibold text-success">
+              +<%= Money.new(transactions[:income].sum { |_, items| items.sum(&:amount) }, Current.family.currency).format %>
+            </p>
+          </div>
+        </div>
+      </div>
+    <% end %>
+
+    <%# Expense Transactions %>
+    <% if transactions[:expense].present? %>
+      <div class="mb-8">
+        <div class="flex items-center gap-2 mb-4">
+          <%= icon("trending-down", class: "w-5 h-5 text-danger") %>
+          <h3 class="text-sm font-medium text-primary">
+            <%= t("reports.transactions.expense_title") %>
+          </h3>
+          <span class="ml-auto text-xs text-tertiary">
+            <%= pluralize(transactions[:expense].sum { |_, items| items.length }, "transaction") %>
+          </span>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-tertiary">
+                <th class="text-left py-2 pr-4 font-medium text-secondary">
+                  <%= t("reports.transactions.category") %>
+                </th>
+                <th class="text-right py-2 px-4 font-medium text-secondary">
+                  <%= t("reports.transactions.amount") %>
+                </th>
+                <th class="text-right py-2 px-4 font-medium text-secondary">
+                  <%= t("reports.transactions.count") %>
+                </th>
+                <th class="text-right py-2 pl-4 font-medium text-secondary">
+                  <%= t("reports.transactions.avg_amount") %>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <% transactions[:expense].each do |category, items| %>
+                <tr class="border-b border-tertiary/50 hover:bg-surface-hover transition-colors">
+                  <td class="py-3 pr-4">
+                    <div class="flex items-center gap-2">
+                      <span class="w-2 h-2 rounded-full bg-danger"></span>
+                      <span class="text-primary font-medium">
+                        <%= category.name %>
+                      </span>
+                    </div>
+                  </td>
+                  <td class="text-right py-3 px-4">
+                    <span class="font-semibold text-danger">
+                      -<%= Money.new(items.sum(&:amount).abs, Current.family.currency).format %>
+                    </span>
+                  </td>
+                  <td class="text-right py-3 px-4 text-tertiary">
+                    <%= items.length %>
+                  </td>
+                  <td class="text-right py-3 pl-4 text-secondary">
+                    <% avg = items.sum(&:amount).abs / items.length %>
+                    <%= Money.new(avg, Current.family.currency).format %>
+                  </td>
+                </tr>
+              <% end %>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="mt-4 flex justify-end">
+          <div class="text-right">
+            <p class="text-xs text-tertiary mb-1"><%= t("reports.transactions.total_expenses") %></p>
+            <p class="text-lg font-semibold text-danger">
+              -<%= Money.new(transactions[:expense].sum { |_, items| items.sum(&:amount).abs }, Current.family.currency).format %>
+            </p>
+          </div>
+        </div>
+      </div>
+    <% end %>
+  <% else %>
+    <div class="text-center py-8 text-tertiary">
+      <%= t("reports.transactions.no_data") %>
+    </div>
+  <% end %>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const openGoogleSheetsBtn = document.querySelector('[data-action="click->reports-transactions#openGoogleSheets"]');
+  if (openGoogleSheetsBtn) {
+    openGoogleSheetsBtn.addEventListener('click', function() {
+      window.location.href = '<%= report_google_sheets_instructions_path(params.permit(:start_date, :end_date, :period_type)) %>';
+    });
+  }
+});
+</script>

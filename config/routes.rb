@@ -112,6 +112,11 @@ Rails.application.routes.draw do
     resources :budget_categories, only: %i[index show update]
   end
 
+  resources :reports, only: %i[index] do
+    get :export_transactions, on: :collection
+    get :google_sheets_instructions, on: :collection
+  end
+
   resources :family_merchants, only: %i[index new create edit update destroy]
 
   resources :transfers, only: %i[new create destroy show update]

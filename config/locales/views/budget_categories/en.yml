@@ -1,0 +1,8 @@
+en:
+  budget_category:
+    on_track: "On Track"
+    near_limit: "Near Limit"
+    over_budget: "Over Budget"
+    remaining: "remaining"
+    over: "over"
+    suggested_daily: "~%{amount} daily (%{days} days left)"
