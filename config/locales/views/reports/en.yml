@@ -110,6 +110,8 @@ en:
       step_1: "Step 1: Copy the Formula"
       step_1_description: "Copy the formula below to import your transaction data into Google Sheets:"
       replace_api_key: "Replace YOUR_API_KEY with your actual API key from Settings"
+      security_warning_title: "Security: Use Short-lived or Restricted Keys"
+      security_warning_description: "Do not use long-lived API keys in shared Google Sheets. Create a restricted API key with minimal permissions or use a short-lived key. Anyone with access to the sheet can see the API key in the formula."
       step_2: "Step 2: Paste into Google Sheets"
       step_2_description: "Create a new cell in your Google Sheet and paste the formula:"
       formula_example: '=IMPORTDATA("https://yourapp.com/api/v1/reports/export_transactions?api_key=YOUR_KEY&format=csv")'
@@ -123,8 +125,6 @@ en:
       setup_step_1: "Go to Settings → API Keys"
       setup_step_2: "Click 'Create API Key' and configure permissions"
       setup_step_3: "Copy the API key and return here to see the Google Sheets formula"
-      go_to_settings: "Go to Settings"
-      copy_formula: "Copy Formula"
       go_to_settings: "Go to Settings"
       copy_formula: "Copy Formula to Clipboard"
 

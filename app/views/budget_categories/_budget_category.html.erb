@@ -51,7 +51,7 @@
           </div>
 
           <% if budget_category.initialized? %>
-            <%# Suggested Daily Spending -->
+            <%# Suggested Daily Spending %>
             <% if budget_category.suggested_daily_spending %>
               <p class="text-xs text-secondary">
                 <%= t("budget_category.suggested_daily", 
@@ -80,7 +80,7 @@
         </div>
       </div>
 
-      <%# Right: Progress + Amount -->
+      <%# Right: Progress + Amount %>
       <div class="text-right flex-shrink-0">
         <p class="text-sm font-medium text-primary mb-1"><%= format_money(budget_category.actual_spending_money) %></p>
 

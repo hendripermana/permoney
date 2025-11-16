@@ -14,6 +14,12 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     @category.update(family: @family)
   end
 
+  def sign_out
+    @user.sessions.each do |session|
+      delete session_path(session)
+    end
+  end
+
   test "index renders successfully" do
     get reports_path
     assert_response :success
@@ -48,9 +54,9 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "index requires authentication" do
-    sign_out @user
+    sign_out
     get reports_path
-    assert_redirected_to new_user_session_path
+    assert_redirected_to new_session_path
   end
 
   test "export_transactions renders CSV" do
@@ -60,9 +66,9 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "export_transactions requires authentication" do
-    sign_out @user
+    sign_out
     get export_transactions_reports_path
-    assert_redirected_to new_user_session_path
+    assert_redirected_to new_session_path
   end
 
   test "google_sheets_instructions renders successfully" do
@@ -71,8 +77,8 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "google_sheets_instructions requires authentication" do
-    sign_out @user
+    sign_out
     get google_sheets_instructions_reports_path
-    assert_redirected_to new_user_session_path
+    assert_redirected_to new_session_path
   end
 end

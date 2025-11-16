@@ -18,7 +18,7 @@
     </div>
 
     <div class="p-6 space-y-6">
-      <% if api_key_present %>
+      <% if @api_key_present %>
         <%# API Key Setup Complete %>
         <div class="p-4 bg-success/10 border border-success rounded-lg">
           <div class="flex items-start gap-3">
@@ -43,12 +43,18 @@
           </p>
           <div class="bg-surface-inset rounded-lg p-4 mb-3">
             <code class="text-xs text-tertiary break-all">
-              <%= "=IMPORTDATA(\"#{report_export_url(format: :csv, api_key: "YOUR_API_KEY", start_date: @start_date, end_date: @end_date)}\")" %>
+              <%= "=IMPORTDATA(\"#{export_transactions_reports_url(format: :csv, api_key: "YOUR_API_KEY", start_date: @start_date, end_date: @end_date)}\")" %>
             </code>
           </div>
-          <p class="text-xs text-tertiary">
+          <p class="text-xs text-tertiary mb-2">
             <%= t("reports.google_sheets.replace_api_key") %>
           </p>
+          <div class="bg-warning/5 border border-warning/20 rounded p-3 mb-3">
+            <p class="text-xs text-warning font-medium mb-1">⚠️ <%= t("reports.google_sheets.security_warning_title") %></p>
+            <p class="text-xs text-secondary">
+              <%= t("reports.google_sheets.security_warning_description") %>
+            </p>
+          </div>
         </div>
 
         <div>
@@ -134,7 +140,7 @@
       <% end %>
     </div>
 
-    <% if api_key_present %>
+    <% if @api_key_present %>
       <div class="p-6 border-t border-tertiary bg-surface-inset flex gap-3">
         <button data-action="click->modal#copyFormula" class="flex-1 px-4 py-2 rounded-lg bg-primary text-white font-medium hover:bg-primary/90 transition-colors">
           <%= icon("copy", class: "w-4 h-4 inline mr-2") %>
