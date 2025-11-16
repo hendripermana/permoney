@@ -18,7 +18,7 @@
    - use latest stable versions of gems
    - always upgrade if you find deprecated gems or anything to latest stable version
 
-2. **🔍 ALWAYS USE CONTEXT7 AND EXA MCP** - Use Context7 MCP tool for up-to-date library documentation
+2. **🔍 ALWAYS USE FIRECRAWL, CONTEXT7 AND EXA MCP** - Use Firecrawl, exa, and Context7 MCP tool for up-to-date library documentation
    - Get latest Ruby on Rails component documentation
    - Get latest Shadcn/ui component documentation
    - Verify API changes and best practices

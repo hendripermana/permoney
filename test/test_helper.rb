@@ -9,6 +9,18 @@ require_relative "../config/environment"
 
 ENV["RAILS_ENV"] ||= "test"
 
+# Mock Redis for self-hosting Redis configuration check
+# In test environment, we don't need actual Redis connection
+Redis.singleton_class.prepend(Module.new do
+  def new(*args, **kwargs)
+    mock = Object.new
+    def mock.ping
+      "PONG"
+    end
+    mock
+  end
+end)
+
 # Set Plaid to sandbox mode for tests
 ENV["PLAID_ENV"] = "sandbox"
 ENV["PLAID_CLIENT_ID"] ||= "test_client_id"
