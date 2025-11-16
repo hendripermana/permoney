@@ -203,8 +203,8 @@ class ReportsController < ApplicationController
       transactions = transactions_for_date_range(@start_date, @end_date)
 
       # Group by type and category
-      income_by_category = {}
-      expense_by_category = {}
+      income_data = {}
+      expense_data = {}
 
       transactions.each do |entry|
         transaction = entry.entryable
@@ -212,19 +212,11 @@ class ReportsController < ApplicationController
         next unless category  # Skip if no category
 
         type = entry.amount.negative? ? "expense" : "income"
-        target_hash = type == "expense" ? expense_by_category : income_by_category
-        category_key = category.id
+        target_hash = type == "expense" ? expense_data : income_data
 
-        target_hash[category_key] ||= {
-          category_id: category.id,
-          category_name: category.name,
-          category_color: category.color,
-          amount: 0,
-          transactions: []
-        }
-
-        target_hash[category_key][:amount] += entry.amount.abs
-        target_hash[category_key][:transactions] << {
+        # Use category object as key so view can access .name, .color
+        target_hash[category] ||= []
+        target_hash[category] << {
           date: entry.created_at.to_date,
           amount: entry.amount.abs,
           description: transaction.try(:description) || category.name
@@ -232,8 +224,8 @@ class ReportsController < ApplicationController
       end
 
       {
-        income: income_by_category,
-        expense: expense_by_category
+        income: income_data,
+        expense: expense_data
       }
     end
 
@@ -314,18 +306,43 @@ class ReportsController < ApplicationController
       require "csv"
 
       CSV.generate do |csv|
-        csv << [ "Category", "Amount", "Type", "Percentage", "Transactions" ]
+        csv << [ "Category", "Amount", "Type", "Transaction Count" ]
 
-        transactions_data.each do |group|
-          # Sanitize category name to prevent CSV injection
-          category_name = sanitize_csv_field(group[:category_name])
+        # Process both income and expense data
+        all_rows = []
 
+        transactions_data[:income].each do |category, items|
+          total_amount = items.sum { |item| item[:amount] }
+          all_rows << {
+            category_name: sanitize_csv_field(category.name),
+            amount: total_amount,
+            type: "Income",
+            count: items.length
+          }
+        end
+
+        transactions_data[:expense].each do |category, items|
+          total_amount = items.sum { |item| item[:amount] }
+          all_rows << {
+            category_name: sanitize_csv_field(category.name),
+            amount: total_amount,
+            type: "Expense",
+            count: items.length
+          }
+        end
+
+        # Calculate total for percentage
+        total_sum = all_rows.sum { |row| row[:amount] }
+
+        # Write rows
+        all_rows.each do |row|
+          percentage = total_sum > 0 ? ((row[:amount].to_f / total_sum) * 100).round(1) : 0
           csv << [
-            category_name,
-            group[:total],
-            group[:type].titleize,
-            "#{((group[:total].to_f / transactions_data.sum { |g| g[:total] }) * 100).round(1)}%",
-            group[:count]
+            row[:category_name],
+            row[:amount],
+            row[:type],
+            "#{percentage}%",
+            row[:count]
           ]
         end
       end
