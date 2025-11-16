@@ -7,8 +7,8 @@ class FamilyMerchantsController < ApplicationController
       { text: "Merchants", icon: "store" }
     ]
 
-    # Show all merchants assigned to transactions (both FamilyMerchant and ProviderMerchant)
-    @family_merchants = Current.family.assigned_merchants.alphabetically
+    # Show all merchants for this family
+    @family_merchants = Current.family.merchants.alphabetically
 
     render layout: "settings"
   end
