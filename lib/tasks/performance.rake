@@ -22,7 +22,7 @@ namespace :performance do
   desc "Analyze slow queries from logs"
   task analyze_queries: :environment do
     puts "To analyze slow queries, run:"
-    puts "docker compose exec db psql -U postgres -d maybe_production -c \""
+    puts "docker compose exec db psql -U postgres -d permoney_production -c \""
     puts "SELECT query, calls, total_exec_time, mean_exec_time"
     puts "FROM pg_stat_statements"
     puts "ORDER BY mean_exec_time DESC"

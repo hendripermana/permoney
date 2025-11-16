@@ -23,8 +23,12 @@ if defined?(Sentry)
       "ActiveRecord::RecordNotFound"
     ]
 
-    # Release
-    config.release = ENV["GIT_COMMIT_SHA"] if ENV["GIT_COMMIT_SHA"]
+    # Release tagging (prefers explicit SENTRY_RELEASE, falls back to build commit)
+    release = ENV["SENTRY_RELEASE"].presence ||
+      ENV["BUILD_COMMIT_SHA"].presence ||
+      ENV["GIT_COMMIT_SHA"].presence
+
+    config.release = release if release
 
     # Enhanced context
     config.before_send = lambda do |event, hint|

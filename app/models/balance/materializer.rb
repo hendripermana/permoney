@@ -161,11 +161,26 @@ class Balance::Materializer
     end
 
     def purge_stale_balances
-      sorted_balances = @balances.sort_by(&:date)
-      oldest_calculated_balance_date = sorted_balances.first&.date
-      newest_calculated_balance_date = sorted_balances.last&.date
-      deleted_count = account.balances.delete_by("date < ? OR date > ?", oldest_calculated_balance_date, newest_calculated_balance_date)
-      Rails.logger.info("Purged #{deleted_count} stale balances") if deleted_count > 0
+      return if @balances.blank?
+
+      calculated_dates = @balances.map(&:date)
+      calculated_start = calculated_dates.min
+      calculated_end = calculated_dates.max
+
+      deleted_count =
+        if window_start_date.nil? && window_end_date.nil?
+          # Full rebuild: trim balances outside the newly calculated range
+          account.balances.delete_by("date < ? OR date > ?", calculated_start, calculated_end)
+        else
+          # Windowed recalculation: only purge stale rows inside the recalculated window
+          account.balances
+            .where("date >= ?", calculated_start)
+            .where("date <= ?", calculated_end)
+            .where.not(date: calculated_dates)
+            .delete_all
+        end
+
+      Rails.logger.info("Purged #{deleted_count} stale balances") if deleted_count.positive?
     end
 
     def calculator

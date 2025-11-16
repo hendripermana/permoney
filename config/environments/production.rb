@@ -183,10 +183,12 @@ Rails.application.configure do
   monitoring_logger = Rails.logger || ActiveSupport::Logger.new($stdout)
 
   # Only enable Skylight if API key is configured
-  if ENV["SKYLIGHT_AUTHENTICATION_TOKEN"].present?
+  skylight_token = ENV["SKYLIGHT_AUTHENTICATION_TOKEN"].presence || ENV["SKYLIGHT_AUTHENTICATION"].presence
+
+  if skylight_token
     config.skylight.environments = [ "production" ]
   else
-    monitoring_logger.info "Skylight disabled: SKYLIGHT_AUTHENTICATION_TOKEN not configured"
+    monitoring_logger.info "Skylight disabled: SKYLIGHT_AUTHENTICATION_TOKEN/SKYLIGHT_AUTHENTICATION not configured"
   end
 
   # Only enable OIDC if required environment variables are present

@@ -18,12 +18,12 @@ default: &default
 
 development:
   <<: *default
-  database: <%= ENV.fetch("POSTGRES_DB") { "permoney_development" } %>
+  database: <%= ENV["POSTGRES_DB_DEVELOPMENT"].presence || "permoney_development" %>
 
 test:
   <<: *default
-  database: <%= ENV.fetch("POSTGRES_DB") { "permoney_test" } %>
+  database: <%= ENV["POSTGRES_DB_TEST"].presence || "permoney_test" %>
 
 production:
   <<: *default
-  database: <%= ENV.fetch("POSTGRES_DB") { "permoney_production" } %>
+  database: <%= ENV["POSTGRES_DB_PRODUCTION"].presence || ENV["POSTGRES_DB"].presence || "permoney_production" %>

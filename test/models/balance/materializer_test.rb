@@ -134,6 +134,41 @@ class Balance::MaterializerTest < ActiveSupport::TestCase
     assert_balance_fields_persisted(expected_balances)
   end
 
+  test "windowed sync keeps historical balances outside recalculated window" do
+    # Existing historical balance before the recalculation window
+    historical_balance = create_balance(account: @account, date: 10.days.ago.to_date, balance: 4000, cash_balance: 4000)
+    existing_current_balance = create_balance(account: @account, date: Date.current, balance: 2500, cash_balance: 2500)
+
+    recalculated_balance = Balance.new(
+      date: Date.current,
+      balance: 2000,
+      cash_balance: 2000,
+      currency: "USD",
+      start_cash_balance: 2500,
+      start_non_cash_balance: 0,
+      cash_inflows: 0,
+      cash_outflows: 500,
+      non_cash_inflows: 0,
+      non_cash_outflows: 0,
+      net_market_flows: 0,
+      cash_adjustments: 0,
+      non_cash_adjustments: 0,
+      flows_factor: 1
+    )
+
+    Balance::ForwardCalculator.any_instance.expects(:calculate).returns([ recalculated_balance ])
+    Holding::Materializer.any_instance.expects(:materialize_holdings).returns([]).once
+
+    # Windowed run should not delete balances prior to the window start
+    assert_no_difference "@account.balances.count" do
+      Balance::Materializer.new(@account, strategy: :forward, window_start_date: Date.current).materialize_balances
+    end
+
+    assert @account.balances.exists?(historical_balance.id), "Historical balance outside the window should remain"
+    assert @account.balances.exists?(existing_current_balance.id), "Existing balance within the window should be updated, not removed"
+    assert_balance_fields_persisted([ recalculated_balance ])
+  end
+
   private
 
     def assert_balance_fields_persisted(expected_balances)
