@@ -1,7 +1,8 @@
 <% mobile_nav_items = [
   { name: "Home", path: root_path, icon: "pie-chart", icon_custom: false, active: page_active?(root_path) },
   { name: "Transactions", path: transactions_path, icon: "credit-card", icon_custom: false, active: page_active?(transactions_path) },
-  { name: "Budgets", path: budgets_path, icon: "map", icon_custom: false, active: page_active?(budgets_path) }
+  { name: "Budgets", path: budgets_path, icon: "map", icon_custom: false, active: page_active?(budgets_path) },
+  { name: "Reports", path: reports_path, icon: "chart-bar", icon_custom: false, active: page_active?(reports_path) }
 ] %>
 
 <% desktop_nav_items = mobile_nav_items.reject { |item| item[:mobile_only] } %>

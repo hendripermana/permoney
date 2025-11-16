@@ -1,0 +1,149 @@
+<div data-controller="modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+  <div class="bg-container rounded-xl shadow-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+    <div class="p-6 border-b border-tertiary">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-lg font-semibold text-primary">
+            <%= icon("sheet", class: "w-5 h-5 inline mr-2") %>
+            <%= t("reports.google_sheets.title") %>
+          </h2>
+          <p class="text-sm text-tertiary mt-1">
+            <%= t("reports.google_sheets.subtitle") %>
+          </p>
+        </div>
+        <button data-action="click->modal#close" class="text-tertiary hover:text-primary">
+          <%= icon("x", class: "w-5 h-5") %>
+        </button>
+      </div>
+    </div>
+
+    <div class="p-6 space-y-6">
+      <% if api_key_present %>
+        <%# API Key Setup Complete %>
+        <div class="p-4 bg-success/10 border border-success rounded-lg">
+          <div class="flex items-start gap-3">
+            <%= icon("check-circle", class: "w-5 h-5 text-success mt-0.5") %>
+            <div>
+              <p class="font-medium text-success">
+                <%= t("reports.google_sheets.api_enabled") %>
+              </p>
+              <p class="text-sm text-secondary mt-1">
+                <%= t("reports.google_sheets.api_ready") %>
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <h3 class="font-medium text-primary mb-3">
+            <%= t("reports.google_sheets.step_1") %>
+          </h3>
+          <p class="text-sm text-secondary mb-3">
+            <%= t("reports.google_sheets.step_1_description") %>
+          </p>
+          <div class="bg-surface-inset rounded-lg p-4 mb-3">
+            <code class="text-xs text-tertiary break-all">
+              <%= "=IMPORTDATA(\"#{report_export_url(format: :csv, api_key: "YOUR_API_KEY", start_date: @start_date, end_date: @end_date)}\")" %>
+            </code>
+          </div>
+          <p class="text-xs text-tertiary">
+            <%= t("reports.google_sheets.replace_api_key") %>
+          </p>
+        </div>
+
+        <div>
+          <h3 class="font-medium text-primary mb-3">
+            <%= t("reports.google_sheets.step_2") %>
+          </h3>
+          <p class="text-sm text-secondary mb-3">
+            <%= t("reports.google_sheets.step_2_description") %>
+          </p>
+          <div class="bg-surface-inset rounded-lg p-4">
+            <p class="text-xs font-mono text-tertiary">
+              <%= t("reports.google_sheets.formula_example") %>
+            </p>
+          </div>
+        </div>
+
+        <div>
+          <h3 class="font-medium text-primary mb-3">
+            <%= t("reports.google_sheets.step_3") %>
+          </h3>
+          <p class="text-sm text-secondary">
+            <%= t("reports.google_sheets.step_3_description") %>
+          </p>
+        </div>
+
+        <div class="p-4 bg-warning/10 border border-warning rounded-lg">
+          <div class="flex items-start gap-3">
+            <%= icon("alert-circle", class: "w-5 h-5 text-warning mt-0.5") %>
+            <div>
+              <p class="text-sm font-medium text-primary mb-1">
+                <%= t("reports.google_sheets.security_note") %>
+              </p>
+              <p class="text-xs text-secondary">
+                <%= t("reports.google_sheets.security_description") %>
+              </p>
+            </div>
+          </div>
+        </div>
+      <% else %>
+        <%# API Key Not Set Up %>
+        <div class="p-4 bg-warning/10 border border-warning rounded-lg">
+          <div class="flex items-start gap-3">
+            <%= icon("alert-circle", class: "w-5 h-5 text-warning mt-0.5") %>
+            <div>
+              <p class="font-medium text-warning mb-1">
+                <%= t("reports.google_sheets.api_not_enabled") %>
+              </p>
+              <p class="text-sm text-secondary mt-2">
+                <%= t("reports.google_sheets.api_setup_required") %>
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-surface-inset rounded-lg p-4">
+          <h3 class="font-medium text-primary mb-3">
+            <%= t("reports.google_sheets.setup_steps") %>
+          </h3>
+          <ol class="space-y-2 text-sm text-secondary">
+            <li class="flex gap-3">
+              <span class="font-semibold text-primary min-w-fit">1.</span>
+              <%= t("reports.google_sheets.setup_step_1") %>
+            </li>
+            <li class="flex gap-3">
+              <span class="font-semibold text-primary min-w-fit">2.</span>
+              <%= t("reports.google_sheets.setup_step_2") %>
+            </li>
+            <li class="flex gap-3">
+              <span class="font-semibold text-primary min-w-fit">3.</span>
+              <%= t("reports.google_sheets.setup_step_3") %>
+            </li>
+          </ol>
+        </div>
+
+        <div class="flex gap-3">
+          <a href="<%= account_settings_path %>" class="flex-1 px-4 py-2 rounded-lg bg-primary text-white font-medium text-center hover:bg-primary/90 transition-colors">
+            <%= t("reports.google_sheets.go_to_settings") %>
+          </a>
+          <button data-action="click->modal#close" class="flex-1 px-4 py-2 rounded-lg border border-tertiary text-primary font-medium hover:bg-surface-hover transition-colors">
+            <%= t("common.close") %>
+          </button>
+        </div>
+      <% end %>
+    </div>
+
+    <% if api_key_present %>
+      <div class="p-6 border-t border-tertiary bg-surface-inset flex gap-3">
+        <button data-action="click->modal#copyFormula" class="flex-1 px-4 py-2 rounded-lg bg-primary text-white font-medium hover:bg-primary/90 transition-colors">
+          <%= icon("copy", class: "w-4 h-4 inline mr-2") %>
+          <%= t("reports.google_sheets.copy_formula") %>
+        </button>
+        <button data-action="click->modal#close" class="flex-1 px-4 py-2 rounded-lg border border-tertiary text-primary font-medium hover:bg-surface-hover transition-colors">
+          <%= t("common.close") %>
+        </button>
+      </div>
+    <% end %>
+  </div>
+</div>

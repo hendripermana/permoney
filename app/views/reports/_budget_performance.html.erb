@@ -1,0 +1,154 @@
+<div>
+  <h2 class="text-lg font-medium text-primary mb-6">
+    <%= t("reports.budget_performance.title") %>
+  </h2>
+
+  <% if budget_performance.any? %>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-tertiary">
+            <th class="text-left py-2 pr-4 font-medium text-secondary">
+              <%= t("reports.budget_performance.category") %>
+            </th>
+            <th class="text-right py-2 px-4 font-medium text-secondary">
+              <%= t("reports.budget_performance.budget") %>
+            </th>
+            <th class="text-right py-2 px-4 font-medium text-secondary">
+              <%= t("reports.budget_performance.spent") %>
+            </th>
+            <th class="text-right py-2 px-4 font-medium text-secondary">
+              <%= t("reports.budget_performance.remaining") %>
+            </th>
+            <th class="text-right py-2 pl-4 font-medium text-secondary">
+              <%= t("reports.budget_performance.progress") %>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <% budget_performance.each do |category_perf| %>
+            <tr class="border-b border-tertiary/50 hover:bg-surface-hover transition-colors">
+              <td class="py-3 pr-4">
+                <div class="flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full <%= 
+                    category_perf[:status] == 'over_budget' ? 'bg-danger' : 
+                    category_perf[:status] == 'near_limit' ? 'bg-warning' : 
+                    'bg-success'
+                  %>"></span>
+                  <span class="text-primary font-medium">
+                    <%= category_perf[:category_name] %>
+                  </span>
+                </div>
+              </td>
+              <td class="text-right py-3 px-4 text-primary">
+                <%= Money.new(category_perf[:budgeted_amount], Current.family.currency).format %>
+              </td>
+              <td class="text-right py-3 px-4 <%= 
+                category_perf[:status] == 'over_budget' ? 'text-danger font-semibold' : 
+                category_perf[:status] == 'near_limit' ? 'text-warning font-semibold' : 
+                'text-primary'
+              %>">
+                <%= Money.new(category_perf[:spent_amount], Current.family.currency).format %>
+              </td>
+              <td class="text-right py-3 px-4 <%= 
+                category_perf[:remaining_amount].negative? ? 'text-danger' : 'text-success'
+              %>">
+                <% if category_perf[:remaining_amount].negative? %>
+                  -<%= Money.new(category_perf[:remaining_amount].abs, Current.family.currency).format %>
+                <% else %>
+                  <%= Money.new(category_perf[:remaining_amount], Current.family.currency).format %>
+                <% end %>
+              </td>
+              <td class="text-right py-3 pl-4">
+                <div class="flex items-center gap-2">
+                  <div class="w-16 h-1.5 bg-tertiary/20 rounded-full overflow-hidden">
+                    <div class="h-full transition-all duration-300 <%= 
+                      category_perf[:percent] >= 100 ? 'bg-danger' : 
+                      category_perf[:percent] >= 80 ? 'bg-warning' : 
+                      'bg-success'
+                    %>" style="width: <%= [category_perf[:percent], 100].min %>%"></div>
+                  </div>
+                  <span class="text-xs font-medium text-secondary min-w-fit">
+                    <%= category_perf[:percent].round(0) %>%
+                  </span>
+                </div>
+              </td>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+    </div>
+
+    <%# Budget Summary Stats %>
+    <div class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+      <% total_budgeted = budget_performance.sum { |p| p[:budgeted_amount] } %>
+      <% total_spent = budget_performance.sum { |p| p[:spent_amount] } %>
+      <% total_remaining = budget_performance.sum { |p| p[:remaining_amount] } %>
+
+      <div class="p-4 bg-surface-inset rounded-lg">
+        <p class="text-xs text-tertiary mb-1"><%= t("reports.budget_performance.total_budget") %></p>
+        <p class="text-lg font-semibold text-primary">
+          <%= Money.new(total_budgeted, Current.family.currency).format %>
+        </p>
+      </div>
+
+      <div class="p-4 bg-surface-inset rounded-lg">
+        <p class="text-xs text-tertiary mb-1"><%= t("reports.budget_performance.total_spent") %></p>
+        <p class="text-lg font-semibold text-primary">
+          <%= Money.new(total_spent, Current.family.currency).format %>
+        </p>
+      </div>
+
+      <div class="p-4 bg-surface-inset rounded-lg">
+        <p class="text-xs text-tertiary mb-1"><%= t("reports.budget_performance.total_remaining") %></p>
+        <p class="text-lg font-semibold <%= total_remaining.negative? ? 'text-danger' : 'text-success' %>">
+          <% if total_remaining.negative? %>
+            -<%= Money.new(total_remaining.abs, Current.family.currency).format %>
+          <% else %>
+            <%= Money.new(total_remaining, Current.family.currency).format %>
+          <% end %>
+        </p>
+      </div>
+    </div>
+
+    <%# Status Distribution Insight %>
+    <% on_track_count = budget_performance.count { |p| p[:status] == 'on_track' } %>
+    <% near_limit_count = budget_performance.count { |p| p[:status] == 'near_limit' } %>
+    <% over_budget_count = budget_performance.count { |p| p[:status] == 'over_budget' } %>
+
+    <% if near_limit_count > 0 || over_budget_count > 0 %>
+      <div class="mt-4 p-4 bg-container rounded-lg border border-tertiary">
+        <div class="flex items-start gap-3">
+          <%= icon("info", class: "w-5 h-5 text-secondary mt-0.5") %>
+          <div>
+            <p class="text-sm font-medium text-primary mb-1">
+              <%= t("reports.budget_performance.status_summary") %>
+            </p>
+            <p class="text-sm text-secondary">
+              <% if over_budget_count > 0 %>
+                <span class="font-medium text-danger">
+                  <%= pluralize(over_budget_count, "category") %> <%= t("reports.budget_performance.is_over_budget") %>
+                </span>
+                <% if near_limit_count > 0 %>
+                  and 
+                <% end %>
+              <% end %>
+              <% if near_limit_count > 0 %>
+                <span class="font-medium text-warning">
+                  <%= pluralize(near_limit_count, "category") %> <%= t("reports.budget_performance.is_near_limit") %>
+                </span>
+              <% end %>
+            </p>
+          </div>
+        </div>
+      </div>
+    <% end %>
+  <% else %>
+    <div class="text-center py-8 text-tertiary">
+      <p><%= t("reports.budget_performance.no_budgets") %></p>
+      <p class="text-sm mt-2">
+        <%= link_to t("reports.budget_performance.create_budget"), budgets_path, class: "text-primary hover:underline" %>
+      </p>
+    </div>
+  <% end %>
+</div>
