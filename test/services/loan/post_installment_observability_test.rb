@@ -57,6 +57,7 @@ class LoanPostInstallmentObservabilityTest < ActiveSupport::TestCase
         Object.new.tap do |span|
           span.define_singleton_method(:set_data) { |*_args, **_kwargs| }
           span.define_singleton_method(:set_description) { |*_args, **_kwargs| }
+          span.define_singleton_method(:set_http_status) { |*_args| }
         end
       end
 

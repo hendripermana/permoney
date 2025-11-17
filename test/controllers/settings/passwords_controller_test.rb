@@ -14,7 +14,7 @@ class Settings::PasswordsControllerTest < ActionDispatch::IntegrationTest
   test "should update password with valid current password" do
     patch settings_password_path, params: {
       user: {
-        current_password: "password",
+        current_password: user_password_test,
         password: "newpassword123",
         password_confirmation: "newpassword123"
       }
@@ -38,13 +38,13 @@ class Settings::PasswordsControllerTest < ActionDispatch::IntegrationTest
     assert_equal "Current password is incorrect", flash[:alert]
 
     @user.reload
-    assert @user.authenticate("password")
+    assert @user.authenticate(user_password_test)
   end
 
   test "should not update password when confirmation does not match" do
     patch settings_password_path, params: {
       user: {
-        current_password: "password",
+        current_password: user_password_test,
         password: "newpassword123",
         password_confirmation: "differentpassword"
       }
@@ -53,13 +53,13 @@ class Settings::PasswordsControllerTest < ActionDispatch::IntegrationTest
     assert flash[:alert].present?
 
     @user.reload
-    assert @user.authenticate("password")
+    assert @user.authenticate(user_password_test)
   end
 
   test "should not update password when too short" do
     patch settings_password_path, params: {
       user: {
-        current_password: "password",
+        current_password: user_password_test,
         password: "short",
         password_confirmation: "short"
       }
@@ -68,7 +68,7 @@ class Settings::PasswordsControllerTest < ActionDispatch::IntegrationTest
     assert flash[:alert].present?
 
     @user.reload
-    assert @user.authenticate("password")
+    assert @user.authenticate(user_password_test)
   end
 
   test "should require authentication" do
@@ -79,7 +79,7 @@ class Settings::PasswordsControllerTest < ActionDispatch::IntegrationTest
 
     patch settings_password_path, params: {
       user: {
-        current_password: "password",
+        current_password: user_password_test,
         password: "newpassword123",
         password_confirmation: "newpassword123"
       }

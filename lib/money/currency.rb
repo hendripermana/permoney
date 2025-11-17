@@ -77,4 +77,8 @@ class Money::Currency
     return nil unless other.is_a?(Money::Currency)
     @iso_code <=> other.iso_code
   end
+
+  def to_s
+    iso_code
+  end
 end

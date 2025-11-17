@@ -54,12 +54,18 @@ class Account::CurrentBalanceManagerTest < ActiveSupport::TestCase
 
   test "all manual non cash accounts append reconciliations for current balance updates" do
     [ Property, Vehicle, OtherAsset, Loan, OtherLiability ].each do |account_type|
+      accountable = if account_type == Loan
+        Loan.new(counterparty_name: "Test Lender", debt_kind: "personal")
+      else
+        account_type.new
+      end
+
       account = @family.accounts.create!(
         name: "Test",
         balance: 1000,
         cash_balance: 1000,
         currency: "USD",
-        accountable: account_type.new
+        accountable: accountable
       )
 
       manager = Account::CurrentBalanceManager.new(account)

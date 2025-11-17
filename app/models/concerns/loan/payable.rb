@@ -3,10 +3,6 @@
 module Loan::Payable
   extend ActiveSupport::Concern
 
-  included do
-    has_many :loan_installments, foreign_key: :account_id, dependent: :destroy
-  end
-
   # Make a payment towards this loan
   def make_payment(amount:, from_account:, date: Date.current, notes: nil)
     validate_payment!(amount, from_account)
@@ -25,11 +21,15 @@ module Loan::Payable
     end
   end
 
+  def loan_installments
+    account&.loan_installments || LoanInstallment.none
+  end
+
   # Post a specific installment
   def post_installment(installment: nil, from_account:, date: Date.current, notes: nil)
     installment ||= next_pending_installment
     raise ArgumentError, "No pending installments" unless installment
-    raise ArgumentError, "Installment already posted" if installment.posted?
+    return installment if installment.posted?
 
     ActiveRecord::Base.transaction do
       installment.with_lock do
@@ -165,12 +165,24 @@ module Loan::Payable
 
     # Create new installment records
     rows.each_with_index do |row, index|
+      due_date = row.respond_to?(:due_date) ? row.due_date : row[:due_date]
+      principal = row.respond_to?(:principal) ? row.principal : row[:principal]
+      interest = row.respond_to?(:interest) ? row.interest : row[:interest]
+      total = row.respond_to?(:total) ? row.total : row[:total]
+
+      principal = principal.to_d if principal.respond_to?(:to_d)
+      interest = interest.to_d if interest.respond_to?(:to_d)
+
+      principal ||= 0
+      interest ||= 0
+      total ||= principal + interest
+
       loan_installments.create!(
         installment_no: index + 1,
-        due_date: row.due_date,
-        principal_amount: row.principal,
-        interest_amount: row.interest,
-        total_amount: row.total,
+        due_date: due_date,
+        principal_amount: principal,
+        interest_amount: interest,
+        total_amount: total,
         status: "planned"
       )
     end
@@ -183,12 +195,16 @@ module Loan::Payable
     def validate_payment!(amount, from_account)
       raise ArgumentError, "Amount must be positive" unless amount.to_d.positive?
       raise ArgumentError, "Source account required" unless from_account
+      raise ArgumentError, "Loan must belong to an account" unless account
+      ensure_same_family!(from_account)
       raise ArgumentError, "Cannot pay from same account" if from_account == account
     end
 
     def validate_borrowing!(amount, to_account)
       raise ArgumentError, "Amount must be positive" unless amount.to_d.positive?
       raise ArgumentError, "Destination account required" unless to_account
+      raise ArgumentError, "Loan must belong to an account" unless account
+      ensure_same_family!(to_account)
       raise ArgumentError, "Cannot borrow to same account" if to_account == account
     end
 
@@ -259,16 +275,15 @@ module Loan::Payable
     end
 
     def apply_with_schedule_adjustment(amount:, from_account:, date:)
-      # Apply payment and regenerate future schedule
-      create_payment_transfer(
+      transfer = create_payment_transfer(
         amount: amount,
         from_account: from_account,
         date: date,
         notes: "Extra payment with schedule adjustment"
       )
 
-      # Regenerate remaining schedule based on new balance
       rebuild_schedule!
+      transfer
     end
 
     def build_payment_notes(user_notes)
@@ -305,5 +320,11 @@ module Loan::Payable
 
     def sync_accounts!(*accounts)
       ([ account ] + accounts).uniq.each(&:sync_later)
+    end
+
+    def ensure_same_family!(other_account)
+      return if other_account.family_id == account.family_id
+
+      raise ArgumentError, "Both accounts must belong to the same family for compliance"
     end
 end

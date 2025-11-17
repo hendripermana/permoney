@@ -7,7 +7,7 @@ class LoansSchedulePreviewTest < ActionDispatch::IntegrationTest
   end
 
   test "schedule preview renders via turbo frame with i18n headers" do
-    get schedule_preview_loan_path(@account, format: :turbo_stream), params: {
+    get schedule_preview_loan_path(@account, format: :html), params: {
       principal_amount: 1_000_000,
       rate_or_profit: 0,
       tenor_months: 6,

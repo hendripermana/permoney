@@ -435,19 +435,27 @@ class Balance::ForwardCalculatorTest < ActiveSupport::TestCase
     )
   end
 
-  test "non cash accounts can only use valuations and transactions will be recorded but ignored for balance calculation" do
+  test "non cash accounts treat transactions as non-cash flows" do
     [ Property, Vehicle, OtherAsset, OtherLiability ].each do |account_type|
+      opening_balance = 500000
+      txn_amount = -50000
       account = create_account_with_ledger(
         account: { type: account_type, currency: "USD" },
         entries: [
-          { type: "opening_anchor", date: 3.days.ago.to_date, balance: 500000 },
+          { type: "opening_anchor", date: 3.days.ago.to_date, balance: opening_balance },
 
-          # Will be ignored for balance calculation due to account type of non-cash
-          { type: "transaction", date: 2.days.ago.to_date, amount: -50000 }
+          # For non-cash accounts, transactions are treated as changes to the non-cash value
+          { type: "transaction", date: 2.days.ago.to_date, amount: txn_amount }
         ]
       )
 
       calculated = Balance::ForwardCalculator.new(account).calculate
+      expected_end_balance = if account.liability?
+        opening_balance + txn_amount # payoff reduces liability
+      else
+        opening_balance + txn_amount.abs # assets increase by abs amount
+      end
+      expected_flow = expected_end_balance - opening_balance
 
       assert_calculated_ledger_balances(
         calculated_data: calculated,
@@ -461,9 +469,9 @@ class Balance::ForwardCalculatorTest < ActiveSupport::TestCase
           },
           {
             date: 2.days.ago.to_date,
-            legacy_balances: { balance: 500000, cash_balance: 0 },
-            balances: { start: 500000, start_cash: 0, start_non_cash: 500000, end_cash: 0, end_non_cash: 500000, end: 500000 },
-            flows: 0, # Despite having a transaction, non-cash accounts ignore it for balance calculation
+            legacy_balances: { balance: expected_end_balance, cash_balance: 0 },
+            balances: { start: opening_balance, start_cash: 0, start_non_cash: opening_balance, end_cash: 0, end_non_cash: expected_end_balance, end: expected_end_balance },
+            flows: expected_flow, # Transaction changes non-cash balance
             adjustments: 0
           }
         ]

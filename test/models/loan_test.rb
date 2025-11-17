@@ -27,6 +27,21 @@ class LoanTest < ActiveSupport::TestCase
     assert_equal 0.to_d, Loan.normalize_rate(nil)
   end
 
+  test "personal loans require lender context" do
+    loan = Loan.new(
+      debt_kind: "personal",
+      counterparty_type: "person",
+      term_months: 6,
+      rate_type: "fixed"
+    )
+
+    refute loan.valid?
+    assert_includes loan.errors[:base], "Provide a contact or lender name for personal loans"
+
+    loan.counterparty_name = "Jane"
+    assert loan.valid?, "personal loans should be valid when counterparty provided"
+  end
+
   test "tenor backfills term months" do
     loan = Loan.new(tenor_months: 12)
     loan.valid?
@@ -105,6 +120,30 @@ class LoanTest < ActiveSupport::TestCase
         balloon_amount: 0
       )
     end
+  end
+
+  test "annuity schedule amortizes the full principal" do
+    loan = Loan.new(
+      debt_kind: "institutional",
+      counterparty_type: "institution",
+      counterparty_name: "Test Bank",
+      payment_frequency: "MONTHLY",
+      schedule_method: "ANNUITY"
+    )
+
+    calculator = Loan::PaymentCalculator.new(
+      loan: loan,
+      principal_amount: 500_000,
+      rate_or_profit: 10.0,
+      tenor_months: 24,
+      balloon_amount: 0
+    )
+
+    schedule = calculator.calculate_installments
+    total_principal = schedule.sum { |row| (row[:principal_amount] || row[:principal]).to_d }
+
+    assert_equal 24, schedule.length
+    assert_in_delta 500_000, total_principal, 0.01
   end
 
   test "payment calculator handles different schedule methods" do

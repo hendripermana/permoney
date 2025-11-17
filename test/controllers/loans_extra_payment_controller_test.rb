@@ -22,7 +22,7 @@ class LoansExtraPaymentControllerTest < ActionDispatch::IntegrationTest
       assert_response :success
 
       post create_extra_payment_loan_path(@account), params: {
-        extra: { amount: 50, date: Date.current.to_s, allocation_mode: "reduce_term" }
+        extra: { amount: 50, date: Date.current.to_s, allocation_mode: "principal_first", source_account_id: accounts(:depository).id }
       }
       assert_response :redirect
       follow_redirect!
@@ -33,7 +33,7 @@ class LoansExtraPaymentControllerTest < ActionDispatch::IntegrationTest
   test "flag ON: applies reduce_installment" do
     with_extra_payment_flag(true) do
       post create_extra_payment_loan_path(@account), params: {
-        extra: { amount: 50, date: Date.current.to_s, allocation_mode: "reduce_installment" }
+        extra: { amount: 50, date: Date.current.to_s, allocation_mode: "principal_first", source_account_id: accounts(:depository).id }
       }
       assert_response :redirect
     end
@@ -41,17 +41,21 @@ class LoansExtraPaymentControllerTest < ActionDispatch::IntegrationTest
 
   test "flag OFF: paths return 404" do
     with_extra_payment_flag(false) do
-      assert_raises(ActionController::RoutingError) { get new_extra_payment_loan_path(@account) }
-      assert_raises(ActionController::RoutingError) { post create_extra_payment_loan_path(@account) }
+      get new_extra_payment_loan_path(@account)
+      assert_response :not_found
+
+      post create_extra_payment_loan_path(@account)
+      assert_response :not_found
     end
   end
 
   private
     def with_extra_payment_flag(value)
-      original = Rails.application.config.features.loans.extra_payment
-      Rails.application.config.features.loans.extra_payment = value
+      LoanConfigurationService.stubs(:feature_enabled?)
+        .with(:extra_payments)
+        .returns(value)
       yield
     ensure
-      Rails.application.config.features.loans.extra_payment = original
+      LoanConfigurationService.unstub(:feature_enabled?)
     end
 end

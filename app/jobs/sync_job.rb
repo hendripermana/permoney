@@ -49,11 +49,16 @@ class SyncJob < ApplicationJob
 
   private
     def load_sync_record(sync)
-      sync_record = sync.is_a?(Sync) ? Sync.find_by(id: sync.id) : Sync.find_by(id: sync.id)
+      if sync.is_a?(Sync)
+        return sync.reload
+      end
+
+      sync_record = Sync.find_by(id: sync)
       unless sync_record
         Rails.logger.warn("Sync record not found, job may be stale")
         return nil
       end
+
       sync_record
     end
 

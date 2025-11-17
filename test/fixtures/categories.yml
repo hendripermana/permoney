@@ -15,3 +15,15 @@ subcategory:
   name: Restaurants
   parent: food_and_drink
   family: dylan_family
+
+salary:
+  name: Salary
+  family: dylan_family
+  classification: income
+  color: "#16a34a"
+
+transfer:
+  name: Transfer
+  family: dylan_family
+  classification: transfer
+  color: "#0ea5e9"

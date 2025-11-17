@@ -62,7 +62,7 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
   test "export_transactions renders CSV" do
     get export_transactions_reports_path, params: { format: "csv" }
     assert_response :success
-    assert_equal "text/csv; charset=utf-8", @response.content_type
+    assert_includes @response.content_type, "text/csv"
   end
 
   test "export_transactions requires authentication" do

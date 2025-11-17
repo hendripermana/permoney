@@ -15,6 +15,8 @@ module Accountable
     include Enrichable
 
     has_one :account, as: :accountable, touch: true
+
+    after_save :sync_account_subtype, if: -> { respond_to?(:subtype) }
   end
 
   class_methods do
@@ -102,4 +104,14 @@ module Accountable
   def classification
     self.class.classification
   end
+
+  private
+
+    def sync_account_subtype
+      return unless account&.persisted?
+      return unless account.subtype != subtype
+
+      account.update_column(:subtype, subtype) # rubocop:disable Rails/SkipsModelValidations -- keep models in sync without callbacks
+      account[:subtype] = subtype
+    end
 end

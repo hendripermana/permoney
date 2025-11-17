@@ -8,10 +8,18 @@ module LedgerTestingHelper
     account_attrs = account.except(:type)
     account_type = account[:type]
 
+    accountable_attributes = account[:accountable_attributes] || {}
+    accountable_instance = if account_type == Loan
+      # Loans require counterparty metadata for validation in tests
+      Loan.new({ counterparty_name: "Test Lender", debt_kind: "personal" }.merge(accountable_attributes))
+    else
+      account_type.new(accountable_attributes)
+    end
+
     # Create the account
     created_account = families(:empty).accounts.create!(
       name: "Test Account",
-      accountable: account_type.new,
+      accountable: accountable_instance,
       balance: account[:balance] || 0, # Doesn't matter, ledger derives this
       cash_balance: account[:cash_balance] || 0, # Doesn't matter, ledger derives this
       **account_attrs

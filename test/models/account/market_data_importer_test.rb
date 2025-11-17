@@ -16,10 +16,20 @@ class Account::MarketDataImporterTest < ActiveSupport::TestCase
     Entry.delete_all
 
     @provider = mock("provider")
+
+    # Force registry to use twelve_data only (avoid alpha_vantage stub churn)
+    Provider::Registry.any_instance.stubs(:available_providers).returns([ :twelve_data ])
     Provider::Registry.any_instance
                       .stubs(:get_provider)
                       .with(:twelve_data)
                       .returns(@provider)
+    ExchangeRate.stubs(:providers_in_order).returns([ @provider ])
+    Security.stubs(:providers_in_order).returns([ @provider ])
+  end
+
+  teardown do
+    ExchangeRate.unstub(:providers_in_order)
+    Security.unstub(:providers_in_order)
   end
 
   test "syncs required exchange rates for a foreign-currency account" do

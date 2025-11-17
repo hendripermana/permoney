@@ -2,6 +2,7 @@ require "test_helper"
 
 class LoanRemainingPrincipalCalculatorTest < ActiveSupport::TestCase
   setup do
+    Current.session = users(:family_admin).sessions.create!
     @family = families(:dylan_family)
     @loan = accounts(:loan)
     @cash = accounts(:depository)
@@ -13,6 +14,10 @@ class LoanRemainingPrincipalCalculatorTest < ActiveSupport::TestCase
       counterparty_type: "person",
       counterparty_name: "Ahmad"
     )
+  end
+
+  teardown do
+    Current.session = nil
   end
 
   test "remaining principal changes after disbursement and payment" do

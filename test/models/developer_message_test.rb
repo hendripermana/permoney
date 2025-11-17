@@ -6,10 +6,12 @@ class DeveloperMessageTest < ActiveSupport::TestCase
   end
 
   test "does not broadcast" do
-    message = DeveloperMessage.create!(chat: @chat, content: "Some instructions")
-    message.update!(content: "updated")
+    streams = capture_turbo_stream_broadcasts(@chat) do
+      message = DeveloperMessage.create!(chat: @chat, content: "Some instructions")
+      message.update!(content: "updated")
+    end
 
-    assert_no_turbo_stream_broadcasts(@chat)
+    assert_empty streams
   end
 
   test "broadcasts if debug mode is enabled" do

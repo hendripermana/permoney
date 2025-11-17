@@ -52,6 +52,10 @@ class Balance::ReverseCalculator < Balance::BaseCalculator
 
   private
 
+    def non_cash_transactions_affect_balance?
+      account.accountable_type.in?(%w[Loan PersonalLending])
+    end
+
     # Negative entries amount on an "asset" account means, "account value has increased"
     # Negative entries amount on a "liability" account means, "account debt has decreased"
     # Positive entries amount on an "asset" account means, "account value has decreased"

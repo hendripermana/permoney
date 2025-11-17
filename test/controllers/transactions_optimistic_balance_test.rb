@@ -3,12 +3,30 @@ require "test_helper"
 class TransactionsOptimisticBalanceTest < ActionDispatch::IntegrationTest
   setup do
     sign_in @user = users(:family_admin)
-    @asset_account = accounts(:checking)  # Asset account
+    @asset_account = accounts(:depository)  # Asset account
     @liability_account = accounts(:credit_card)  # Liability account
 
     # Ensure accounts have initial balances
     @asset_account.update!(balance: 1000.0)
     @liability_account.update!(balance: 500.0)
+
+    Balance.create!(
+      account: @asset_account,
+      date: Date.current,
+      currency: @asset_account.currency,
+      balance: @asset_account.balance,
+      cash_balance: @asset_account.balance,
+      flows_factor: 1
+    )
+
+    Balance.create!(
+      account: @liability_account,
+      date: Date.current,
+      currency: @liability_account.currency,
+      balance: @liability_account.balance,
+      cash_balance: 0,
+      flows_factor: -1
+    )
   end
 
   # ============================================================================
@@ -288,7 +306,7 @@ class TransactionsOptimisticBalanceTest < ActionDispatch::IntegrationTest
     # (async sync will handle it)
     # This is a bit tricky to test since we'd need to ensure sync hasn't run yet
     # For now, just verify transaction was created
-    assert_equal 201, response.status || 302,
+    assert_includes [ 201, 302 ], response.status,
       "Transaction should be created even with currency mismatch"
   end
 
@@ -312,7 +330,7 @@ class TransactionsOptimisticBalanceTest < ActionDispatch::IntegrationTest
     }
 
     # Should create successfully
-    assert_equal 201, response.status || 302,
+    assert_includes [ 201, 302 ], response.status,
       "Old transaction should be created"
   end
 

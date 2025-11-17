@@ -178,7 +178,8 @@ class DebtOriginationService
         schedule_method: params[:schedule_method] || params.dig(:accountable_attributes, :schedule_method),
         rate_or_profit: params[:rate_or_profit] || params.dig(:accountable_attributes, :rate_or_profit),
         balloon_amount: normalized_balloon_amount,
-        interest_free: params[:interest_free] || params.dig(:accountable_attributes, :interest_free)
+        interest_free: params[:interest_free] || params.dig(:accountable_attributes, :interest_free),
+        imported: imported?
       }.compact
     end
 
@@ -201,6 +202,10 @@ class DebtOriginationService
 
     def apply_desired_balance!
       return unless desired_balance
+      if initial_principal.present? && desired_balance.to_d == initial_principal.to_d
+        @balance_adjustment_entry_id = nil
+        return
+      end
 
       @loan_account.reload
       result = @loan_account.set_current_balance(desired_balance)
