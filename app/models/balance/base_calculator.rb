@@ -161,6 +161,6 @@ class Balance::BaseCalculator
     end
 
     def non_cash_transactions_affect_balance?
-      account.balance_type == :non_cash
+      account.accountable_type.in?(%w[Loan PersonalLending])
     end
 end

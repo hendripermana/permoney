@@ -450,12 +450,8 @@ class Balance::ForwardCalculatorTest < ActiveSupport::TestCase
       )
 
       calculated = Balance::ForwardCalculator.new(account).calculate
-      expected_end_balance = if account.liability?
-        opening_balance + txn_amount # payoff reduces liability
-      else
-        opening_balance + txn_amount.abs # assets increase by abs amount
-      end
-      expected_flow = expected_end_balance - opening_balance
+      expected_end_balance = opening_balance
+      expected_flow = 0
 
       assert_calculated_ledger_balances(
         calculated_data: calculated,
@@ -471,7 +467,7 @@ class Balance::ForwardCalculatorTest < ActiveSupport::TestCase
             date: 2.days.ago.to_date,
             legacy_balances: { balance: expected_end_balance, cash_balance: 0 },
             balances: { start: opening_balance, start_cash: 0, start_non_cash: opening_balance, end_cash: 0, end_non_cash: expected_end_balance, end: expected_end_balance },
-            flows: expected_flow, # Transaction changes non-cash balance
+            flows: expected_flow, # Transactions ignored for non-cash assets/liabilities (except loans/personal lending)
             adjustments: 0
           }
         ]

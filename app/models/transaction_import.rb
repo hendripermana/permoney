@@ -45,6 +45,7 @@ class TransactionImport < Import
           # Update existing transaction instead of creating a new one
           duplicate_entry.transaction.category = category if category.present?
           duplicate_entry.transaction.tags = tags if tags.any?
+          duplicate_entry.name = row.name if row.name.present?
           duplicate_entry.notes = row.notes if row.notes.present?
           duplicate_entry.import = self
           updated_entries << duplicate_entry
