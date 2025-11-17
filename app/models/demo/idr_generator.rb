@@ -145,21 +145,25 @@ class Demo::IdrGenerator < Demo::Generator
       # Crypto (IDR)
       @indodax_btc = family.accounts.create!(accountable: Crypto.new, name: "Indodax Bitcoin", balance: 0, currency: "IDR")
 
+      loan_builder = ->(name, debt_kind: "institutional") {
+        Loan.new(counterparty_name: name, debt_kind: debt_kind)
+      }
+
       # Traditional Loans (IDR)
-      @kpr_loan = family.accounts.create!(accountable: Loan.new, name: "KPR BTN", balance: 0, currency: "IDR")
+      @kpr_loan = family.accounts.create!(accountable: loan_builder.call("KPR BTN"), name: "KPR BTN", balance: 0, currency: "IDR")
       puts "   ✅ Created KPR loan: #{@kpr_loan.id}"
-      @motor_loan = family.accounts.create!(accountable: Loan.new, name: "Kredit Motor", balance: 0, currency: "IDR")
-      @education_loan = family.accounts.create!(accountable: Loan.new, name: "Kredit Pendidikan", balance: 0, currency: "IDR")
+      @motor_loan = family.accounts.create!(accountable: loan_builder.call("Kredit Motor"), name: "Kredit Motor", balance: 0, currency: "IDR")
+      @education_loan = family.accounts.create!(accountable: loan_builder.call("Kredit Pendidikan"), name: "Kredit Pendidikan", balance: 0, currency: "IDR")
 
       # Indonesian Fintech Loans
-      @kredivo_loan = family.accounts.create!(accountable: Loan.new, name: "Kredivo", balance: 0, currency: "IDR")
-      @akulaku_loan = family.accounts.create!(accountable: Loan.new, name: "Akulaku", balance: 0, currency: "IDR")
-      @home_credit_loan = family.accounts.create!(accountable: Loan.new, name: "Home Credit", balance: 0, currency: "IDR")
+      @kredivo_loan = family.accounts.create!(accountable: loan_builder.call("Kredivo"), name: "Kredivo", balance: 0, currency: "IDR")
+      @akulaku_loan = family.accounts.create!(accountable: loan_builder.call("Akulaku"), name: "Akulaku", balance: 0, currency: "IDR")
+      @home_credit_loan = family.accounts.create!(accountable: loan_builder.call("Home Credit"), name: "Home Credit", balance: 0, currency: "IDR")
 
       # Personal Loans (Pinjam ke Orang) - Indonesian context
-      @loan_from_family = family.accounts.create!(accountable: Loan.new, name: "Pinjaman dari Ibu", balance: 0, currency: "IDR")
-      @loan_from_friend = family.accounts.create!(accountable: Loan.new, name: "Pinjaman dari Teman", balance: 0, currency: "IDR")
-      @loan_from_colleague = family.accounts.create!(accountable: Loan.new, name: "Pinjaman dari Rekan Kerja", balance: 0, currency: "IDR")
+      @loan_from_family = family.accounts.create!(accountable: loan_builder.call("Pinjaman dari Ibu", debt_kind: "personal"), name: "Pinjaman dari Ibu", balance: 0, currency: "IDR")
+      @loan_from_friend = family.accounts.create!(accountable: loan_builder.call("Pinjaman dari Teman", debt_kind: "personal"), name: "Pinjaman dari Teman", balance: 0, currency: "IDR")
+      @loan_from_colleague = family.accounts.create!(accountable: loan_builder.call("Pinjaman dari Rekan Kerja", debt_kind: "personal"), name: "Pinjaman dari Rekan Kerja", balance: 0, currency: "IDR")
 
       # Other liabilities
       @personal_loc = family.accounts.create!(accountable: OtherLiability.new, name: "Kredit Tanpa Agunan", balance: 0, currency: "IDR")

@@ -311,7 +311,6 @@ class Loan::FormComponent < ViewComponent::Base
     # Helper method delegates with fallbacks
     def render_field(field_name, config)
       cfg = normalized_config(config)
-      return text_field(field_name, cfg) if respond_to?(:text_field)
       return form.text_field(field_name, **builder_options(cfg)) if form&.respond_to?(:text_field)
 
       html_options = fallback_input_options(field_name, cfg)
@@ -320,7 +319,6 @@ class Loan::FormComponent < ViewComponent::Base
 
     def render_money_field(field_name, config)
       cfg = normalized_config(config)
-      return money_field(field_name, cfg) if respond_to?(:money_field)
 
       currency = Current.family&.currency || "USD"
       html_options = fallback_input_options(field_name, cfg, default_classes: "form-input flex-1")
@@ -353,7 +351,6 @@ class Loan::FormComponent < ViewComponent::Base
 
     def render_number_field(field_name, config)
       cfg = normalized_config(config)
-      return number_field(field_name, cfg) if respond_to?(:number_field)
       return form.number_field(field_name, **builder_options(cfg)) if form&.respond_to?(:number_field)
 
       html_options = fallback_input_options(field_name, cfg)
@@ -374,7 +371,6 @@ class Loan::FormComponent < ViewComponent::Base
 
     def render_date_field(field_name, config)
       cfg = normalized_config(config)
-      return date_field(field_name, cfg) if respond_to?(:date_field)
       return form.date_field(field_name, **builder_options(cfg)) if form&.respond_to?(:date_field)
 
       html_options = fallback_input_options(field_name, cfg)
@@ -449,7 +445,6 @@ class Loan::FormComponent < ViewComponent::Base
 
     def render_textarea(field_name, config)
       cfg = normalized_config(config)
-      return text_area(field_name, cfg) if respond_to?(:text_area)
       return form.text_area(field_name, **builder_options(cfg)) if form&.respond_to?(:text_area)
 
       html_options = fallback_input_options(field_name, cfg, default_classes: "form-input w-full")
@@ -506,7 +501,18 @@ class Loan::FormComponent < ViewComponent::Base
     end
 
     def use_wizard?
-      options[:wizard] || loan.new_record?
+      return options[:wizard] unless options[:wizard].nil?
+      !(identifier_present?(loan) || identifier_present?(account))
+    end
+
+    def identifier_present?(record)
+      return false if record.nil?
+
+      if record.respond_to?(:id_before_type_cast)
+        record.id_before_type_cast.present?
+      else
+        record.id.present?
+      end
     end
 
     def personal_loan?
@@ -713,6 +719,14 @@ class Loan::FormComponent < ViewComponent::Base
       else
         true
       end
+    end
+
+    def show_margin_field?
+      respond_to?(:show_margin_field_for_loan?) ? show_margin_field_for_loan?(loan) : loan.islamic_product_type == "murabaha"
+    end
+
+    def show_profit_sharing_field?
+      respond_to?(:show_profit_sharing_field_for_loan?) ? show_profit_sharing_field_for_loan?(loan) : %w[musyarakah mudharabah].include?(loan.islamic_product_type)
     end
 
     # Helper service accessors
@@ -959,16 +973,19 @@ class Loan::FormComponent < ViewComponent::Base
 
 
     def render_wizard_content
-      # Render all steps with data-step-content so the Stimulus controller can toggle visibility
-      # Always show the first step initially, JavaScript will handle the rest
       content_tag :div, class: "min-h-[400px]" do
         safe_join([
-          content_tag(:div, render_step_type, data: { step_content: "type" }, style: (current_step == :type ? "" : "display:none;")),
-          content_tag(:div, render_step_basic, data: { step_content: "basic" }, style: "display:none;"),
-          content_tag(:div, render_step_terms, data: { step_content: "terms" }, style: "display:none;"),
-          content_tag(:div, render_step_review, data: { step_content: "review" }, style: "display:none;")
+          render_step_container(:type) { render_step_type },
+          render_step_container(:basic) { render_step_basic },
+          render_step_container(:terms) { render_step_terms },
+          render_step_container(:review) { render_step_review }
         ])
       end
+    end
+
+    def render_step_container(step)
+      visible = current_step == step
+      content_tag(:div, capture { yield }, data: { step_content: step.to_s }, style: (visible ? nil : "display:none;"))
     end
 
     def wizard_actions
@@ -1058,7 +1075,9 @@ class Loan::FormComponent < ViewComponent::Base
     end
 
     def loan_type_selection
-      content_tag :div, class: "grid grid-cols-1 md:grid-cols-2 gap-4" do
+      content_tag :div,
+                  class: "grid grid-cols-1 md:grid-cols-2 gap-4",
+                  data: { action: "click->loan-wizard#selectType" } do
         safe_join([
           loan_type_card("personal", "Personal loan", "Borrowing from family, friends, or colleagues"),
           loan_type_card("institutional", "Institutional loan", "Borrowing from banks, fintech, or other institutions")

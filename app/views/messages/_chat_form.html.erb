@@ -26,6 +26,10 @@
       else
         chats_path(floating: true)
       end %>
+  <% elsif chat && chat.persisted? %>
+    <% form_options[:url] = chat_messages_path(chat) %>
+  <% else %>
+    <% form_options[:url] = chats_path %>
   <% end %>
 
   <% if message_record&.errors&.any? %>

@@ -7,7 +7,7 @@ module Api
 
       def index
         family = current_resource_owner.family
-        accounts_query = family.accounts.visible.alphabetically
+        accounts_query = family.accounts.where(status: "active").alphabetically
 
         @pagy, @accounts = pagy(
           :offset,

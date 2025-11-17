@@ -76,12 +76,17 @@ class Balance::BaseCalculator
       trade_cash_outflow_sum = entries.select { |e| e.amount >= 0 && e.trade? }.sum(&:amount)
 
       if account.balance_type == :non_cash
-        # For non-cash accounts (OtherAsset, Property, Vehicle, OtherLiability, Loan),
-        # transactions represent changes in the non-cash value.
-        # Negative txn amounts (on assets) mean value increased; treat as inflows.
-        # Positive txn amounts mean value decreased; treat as outflows.
-        non_cash_inflows = txn_inflow_sum.abs
-        non_cash_outflows = txn_outflow_sum
+        if non_cash_transactions_affect_balance?
+          # For non-cash accounts that behave like loans (Loan, PersonalLending),
+          # transactions represent changes in the non-cash value.
+          # Negative txn amounts (on assets) mean value increased; treat as inflows.
+          # Positive txn amounts mean value decreased; treat as outflows.
+          non_cash_inflows = txn_inflow_sum.abs
+          non_cash_outflows = txn_outflow_sum
+        else
+          non_cash_inflows = 0
+          non_cash_outflows = 0
+        end
       elsif account.balance_type != :non_cash
         cash_inflows = txn_inflow_sum.abs + trade_cash_inflow_sum.abs
         cash_outflows = txn_outflow_sum + trade_cash_outflow_sum
@@ -116,6 +121,8 @@ class Balance::BaseCalculator
       entries = sync_cache.get_entries(date)
       # For non-cash accounts, apply transaction flows to the non-cash balance.
       if account.balance_type == :non_cash
+        return non_cash_balance unless non_cash_transactions_affect_balance?
+
         # CRITICAL FIX: Exclude valuations from non-cash balance calculation
         # Valuations SET balance (not apply as flow)
         non_valuation_entries = entries.reject(&:valuation?)
@@ -151,5 +158,9 @@ class Balance::BaseCalculator
         net_market_flows: args[:net_market_flows] || 0,
         flows_factor: account.classification == "asset" ? 1 : -1
       )
+    end
+
+    def non_cash_transactions_affect_balance?
+      account.accountable_type.in?(%w[Loan PersonalLending])
     end
 end

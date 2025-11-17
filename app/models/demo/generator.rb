@@ -248,9 +248,18 @@ class Demo::Generator
       @coinbase_usdc = family.accounts.create!(accountable: Crypto.new, name: "Coinbase USDC", balance: 0, currency: "USD")
 
       # Loans / Liabilities (USD)
-      @mortgage      = family.accounts.create!(accountable: Loan.new, name: "Home Mortgage", balance: 0, currency: "USD")
-      @car_loan      = family.accounts.create!(accountable: Loan.new, name: "Car Loan", balance: 0, currency: "USD")
-      @student_loan  = family.accounts.create!(accountable: Loan.new, name: "Student Loan", balance: 0, currency: "USD")
+      loan_template = ->(name) {
+        family.accounts.create!(
+          accountable: Loan.new(counterparty_name: name, debt_kind: "institutional"),
+          name: name,
+          balance: 0,
+          currency: "USD"
+        )
+      }
+
+      @mortgage      = loan_template.call("Home Mortgage")
+      @car_loan      = loan_template.call("Car Loan")
+      @student_loan  = loan_template.call("Student Loan")
 
       @personal_loc  = family.accounts.create!(accountable: OtherLiability.new, name: "Personal Line of Credit", balance: 0, currency: "USD")
 

@@ -55,6 +55,9 @@ class Account < ApplicationRecord
 
   delegated_type :accountable, types: Accountable::TYPES, dependent: :destroy
 
+  before_validation :backfill_subtype_from_accountable
+  before_save :propagate_subtype_to_accountable
+
   accepts_nested_attributes_for :accountable, update_only: true
 
   # Account state machine
@@ -215,12 +218,21 @@ class Account < ApplicationRecord
 
   # Get short version of the subtype label
   def short_subtype_label
-    accountable_class.short_subtype_label_for(subtype) || accountable_class.display_name
+    effective_subtype = subtype.presence || accountable&.subtype
+    accountable_class.short_subtype_label_for(effective_subtype) || accountable_class.display_name
   end
 
   # Get long version of the subtype label
   def long_subtype_label
-    accountable_class.long_subtype_label_for(subtype) || accountable_class.display_name
+    effective_subtype = subtype.presence || accountable&.subtype
+    accountable_class.long_subtype_label_for(effective_subtype) || accountable_class.display_name
+  end
+
+  def subtype
+    value = self[:subtype]
+    return value if value.present?
+
+    accountable&.respond_to?(:subtype) ? accountable.subtype : nil
   end
 
   # The balance type determines which "component" of balance is being tracked.
@@ -248,4 +260,19 @@ class Account < ApplicationRecord
     # Use the DB-provided classification (virtual column) for all account types
     self[:classification]
   end
+
+  private
+
+    def backfill_subtype_from_accountable
+      return unless subtype.blank?
+      return unless accountable&.respond_to?(:subtype)
+
+      self[:subtype] = accountable.subtype
+    end
+
+    def propagate_subtype_to_accountable
+      return unless accountable&.respond_to?(:subtype=)
+
+      accountable.subtype = subtype
+    end
 end

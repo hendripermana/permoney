@@ -54,6 +54,8 @@ class Setting < RailsSettings::Base
   class << self
     alias_method :raw_onboarding_state, :onboarding_state
     alias_method :raw_onboarding_state=, :onboarding_state=
+    alias_method :raw_openai_uri_base, :openai_uri_base
+    alias_method :raw_openai_uri_base=, :openai_uri_base=
 
     def onboarding_state
       value = raw_onboarding_state
@@ -66,6 +68,14 @@ class Setting < RailsSettings::Base
       validate_onboarding_state!(state)
       self.require_invite_for_signup = state == "invite_only"
       self.raw_onboarding_state = state
+    end
+
+    def openai_uri_base
+      raw_openai_uri_base.presence
+    end
+
+    def openai_uri_base=(value)
+      self.raw_openai_uri_base = value.presence
     end
 
     # Upstream: Support dynamic field access via bracket notation

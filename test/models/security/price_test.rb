@@ -7,6 +7,7 @@ class Security::PriceTest < ActiveSupport::TestCase
   setup do
     @provider = mock
     Security.stubs(:provider).returns(@provider)
+    Security.stubs(:providers_in_order).returns([ @provider ])
 
     @security = securities(:aapl)
   end

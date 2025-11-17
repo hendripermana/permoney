@@ -11,7 +11,7 @@ class RegistrationsControllerTest < ActionDispatch::IntegrationTest
       email: "john@example.com",
       password: "Password1!" } }
 
-    assert_redirected_to root_url
+    assert_redirected_to onboarding_url
   end
 
   test "create when hosted requires an invite code" do
@@ -34,7 +34,7 @@ class RegistrationsControllerTest < ActionDispatch::IntegrationTest
           email: "john@example.com",
           password: "Password1!",
           invite_code: InviteCode.generate! } }
-        assert_redirected_to root_url
+        assert_redirected_to onboarding_url
       end
     end
   end

@@ -18,6 +18,7 @@ class User < ApplicationRecord
   validate :ensure_valid_profile_image
   validates :default_period, inclusion: { in: Period::PERIODS.keys }
   validates :default_account_order, inclusion: { in: AccountOrder::ORDERS.keys }
+  validates :password, length: { minimum: 8 }, allow_nil: true
   normalizes :email, with: ->(email) { email.strip.downcase }
   normalizes :unconfirmed_email, with: ->(email) { email&.strip&.downcase }
 
@@ -105,7 +106,10 @@ class User < ApplicationRecord
   end
 
   def ai_available?
-    !Rails.application.config.app_mode.self_hosted? || ENV["OPENAI_ACCESS_TOKEN"].present? || Setting.openai_access_token.present?
+    env_token = ENV["OPENAI_ACCESS_TOKEN"]
+    db_token = Setting.find_by(var: "openai_access_token")&.value
+
+    env_token.present? || db_token.present?
   end
 
   def ai_enabled?

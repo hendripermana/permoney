@@ -6,7 +6,7 @@ class OnboardingsControllerTest < ActionDispatch::IntegrationTest
     @family = @user.family
 
     # Reset onboarding state
-    @user.update!(set_onboarding_preferences_at: nil)
+    @user.update!(set_onboarding_preferences_at: nil, onboarded_at: nil)
 
     sign_in @user
   end

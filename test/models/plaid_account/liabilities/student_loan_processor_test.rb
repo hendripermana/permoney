@@ -9,7 +9,7 @@ class PlaidAccount::Liabilities::StudentLoanProcessorTest < ActiveSupport::TestC
     )
 
     # Change the underlying accountable to a Loan so the helper method `loan` is available
-    @plaid_account.current_account.update!(accountable: Loan.new)
+    @plaid_account.current_account.update!(accountable: Loan.new(lender_name: "Plaid Lender", debt_kind: "institutional"))
   end
 
   test "updates loan details including term months from Plaid data" do

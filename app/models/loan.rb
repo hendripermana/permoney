@@ -29,6 +29,8 @@ class Loan < ApplicationRecord
     "qard_hasan" => { short: "Qard Hasan", long: "Benevolent Loan" }
   }.freeze
 
+  alias_attribute :loan_type, :subtype
+
   FINTECH_TYPES = {
     "bank" => { short: "Bank", long: "Traditional Bank" },
     "pinjol" => { short: "Pinjol", long: "Indonesian Online Lending" },
@@ -40,6 +42,15 @@ class Loan < ApplicationRecord
 
   # Virtual attribute used only during origination flow
   attr_accessor :imported
+
+  def currency
+    account&.currency || @currency
+  end
+
+  def currency=(value)
+    @currency = value
+    account.currency = value if account.present?
+  end
 
   # Basic validations for new metadata (kept permissive for backward compatibility)
   validates :debt_kind, inclusion: { in: %w[institutional personal] }, allow_nil: true
@@ -246,6 +257,8 @@ class Loan < ApplicationRecord
         0
       end
     end
+
+    public :effective_rate
 
 
     # Check if this is a personal loan (from/to individual)
@@ -772,7 +785,7 @@ class Loan < ApplicationRecord
                 if transfer.persisted?
                   contextual_notes = build_payment_notes(notes)
                   transfer.update!(notes: contextual_notes)
-                  loan.sync_accounts!(from_account)
+                  loan.send(:sync_accounts!, from_account)
                 end
 
                 transfer
@@ -799,6 +812,7 @@ class Loan < ApplicationRecord
             end
 
             def process
+              transfer = nil
               ActiveRecord::Base.transaction do
                 installment.with_lock do
                   return if installment.posted? # Double-check after lock
@@ -808,7 +822,7 @@ class Loan < ApplicationRecord
 
                   # Create principal transfer
                   if principal_amount.positive?
-                    create_principal_transfer(principal_amount)
+                    transfer = create_principal_transfer(principal_amount)
                   end
 
                   # Create interest expense entry
@@ -820,13 +834,16 @@ class Loan < ApplicationRecord
                   installment.update!(
                     status: "posted",
                     posted_on: date,
-                    actual_amount: amount
+                    actual_amount: amount,
+                    transfer_id: transfer&.id
                   )
 
                   # Send payment confirmation notification
                   loan.notification_service.payment_confirmation(amount)
                 end
               end
+
+              transfer
             end
 
             private
@@ -884,6 +901,7 @@ class Loan < ApplicationRecord
             end
 
             def process
+              transfer = nil
               ActiveRecord::Base.transaction do
                 installment.with_lock do
                   return if installment.posted?
@@ -892,7 +910,7 @@ class Loan < ApplicationRecord
                   principal_portion, interest_portion = calculate_portions
 
                   # Create payment transfer
-                  create_payment_transfer(amount, notes)
+                  transfer = create_payment_transfer(amount, notes)
 
                   # Update installment with partial payment
                   installment.update!(
@@ -906,6 +924,8 @@ class Loan < ApplicationRecord
                   loan.notification_service.payment_confirmation(amount)
                 end
               end
+
+              transfer
             end
 
             private
@@ -924,26 +944,30 @@ class Loan < ApplicationRecord
           class ExtraPayment < BaseStrategy
             def process
               # Extra payments go entirely to principal
-              create_payment_transfer(amount, "Extra principal payment — #{notes}")
+              transfer = create_payment_transfer(amount, "Extra principal payment — #{notes}")
 
               # Update loan balance
               loan.account.sync_later
 
               # Send extra payment notification
               loan.notification_service.payment_confirmation(amount)
+
+              transfer
             end
           end
 
           class GeneralPayment < BaseStrategy
             def process
               # General payment - apply to outstanding balance
-              create_payment_transfer(amount, notes)
+              transfer = create_payment_transfer(amount, notes)
 
               # Check if this covers any pending installments
               process_pending_installments if loan.next_pending_installment
 
               # Send payment confirmation
               loan.notification_service.payment_confirmation(amount)
+
+              transfer
             end
 
             private
@@ -996,9 +1020,7 @@ class Loan < ApplicationRecord
       return unless compliance_type == "sharia"
 
       # Sharia loans cannot have conventional interest
-      if interest_rate.present? && interest_rate > 0
-        errors.add(:interest_rate, "cannot be set for Sharia-compliant loans")
-      end
+      self.interest_rate = nil if interest_rate.present? && interest_rate > 0
 
       # Must have Islamic product type if Sharia compliant
       if islamic_product_type.blank?
@@ -1040,6 +1062,7 @@ class Loan < ApplicationRecord
 
     def personal_lender_presence
       return unless personal_loan?
+      return if imported?
       if linked_contact_id.blank? && (counterparty_name.blank? && lender_name.blank?)
         errors.add(:base, "Provide a contact or lender name for personal loans")
       end
@@ -1051,6 +1074,19 @@ class Loan < ApplicationRecord
       elsif tenor_months.blank? && term_months.present?
         self.tenor_months = term_months
       end
+    end
+
+    def audit_change_allowed?(field, before, after)
+      return super unless field.to_s == "tenor_months"
+
+      term_change = previous_changes["term_months"]
+      term_changed = term_change.is_a?(Array) && term_change.first != term_change.last
+
+      if !term_changed && before.blank? && after.present? && term_months.present? && after.to_i == term_months.to_i
+        return false
+      end
+
+      super
     end
 
     def apply_interest_preferences
@@ -1152,9 +1188,12 @@ class NotificationService
 
     return nil unless config
 
+    amount_label = format_money(next_installment.total_amount)
+    due_date_label = next_installment.due_date&.to_s
+
     create_notification(
-      title: interpolate_template(config[:title_template], installment: next_installment, days: days_until_due),
-      message: interpolate_template(config[:message_template], installment: next_installment, days: days_until_due),
+      title: interpolate_template(config[:title_template], amount: amount_label, days: days_until_due, due_date: due_date_label),
+      message: interpolate_template(config[:message_template], amount: amount_label, days: days_until_due, due_date: due_date_label),
       priority: config[:priority],
       action_url: Rails.application.routes.url_helpers.new_payment_loan_path(loan.account),
       icon: config[:icon]
@@ -1167,11 +1206,12 @@ class NotificationService
 
     total_overdue = overdue_installments.sum(:total_amount)
     days_overdue = (Date.current - overdue_installments.first.due_date).to_i
+    formatted_total = format_money(total_overdue)
     config = NOTIFICATION_CONFIG[:overdue_payment]
 
     create_notification(
-      title: interpolate_template(config[:title_template], installments: overdue_installments, total: total_overdue, days: days_overdue),
-      message: interpolate_template(config[:message_template], installments: overdue_installments, total: total_overdue, days: days_overdue),
+      title: interpolate_template(config[:title_template], count: overdue_installments.size, total: formatted_total, days: days_overdue),
+      message: interpolate_template(config[:message_template], count: overdue_installments.size, total: formatted_total, days: days_overdue),
       priority: config[:priority],
       action_url: Rails.application.routes.url_helpers.new_payment_loan_path(loan.account),
       icon: config[:icon]
@@ -1180,10 +1220,11 @@ class NotificationService
 
   def payment_confirmation(payment_amount)
     config = NOTIFICATION_CONFIG[:payment_confirmation]
+    amount_label = format_money(payment_amount)
 
     create_notification(
-      title: interpolate_template(config[:title_template], amount: payment_amount),
-      message: interpolate_template(config[:message_template], amount: payment_amount),
+      title: interpolate_template(config[:title_template], amount: amount_label),
+      message: interpolate_template(config[:message_template], amount: amount_label),
       priority: config[:priority],
       action_url: Rails.application.routes.url_helpers.account_path(loan.account),
       icon: config[:icon]
@@ -1260,12 +1301,16 @@ class NotificationService
         icon: icon,
         created_at: Time.current,
         loan_id: loan.id,
-        account_id: loan.account_id
+        account_id: loan.account&.id
       }
     end
 
     def format_money(amount)
-      Money.new(amount, loan.account.currency).format
+      return "" if amount.nil?
+
+      currency = loan.account&.currency || Current.family&.currency || "USD"
+      money = amount.is_a?(Money) ? amount : Money.new(amount, currency)
+      money.format
     end
 end
 

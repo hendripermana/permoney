@@ -105,7 +105,7 @@ class Sync < ApplicationRecord
   # 4. Separate transaction untuk parent finalization
   def finalize_if_all_children_finalized
     # Early return jika tidak dalam state yang bisa di-finalize
-    return unless syncing? || pending?
+    return unless finalizable_state?
 
     # PERFORMANCE: Cek children tanpa lock dulu untuk menghindari unnecessary locking
     return unless all_children_finalized?
@@ -129,7 +129,7 @@ class Sync < ApplicationRecord
         reload.lock!("FOR UPDATE NOWAIT")
 
         # Double-check state setelah lock (idempotency)
-        return unless syncing? || pending?
+        return unless finalizable_state?
         return unless all_children_finalized?
 
         # Finalize sync
@@ -249,6 +249,10 @@ class Sync < ApplicationRecord
 
     def update_family_sync_timestamp
       family.touch(:latest_sync_activity_at)
+    end
+
+    def finalizable_state?
+      syncing? || pending? || failed?
     end
 
     def family

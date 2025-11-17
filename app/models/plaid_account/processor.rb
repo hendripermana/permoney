@@ -53,20 +53,27 @@ class PlaidAccount::Processor
 
         # Name and subtype are the attributes a user can override for Plaid accounts
         # Use enrichable pattern to respect locked attributes
+        subtype = map_subtype(plaid_account.plaid_type, plaid_account.plaid_subtype)
+
+        account_attributes = { name: plaid_account.name }
+        if subtype.present? && account.enrichable?(:subtype) && !(account.accountable&.locked?(:subtype))
+          account_attributes[:subtype] = subtype
+        end
+
         account.enrich_attributes(
-          {
-            name: plaid_account.name
-          },
+          account_attributes,
           source: "plaid"
         )
 
         # Enrich subtype on the accountable, respecting locks
-        account.accountable.enrich_attributes(
-          {
-            subtype: map_subtype(plaid_account.plaid_type, plaid_account.plaid_subtype)
-          },
-          source: "plaid"
-        )
+        if subtype.present?
+          account.accountable.enrich_attributes(
+            {
+              subtype: subtype
+            },
+            source: "plaid"
+          )
+        end
 
         account.assign_attributes(
           balance: balance_calculator.balance,

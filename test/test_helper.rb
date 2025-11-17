@@ -13,11 +13,36 @@ ENV["RAILS_ENV"] ||= "test"
 # In test environment, we don't need actual Redis connection
 Redis.singleton_class.prepend(Module.new do
   def new(*args, **kwargs)
-    mock = Object.new
-    def mock.ping
-      "PONG"
-    end
-    mock
+    @__redis_mock ||= Class.new do
+      def initialize
+        @store = Hash.new { |h, k| h[k] = {} }
+      end
+
+      def ping
+        "PONG"
+      end
+
+      def hincrby(key, field, increment)
+        @store[key][field] = (@store[key][field] || 0) + increment.to_i
+      end
+
+      def expire(_key, _ttl)
+        true
+      end
+
+      def hget(key, field)
+        @store[key][field]
+      end
+
+      def del(key)
+        @store.delete(key)
+        true
+      end
+
+      def multi
+        yield self
+      end
+    end.new
   end
 end)
 
@@ -76,6 +101,16 @@ module ActiveSupport
     # Add more helper methods to be used by all tests here...
     def sign_in(user)
       post sessions_path, params: { email: user.email, password: user_password_test }
+    end
+
+    def sign_out(user = nil)
+      session_record = if user.present?
+        user.sessions.order(created_at: :desc).first
+      else
+        Session.order(created_at: :desc).first
+      end
+
+      delete session_path(session_record) if session_record.present?
     end
 
     def with_env_overrides(overrides = {}, &block)

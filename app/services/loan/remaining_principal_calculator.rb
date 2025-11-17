@@ -6,7 +6,10 @@ class Loan::RemainingPrincipalCalculator
 
   # Returns a decimal number in account currency units
   def remaining_principal
-    base = (@account.accountable.initial_balance || 0).to_d
+    loan_record = @account.accountable
+    loan_record = loan_record.reload if loan_record.respond_to?(:reload) && loan_record.persisted?
+
+    base = (loan_record.initial_balance || 0).to_d
 
     tx_join = "INNER JOIN transactions ON transactions.id = entries.entryable_id AND entries.entryable_type = 'Transaction'"
 
@@ -23,7 +26,7 @@ class Loan::RemainingPrincipalCalculator
     principal_paid = @account
       .entries
       .joins(tx_join)
-      .where(transactions: { kind: "funds_movement" })
+      .where(transactions: { kind: %w[funds_movement loan_payment] })
       .where("entries.amount < 0")
       .sum("-entries.amount")
       .to_d
@@ -31,7 +34,7 @@ class Loan::RemainingPrincipalCalculator
     remaining = (base + disbursements - principal_paid)
 
     if principal_paid.zero?
-      fallback = @account.accountable.principal_amount
+      fallback = loan_record.principal_amount
       return fallback.to_d if fallback.present?
     end
 

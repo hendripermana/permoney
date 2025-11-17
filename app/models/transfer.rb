@@ -72,6 +72,22 @@ class Transfer < ApplicationRecord
     inflow_transaction&.entry&.amount_money&.abs
   end
 
+  # Backwards compatibility helpers for legacy tests/components
+  def amount
+    money = amount_abs
+    return nil if money.nil?
+
+    money.respond_to?(:amount) ? money.amount : money
+  end
+
+  def source_account
+    from_account
+  end
+
+  def destination_account
+    to_account
+  end
+
   def name
     acc = to_account
     if payment?

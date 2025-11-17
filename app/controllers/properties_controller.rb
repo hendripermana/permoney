@@ -8,18 +8,38 @@ class PropertiesController < ApplicationController
   end
 
   def create
+    sanitized_params = property_params
+    return_path = safe_return_path(sanitized_params[:return_to])
+
     @account = Current.family.accounts.create!(
-      property_params.merge(currency: Current.family.currency, balance: 0, status: "draft")
+      sanitized_params.except(:return_to, :balance).merge(currency: Current.family.currency, balance: 0, status: "draft")
     )
 
-    redirect_to balances_property_path(@account)
+    redirect_to(return_path.presence || balances_property_path(@account))
   end
 
   def update
-    if @account.update(property_params)
+    balance_value = property_params[:balance]
+
+    if balance_value.present?
+      result = @account.set_current_balance(balance_value.to_d)
+      unless result.success?
+        @error_message = result.error_message
+        render :edit, status: :unprocessable_entity
+        return
+      end
+      @account.sync_later
+    end
+
+    update_attributes = property_params.except(:return_to, :balance)
+
+    if @account.update(update_attributes)
       @success_message = "Property details updated successfully."
 
-      if @account.active?
+      if balance_value.present?
+        flash[:notice] = I18n.t("accounts.update.success", type: @account.accountable_type.underscore.humanize)
+        redirect_to account_path(@account)
+      elsif @account.active?
         render :edit
       else
         redirect_to balances_property_path(@account)
@@ -89,7 +109,7 @@ class PropertiesController < ApplicationController
 
     def property_params
       params.require(:account)
-            .permit(:name, :accountable_type, accountable_attributes: [ :id, :subtype, :year_built, :area_unit, :area_value ])
+            .permit(:name, :subtype, :balance, :return_to, :accountable_type, accountable_attributes: [ :id, :subtype, :year_built, :area_unit, :area_value ])
     end
 
     def set_property

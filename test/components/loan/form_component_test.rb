@@ -186,4 +186,18 @@ class Loan::FormComponentTest < ViewComponent::TestCase
     # Should have proper form styling
     assert_selector "input.w-full"
   end
+
+  private
+
+    def default_loan_attributes
+      {
+        debt_kind: "institutional",
+        counterparty_type: "institution",
+        counterparty_name: "Test Bank",
+        currency: "USD",
+        rate_type: "fixed",
+        term_months: 12,
+        initial_balance: 1_000_000
+      }
+    end
 end

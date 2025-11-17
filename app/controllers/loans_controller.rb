@@ -26,6 +26,13 @@ class LoansController < ApplicationController
     @account = Current.family.accounts.find(params[:id])
     loan = @account.accountable
 
+    unless borrowing_params[:loan_account_id].present? && borrowing_params[:loan_account_id].to_s == @account.id.to_s
+      @available_accounts = available_payment_source_accounts(Current.family)
+      @error_message = "Loan account must be selected"
+      render :new_borrowing, status: :unprocessable_entity
+      return
+    end
+
     begin
       transfer = loan.borrow_more(
         amount: borrowing_params[:amount],
@@ -47,6 +54,29 @@ class LoansController < ApplicationController
       @available_accounts = available_payment_source_accounts(Current.family)
       @error_message = e.message
       render :new_borrowing, status: :unprocessable_entity
+    end
+  end
+
+  def create
+    service_params = account_params.except(:return_to)
+    result = DebtOriginationService.call!(family: Current.family, params: service_params)
+
+    if result.success?
+      @account = result.account
+      @account.lock_saved_attributes!
+
+      redirect_to(
+        safe_return_path(account_params[:return_to]) || @account,
+        allow_other_host: false,
+        notice: "Loan account created — Opening balance anchored successfully."
+      )
+    else
+      form_params = account_params.except(:return_to)
+      @account = Current.family.accounts.build(form_params)
+      @account.errors.add(:base, result.error) if result.error.present?
+      @error_message = result.error
+      set_link_options
+      render :new, status: :unprocessable_entity
     end
   end
 

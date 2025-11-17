@@ -55,7 +55,13 @@ class PagesController < ApplicationController
   end
 
   def changelog
-    @release_notes = github_provider.fetch_latest_release_notes
+    provider = github_provider
+    github_release_url = if provider.respond_to?(:releases_url)
+      provider.releases_url
+    else
+      Provider::Github.new.releases_url
+    end
+    @release_notes = provider.fetch_latest_release_notes
 
     # Fallback if no release notes are available
     if @release_notes.nil?
@@ -64,7 +70,7 @@ class PagesController < ApplicationController
         username: "we-promise",
         name: "Release notes unavailable",
         published_at: Date.current,
-        body: "<p>Unable to fetch the latest release notes at this time. Please check back later or visit our <a href='https://github.com/we-promise/sure/releases' target='_blank'>GitHub releases page</a> directly.</p>"
+        body: "<p>Unable to fetch the latest release notes at this time. Please check back later or visit our <a href='#{github_release_url}' target='_blank'>GitHub releases page</a> directly.</p>"
       }
     end
 
