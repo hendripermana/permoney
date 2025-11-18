@@ -4,7 +4,7 @@ class AccountsController < ApplicationController
 
   def index
     # PERFORMANCE: Eager load associations to prevent N+1 queries
-    @manual_accounts = family.accounts.manual.alphabetically.includes(:accountable)
+    @manual_accounts = family.accounts.manual.alphabetically.includes(:accountable, :account_providers)
     @plaid_items = family.plaid_items.ordered.includes(:plaid_accounts)
     @simplefin_items = family.simplefin_items.ordered.includes(:simplefin_accounts)
     @lunchflow_items = family.lunchflow_items.ordered.includes(:lunchflow_accounts)
@@ -27,7 +27,7 @@ class AccountsController < ApplicationController
     entries = @account.entries
                       .search(@q)
                       .reverse_chronological
-                      .includes(:account)
+                      .preload(:account, :transfer, entryable: [ :category, :merchant, :tags ])
 
     @pagy, @entries = pagy(:offset, entries, limit: per_page_param(10))
 
@@ -92,7 +92,7 @@ class AccountsController < ApplicationController
     end
 
     def set_account
-      @account = family.accounts.find(params[:id])
+      @account = family.accounts.includes(:account_providers).find(params[:id])
     end
 
     def load_loan_adjustment_prompt

@@ -22,6 +22,7 @@ class SyncCleanupJob < ApplicationJob
       cleanup_stuck_syncing_syncs
       cleanup_stuck_pending_syncs
       cleanup_stale_syncs
+      report_sync_health
     end
   rescue ActiveRecord::ConnectionNotEstablished => e
     # Gracefully handle database connection errors
@@ -119,5 +120,29 @@ class SyncCleanupJob < ApplicationJob
     # This is a fallback for edge cases not caught by other cleanup methods
     def cleanup_stale_syncs
       Sync.clean
+    end
+
+    # Observability: alert if any lingering syncs remain beyond expected windows
+    def report_sync_health
+      pending_old = Sync.where(status: "pending").where("created_at < ?", 10.minutes.ago)
+      syncing_old = Sync.where(status: "syncing").where("syncing_at < ?", 10.minutes.ago)
+      stale_count = Sync.where(status: "stale").count
+      failed_count = Sync.where(status: "failed").count
+
+      if pending_old.exists? || syncing_old.exists? || stale_count.positive? || failed_count.positive?
+        Rails.logger.warn("[SyncCleanup] Health warn pending=#{pending_old.count} syncing=#{syncing_old.count} stale=#{stale_count} failed=#{failed_count}")
+
+        Sentry.capture_message(
+          "Sync health warning",
+          level: :warning,
+          tags: { job: "sync_cleanup" },
+          extra: {
+            pending_older_than_10m: pending_old.count,
+            syncing_older_than_10m: syncing_old.count,
+            stale: stale_count,
+            failed: failed_count
+          }
+        ) if defined?(Sentry)
+      end
     end
 end

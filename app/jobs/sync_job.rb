@@ -17,10 +17,9 @@ class SyncJob < ApplicationJob
   retry_on ActiveRecord::ConnectionNotEstablished, wait: 2.seconds, attempts: 3
   retry_on Redis::ConnectionError, wait: 2.seconds, attempts: 3
 
-  # Discard jobs yang tidak bisa di-deserialize (sync sudah dihapus)
-  discard_on ActiveJob::DeserializationError do |job, error|
-    Rails.logger.warn("Discarding SyncJob - sync record no longer exists: #{error.message}")
-  end
+  # Retry ketika sync belum terlihat karena race commit (commit-safe enqueue
+  # sudah menutup mayoritas kasus, ini jadi safety net)
+  retry_on ActiveRecord::RecordNotFound, wait: 1.second, attempts: 3
 
   # Timeout untuk mencegah sync stuck selamanya
   # Menggunakan Sidekiq timeout (90 detik) + buffer untuk finalization
@@ -50,16 +49,10 @@ class SyncJob < ApplicationJob
   private
     def load_sync_record(sync)
       if sync.is_a?(Sync)
-        return sync.reload
+        sync.reload
+      else
+        Sync.find(sync)
       end
-
-      sync_record = Sync.find_by(id: sync)
-      unless sync_record
-        Rails.logger.warn("Sync record not found, job may be stale")
-        return nil
-      end
-
-      sync_record
     end
 
     def execute_with_timeout(sync_record)
@@ -84,11 +77,15 @@ class SyncJob < ApplicationJob
     end
 
     def handle_error(sync_record, error)
-      Rails.logger.error("Sync #{sync_record.id} failed: #{error.class} - #{error.message}")
-      Rails.logger.error(error.backtrace.first(5).join("\n")) if error.backtrace
+      if sync_record
+        Rails.logger.error("Sync #{sync_record.id} failed: #{error.class} - #{error.message}")
+        Rails.logger.error(error.backtrace.first(5).join("\n")) if error.backtrace
+      else
+        Rails.logger.error("Sync record missing when handling error: #{error.class} - #{error.message}")
+      end
 
       # Reload untuk mendapatkan state terbaru
-      sync_record = Sync.find_by(id: sync_record.id)
+      sync_record = Sync.find_by(id: sync_record&.id)
       return unless sync_record
 
       # IDEMPOTENCY: Hanya update jika masih dalam state yang bisa di-update

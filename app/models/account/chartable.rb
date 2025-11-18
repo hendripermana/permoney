@@ -24,9 +24,9 @@ module Account::Chartable
   end
 
   def sparkline_series
-    cache_key = family.build_cache_key("#{id}_sparkline", invalidate_on_data_updates: true)
+    cache_key = family.build_cache_key("#{id}_sparkline_#{updated_at.to_i}", invalidate_on_data_updates: true)
 
-    Rails.cache.fetch(cache_key, expires_in: 24.hours) do
+    Rails.cache.fetch(cache_key, expires_in: 10.minutes) do
       balance_series
     end
   end

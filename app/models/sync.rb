@@ -20,6 +20,7 @@ class Sync < ApplicationRecord
   scope :visible, -> { incomplete.where("syncs.created_at > ?", VISIBLE_FOR.ago) }
 
   after_commit :update_family_sync_timestamp
+  after_commit :enqueue_sync_job, on: :create
 
   serialize :sync_stats, coder: JSON
 
@@ -253,6 +254,11 @@ class Sync < ApplicationRecord
 
     def finalizable_state?
       syncing? || pending? || failed?
+    end
+
+    def enqueue_sync_job
+      # Commit-safe enqueue to prevent deserialization races before the row is visible
+      SyncJob.perform_later(id)
     end
 
     def family

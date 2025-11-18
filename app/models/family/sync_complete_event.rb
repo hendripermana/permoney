@@ -29,6 +29,20 @@ class Family::SyncCompleteEvent
       Rails.logger.error("Family::SyncCompleteEvent net_worth_chart broadcast failed: #{e.message}\n#{e.backtrace&.join("\n")}")
     end
 
+    # Surface a small toast so users know sync-all has finished.
+    ActionView::Base.with_empty_template_cache do
+      turbo_stream = ApplicationController.render(
+        partial: "shared/notifications/notice",
+        locals: { message: "All accounts are up to date." }
+      )
+
+      Turbo::StreamsChannel.broadcast_append_to(
+        family,
+        target: "notification-tray",
+        html: turbo_stream
+      )
+    end
+
     # Identify recurring transaction patterns after sync
     begin
       RecurringTransaction.identify_patterns_for(family)
