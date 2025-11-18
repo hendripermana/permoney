@@ -8,7 +8,11 @@
             size: "sm",
             href: sync_all_accounts_path,
             disabled: Current.family.syncing?,
-            frame: :_top
+            frame: :_top,
+            data: {
+              controller: "sync-button",
+              action: "click->sync-button#start"
+            }
           ) %>
       <%= render DS::Link.new(
         text: "New account",
@@ -18,6 +22,12 @@
         frame: :modal
       ) %>
     </div>
+    <% if Current.family.syncing? %>
+      <span class="text-sm text-secondary inline-flex items-center gap-1">
+        <span class="w-2 h-2 rounded-full bg-primary animate-pulse"></span>
+        Sync in progress...
+      </span>
+    <% end %>
   </div>
 </header>
 

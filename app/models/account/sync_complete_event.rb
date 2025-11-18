@@ -32,6 +32,20 @@ class Account::SyncCompleteEvent
       account.family.broadcast_sync_complete
     end
 
+    # Toast to indicate the single account finished syncing
+    ActionView::Base.with_empty_template_cache do
+      turbo_stream = ApplicationController.render(
+        partial: "shared/notifications/notice",
+        locals: { message: "#{account.name} is up to date." }
+      )
+
+      Turbo::StreamsChannel.broadcast_append_to(
+        account.family,
+        target: "notification-tray",
+        html: turbo_stream
+      )
+    end
+
     # Refresh entire account page (only applies if currently viewing this account)
     account.broadcast_refresh
   end

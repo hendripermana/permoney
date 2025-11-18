@@ -34,7 +34,11 @@
             size: "sm",
             href: sync_path_for(account),
             disabled: account.syncing?,
-            frame: :_top
+            frame: :_top,
+            data: {
+              controller: "sync-button",
+              action: "click->sync-button#start"
+            }
           ) %>
       <% end %>
 

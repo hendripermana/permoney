@@ -1,0 +1,22 @@
+<% state = sync_health_state %>
+<% total_active = state.values.compact.sum %>
+<% return if total_active.zero? %>
+
+<div class="rounded-lg border border-secondary bg-surface p-3 flex items-center gap-3">
+  <div class="w-2 h-2 rounded-full bg-warning animate-pulse"></div>
+  <div class="flex-1 text-sm">
+    <p class="font-medium text-primary">Sync activity detected</p>
+    <p class="text-secondary">
+      Pending: <%= state[:pending] %> • Syncing: <%= state[:syncing] %> • Stale: <%= state[:stale] %> • Failed: <%= state[:failed] %>
+    </p>
+  </div>
+  <%= render DS::Link.new(
+    text: "Refresh",
+    href: sync_all_accounts_path,
+    variant: :outline,
+    size: :sm,
+    icon: "refresh-cw",
+    frame: :_top,
+    data: { controller: "sync-button", action: "click->sync-button#start" }
+  ) %>
+</div>
