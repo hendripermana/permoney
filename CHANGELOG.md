@@ -1,3 +1,19 @@
+## [0.11.0](https://github.com/hendripermana/permoney/compare/v0.10.1...v0.11.0) (2025-11-19)
+
+### Features
+
+- feat: implement commits from we-promise/sure (#279 #307) and setup Biome+Ultracite (1ceea4f6)
+
+### Bug Fixes
+
+- fix: biome linting and formatting issues (73ccd947)
+- fix: set fetch-depth to 0 in publish workflow to ensure git describe finds tags (96d1484f)
+
+### Other Changes
+
+- Merge pull request #64 from hendripermana/feature/implement-we-promise-sure-commits (f52b7da3)
+- Merge pull request #63 from hendripermana/fix/publish-fetch-depth (6d179029)
+
 ## [0.10.1](https://github.com/hendripermana/permoney/compare/v0.10.0...v0.10.1) (2025-11-19)
 
 ### Bug Fixes
