@@ -1,31 +1,49 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.2.6/schema.json",
-  "vcs": {
-    "enabled": false,
-    "clientKind": "git",
-    "useIgnoreFile": true
-  },
+  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "extends": [
+    "ultracite"
+  ],
   "files": {
-    "ignoreUnknown": false,
-    "includes": ["app/javascript/**/*.js"]
+    "include": [
+      "app/javascript/**/*.js",
+      "app/javascript/**/*.ts"
+    ],
+    "ignore": [
+      "node_modules",
+      "vendor",
+      "tmp",
+      "log",
+      "public/assets",
+      "app/assets/builds",
+      "vendor/javascript"
+    ]
   },
   "formatter": {
     "enabled": true,
-    "useEditorconfig": true
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
   },
-  "assist": { "actions": { "source": { "organizeImports": "on" } } },
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true,
-      "complexity": {
-        "noForEach": "off"
-      }
+      "recommended": true
     }
   },
   "javascript": {
     "formatter": {
-      "quoteStyle": "double"
+      "quoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "es5",
+      "arrowParentheses": "always"
     }
+  },
+  "organizeImports": {
+    "enabled": true
+  },
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
   }
 }
