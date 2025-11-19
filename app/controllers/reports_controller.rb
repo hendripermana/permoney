@@ -70,8 +70,6 @@ class ReportsController < ApplicationController
       # Summary Metrics
       @summary_metrics = build_summary_metrics
 
-      # Comparison Data (Current vs Previous Period)
-      @comparison_data = build_comparison_data
 
       # Trends Data (Monthly breakdown)
       @trends_data = build_trends_data
@@ -105,21 +103,6 @@ class ReportsController < ApplicationController
       }
     end
 
-    def build_comparison_data
-      {
-        current: {
-          income: current_period_income,
-          expenses: current_period_expenses,
-          net: current_period_income - current_period_expenses
-        },
-        previous: {
-          income: previous_period_income,
-          expenses: previous_period_expenses,
-          net: previous_period_income - previous_period_expenses
-        },
-        currency_symbol: Money.new(0, Current.family.currency).currency.symbol
-      }
-    end
 
     def build_trends_data
       case @period_type

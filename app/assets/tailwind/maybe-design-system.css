@@ -376,6 +376,10 @@
     background-size: 1.25rem 1.25rem;
   }
 
+  textarea.form-field__input {
+    @apply whitespace-normal text-clip overflow-auto;
+  }
+
   .form-field__radio {
     @apply text-primary;
   }
