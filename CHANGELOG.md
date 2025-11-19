@@ -1,3 +1,70 @@
+## [0.10.0](https://github.com/hendripermana/permoney/compare/v0.9.7...v0.10.0) (2025-11-19)
+
+### Features
+
+- feat: implement auto-versioning and changelog generation (8a201947)
+- feat: Support name-based recurring transactions - upstream 3611413 (e0720c4f)
+- feat: Add admin-only settings sections and role-based access (a8f5afc) (7c02ed7a)
+- feat: PWA - Responsive menu positioning for desktop/mobile (b533a9b) (a9f0e5ac)
+- feat: Move Plaid test env vars to test setup/teardown (e065c98) (506f3551)
+- feat: Implement dynamic fields batch update to fix race condition (a0c28c20)
+- feat: Add change password functionality in settings (0ef06459)
+
+### Bug Fixes
+
+- fix: Transaction UI responsive layout and merchant display (b284508) (c686e7d7)
+- fix: prevent double render in turbo redirects (cb588d64)
+- fix: clean manual sync script lint (6cf6f3ae)
+- fix: Add optimistic balance update to DELETE to prevent stale balance (5fca35ad)
+- fix: CRITICAL - Remove invalid turbo_stream.action(:refresh) causing 500 error (207e68de)
+- fix: Use turbo:refresh instead of redirect to prevent stale balance flicker (025614ae)
+- fix: Remove optimistic updates, match Sure community approach (best practice) (92f597d4)
+- fix: Simplify sync to Sure community approach - remove cache-based debouncing (230b96b4)
+- fix: CRITICAL - Valuations must SET balance, not apply as flow (Sure community approach) (0d0e35d2)
+- fix: Sync debouncing race condition and modal glitch on transaction create (b4f0ea30)
+- fix: Use proper Turbo redirect for instant transaction list update (d77a3212)
+- fix: CRITICAL - Correct entry amount sign convention in optimistic balance updates (4fa18825)
+- fix: Correct flows_factor convention in optimistic balance updates (2f0f72b2)
+- fix: Remove PostgreSQL generated column updates from optimistic balance code (041a33d4)
+- fix: Remove trailing whitespace from entryable_resource.rb (7ffc065b)
+- fix: Remove trailing whitespace from transactions_controller.rb (28f747c8)
+- fix: Complete optimistic balance updates for all transaction operations (7dc5f0f7)
+- fix: Make expand_window_if_needed public to fix NoMethodError (55ea7c6d)
+- fix: Implement sync debouncing and optimistic balance updates (0d53cd78)
+- fix: Remove trailing whitespace from entryable_resource.rb (3d03920e)
+
+### Documentation
+
+- docs: Add critical fix verification and deployment guide (e1775132)
+- docs: Add deployment instructions for v0.9.7 release (311298dc)
+
+### Other Changes
+
+- Merge pull request #61 from hendripermana/feat/auto-versioning-and-changelog (076ddffb)
+- chore: enhance security and compliance for release workflows (6dbc9abb)
+- Merge pull request #60 from hendripermana/sync-health-and-ux-guard (d179e417)
+- Fallback to full balance recalculation when no anchor for windowed sync (2d9606f4)
+- Merge pull request #59 from hendripermana/sync-health-and-ux (4f783e39)
+- Improve sync stability, UX feedback, and dashboard health banner (bed868be)
+- Merge pull request #58 from hendripermana/feature/csv-dedup-enhancements (fe40d1a0)
+- Limit non-cash flows to loan accounts and update CSV duplicate names (a992b2db)
+- Integrate CSV dedup and stabilize tests (3d07ff4f)
+- Merge pull request #57 from hendripermana/feature/upstream-sync-4-commits (f35cf899)
+- Merge pull request #56 from hendripermana/feature/reports-dashboard (b7737973)
+- Fix google_sheets_instructions route path in transactions breakdown view (f7c5176f)
+- Merge pull request #55 from hendripermana/feature/reports-dashboard (ad0ba210)
+- Fix hash access in transactions breakdown view (462bff77)
+- Merge pull request #54 from hendripermana/feature/reports-dashboard (8493c3ac)
+- Fix reports view data structure - use category objects as keys (a0dc36cc)
+- Merge pull request #53 from hendripermana/feature/reports-dashboard (b265d53c)
+- Security hardening: CSV injection protection, HTTPS API enforcement, rate limiting, and secret leakage warnings (894395d7)
+- feat(reports): implement comprehensive reporting dashboard with budget tracking (8d37ffab)
+- Enable Sentry cron monitoring patches (f981a422)
+- Improve balance sync safety and monitoring config (9e667e5f)
+- Fix change password link on profile page (8313f78e)
+- Remove outdated optimization and testing documentation for server performance and balance calculation fixes (3de018ec)
+- Delete BACKGROUND_JOB_OPTIMIZATION_2025_11_09.md (01672281)
+
 # Changelog
 
 ## [0.9.7](https://github.com/hendripermana/permoney/compare/v0.9.6...v0.9.7) (2025-11-09)
