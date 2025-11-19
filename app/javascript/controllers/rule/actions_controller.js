@@ -3,12 +3,7 @@ import { Controller } from "@hotwired/stimulus";
 // Connects to data-controller="rule--actions"
 export default class extends Controller {
   static values = { actionExecutors: Array };
-  static targets = [
-    "destroyField",
-    "actionValue",
-    "selectTemplate",
-    "textTemplate",
-  ];
+  static targets = ["destroyField", "actionValue", "selectTemplate", "textTemplate"];
 
   remove(e) {
     if (e.params.destroy) {
@@ -21,7 +16,7 @@ export default class extends Controller {
 
   handleActionTypeChange(e) {
     const actionExecutor = this.actionExecutorsValue.find(
-      (executor) => executor.key === e.target.value,
+      (executor) => executor.key === e.target.value
     );
 
     // Clear any existing input elements first

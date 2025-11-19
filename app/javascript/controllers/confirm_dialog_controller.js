@@ -19,7 +19,7 @@ export default class extends Controller {
           const isConfirmed = this.element.returnValue === "confirm";
           resolve(isConfirmed);
         },
-        { once: true },
+        { once: true }
       );
     });
   }
@@ -38,8 +38,7 @@ export default class extends Controller {
     });
 
     this.titleTarget.textContent = data.title || "Are you sure?";
-    this.subtitleTarget.innerHTML =
-      data.body || "This action cannot be undone.";
+    this.subtitleTarget.innerHTML = data.body || "This action cannot be undone.";
   }
 
   // If data is a string, it's the title.  Otherwise, return the parsed object.

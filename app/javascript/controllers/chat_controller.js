@@ -20,8 +20,7 @@ export default class extends Controller {
 
     input.style.height = "auto";
     input.style.height = `${Math.min(input.scrollHeight, lineHeight * maxLines)}px`;
-    input.style.overflowY =
-      input.scrollHeight > lineHeight * maxLines ? "auto" : "hidden";
+    input.style.overflowY = input.scrollHeight > lineHeight * maxLines ? "auto" : "hidden";
   }
 
   submitSampleQuestion(e) {

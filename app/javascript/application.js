@@ -12,7 +12,7 @@ document.addEventListener("turbo:frame-missing", (event) => {
   // Prevent default error handling for drawer/modal frames
   const { detail } = event;
   const { response } = detail;
-  
+
   if (response.ok) {
     event.preventDefault();
     // Let the server handle the response

@@ -37,10 +37,8 @@ export default class extends Controller {
     if (!this.element.id) return;
 
     if (this.constructor.scrollPositions[this.element.id]) {
-      this.element.scrollTop =
-        this.constructor.scrollPositions[this.element.id].top;
-      this.element.scrollLeft =
-        this.constructor.scrollPositions[this.element.id].left;
+      this.element.scrollTop = this.constructor.scrollPositions[this.element.id].top;
+      this.element.scrollLeft = this.constructor.scrollPositions[this.element.id].left;
     }
   }
 }

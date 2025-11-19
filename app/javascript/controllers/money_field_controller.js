@@ -16,9 +16,9 @@ export default class extends Controller {
       this.amountTarget.step = currency.step;
 
       if (Number.isFinite(this.amountTarget.value)) {
-        this.amountTarget.value = Number.parseFloat(
-          this.amountTarget.value,
-        ).toFixed(currency.default_precision);
+        this.amountTarget.value = Number.parseFloat(this.amountTarget.value).toFixed(
+          currency.default_precision
+        );
       }
 
       this.symbolTarget.innerText = currency.symbol;

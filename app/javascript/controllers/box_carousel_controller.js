@@ -244,8 +244,7 @@ export default class extends Controller {
     const deltaX = point.clientX - this.startPosition.x;
     const deltaY = point.clientY - this.startPosition.y;
 
-    const isVertical =
-      this.directionValue === "top" || this.directionValue === "bottom";
+    const isVertical = this.directionValue === "top" || this.directionValue === "bottom";
     const delta = isVertical ? deltaY : deltaX;
     const rotationDelta = (delta * 0.5) / 2;
 
@@ -274,8 +273,7 @@ export default class extends Controller {
 
     this.isDragging = false;
 
-    const isVertical =
-      this.directionValue === "top" || this.directionValue === "bottom";
+    const isVertical = this.directionValue === "top" || this.directionValue === "bottom";
     const currentValue = isVertical ? this.rotateX : this.rotateY;
 
     const quarterRotations = Math.round(currentValue / 90);
@@ -292,8 +290,7 @@ export default class extends Controller {
         if (steps > 0) {
           newItemIndex = (newItemIndex + 1) % this.itemsValue.length;
         } else {
-          newItemIndex =
-            newItemIndex === 0 ? this.itemsValue.length - 1 : newItemIndex - 1;
+          newItemIndex = newItemIndex === 0 ? this.itemsValue.length - 1 : newItemIndex - 1;
         }
       }
 
@@ -333,10 +330,8 @@ export default class extends Controller {
     const newIndex = (this.currentItemIndex + 1) % this.itemsValue.length;
     this.pendingIndexChange = newIndex;
 
-    const isVertical =
-      this.directionValue === "top" || this.directionValue === "bottom";
-    const rotation =
-      this.currentRotation + (this.directionValue === "left" ? -90 : 90);
+    const isVertical = this.directionValue === "top" || this.directionValue === "bottom";
+    const rotation = this.currentRotation + (this.directionValue === "left" ? -90 : 90);
 
     if (isVertical) {
       this.rotateX = rotation;
@@ -357,15 +352,11 @@ export default class extends Controller {
 
     this.isRotating = true;
     const newIndex =
-      this.currentItemIndex === 0
-        ? this.itemsValue.length - 1
-        : this.currentItemIndex - 1;
+      this.currentItemIndex === 0 ? this.itemsValue.length - 1 : this.currentItemIndex - 1;
     this.pendingIndexChange = newIndex;
 
-    const isVertical =
-      this.directionValue === "top" || this.directionValue === "bottom";
-    const rotation =
-      this.currentRotation + (this.directionValue === "left" ? 90 : -90);
+    const isVertical = this.directionValue === "top" || this.directionValue === "bottom";
+    const rotation = this.currentRotation + (this.directionValue === "left" ? 90 : -90);
 
     if (isVertical) {
       this.rotateX = rotation;
@@ -402,20 +393,16 @@ export default class extends Controller {
 
       if (currentBackFaceIndex === 0) {
         this.prevIndex =
-          (this.pendingIndexChange + indexOffset + this.itemsValue.length) %
-          this.itemsValue.length;
+          (this.pendingIndexChange + indexOffset + this.itemsValue.length) % this.itemsValue.length;
       } else if (currentBackFaceIndex === 1) {
         this.currentIndex =
-          (this.pendingIndexChange + indexOffset + this.itemsValue.length) %
-          this.itemsValue.length;
+          (this.pendingIndexChange + indexOffset + this.itemsValue.length) % this.itemsValue.length;
       } else if (currentBackFaceIndex === 2) {
         this.nextIndex =
-          (this.pendingIndexChange + indexOffset + this.itemsValue.length) %
-          this.itemsValue.length;
+          (this.pendingIndexChange + indexOffset + this.itemsValue.length) % this.itemsValue.length;
       } else if (currentBackFaceIndex === 3) {
         this.afterNextIndex =
-          (this.pendingIndexChange + indexOffset + this.itemsValue.length) %
-          this.itemsValue.length;
+          (this.pendingIndexChange + indexOffset + this.itemsValue.length) % this.itemsValue.length;
       }
 
       this.pendingIndexChange = null;
@@ -430,12 +417,9 @@ export default class extends Controller {
 
     const faces = this.cubeTarget.querySelectorAll(".box-carousel-face");
     if (faces[faceIndex]) {
-      const itemIndex = [
-        this.prevIndex,
-        this.currentIndex,
-        this.nextIndex,
-        this.afterNextIndex,
-      ][faceIndex];
+      const itemIndex = [this.prevIndex, this.currentIndex, this.nextIndex, this.afterNextIndex][
+        faceIndex
+      ];
       const item = this.itemsValue[itemIndex];
 
       if (item) {

@@ -1,10 +1,4 @@
-import {
-  autoUpdate,
-  computePosition,
-  flip,
-  offset,
-  shift,
-} from "@floating-ui/dom";
+import { autoUpdate, computePosition, flip, offset, shift } from "@floating-ui/dom";
 import { Controller } from "@hotwired/stimulus";
 
 export default class extends Controller {
@@ -49,11 +43,7 @@ export default class extends Controller {
 
   startAutoUpdate() {
     if (!this._cleanup) {
-      this._cleanup = autoUpdate(
-        this.element,
-        this.tooltipTarget,
-        this.boundUpdate,
-      );
+      this._cleanup = autoUpdate(this.element, this.tooltipTarget, this.boundUpdate);
     }
   }
 

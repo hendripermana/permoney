@@ -18,18 +18,9 @@ const ICON_SVG_SELECTED_CLASSES = ["text-primary"];
 
 const ICON_SVG_UNSELECTED_CLASSES = ["text-secondary"];
 
-const INDICATOR_SELECTED_CLASSES = [
-  "flex",
-  "border-primary",
-  "bg-primary/10",
-  "text-primary",
-];
+const INDICATOR_SELECTED_CLASSES = ["flex", "border-primary", "bg-primary/10", "text-primary"];
 
-const INDICATOR_UNSELECTED_CLASSES = [
-  "hidden",
-  "border-secondary",
-  "text-secondary",
-];
+const INDICATOR_UNSELECTED_CLASSES = ["hidden", "border-secondary", "text-secondary"];
 
 export default class extends Controller {
   static targets = [
@@ -67,9 +58,7 @@ export default class extends Controller {
   selectLoanType(event) {
     const selectedType = event.currentTarget.dataset.loanType;
 
-    const radioButton = event.currentTarget.querySelector(
-      'input[type="radio"]',
-    );
+    const radioButton = event.currentTarget.querySelector('input[type="radio"]');
     if (radioButton) {
       radioButton.checked = true;
       radioButton.dispatchEvent(new Event("change", { bubbles: true }));
@@ -91,7 +80,7 @@ export default class extends Controller {
     }
 
     const fallback = this.element.querySelector(
-      'input[type="radio"][name="loan[debt_kind]"]:checked',
+      'input[type="radio"][name="loan[debt_kind]"]:checked'
     );
     this.loanTypeValue = fallback ? fallback.value : "personal";
   }
@@ -104,10 +93,7 @@ export default class extends Controller {
     }
 
     if (this.hasInstitutionalFieldsTarget) {
-      this.toggleFieldSection(
-        this.institutionalFieldsTarget,
-        type === "institutional",
-      );
+      this.toggleFieldSection(this.institutionalFieldsTarget, type === "institutional");
     }
 
     // Update any additional containers that rely on data attributes
@@ -222,9 +208,7 @@ export default class extends Controller {
     const currentIndex = steps.indexOf(this.currentStepValue || "type");
 
     this.stepIndicatorTargets.forEach((indicator, index) => {
-      const circle = indicator.querySelector(
-        '[data-loan-wizard-target="stepCircle"]',
-      );
+      const circle = indicator.querySelector('[data-loan-wizard-target="stepCircle"]');
       const isActive = index === currentIndex;
       const isCompleted = index < currentIndex;
 
@@ -314,9 +298,7 @@ export default class extends Controller {
   animateStepCompletion(stepIndex) {
     const indicators = this.stepIndicatorTargets;
     if (indicators[stepIndex]) {
-      const circle = indicators[stepIndex].querySelector(
-        '[data-loan-wizard-target="stepCircle"]',
-      );
+      const circle = indicators[stepIndex].querySelector('[data-loan-wizard-target="stepCircle"]');
       if (circle) {
         // Add completion animation
         circle.style.transform = "scale(1.2)";
@@ -348,7 +330,7 @@ export default class extends Controller {
 
     // Also update glow effects
     const glowElements = this.element.querySelectorAll(
-      '.progress-bar-glow, [class*="bg-success/"]',
+      '.progress-bar-glow, [class*="bg-success/"]'
     );
     glowElements.forEach((glow) => {
       if (glow.style.transform !== undefined) {
@@ -366,7 +348,7 @@ export default class extends Controller {
       case "type": {
         // Ensure a loan type has been selected
         const debtKindRadio = this.element.querySelector(
-          'input[type="radio"][name="loan[debt_kind]"]:checked',
+          'input[type="radio"][name="loan[debt_kind]"]:checked'
         );
         if (!debtKindRadio) {
           this.showError("Please select a loan type");
@@ -376,12 +358,8 @@ export default class extends Controller {
         // Validate account details (account name and current balance)
         // Account fields are outside the wizard component, so we need to look in the parent form
         const parentForm = this.element.closest("form");
-        const accountName = parentForm?.querySelector(
-          'input[name="account[name]"]',
-        );
-        const currentBalance = parentForm?.querySelector(
-          'input[name="account[balance]"]',
-        );
+        const accountName = parentForm?.querySelector('input[name="account[name]"]');
+        const currentBalance = parentForm?.querySelector('input[name="account[balance]"]');
 
         if (!accountName?.value?.trim()) {
           this.showError("Please enter an account name");
@@ -399,20 +377,14 @@ export default class extends Controller {
       }
       case "basic": {
         // Try multiple selectors for counterparty name field
-        let counterpartyName = this.element.querySelector(
-          'input[name="loan[counterparty_name]"]',
-        );
+        let counterpartyName = this.element.querySelector('input[name="loan[counterparty_name]"]');
         if (!counterpartyName) {
           // Try alternative selectors
-          counterpartyName = this.element.querySelector(
-            'input[id*="counterparty_name"]',
-          );
+          counterpartyName = this.element.querySelector('input[id*="counterparty_name"]');
         }
         if (!counterpartyName) {
           // Try by placeholder text
-          counterpartyName = this.element.querySelector(
-            'input[placeholder*="Ana, Bank Mandiri"]',
-          );
+          counterpartyName = this.element.querySelector('input[placeholder*="Ana, Bank Mandiri"]');
         }
 
         if (!counterpartyName) {
@@ -427,12 +399,8 @@ export default class extends Controller {
         }
 
         // Get loan type from radio button selection (more reliable)
-        const selectedRadio = this.element.querySelector(
-          'input[name="loan[debt_kind]"]:checked',
-        );
-        const selectedLoanType = selectedRadio
-          ? selectedRadio.value
-          : "personal";
+        const selectedRadio = this.element.querySelector('input[name="loan[debt_kind]"]:checked');
+        const selectedLoanType = selectedRadio ? selectedRadio.value : "personal";
 
         if (selectedLoanType === "personal") {
           // For personal loans, just lender name is enough
@@ -440,7 +408,7 @@ export default class extends Controller {
         } else {
           // For institutional loans, check if institution name is filled
           const institutionName = this.element.querySelector(
-            'input[name="loan[institution_name]"]',
+            'input[name="loan[institution_name]"]'
           );
           if (!institutionName?.value.trim()) {
             this.showError("Please enter the institution name");
@@ -450,12 +418,8 @@ export default class extends Controller {
         }
       }
       case "terms": {
-        const principalAmount = this.element.querySelector(
-          'input[name="loan[principal_amount]"]',
-        );
-        const termMonths = this.element.querySelector(
-          'input[name="loan[term_months]"]',
-        );
+        const principalAmount = this.element.querySelector('input[name="loan[principal_amount]"]');
+        const termMonths = this.element.querySelector('input[name="loan[term_months]"]');
 
         if (!principalAmount?.value || parseFloat(principalAmount.value) <= 0) {
           this.showError("Please enter a valid loan amount");
@@ -467,15 +431,10 @@ export default class extends Controller {
         }
 
         const interestFree = this.element.querySelector(
-          'input[name="loan[interest_free]"]',
+          'input[name="loan[interest_free]"]'
         )?.checked;
-        const interestRate = this.element.querySelector(
-          'input[name="loan[interest_rate]"]',
-        );
-        if (
-          !interestFree &&
-          (!interestRate?.value || parseFloat(interestRate.value) < 0)
-        ) {
+        const interestRate = this.element.querySelector('input[name="loan[interest_rate]"]');
+        if (!interestFree && (!interestRate?.value || parseFloat(interestRate.value) < 0)) {
           this.showError("Please enter a valid interest rate");
           return false;
         }
@@ -520,7 +479,7 @@ export default class extends Controller {
 
     // Set loan as personal type
     const personalRadio = this.element.querySelector(
-      '[data-loan-type="personal"] input[type="radio"]',
+      '[data-loan-type="personal"] input[type="radio"]'
     );
     if (personalRadio) {
       personalRadio.checked = true;
@@ -530,9 +489,7 @@ export default class extends Controller {
     }
 
     // Show success message
-    this.showSuccess(
-      "Quick setup applied! This loan is set as interest-free personal loan.",
-    );
+    this.showSuccess("Quick setup applied! This loan is set as interest-free personal loan.");
   }
 
   showSuccess(message) {
@@ -587,7 +544,7 @@ export default class extends Controller {
   toggleInterestRate(event) {
     const isInterestFree = event.target.checked;
     const interestRateSection = this.element.querySelector(
-      '[data-loan-wizard-target="interestRateSection"]',
+      '[data-loan-wizard-target="interestRateSection"]'
     );
 
     if (interestRateSection) {
@@ -595,7 +552,7 @@ export default class extends Controller {
         interestRateSection.style.display = "none";
         // Set interest rate to 0
         const interestRateInput = interestRateSection.querySelector(
-          'input[name="loan[interest_rate]"]',
+          'input[name="loan[interest_rate]"]'
         );
         if (interestRateInput) {
           interestRateInput.value = "0";
@@ -617,7 +574,7 @@ export default class extends Controller {
     this.element.dispatchEvent(
       new CustomEvent("wizard:step-changed", {
         detail: { step: this.currentStepValue },
-      }),
+      })
     );
   }
 
@@ -673,8 +630,7 @@ export default class extends Controller {
       this.monthlyPaymentTarget.textContent = formatter.format(monthly);
     if (this.hasTotalInterestTarget)
       this.totalInterestTarget.textContent = formatter.format(interest);
-    if (this.hasTotalAmountTarget)
-      this.totalAmountTarget.textContent = formatter.format(total);
+    if (this.hasTotalAmountTarget) this.totalAmountTarget.textContent = formatter.format(total);
   }
 
   toggleInterestFree(event) {

@@ -19,7 +19,7 @@ export default class extends Controller {
   addSubCondition() {
     const html = this.subConditionTemplateTarget.innerHTML.replaceAll(
       "IDX_CHILD_PLACEHOLDER",
-      this.#uniqueKey(),
+      this.#uniqueKey()
     );
 
     this.subConditionsListTarget.insertAdjacentHTML("beforeend", html);
@@ -38,12 +38,11 @@ export default class extends Controller {
 
     // Update the prefixes of all conditions from the parent rules controller
     if (rulesEl) {
-      const rulesController =
-        this.application.getControllerForElementAndIdentifier(rulesEl, "rules");
-      if (
-        rulesController &&
-        typeof rulesController.updateConditionPrefixes === "function"
-      ) {
+      const rulesController = this.application.getControllerForElementAndIdentifier(
+        rulesEl,
+        "rules"
+      );
+      if (rulesController && typeof rulesController.updateConditionPrefixes === "function") {
         rulesController.updateConditionPrefixes();
       }
     }
@@ -51,7 +50,7 @@ export default class extends Controller {
 
   handleConditionTypeChange(e) {
     const conditionFilter = this.conditionFiltersValue.find(
-      (filter) => filter.key === e.target.value,
+      (filter) => filter.key === e.target.value
     );
 
     if (conditionFilter.type === "select") {

@@ -1,6 +1,6 @@
 import { Controller } from "@hotwired/stimulus";
 import * as d3 from "d3";
-import { sankey, } from "d3-sankey";
+import { sankey } from "d3-sankey";
 
 // Connects to data-controller="sankey-chart"
 export default class extends Controller {
@@ -46,23 +46,14 @@ export default class extends Controller {
     const paddingRight = Number.parseFloat(computedStyle.paddingRight) || 0;
 
     const borderTop = Number.parseFloat(computedStyle.borderTopWidth) || 0;
-    const borderBottom =
-      Number.parseFloat(computedStyle.borderBottomWidth) || 0;
+    const borderBottom = Number.parseFloat(computedStyle.borderBottomWidth) || 0;
     const borderLeft = Number.parseFloat(computedStyle.borderLeftWidth) || 0;
     const borderRight = Number.parseFloat(computedStyle.borderRightWidth) || 0;
 
     const availableWidth =
-      containerRect.width -
-      paddingLeft -
-      paddingRight -
-      borderLeft -
-      borderRight;
+      containerRect.width - paddingLeft - paddingRight - borderLeft - borderRight;
     const availableHeight =
-      containerRect.height -
-      paddingTop -
-      paddingBottom -
-      borderTop -
-      borderBottom;
+      containerRect.height - paddingTop - paddingBottom - borderTop - borderBottom;
 
     return {
       width: Math.max(320, availableWidth),
@@ -106,10 +97,7 @@ export default class extends Controller {
     this.lastDataHash = null;
 
     // Listen for resize events from SankeyAutoSizer
-    this.element.addEventListener(
-      "sankey:resize",
-      this.handleExternalResize.bind(this),
-    );
+    this.element.addEventListener("sankey:resize", this.handleExternalResize.bind(this));
 
     // Initial draw with a slight delay to ensure container is properly sized
     requestAnimationFrame(() => {
@@ -140,10 +128,7 @@ export default class extends Controller {
 
   disconnect() {
     // Clean up event listeners
-    this.element.removeEventListener(
-      "sankey:resize",
-      this.handleExternalResize.bind(this),
-    );
+    this.element.removeEventListener("sankey:resize", this.handleExternalResize.bind(this));
 
     if (this.tooltip) {
       this.tooltip.remove();
@@ -164,12 +149,8 @@ export default class extends Controller {
     const applyHoverEffect = (targetLinks, allLinks, allNodes) => {
       const targetLinksSet = new Set(targetLinks);
       allLinks
-        .style("opacity", (linkData) =>
-          targetLinksSet.has(linkData) ? 1 : HOVER_OPACITY,
-        )
-        .style("filter", (linkData) =>
-          targetLinksSet.has(linkData) ? HOVER_FILTER : "none",
-        );
+        .style("opacity", (linkData) => (targetLinksSet.has(linkData) ? 1 : HOVER_OPACITY))
+        .style("filter", (linkData) => (targetLinksSet.has(linkData) ? HOVER_FILTER : "none"));
 
       const connectedNodes = new Set();
       targetLinks.forEach((link) => {
@@ -177,9 +158,7 @@ export default class extends Controller {
         connectedNodes.add(link.target);
       });
 
-      allNodes.style("opacity", (nodeData) =>
-        connectedNodes.has(nodeData) ? 1 : HOVER_OPACITY,
-      );
+      allNodes.style("opacity", (nodeData) => (connectedNodes.has(nodeData) ? 1 : HOVER_OPACITY));
     };
 
     const resetHoverEffect = (allLinks, allNodes) => {
@@ -195,10 +174,7 @@ export default class extends Controller {
 
     // Calculate dynamic spacing and sizing
     const margin = this.#calculateDynamicPadding(width, height);
-    const { nodeWidth, nodePadding } = this.#calculateNodeDimensions(
-      width,
-      height,
-    );
+    const { nodeWidth, nodePadding } = this.#calculateNodeDimensions(width, height);
     const { labelFontSize, valueFontSize } = this.#calculateFontSizes(width);
 
     // Create responsive SVG that shows all content without cutoff
@@ -251,9 +227,7 @@ export default class extends Controller {
         }
 
         const d3Color = d3.color(colorStr);
-        return d3Color
-          ? d3Color.copy({ opacity: opacity })
-          : "var(--color-gray-400)";
+        return d3Color ? d3Color.copy({ opacity: opacity }) : "var(--color-gray-400)";
       };
 
       const sourceStopColor = getStopColorWithOpacity(link.source.color);
@@ -266,15 +240,9 @@ export default class extends Controller {
         .attr("x1", link.source.x1)
         .attr("x2", link.target.x0);
 
-      gradient
-        .append("stop")
-        .attr("offset", "0%")
-        .attr("stop-color", sourceStopColor);
+      gradient.append("stop").attr("offset", "0%").attr("stop-color", sourceStopColor);
 
-      gradient
-        .append("stop")
-        .attr("offset", "100%")
-        .attr("stop-color", targetStopColor);
+      gradient.append("stop").attr("offset", "100%").attr("stop-color", targetStopColor);
     });
 
     // Draw links
@@ -294,11 +262,7 @@ export default class extends Controller {
         });
         return path;
       })
-      .attr(
-        "stroke",
-        (d, i) =>
-          `url(#link-gradient-${d.source.index}-${d.target.index}-${i})`,
-      )
+      .attr("stroke", (d, i) => `url(#link-gradient-${d.source.index}-${d.target.index}-${i})`)
       .attr("stroke-width", (d) => Math.max(1, d.width))
       .style("transition", "opacity 0.3s ease");
 
@@ -323,10 +287,7 @@ export default class extends Controller {
         // const w = x1 - x0; // Not directly used in path string, but good for context
 
         // Dynamic corner radius based on node height, maxed at 8
-        const effectiveCornerRadius = Math.max(
-          0,
-          Math.min(cornerRadius, h / 2),
-        );
+        const effectiveCornerRadius = Math.max(0, Math.min(cornerRadius, h / 2));
 
         const isSourceNode =
           d.sourceLinks &&
@@ -407,7 +368,7 @@ export default class extends Controller {
       .on("mouseenter", (event, d) => {
         // Find all links connected to this node
         const connectedLinks = sankeyData.links.filter(
-          (link) => link.source === d || link.target === d,
+          (link) => link.source === d || link.target === d
         );
 
         applyHoverEffect(connectedLinks, linkPaths, nodeGroups);
@@ -429,7 +390,7 @@ export default class extends Controller {
         // Smart text truncation based on available space
         const maxChars = Math.max(
           8,
-          Math.min(20, Math.floor(maxTextWidth / (labelFontSize * 0.6))),
+          Math.min(20, Math.floor(maxTextWidth / (labelFontSize * 0.6)))
         );
         let displayName = d.name;
         let isNameTruncated = false;
@@ -439,10 +400,7 @@ export default class extends Controller {
           isNameTruncated = true;
         }
 
-        const nameSpan = textElement
-          .append("tspan")
-          .text(displayName)
-          .attr("font-weight", "500");
+        const nameSpan = textElement.append("tspan").text(displayName).attr("font-weight", "500");
 
         // Add tooltip for truncated names
         if (isNameTruncated) {
@@ -473,10 +431,7 @@ export default class extends Controller {
     this.tooltip = d3
       .select("body")
       .append("div")
-      .attr(
-        "class",
-        "bg-gray-700 text-white text-sm p-2 rounded pointer-events-none absolute z-50",
-      )
+      .attr("class", "bg-gray-700 text-white text-sm p-2 rounded pointer-events-none absolute z-50")
       .style("opacity", 0)
       .style("pointer-events", "none");
   }
@@ -486,12 +441,7 @@ export default class extends Controller {
   }
 
   #showNodeTooltip(event, nodeData) {
-    this.#displayTooltip(
-      event,
-      nodeData.value,
-      nodeData.percentage,
-      nodeData.name,
-    );
+    this.#displayTooltip(event, nodeData.value, nodeData.percentage, nodeData.name);
   }
 
   #displayTooltip(event, value, percentage, title = null) {
@@ -523,9 +473,7 @@ export default class extends Controller {
 
   #updateTooltipPosition(event) {
     if (this.tooltip) {
-      this.tooltip
-        .style("left", `${event.pageX + 10}px`)
-        .style("top", `${event.pageY - 10}px`);
+      this.tooltip.style("left", `${event.pageX + 10}px`).style("top", `${event.pageY - 10}px`);
     }
   }
 

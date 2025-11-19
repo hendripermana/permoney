@@ -67,20 +67,17 @@ export default class extends Controller {
 
     // Set up smart defaults
     this.setSmartDefaults();
-    
+
     // Initialize progress indicator (start at step 0 - no steps completed yet)
     this.updateProgress(0);
-    
+
     // Add form field listeners for real-time progress tracking
     this.setupProgressTracking();
   }
 
   selectPersonal() {
     // Update UI state
-    this.updateCardSelection(
-      this.personalCardTarget,
-      this.institutionalCardTarget,
-    );
+    this.updateCardSelection(this.personalCardTarget, this.institutionalCardTarget);
     this.showPersonalFields();
 
     // Update hidden fields
@@ -99,10 +96,7 @@ export default class extends Controller {
 
   selectInstitutional() {
     // Update UI state
-    this.updateCardSelection(
-      this.institutionalCardTarget,
-      this.personalCardTarget,
-    );
+    this.updateCardSelection(this.institutionalCardTarget, this.personalCardTarget);
     this.showInstitutionalFields();
 
     // Update hidden fields
@@ -123,10 +117,8 @@ export default class extends Controller {
     // Use data attributes for state management (best practice 2025)
     // This ensures consistent styling via CSS data-* selectors
     // Optimized: Cache selector results to avoid multiple DOM queries
-    const selectedCardDiv =
-      selectedCard?.querySelector?.(".loan-type-card") || selectedCard;
-    const unselectedCardDiv =
-      unselectedCard?.querySelector?.(".loan-type-card") || unselectedCard;
+    const selectedCardDiv = selectedCard?.querySelector?.(".loan-type-card") || selectedCard;
+    const unselectedCardDiv = unselectedCard?.querySelector?.(".loan-type-card") || unselectedCard;
 
     // Batch DOM updates for better performance (Rails 8.1 optimization)
     if (selectedCardDiv) {
@@ -196,8 +188,7 @@ export default class extends Controller {
     if (!this.interestRateTarget.value) {
       // Cache meta tag query to avoid repeated DOM lookups
       if (!this._cachedCurrency) {
-        const currencyMeta =
-          document.querySelector('meta[name="family-currency"]');
+        const currencyMeta = document.querySelector('meta[name="family-currency"]');
         this._cachedCurrency = currencyMeta?.content || "IDR";
       }
       this.interestRateTarget.value = this._cachedCurrency === "IDR" ? "12" : "6";
@@ -256,17 +247,11 @@ export default class extends Controller {
       errors.push("Lender/Institution name is required");
     }
 
-    if (
-      !this.loanAmountTarget.value ||
-      parseFloat(this.loanAmountTarget.value) <= 0
-    ) {
+    if (!this.loanAmountTarget.value || parseFloat(this.loanAmountTarget.value) <= 0) {
       errors.push("Loan amount must be greater than 0");
     }
 
-    if (
-      !this.termMonthsTarget.value ||
-      parseInt(this.termMonthsTarget.value, 10) <= 0
-    ) {
+    if (!this.termMonthsTarget.value || parseInt(this.termMonthsTarget.value, 10) <= 0) {
       errors.push("Repayment period must be at least 1 month");
     }
 
@@ -278,8 +263,7 @@ export default class extends Controller {
     const helpMessages = {
       personal: {
         lenderName: "Enter the name of the person you're borrowing from",
-        relationship:
-          "Select your relationship to help with reminders and context",
+        relationship: "Select your relationship to help with reminders and context",
         loanAmount: "Enter the total amount you're borrowing",
         termMonths: "How many months will you take to repay this loan?",
       },
@@ -287,8 +271,7 @@ export default class extends Controller {
         institutionName: "Enter the name of the bank or institution",
         fintechType: "Select the type of institution for better categorization",
         loanAmount: "Enter the total loan amount from the institution",
-        termMonths:
-          "The loan term in months (usually 12-60 for personal loans)",
+        termMonths: "The loan term in months (usually 12-60 for personal loans)",
       },
     };
 
@@ -303,8 +286,7 @@ export default class extends Controller {
   showTooltip(message) {
     // Simple tooltip implementation
     const tooltip = document.createElement("div");
-    tooltip.className =
-      "absolute z-10 px-2 py-1 text-xs text-white bg-gray-800 rounded shadow-lg";
+    tooltip.className = "absolute z-10 px-2 py-1 text-xs text-white bg-gray-800 rounded shadow-lg";
     tooltip.textContent = message;
 
     // Position and show tooltip (simplified)
@@ -341,8 +323,7 @@ export default class extends Controller {
         // Annuity calculation (simplified)
         const monthlyRate = rate / 12;
         const monthlyPayment =
-          (amount * (monthlyRate * (1 + monthlyRate) ** term)) /
-          ((1 + monthlyRate) ** term - 1);
+          (amount * (monthlyRate * (1 + monthlyRate) ** term)) / ((1 + monthlyRate) ** term - 1);
         return monthlyPayment;
       }
     }
@@ -429,9 +410,7 @@ export default class extends Controller {
 
     const closeButton = modal.querySelector("[data-preview-close]");
     if (closeButton) {
-      closeButton.addEventListener("mousedown", (event) =>
-        event.stopPropagation(),
-      );
+      closeButton.addEventListener("mousedown", (event) => event.stopPropagation());
       closeButton.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -467,20 +446,13 @@ export default class extends Controller {
   // Collect form data for preview
   collectFormData() {
     const initialRaw = this.normalizeNumber(this.targetValue("loanAmount", ""));
-    const currentRaw = this.normalizeNumber(
-      this.targetValue("currentBalance", ""),
-    );
+    const currentRaw = this.normalizeNumber(this.targetValue("currentBalance", ""));
     const tenorMonths = this.targetValue("termMonths", "12") || "12";
-    const paymentFrequency =
-      this.targetValue("paymentFrequency", "MONTHLY") || "MONTHLY";
-    const scheduleMethod = this.targetValue("scheduleMethod", "ANNUITY")
-      .toString()
-      .toUpperCase();
+    const paymentFrequency = this.targetValue("paymentFrequency", "MONTHLY") || "MONTHLY";
+    const scheduleMethod = this.targetValue("scheduleMethod", "ANNUITY").toString().toUpperCase();
     const startDate = this.normalizeDate(this.targetValue("startDate", ""));
-    const rate =
-      this.normalizeNumber(this.targetValue("interestRate", "0")) || "0";
-    const balloon =
-      this.normalizeNumber(this.targetValue("balloonAmount", "0")) || "0";
+    const rate = this.normalizeNumber(this.targetValue("interestRate", "0")) || "0";
+    const balloon = this.normalizeNumber(this.targetValue("balloonAmount", "0")) || "0";
 
     const principal =
       currentRaw && currentRaw !== ""
@@ -510,8 +482,7 @@ export default class extends Controller {
 
   // Build preview URL with form data
   buildPreviewUrl(formData) {
-    const baseUrl =
-      this.data.get("preview-base-href") || "/loans/schedule_preview";
+    const baseUrl = this.data.get("preview-base-href") || "/loans/schedule_preview";
     const params = new URLSearchParams();
 
     Object.entries(formData).forEach(([key, value]) => {
@@ -670,22 +641,21 @@ export default class extends Controller {
           // Completed step - Modern checkmark animation
           stepTarget.className =
             "progress-step relative w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold transition-all duration-500 ease-out transform-gpu bg-primary text-white border-2 border-primary shadow-lg scale-110";
-          
+
           // Animated checkmark with scale-in effect
           stepTarget.innerHTML = `
             <svg class="w-5 h-5 animate-scale-in" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="animation-delay: 0.1s;">
               <path d="M5 13l4 4L19 7"></path>
             </svg>
           `;
-          
+
           // Hide pulse ring for completed
           if (pulseRing) pulseRing.style.opacity = "0";
-          
         } else if (step === completedStep + 1) {
           // Current step - Active state with pulse animation
           stepTarget.className =
             "progress-step relative w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold transition-all duration-500 ease-out transform-gpu bg-primary/10 text-primary border-2 border-primary ring-4 ring-primary/30 shadow-lg scale-110";
-          
+
           // Show step number
           if (stepNumber) {
             stepNumber.textContent = step;
@@ -693,18 +663,17 @@ export default class extends Controller {
           } else {
             stepTarget.innerHTML = `<span class="step-number transition-all duration-300 ease-out">${step}</span>`;
           }
-          
+
           // Show pulse ring with animation
           if (pulseRing) {
             pulseRing.style.opacity = "1";
             pulseRing.classList.add("animate-pulse");
           }
-          
         } else {
           // Future step - Subtle inactive state
           stepTarget.className =
             "progress-step relative w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold transition-all duration-500 ease-out transform-gpu bg-secondary/10 text-secondary border-2 border-secondary/30 shadow-sm";
-          
+
           // Show step number
           if (stepNumber) {
             stepNumber.textContent = step;
@@ -712,7 +681,7 @@ export default class extends Controller {
           } else {
             stepTarget.innerHTML = `<span class="step-number transition-all duration-300 ease-out opacity-60">${step}</span>`;
           }
-          
+
           // Hide pulse ring
           if (pulseRing) pulseRing.style.opacity = "0";
         }
@@ -751,8 +720,7 @@ export default class extends Controller {
     // Use requestAnimationFrame for smooth scroll (Rails 8.1 best practice)
     requestAnimationFrame(() => {
       const offset = 20; // Small offset for visual breathing room
-      const elementPosition =
-        section.getBoundingClientRect().top + window.pageYOffset;
+      const elementPosition = section.getBoundingClientRect().top + window.pageYOffset;
       const offsetPosition = elementPosition - offset;
 
       window.scrollTo({
@@ -785,7 +753,7 @@ export default class extends Controller {
     // Track step 1 completion (loan type selection)
     const personalCard = this.personalCardTarget;
     const institutionalCard = this.institutionalCardTarget;
-    
+
     const checkLoanTypeSelected = () => {
       const personalSelected = personalCard?.querySelector('[data-selected="true"]');
       const institutionalSelected = institutionalCard?.querySelector('[data-selected="true"]');
@@ -798,10 +766,10 @@ export default class extends Controller {
       const institutionName = this.institutionNameTarget?.value?.trim();
       const loanAmount = this.loanAmountTarget?.value;
       const termMonths = this.termMonthsTarget?.value;
-      
+
       const nameFilled = lenderName || institutionName;
       const amountFilled = loanAmount && parseFloat(loanAmount) > 0;
-      
+
       return nameFilled && amountFilled && termMonths;
     };
 
@@ -810,7 +778,7 @@ export default class extends Controller {
       const interestFree = this.interestFreeTarget?.checked;
       const interestRate = this.interestRateTarget?.value;
       const paymentFrequency = this.paymentFrequencyTarget?.value;
-      
+
       if (interestFree) return true; // If interest-free, other fields optional
       return interestRate && paymentFrequency;
     };
@@ -818,7 +786,7 @@ export default class extends Controller {
     // Calculate current progress
     const calculateProgress = () => {
       let completedSteps = 0;
-      
+
       if (checkLoanTypeSelected()) {
         completedSteps = 1;
         if (checkEssentialFields()) {
@@ -828,7 +796,7 @@ export default class extends Controller {
           }
         }
       }
-      
+
       return completedSteps;
     };
 

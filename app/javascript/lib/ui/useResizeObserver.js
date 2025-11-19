@@ -6,8 +6,7 @@
 export class ResizeObserverManager {
   constructor() {
     this.observers = new Map();
-    this.isSSR =
-      typeof window === "undefined" || typeof document === "undefined";
+    this.isSSR = typeof window === "undefined" || typeof document === "undefined";
   }
 
   /**
@@ -20,8 +19,7 @@ export class ResizeObserverManager {
    * @returns {Function} Cleanup function
    */
   observe(element, callback, options = {}) {
-    const { debounceMs = 100, initialSize = { width: 800, height: 600 } } =
-      options;
+    const { debounceMs = 100, initialSize = { width: 800, height: 600 } } = options;
 
     // SSR guard - return no-op cleanup function
     if (this.isSSR || !element) {
@@ -32,9 +30,7 @@ export class ResizeObserverManager {
 
     // Check if ResizeObserver is supported
     if (typeof ResizeObserver === "undefined") {
-      console.warn(
-        "ResizeObserver not supported, falling back to window resize",
-      );
+      console.warn("ResizeObserver not supported, falling back to window resize");
       return this.fallbackToWindowResize(element, callback, debounceMs);
     }
 
@@ -199,10 +195,7 @@ export function useResizeObserver(element, callback, options = {}) {
  * @param {Object} fallback - Fallback dimensions
  * @returns {Object} Dimensions object with width and height
  */
-export function getElementDimensions(
-  element,
-  fallback = { width: 800, height: 600 },
-) {
+export function getElementDimensions(element, fallback = { width: 800, height: 600 }) {
   if (typeof window === "undefined" || !element) {
     return fallback;
   }

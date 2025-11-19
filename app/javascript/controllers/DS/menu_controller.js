@@ -1,9 +1,4 @@
-import {
-  autoUpdate,
-  computePosition,
-  offset,
-  shift,
-} from "@floating-ui/dom";
+import { autoUpdate, computePosition, offset, shift } from "@floating-ui/dom";
 import { Controller } from "@hotwired/stimulus";
 
 /**
@@ -37,7 +32,7 @@ export default class extends Controller {
     this.outsideClickHandler = this.handleOutsideClick.bind(this);
     this.turboLoadHandler = this.handleTurboLoad.bind(this);
     this.turboBeforeVisitHandler = this.handleTurboBeforeVisit.bind(this);
-    
+
     this.buttonTarget.addEventListener("click", this.toggleHandler);
     this.element.addEventListener("keydown", this.keydownHandler);
     document.addEventListener("click", this.outsideClickHandler);
@@ -98,7 +93,7 @@ export default class extends Controller {
       event.preventDefault();
       event.stopPropagation();
     }
-    
+
     this.show = !this.show;
     this.contentTarget.classList.toggle("hidden", !this.show);
     if (this.show) {
@@ -115,8 +110,7 @@ export default class extends Controller {
   focusFirstElement() {
     const focusableElements =
       'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-    const firstFocusableElement =
-      this.contentTarget.querySelectorAll(focusableElements)[0];
+    const firstFocusableElement = this.contentTarget.querySelectorAll(focusableElements)[0];
     if (firstFocusableElement) {
       firstFocusableElement.focus();
     }
@@ -124,11 +118,7 @@ export default class extends Controller {
 
   startAutoUpdate() {
     if (!this._cleanup) {
-      this._cleanup = autoUpdate(
-        this.buttonTarget,
-        this.contentTarget,
-        this.boundUpdate,
-      );
+      this._cleanup = autoUpdate(this.buttonTarget, this.contentTarget, this.boundUpdate);
     }
   }
 

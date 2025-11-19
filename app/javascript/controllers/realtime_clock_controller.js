@@ -56,8 +56,7 @@ export default class extends Controller {
 
   animateChange(element, newText) {
     // Add animation class
-    element.style.transition =
-      "opacity 300ms ease-out, transform 300ms ease-out";
+    element.style.transition = "opacity 300ms ease-out, transform 300ms ease-out";
     element.style.opacity = "0";
     element.style.transform = "translateY(-10px)";
 

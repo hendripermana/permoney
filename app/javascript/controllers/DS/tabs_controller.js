@@ -9,13 +9,13 @@ export default class extends Controller {
   show(e) {
     // Prevent default button behavior, let event bubble normally
     e.preventDefault();
-    
+
     // Rails 8.1: Use e.target.closest for better event delegation support
     // This handles nested elements within buttons (icons, spans, etc.) correctly
     // e.currentTarget would work if data-action is directly on button, but e.target is more defensive
     const btn = e.target.closest("button");
     if (!btn) return;
-    
+
     const selectedTabId = btn.dataset.id;
     if (!selectedTabId) return;
 
@@ -47,7 +47,7 @@ export default class extends Controller {
     if (this.sessionKeyValue) {
       this.#updateSessionPreference(selectedTabId);
     }
-  } 
+  }
 
   #updateSessionPreference(selectedTabId) {
     fetch("/current_session", {

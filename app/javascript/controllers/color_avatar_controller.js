@@ -14,9 +14,7 @@ export default class extends Controller {
   }
 
   handleNameChange = (e) => {
-    this.avatarTarget.textContent = (
-      e.currentTarget.value?.[0] || "?"
-    ).toUpperCase();
+    this.avatarTarget.textContent = (e.currentTarget.value?.[0] || "?").toUpperCase();
   };
 
   handleColorChange(e) {

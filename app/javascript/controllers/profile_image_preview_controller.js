@@ -26,7 +26,7 @@ export default class extends Controller {
   clearFileInput() {
     // Revoke previous blob URL to prevent memory leaks
     this.#revokeBlobUrl();
-    
+
     this.inputTarget.value = null;
     this.clearBtnTarget.classList.add("hidden");
     this.placeholderImageTarget.classList.remove("hidden");
@@ -64,7 +64,7 @@ export default class extends Controller {
     this.changeTextTarget.setAttribute("aria-hidden", "false");
     this.uploadTextTarget.setAttribute("aria-hidden", "true");
     this.cameraIconTarget.classList.add("!hidden");
-    
+
     // Create and store new blob URL
     this.#currentBlobUrl = URL.createObjectURL(file);
     const img = this.previewImageTarget.querySelector("img");

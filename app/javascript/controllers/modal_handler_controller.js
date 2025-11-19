@@ -2,8 +2,8 @@ import { Controller } from "@hotwired/stimulus";
 
 export default class extends Controller {
   static values = {
-    closePath: String
-  }
+    closePath: String,
+  };
 
   connect() {
     // Find the dialog element within this controller's scope

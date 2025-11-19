@@ -2,7 +2,7 @@ import { Controller } from "@hotwired/stimulus";
 
 // Connects to data-controller="dialog"
 export default class extends Controller {
-  static targets = ["content"]
+  static targets = ["content"];
 
   static values = {
     autoOpen: { type: Boolean, default: false },
@@ -34,7 +34,7 @@ export default class extends Controller {
       this.element.close();
     }
   }
-  
+
   // If the user clicks anywhere outside of the visible content, close the dialog
   clickOutside(e) {
     if (!this.contentTarget.contains(e.target)) {
