@@ -2,13 +2,7 @@ import { Controller } from "@hotwired/stimulus";
 
 // Connects to data-controller="bulk-select"
 export default class extends Controller {
-  static targets = [
-    "row",
-    "group",
-    "selectionBar",
-    "selectionBarText",
-    "bulkEditDrawerHeader",
-  ];
+  static targets = ["row", "group", "selectionBar", "selectionBarText", "bulkEditDrawerHeader"];
   static values = {
     singularLabel: String,
     pluralLabel: String,
@@ -35,11 +29,7 @@ export default class extends Controller {
   submitBulkRequest(e) {
     const form = e.target.closest("form");
     const scope = e.params.scope;
-    this._addHiddenFormInputsForSelectedIds(
-      form,
-      `${scope}[entry_ids][]`,
-      this.selectedIdsValue,
-    );
+    this._addHiddenFormInputsForSelectedIds(form, `${scope}[entry_ids][]`, this.selectedIdsValue);
     form.requestSubmit();
   }
 
@@ -102,27 +92,19 @@ export default class extends Controller {
   }
 
   _rowsForGroup(group) {
-    return this.rowTargets.filter(
-      (row) => group.contains(row) && !row.disabled,
-    );
+    return this.rowTargets.filter((row) => group.contains(row) && !row.disabled);
   }
 
   _addToSelection(idToAdd) {
-    this.selectedIdsValue = Array.from(
-      new Set([...this.selectedIdsValue, idToAdd]),
-    );
+    this.selectedIdsValue = Array.from(new Set([...this.selectedIdsValue, idToAdd]));
   }
 
   _removeFromSelection(idToRemove) {
-    this.selectedIdsValue = this.selectedIdsValue.filter(
-      (id) => id !== idToRemove,
-    );
+    this.selectedIdsValue = this.selectedIdsValue.filter((id) => id !== idToRemove);
   }
 
   _selectAll() {
-    this.selectedIdsValue = this.rowTargets
-      .filter((t) => !t.disabled)
-      .map((t) => t.dataset.id);
+    this.selectedIdsValue = this.rowTargets.filter((t) => !t.disabled).map((t) => t.dataset.id);
   }
 
   _updateView = () => {
@@ -135,8 +117,7 @@ export default class extends Controller {
     const count = this.selectedIdsValue.length;
     this.selectionBarTextTarget.innerText = `${count} ${this._pluralizedResourceName()} selected`;
     this.selectionBarTarget.classList.toggle("hidden", count === 0);
-    this.selectionBarTarget.querySelector("input[type='checkbox']").checked =
-      count > 0;
+    this.selectionBarTarget.querySelector("input[type='checkbox']").checked = count > 0;
   }
 
   _pluralizedResourceName() {
@@ -149,12 +130,9 @@ export default class extends Controller {
 
   _updateGroups() {
     this.groupTargets.forEach((group) => {
-      const rows = this.rowTargets.filter(
-        (row) => group.contains(row) && !row.disabled,
-      );
+      const rows = this.rowTargets.filter((row) => group.contains(row) && !row.disabled);
       const groupSelected =
-        rows.length > 0 &&
-        rows.every((row) => this.selectedIdsValue.includes(row.dataset.id));
+        rows.length > 0 && rows.every((row) => this.selectedIdsValue.includes(row.dataset.id));
       group.querySelector("input[type='checkbox']").checked = groupSelected;
     });
   }

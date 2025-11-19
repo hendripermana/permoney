@@ -83,18 +83,14 @@ export default class extends Controller {
     this.signedAmountFieldsetTarget.classList.add("hidden");
 
     // Set required on custom column fields
-    this.customColumnFieldsetTarget
-      .querySelectorAll("select, input")
-      .forEach((field) => {
-        field.setAttribute("required", "");
-      });
+    this.customColumnFieldsetTarget.querySelectorAll("select, input").forEach((field) => {
+      field.setAttribute("required", "");
+    });
 
     // Remove required from signed amount fields
-    this.signedAmountFieldsetTarget
-      .querySelectorAll("select, input")
-      .forEach((field) => {
-        field.removeAttribute("required");
-      });
+    this.signedAmountFieldsetTarget.querySelectorAll("select, input").forEach((field) => {
+      field.removeAttribute("required");
+    });
   }
 
   #enableSignedAmountFieldset() {
@@ -102,17 +98,13 @@ export default class extends Controller {
     this.signedAmountFieldsetTarget.classList.remove("hidden");
 
     // Remove required from custom column fields
-    this.customColumnFieldsetTarget
-      .querySelectorAll("select, input")
-      .forEach((field) => {
-        field.removeAttribute("required");
-      });
+    this.customColumnFieldsetTarget.querySelectorAll("select, input").forEach((field) => {
+      field.removeAttribute("required");
+    });
 
     // Set required on signed amount fields
-    this.signedAmountFieldsetTarget
-      .querySelectorAll("select, input")
-      .forEach((field) => {
-        field.setAttribute("required", "");
-      });
+    this.signedAmountFieldsetTarget.querySelectorAll("select, input").forEach((field) => {
+      field.setAttribute("required", "");
+    });
   }
 }

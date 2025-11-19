@@ -10,10 +10,7 @@ export default class extends Controller {
     }, this.timeoutValue);
 
     // Listen for successful frame loads to clear timeout
-    this.element.addEventListener(
-      "turbo:frame-load",
-      this.clearTimeout.bind(this),
-    );
+    this.element.addEventListener("turbo:frame-load", this.clearTimeout.bind(this));
   }
 
   disconnect() {

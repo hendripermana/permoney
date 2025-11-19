@@ -29,9 +29,7 @@ export default class extends Controller {
     if (indexOfActiveElement !== -1) {
       return indexOfActiveElement;
     }
-    return targets.findIndex(
-      (target) => target.getAttribute("tabindex") === "0",
-    );
+    return targets.findIndex((target) => target.getAttribute("tabindex") === "0");
   }
 
   get focusableLinks() {

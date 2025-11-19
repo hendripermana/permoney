@@ -1,11 +1,11 @@
-import { Controller } from "@hotwired/stimulus"
+import { Controller } from "@hotwired/stimulus";
 
 /**
  * Lazy Chart Controller
- * 
+ *
  * Implements Intersection Observer API for lazy loading heavy D3 charts
  * Only loads and renders charts when they enter the viewport
- * 
+ *
  * Usage:
  *   <div data-controller="lazy-chart"
  *        data-lazy-chart-threshold-value="0.1"
@@ -18,43 +18,40 @@ export default class extends Controller {
   static values = {
     threshold: { type: Number, default: 0.1 },
     chartType: String,
-    data: Object
-  }
+    data: Object,
+  };
 
   connect() {
     // Create Intersection Observer for lazy loading
-    this.observer = new IntersectionObserver(
-      (entries) => this.handleIntersection(entries),
-      {
-        root: null, // viewport
-        rootMargin: "50px", // Load 50px before entering viewport
-        threshold: this.thresholdValue
-      }
-    )
+    this.observer = new IntersectionObserver((entries) => this.handleIntersection(entries), {
+      root: null, // viewport
+      rootMargin: "50px", // Load 50px before entering viewport
+      threshold: this.thresholdValue,
+    });
 
     // Start observing the element
-    this.observer.observe(this.element)
+    this.observer.observe(this.element);
   }
 
   disconnect() {
     // Clean up observer when controller disconnects
     if (this.observer) {
-      this.observer.disconnect()
+      this.observer.disconnect();
     }
   }
 
   async handleIntersection(entries) {
-    const entry = entries[0]
-    
+    const entry = entries[0];
+
     if (entry.isIntersecting && !this.loaded) {
-      this.loaded = true
-      this.observer.disconnect() // Stop observing after load
-      
+      this.loaded = true;
+      this.observer.disconnect(); // Stop observing after load
+
       try {
-        await this.loadChart()
+        await this.loadChart();
       } catch (error) {
-        console.error("Failed to load chart:", error)
-        this.showError()
+        console.error("Failed to load chart:", error);
+        this.showError();
       }
     }
   }
@@ -65,23 +62,23 @@ export default class extends Controller {
       <div class="flex items-center justify-center h-64">
         <div class="text-secondary text-sm">Loading chart...</div>
       </div>
-    `
+    `;
 
     // Dynamically import D3 only when needed
-    const chartType = this.chartTypeValue
-    
+    const chartType = this.chartTypeValue;
+
     switch (chartType) {
       case "sankey":
-        await this.loadSankeyChart()
-        break
+        await this.loadSankeyChart();
+        break;
       case "area":
-        await this.loadAreaChart()
-        break
+        await this.loadAreaChart();
+        break;
       case "line":
-        await this.loadLineChart()
-        break
+        await this.loadLineChart();
+        break;
       default:
-        console.warn(`Unknown chart type: ${chartType}`)
+        console.warn(`Unknown chart type: ${chartType}`);
     }
   }
 
@@ -89,39 +86,39 @@ export default class extends Controller {
     // Dynamic import - only loads when needed
     const [d3, { sankey, sankeyLinkHorizontal }] = await Promise.all([
       import("d3"),
-      import("d3-sankey")
-    ])
-    
+      import("d3-sankey"),
+    ]);
+
     // Trigger custom event to initialize Sankey chart
     // The sankey controller will handle the actual rendering
     this.element.dispatchEvent(
       new CustomEvent("lazy-chart:loaded", {
         bubbles: true,
-        detail: { chartType: "sankey", d3, sankey, sankeyLinkHorizontal }
+        detail: { chartType: "sankey", d3, sankey, sankeyLinkHorizontal },
       })
-    )
+    );
   }
 
   async loadAreaChart() {
-    const d3 = await import("d3")
-    
+    const d3 = await import("d3");
+
     this.element.dispatchEvent(
       new CustomEvent("lazy-chart:loaded", {
         bubbles: true,
-        detail: { chartType: "area", d3 }
+        detail: { chartType: "area", d3 },
       })
-    )
+    );
   }
 
   async loadLineChart() {
-    const d3 = await import("d3")
-    
+    const d3 = await import("d3");
+
     this.element.dispatchEvent(
       new CustomEvent("lazy-chart:loaded", {
         bubbles: true,
-        detail: { chartType: "line", d3 }
+        detail: { chartType: "line", d3 },
       })
-    )
+    );
   }
 
   showError() {
@@ -136,30 +133,27 @@ export default class extends Controller {
           </button>
         </div>
       </div>
-    `
+    `;
   }
 
   retry() {
     // Rails 8.1: Recreate observer instead of reusing disconnected one
     // Disconnected observers cannot be re-observed, so we need to create a new one
-    this.loaded = false
-    
+    this.loaded = false;
+
     // Disconnect old observer if it exists
     if (this.observer) {
-      this.observer.disconnect()
+      this.observer.disconnect();
     }
-    
+
     // Create new observer
-    this.observer = new IntersectionObserver(
-      (entries) => this.handleIntersection(entries),
-      {
-        root: null,
-        rootMargin: "50px",
-        threshold: this.thresholdValue
-      }
-    )
-    
+    this.observer = new IntersectionObserver((entries) => this.handleIntersection(entries), {
+      root: null,
+      rootMargin: "50px",
+      threshold: this.thresholdValue,
+    });
+
     // Start observing
-    this.observer.observe(this.element)
+    this.observer.observe(this.element);
   }
 }

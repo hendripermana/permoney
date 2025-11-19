@@ -17,18 +17,12 @@ export default class extends Controller {
   }
 
   addConditionGroup() {
-    this.#appendTemplate(
-      this.conditionGroupTemplateTarget,
-      this.conditionsListTarget,
-    );
+    this.#appendTemplate(this.conditionGroupTemplateTarget, this.conditionsListTarget);
     this.updateConditionPrefixes();
   }
 
   addCondition() {
-    this.#appendTemplate(
-      this.conditionTemplateTarget,
-      this.conditionsListTarget,
-    );
+    this.#appendTemplate(this.conditionTemplateTarget, this.conditionsListTarget);
     this.updateConditionPrefixes();
   }
 
@@ -41,10 +35,7 @@ export default class extends Controller {
   }
 
   #appendTemplate(templateEl, listEl) {
-    const html = templateEl.innerHTML.replaceAll(
-      "IDX_PLACEHOLDER",
-      this.#uniqueKey(),
-    );
+    const html = templateEl.innerHTML.replaceAll("IDX_PLACEHOLDER", this.#uniqueKey());
 
     listEl.insertAdjacentHTML("beforeend", html);
   }

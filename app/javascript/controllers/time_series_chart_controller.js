@@ -200,7 +200,7 @@ export default class extends Controller {
             this._normalDataPoints[this._normalDataPoints.length - 1].date,
           ])
           .tickSize(0)
-          .tickFormat(d3.timeFormat("%b %d, %Y")),
+          .tickFormat(d3.timeFormat("%b %d, %Y"))
       )
       .select(".domain")
       .remove();
@@ -228,10 +228,7 @@ export default class extends Controller {
       .attr("gradientUnits", "userSpaceOnUse")
       .attr("x1", 0)
       .attr("x2", 0)
-      .attr(
-        "y1",
-        this._d3YScale(d3.max(this._normalDataPoints, this._getDatumValue)),
-      )
+      .attr("y1", this._d3YScale(d3.max(this._normalDataPoints, this._getDatumValue)))
       .attr("y2", this._d3ContainerHeight);
 
     gradient
@@ -258,7 +255,7 @@ export default class extends Controller {
           .area()
           .x((d) => this._d3XScale(d.date))
           .y0(this._d3ContainerHeight)
-          .y1((d) => this._d3YScale(this._getDatumValue(d))),
+          .y1((d) => this._d3YScale(this._getDatumValue(d)))
       );
 
     // Apply the gradient + clip path
@@ -277,7 +274,7 @@ export default class extends Controller {
       .append("div")
       .attr(
         "class",
-        "bg-container text-sm font-sans absolute p-2 border border-secondary rounded-lg pointer-events-none opacity-0",
+        "bg-container text-sm font-sans absolute p-2 border border-secondary rounded-lg pointer-events-none opacity-0"
       );
   }
 
@@ -296,21 +293,13 @@ export default class extends Controller {
         const pageWidth = document.body.clientWidth;
         const tooltipX = event.pageX + 10;
         const overflowX = tooltipX + estimatedTooltipWidth - pageWidth;
-        const adjustedX =
-          overflowX > 0 ? event.pageX - overflowX - 20 : tooltipX;
+        const adjustedX = overflowX > 0 ? event.pageX - overflowX - 20 : tooltipX;
 
         const [xPos] = d3.pointer(event);
-        const x0 = bisectDate(
-          this._normalDataPoints,
-          this._d3XScale.invert(xPos),
-          1,
-        );
+        const x0 = bisectDate(this._normalDataPoints, this._d3XScale.invert(xPos), 1);
         const d0 = this._normalDataPoints[x0 - 1];
         const d1 = this._normalDataPoints[x0];
-        const d =
-          xPos - this._d3XScale(d0.date) > this._d3XScale(d1.date) - xPos
-            ? d1
-            : d0;
+        const d = xPos - this._d3XScale(d0.date) > this._d3XScale(d1.date) - xPos ? d1 : d0;
         const xPercent = this._d3XScale(d.date) / this._d3ContainerWidth;
 
         this._setTrendlineSplitAt(xPercent);
@@ -360,8 +349,7 @@ export default class extends Controller {
           .style("top", `${event.pageY - 10}px`);
       })
       .on("mouseout", (event) => {
-        const hoveringOnGuideline =
-          event.toElement?.classList.contains("guideline");
+        const hoveringOnGuideline = event.toElement?.classList.contains("guideline");
 
         if (!hoveringOnGuideline) {
           this._d3Group.selectAll(".guideline").remove();
@@ -399,10 +387,8 @@ export default class extends Controller {
   }
 
   _getTrendIcon(datum) {
-    const isIncrease =
-      Number(datum.trend.previous.amount) < Number(datum.trend.current.amount);
-    const isDecrease =
-      Number(datum.trend.previous.amount) > Number(datum.trend.current.amount);
+    const isIncrease = Number(datum.trend.previous.amount) < Number(datum.trend.current.amount);
+    const isDecrease = Number(datum.trend.previous.amount) > Number(datum.trend.current.amount);
 
     if (isIncrease) {
       return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${datum.trend.color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right-icon lucide-arrow-up-right"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>`;
@@ -438,12 +424,7 @@ export default class extends Controller {
       .append("svg")
       .attr("width", this._d3InitialContainerWidth)
       .attr("height", this._d3InitialContainerHeight)
-      .attr("viewBox", [
-        0,
-        0,
-        this._d3InitialContainerWidth,
-        this._d3InitialContainerHeight,
-      ]);
+      .attr("viewBox", [0, 0, this._d3InitialContainerWidth, this._d3InitialContainerHeight]);
   }
 
   _createMainGroup() {
@@ -474,15 +455,11 @@ export default class extends Controller {
   }
 
   get _d3ContainerWidth() {
-    return (
-      this._d3InitialContainerWidth - this._margin.left - this._margin.right
-    );
+    return this._d3InitialContainerWidth - this._margin.left - this._margin.right;
   }
 
   get _d3ContainerHeight() {
-    return (
-      this._d3InitialContainerHeight - this._margin.top - this._margin.bottom
-    );
+    return this._d3InitialContainerHeight - this._margin.top - this._margin.bottom;
   }
 
   get _d3Container() {
@@ -555,10 +532,7 @@ export default class extends Controller {
       yMax += extraPadding;
     }
 
-    return d3
-      .scaleLinear()
-      .rangeRound([this._d3ContainerHeight, 0])
-      .domain([yMin, yMax]);
+    return d3.scaleLinear().rangeRound([this._d3ContainerHeight, 0]).domain([yMin, yMax]);
   }
 
   _setupResizeObserver() {

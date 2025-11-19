@@ -4,7 +4,7 @@ import { Controller } from "@hotwired/stimulus";
 export default class extends Controller {
   static targets = ["leftSidebar", "mobileSidebar"];
   static values = {
-    userId: String
+    userId: String,
   };
   static classes = [
     "expandedSidebar",

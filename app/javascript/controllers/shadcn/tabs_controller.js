@@ -86,26 +86,16 @@ export default class extends Controller {
     // Update triggers
     this.triggerTargets.forEach((trigger) => {
       const isActive = trigger.dataset.tabValue === value;
-      
+
       trigger.setAttribute("aria-selected", isActive ? "true" : "false");
       trigger.setAttribute("tabindex", isActive ? "0" : "-1");
-      
+
       // Update classes
       if (isActive) {
-        trigger.classList.add(
-          "bg-white",
-          "theme-dark:bg-gray-700",
-          "text-primary",
-          "shadow-sm"
-        );
+        trigger.classList.add("bg-white", "theme-dark:bg-gray-700", "text-primary", "shadow-sm");
         trigger.classList.remove("text-secondary", "hover:bg-surface-inset-hover");
       } else {
-        trigger.classList.remove(
-          "bg-white",
-          "theme-dark:bg-gray-700",
-          "text-primary",
-          "shadow-sm"
-        );
+        trigger.classList.remove("bg-white", "theme-dark:bg-gray-700", "text-primary", "shadow-sm");
         trigger.classList.add("text-secondary", "hover:bg-surface-inset-hover");
       }
     });
@@ -113,7 +103,7 @@ export default class extends Controller {
     // Update panels
     this.panelTargets.forEach((panel) => {
       const isActive = panel.dataset.tabValue === value;
-      
+
       if (isActive) {
         panel.classList.remove("hidden");
         panel.setAttribute("tabindex", "0");

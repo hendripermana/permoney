@@ -10,9 +10,7 @@ export default class extends Controller {
   }
 
   updateSubtype(_event) {
-    const selectElement = this.element.querySelector(
-      'select[name^="account_types"]',
-    );
+    const selectElement = this.element.querySelector('select[name^="account_types"]');
     const selectedType = selectElement ? selectElement.value : "";
     const container = this.subtypeContainerTarget;
     const accountId = this.accountIdValue;
@@ -34,9 +32,7 @@ export default class extends Controller {
     }
 
     // Show the relevant subtype select
-    const relevantSubtype = container.querySelector(
-      `[data-type="${selectedType}"]`,
-    );
+    const relevantSubtype = container.querySelector(`[data-type="${selectedType}"]`);
     if (relevantSubtype) {
       relevantSubtype.style.display = "block";
       // Re-add the name attribute so it gets submitted

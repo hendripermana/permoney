@@ -24,10 +24,7 @@ export default class extends Controller {
 
     // Bind methods to preserve context
     this.escapeHandler = this.handleEscape.bind(this);
-    this.handlePeriodChangeDebounced = this.debounce(
-      this.handlePeriodChange.bind(this),
-      200,
-    );
+    this.handlePeriodChangeDebounced = this.debounce(this.handlePeriodChange.bind(this), 200);
 
     // Update initial aria-pressed state
     this.updateAriaPressed();
@@ -87,9 +84,7 @@ export default class extends Controller {
       const parser = new DOMParser();
       const doc = parser.parseFromString(html, "text/html");
 
-      const newSankeyElement = doc.querySelector(
-        '[data-controller*="cashflow-fullscreen"]',
-      );
+      const newSankeyElement = doc.querySelector('[data-controller*="cashflow-fullscreen"]');
       if (!newSankeyElement) throw new Error("Sankey data element not found");
 
       const readAttr = (el, base) =>
@@ -110,16 +105,9 @@ export default class extends Controller {
       this.periodValue = newPeriodValue;
 
       const setBothAttrs = (base, value) => {
-        const strValue =
-          typeof value === "string" ? value : JSON.stringify(value);
-        this.element.setAttribute(
-          `data-cashflow-fullscreen-enhanced-${base}-value`,
-          strValue,
-        );
-        this.element.setAttribute(
-          `data-cashflow-fullscreen-${base}-value`,
-          strValue,
-        );
+        const strValue = typeof value === "string" ? value : JSON.stringify(value);
+        this.element.setAttribute(`data-cashflow-fullscreen-enhanced-${base}-value`, strValue);
+        this.element.setAttribute(`data-cashflow-fullscreen-${base}-value`, strValue);
       };
       setBothAttrs("sankey-data", newSankeyData);
       setBothAttrs("currency-symbol", newCurrencySymbol);
@@ -240,15 +228,9 @@ export default class extends Controller {
 
   // Add event listeners to modal elements
   addModalEventListeners() {
-    const closeBtn = this.fullscreenModal?.querySelector(
-      "#fullscreen-close-btn",
-    );
-    const exportBtn = this.fullscreenModal?.querySelector(
-      "#fullscreen-export-btn",
-    );
-    const periodSelector = this.fullscreenModal?.querySelector(
-      "#fullscreen-period-selector",
-    );
+    const closeBtn = this.fullscreenModal?.querySelector("#fullscreen-close-btn");
+    const exportBtn = this.fullscreenModal?.querySelector("#fullscreen-export-btn");
+    const periodSelector = this.fullscreenModal?.querySelector("#fullscreen-period-selector");
 
     if (closeBtn) {
       closeBtn.addEventListener("click", () => this.exitFullscreen());
@@ -330,9 +312,7 @@ export default class extends Controller {
       this.fullscreenModal.classList.remove("opacity-0");
 
       // Focus the close button for keyboard navigation
-      const closeButton = this.fullscreenModal.querySelector(
-        "#fullscreen-close-btn",
-      );
+      const closeButton = this.fullscreenModal.querySelector("#fullscreen-close-btn");
       if (closeButton) {
         closeButton.focus();
       }
@@ -383,10 +363,7 @@ export default class extends Controller {
         // Restore scroll
         document.body.style.overflow = this.prevBodyOverflow || "";
         // Restore focus
-        if (
-          this.prevActiveElement &&
-          typeof this.prevActiveElement.focus === "function"
-        ) {
+        if (this.prevActiveElement && typeof this.prevActiveElement.focus === "function") {
           this.prevActiveElement.focus();
         }
       }
@@ -395,9 +372,7 @@ export default class extends Controller {
 
   // Basic loading display
   showBasicLoading() {
-    const overlay = this.fullscreenModal?.querySelector(
-      "#fullscreen-loading-overlay",
-    );
+    const overlay = this.fullscreenModal?.querySelector("#fullscreen-loading-overlay");
     if (overlay) {
       overlay.classList.remove("hidden");
     }
@@ -405,9 +380,7 @@ export default class extends Controller {
 
   // Hide loading display
   hideBasicLoading() {
-    const overlay = this.fullscreenModal?.querySelector(
-      "#fullscreen-loading-overlay",
-    );
+    const overlay = this.fullscreenModal?.querySelector("#fullscreen-loading-overlay");
     if (overlay) {
       overlay.classList.add("hidden");
     }
@@ -424,29 +397,25 @@ export default class extends Controller {
 
   // Initialize fullscreen chart
   initializeFullscreenChart() {
-    const container = this.fullscreenModal?.querySelector(
-      "#fullscreen-sankey-container",
-    );
+    const container = this.fullscreenModal?.querySelector("#fullscreen-sankey-container");
     if (!container) return;
 
     // The sankey-autosizer and sankey-chart controllers will handle the rest
     // We just need to ensure the data attributes are up to date
-    const chartElement = container.querySelector(
-      '[data-controller="sankey-chart"]',
-    );
+    const chartElement = container.querySelector('[data-controller="sankey-chart"]');
     if (chartElement) {
       chartElement.setAttribute(
         "data-sankey-chart-data-value",
-        JSON.stringify(this.sankeyDataValue),
+        JSON.stringify(this.sankeyDataValue)
       );
       chartElement.setAttribute(
         "data-sankey-chart-currency-symbol-value",
-        this.currencySymbolValue,
+        this.currencySymbolValue
       );
       // Trigger a redraw if the controller is connected
       const controller = this.application?.getControllerForElementAndIdentifier(
         chartElement,
-        "sankey-chart",
+        "sankey-chart"
       );
       if (controller && typeof controller.dataValueChanged === "function") {
         controller.dataValueChanged();
@@ -459,9 +428,7 @@ export default class extends Controller {
     this.initializeFullscreenChart();
 
     // Update period selector
-    const periodSelector = this.fullscreenModal?.querySelector(
-      "#fullscreen-period-selector",
-    );
+    const periodSelector = this.fullscreenModal?.querySelector("#fullscreen-period-selector");
     if (periodSelector) {
       periodSelector.value = this.periodValue;
     }
@@ -475,9 +442,7 @@ export default class extends Controller {
 
   // Update main page chart
   updateMainPageChart() {
-    const candidates = document.querySelectorAll(
-      '[data-controller="sankey-chart"]',
-    );
+    const candidates = document.querySelectorAll('[data-controller="sankey-chart"]');
     let mainChartElement = null;
 
     for (const el of candidates) {
@@ -490,17 +455,17 @@ export default class extends Controller {
     if (mainChartElement) {
       mainChartElement.setAttribute(
         "data-sankey-chart-data-value",
-        JSON.stringify(this.sankeyDataValue),
+        JSON.stringify(this.sankeyDataValue)
       );
       mainChartElement.setAttribute(
         "data-sankey-chart-currency-symbol-value",
-        this.currencySymbolValue,
+        this.currencySymbolValue
       );
 
       // Trigger dataValueChanged if the controller exists
       const controller = this.application?.getControllerForElementAndIdentifier(
         mainChartElement,
-        "sankey-chart",
+        "sankey-chart"
       );
       if (controller && typeof controller.dataValueChanged === "function") {
         controller.dataValueChanged();
@@ -510,20 +475,14 @@ export default class extends Controller {
 
   // Force fullscreen resize
   forceFullscreenResize() {
-    const autosizerContainer = this.fullscreenModal?.querySelector(
-      "#fullscreen-sankey-container",
-    );
+    const autosizerContainer = this.fullscreenModal?.querySelector("#fullscreen-sankey-container");
     if (autosizerContainer) {
-      const autosizerController =
-        this.application?.getControllerForElementAndIdentifier(
-          autosizerContainer,
-          "sankey-autosizer",
-        );
+      const autosizerController = this.application?.getControllerForElementAndIdentifier(
+        autosizerContainer,
+        "sankey-autosizer"
+      );
 
-      if (
-        autosizerController &&
-        typeof autosizerController.forceResize === "function"
-      ) {
+      if (autosizerController && typeof autosizerController.forceResize === "function") {
         autosizerController.forceResize();
       }
     }
@@ -531,8 +490,7 @@ export default class extends Controller {
 
   // Update footer stats
   updateFooterStats() {
-    const statsContainer =
-      this.fullscreenModal?.querySelector("#fullscreen-stats");
+    const statsContainer = this.fullscreenModal?.querySelector("#fullscreen-stats");
     if (statsContainer) {
       statsContainer.innerHTML = `
         <span>Total Income: <strong class="text-primary">${this.formatCurrency(this.getTotalIncome())}</strong></span>
@@ -553,9 +511,7 @@ export default class extends Controller {
   // Handle export
   async handleExport() {
     try {
-      const svg = this.fullscreenModal?.querySelector(
-        "#fullscreen-sankey-container svg",
-      );
+      const svg = this.fullscreenModal?.querySelector("#fullscreen-sankey-container svg");
       if (!svg) {
         this.showErrorOverlay("Chart not ready to export yet.");
         return;
@@ -585,9 +541,7 @@ export default class extends Controller {
 
   // Display an error overlay inside the fullscreen modal
   showErrorOverlay(message) {
-    const overlay = this.fullscreenModal?.querySelector(
-      "#fullscreen-loading-overlay",
-    );
+    const overlay = this.fullscreenModal?.querySelector("#fullscreen-loading-overlay");
     if (!overlay) return;
     overlay.classList.remove("hidden");
     overlay.innerHTML = `
@@ -602,9 +556,7 @@ export default class extends Controller {
 
   // Build period options markup using shared options from Rails (Period.as_options)
   _buildPeriodOptionsMarkup() {
-    const opts = Array.isArray(this.periodOptionsValue)
-      ? this.periodOptionsValue
-      : [];
+    const opts = Array.isArray(this.periodOptionsValue) ? this.periodOptionsValue : [];
     const options =
       opts.length > 0
         ? opts
@@ -623,23 +575,21 @@ export default class extends Controller {
     return options
       .map(
         ([label, key]) =>
-          `<option value="${key}" ${key === this.periodValue ? "selected" : ""}>${label}</option>`,
+          `<option value="${key}" ${key === this.periodValue ? "selected" : ""}>${label}</option>`
       )
       .join("");
   }
 
   // Utility methods
   isFullscreenOpen() {
-    return !!(
-      this.fullscreenModal && document.body.contains(this.fullscreenModal)
-    );
+    return !!(this.fullscreenModal && document.body.contains(this.fullscreenModal));
   }
 
   getTotalIncome() {
     if (!this.sankeyDataValue?.links) return 0;
 
     const cashFlowNodeIndex = this.sankeyDataValue.nodes.findIndex(
-      (node) => node.name === "Cash Flow",
+      (node) => node.name === "Cash Flow"
     );
     if (cashFlowNodeIndex === -1) return 0;
 
@@ -652,7 +602,7 @@ export default class extends Controller {
     if (!this.sankeyDataValue?.links) return 0;
 
     const cashFlowNodeIndex = this.sankeyDataValue.nodes.findIndex(
-      (node) => node.name === "Cash Flow",
+      (node) => node.name === "Cash Flow"
     );
     if (cashFlowNodeIndex === -1) return 0;
 

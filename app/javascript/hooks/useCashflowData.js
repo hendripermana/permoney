@@ -35,8 +35,7 @@ const validateCashflowData = (data) => {
  */
 export function useCashflowData(params = {}) {
   // SSR safety guards
-  const isSSR =
-    typeof window === "undefined" || typeof document === "undefined";
+  const isSSR = typeof window === "undefined" || typeof document === "undefined";
 
   if (isSSR) {
     return {
@@ -118,9 +117,7 @@ export function useCashflowData(params = {}) {
       const parser = new DOMParser();
       const doc = parser.parseFromString(html, "text/html");
 
-      const sankeyElement = doc.querySelector(
-        '[data-controller*="cashflow-fullscreen"]',
-      );
+      const sankeyElement = doc.querySelector('[data-controller*="cashflow-fullscreen"]');
       if (!sankeyElement) {
         throw new Error("Sankey data element not found in response");
       }

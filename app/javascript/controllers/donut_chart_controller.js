@@ -35,20 +35,14 @@ export default class extends Controller {
   }
 
   get #data() {
-    const totalPieValue = this.segmentsValue.reduce(
-      (acc, s) => acc + Number(s.amount),
-      0,
-    );
+    const totalPieValue = this.segmentsValue.reduce((acc, s) => acc + Number(s.amount), 0);
 
     // Overage is always first segment, unused is always last segment
     return this.segmentsValue
       .filter((s) => s.amount > 0)
       .map((s) => ({
         ...s,
-        amount: Math.max(
-          Number(s.amount),
-          totalPieValue * (this.#minSegmentAngle / (2 * Math.PI)),
-        ),
+        amount: Math.max(Number(s.amount), totalPieValue * (this.#minSegmentAngle / (2 * Math.PI))),
       }))
       .sort((a, b) => {
         if (a.id === this.overageSegmentIdValue) return -1;
@@ -95,10 +89,7 @@ export default class extends Controller {
 
     const g = svg
       .append("g")
-      .attr(
-        "transform",
-        `translate(${this.#viewBoxSize / 2}, ${this.#viewBoxSize / 2})`,
-      );
+      .attr("transform", `translate(${this.#viewBoxSize / 2}, ${this.#viewBoxSize / 2})`);
 
     const segmentGroups = g
       .selectAll("arc")
@@ -180,7 +171,8 @@ export default class extends Controller {
     if (!template) return;
 
     // Use cached selection if available for better performance
-    const paths = this.#visiblePaths || d3.select(this.chartContainerTarget).selectAll("path.visible-path");
+    const paths =
+      this.#visiblePaths || d3.select(this.chartContainerTarget).selectAll("path.visible-path");
 
     paths.attr("fill", function () {
       if (this.dataset.segmentId === segmentId) {
@@ -203,7 +195,8 @@ export default class extends Controller {
     this.defaultContentTarget.classList.remove("hidden");
 
     // Use cached selection if available for better performance
-    const paths = this.#visiblePaths || d3.select(this.chartContainerTarget).selectAll("path.visible-path");
+    const paths =
+      this.#visiblePaths || d3.select(this.chartContainerTarget).selectAll("path.visible-path");
 
     paths
       .attr("fill", function () {
@@ -235,16 +228,18 @@ export default class extends Controller {
     const segmentId = event.currentTarget.dataset.categoryId;
 
     // Use cached selection if available for better performance
-    const paths = this.#visiblePaths || d3.select(this.chartContainerTarget).selectAll("path.visible-path");
+    const paths =
+      this.#visiblePaths || d3.select(this.chartContainerTarget).selectAll("path.visible-path");
 
-    paths.style("opacity", function() {
+    paths.style("opacity", function () {
       return this.dataset.segmentId === segmentId ? 1 : 0.3;
     });
   }
 
   unhighlightSegment() {
     // Use cached selection if available for better performance
-    const paths = this.#visiblePaths || d3.select(this.chartContainerTarget).selectAll("path.visible-path");
+    const paths =
+      this.#visiblePaths || d3.select(this.chartContainerTarget).selectAll("path.visible-path");
 
     paths.style("opacity", null); // Clear inline opacity style
   }

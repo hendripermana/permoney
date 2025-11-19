@@ -72,18 +72,12 @@ export default class extends Controller {
 
   startSystemThemeListener() {
     this.darkMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    this.darkMediaQuery.addEventListener(
-      "change",
-      this.handleSystemThemeChange,
-    );
+    this.darkMediaQuery.addEventListener("change", this.handleSystemThemeChange);
   }
 
   stopSystemThemeListener() {
     if (this.darkMediaQuery) {
-      this.darkMediaQuery.removeEventListener(
-        "change",
-        this.handleSystemThemeChange,
-      );
+      this.darkMediaQuery.removeEventListener("change", this.handleSystemThemeChange);
     }
   }
 }

@@ -7,11 +7,10 @@ application.debug = false;
 window.Stimulus = application;
 
 Turbo.config.forms.confirm = (data) => {
-  const confirmDialogController =
-    application.getControllerForElementAndIdentifier(
-      document.getElementById("confirm-dialog"),
-      "confirm-dialog",
-    );
+  const confirmDialogController = application.getControllerForElementAndIdentifier(
+    document.getElementById("confirm-dialog"),
+    "confirm-dialog"
+  );
 
   return confirmDialogController.handleConfirm(data);
 };

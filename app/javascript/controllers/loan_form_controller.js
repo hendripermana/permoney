@@ -128,9 +128,7 @@ export default class LoanFormController extends Controller {
 
     // Show/hide profit sharing field for partnership models
     if (this.hasProfitShareFieldTarget) {
-      const showProfitShare = ["musyarakah", "mudharabah"].includes(
-        productType,
-      );
+      const showProfitShare = ["musyarakah", "mudharabah"].includes(productType);
       this.profitShareFieldTarget.classList.toggle("hidden", !showProfitShare);
     }
   }
@@ -154,15 +152,12 @@ export default class LoanFormController extends Controller {
     const data = {};
 
     // Collect values from form fields
-    if (this.hasPrincipalTarget)
-      data.principal_amount = this.principalTarget.value;
+    if (this.hasPrincipalTarget) data.principal_amount = this.principalTarget.value;
     if (this.hasStartDateTarget) data.start_date = this.startDateTarget.value;
     if (this.hasTenorTarget) data.tenor_months = this.tenorTarget.value;
-    if (this.hasFrequencyTarget)
-      data.payment_frequency = this.frequencyTarget.value;
+    if (this.hasFrequencyTarget) data.payment_frequency = this.frequencyTarget.value;
     if (this.hasMethodTarget) data.schedule_method = this.methodTarget.value;
-    if (this.hasRateOrProfitTarget)
-      data.rate_or_profit = this.rateOrProfitTarget.value;
+    if (this.hasRateOrProfitTarget) data.rate_or_profit = this.rateOrProfitTarget.value;
 
     // Handle interest-free checkbox
     if (this.hasInterestFreeTarget) {

@@ -22,9 +22,7 @@ export default class extends Controller {
 
   handleDocumentClick(event) {
     if (
-      event.target.closest(
-        '[data-mobile-cell-interaction-target="errorTooltip"]',
-      ) ||
+      event.target.closest('[data-mobile-cell-interaction-target="errorTooltip"]') ||
       event.target.closest('[data-mobile-cell-interaction-target="errorIcon"]')
     ) {
       return;
@@ -153,9 +151,7 @@ export default class extends Controller {
   findHighlightForField(field) {
     const container = field.closest("div");
     return container
-      ? container.querySelector(
-          '[data-mobile-cell-interaction-target="highlight"]',
-        )
+      ? container.querySelector('[data-mobile-cell-interaction-target="highlight"]')
       : null;
   }
 }

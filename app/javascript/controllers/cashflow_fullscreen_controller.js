@@ -18,11 +18,7 @@ export default class extends Controller {
     this.isUnmounted = false;
 
     // Ensure we have required data
-    if (
-      !this.sankeyDataValue ||
-      !this.sankeyDataValue.nodes ||
-      !this.sankeyDataValue.links
-    ) {
+    if (!this.sankeyDataValue || !this.sankeyDataValue.nodes || !this.sankeyDataValue.links) {
       console.warn("Cashflow fullscreen: Missing required sankey data");
       this.element.style.display = "none";
     }
@@ -204,12 +200,8 @@ export default class extends Controller {
 
   initializeFullscreenChart() {
     // Force re-initialization of Stimulus controllers for the fullscreen chart
-    const autosizerContainer = this.fullscreenModal.querySelector(
-      "#fullscreen-sankey-container",
-    );
-    const chartContainer = this.fullscreenModal.querySelector(
-      '[data-controller="sankey-chart"]',
-    );
+    const autosizerContainer = this.fullscreenModal.querySelector("#fullscreen-sankey-container");
+    const chartContainer = this.fullscreenModal.querySelector('[data-controller="sankey-chart"]');
 
     if (autosizerContainer && chartContainer && window.Stimulus) {
       // Trigger Stimulus controller connection for both autosizer and chart
@@ -225,20 +217,14 @@ export default class extends Controller {
 
   forceFullscreenResize() {
     // Force the autosizer to recalculate dimensions in fullscreen
-    const autosizerContainer = this.fullscreenModal?.querySelector(
-      "#fullscreen-sankey-container",
-    );
+    const autosizerContainer = this.fullscreenModal?.querySelector("#fullscreen-sankey-container");
     if (autosizerContainer) {
-      const autosizerController =
-        this.application?.getControllerForElementAndIdentifier(
-          autosizerContainer,
-          "sankey-autosizer",
-        );
+      const autosizerController = this.application?.getControllerForElementAndIdentifier(
+        autosizerContainer,
+        "sankey-autosizer"
+      );
 
-      if (
-        autosizerController &&
-        typeof autosizerController.forceResize === "function"
-      ) {
+      if (autosizerController && typeof autosizerController.forceResize === "function") {
         autosizerController.forceResize();
       }
 
@@ -249,17 +235,13 @@ export default class extends Controller {
 
   addModalEventListeners() {
     // Close button
-    const closeBtn = this.fullscreenModal.querySelector(
-      "#fullscreen-close-btn",
-    );
+    const closeBtn = this.fullscreenModal.querySelector("#fullscreen-close-btn");
     if (closeBtn) {
       closeBtn.addEventListener("click", () => this.exitFullscreen());
     }
 
     // Period selector
-    const periodSelector = this.fullscreenModal.querySelector(
-      "#fullscreen-period-selector",
-    );
+    const periodSelector = this.fullscreenModal.querySelector("#fullscreen-period-selector");
     if (periodSelector) {
       periodSelector.value = this.periodValue;
       periodSelector.addEventListener("change", (event) => {
@@ -268,9 +250,7 @@ export default class extends Controller {
     }
 
     // Export button functionality
-    const exportBtn = this.fullscreenModal.querySelector(
-      "#fullscreen-export-btn",
-    );
+    const exportBtn = this.fullscreenModal.querySelector("#fullscreen-export-btn");
     if (exportBtn) {
       exportBtn.addEventListener("click", () => {
         this.handleExport();
@@ -334,21 +314,15 @@ export default class extends Controller {
       const doc = parser.parseFromString(html, "text/html");
 
       // Extract the new sankey data from the response
-      const newSankeyElement = doc.querySelector(
-        '[data-controller*="cashflow-fullscreen"]',
-      );
+      const newSankeyElement = doc.querySelector('[data-controller*="cashflow-fullscreen"]');
       if (newSankeyElement) {
         const newSankeyData = JSON.parse(
-          newSankeyElement.getAttribute(
-            "data-cashflow-fullscreen-sankey-data-value",
-          ),
+          newSankeyElement.getAttribute("data-cashflow-fullscreen-sankey-data-value")
         );
         const newCurrencySymbol = newSankeyElement.getAttribute(
-          "data-cashflow-fullscreen-currency-symbol-value",
+          "data-cashflow-fullscreen-currency-symbol-value"
         );
-        const newPeriod = newSankeyElement.getAttribute(
-          "data-cashflow-fullscreen-period-value",
-        );
+        const newPeriod = newSankeyElement.getAttribute("data-cashflow-fullscreen-period-value");
 
         // Update current instance values
         this.sankeyDataValue = newSankeyData;
@@ -358,16 +332,13 @@ export default class extends Controller {
         // Update the original element's data attributes
         this.element.setAttribute(
           "data-cashflow-fullscreen-sankey-data-value",
-          JSON.stringify(newSankeyData),
+          JSON.stringify(newSankeyData)
         );
         this.element.setAttribute(
           "data-cashflow-fullscreen-currency-symbol-value",
-          newCurrencySymbol,
+          newCurrencySymbol
         );
-        this.element.setAttribute(
-          "data-cashflow-fullscreen-period-value",
-          newPeriod,
-        );
+        this.element.setAttribute("data-cashflow-fullscreen-period-value", newPeriod);
 
         // If fullscreen is open, update the chart and stats
         if (wasFullscreen) {
@@ -429,7 +400,7 @@ export default class extends Controller {
     return periods
       .map(
         (period) =>
-          `<option value="${period.key}" ${period.key === this.periodValue ? "selected" : ""}>${period.label}</option>`,
+          `<option value="${period.key}" ${period.key === this.periodValue ? "selected" : ""}>${period.label}</option>`
       )
       .join("");
   }
@@ -439,7 +410,7 @@ export default class extends Controller {
 
     // Calculate total income from links that flow INTO the Cash Flow node
     const cashFlowNodeIndex = this.sankeyDataValue.nodes.findIndex(
-      (node) => node.name === "Cash Flow",
+      (node) => node.name === "Cash Flow"
     );
     if (cashFlowNodeIndex === -1) return 0;
 
@@ -453,7 +424,7 @@ export default class extends Controller {
 
     // Calculate total expenses from links that flow OUT of the Cash Flow node (excluding Surplus)
     const cashFlowNodeIndex = this.sankeyDataValue.nodes.findIndex(
-      (node) => node.name === "Cash Flow",
+      (node) => node.name === "Cash Flow"
     );
     if (cashFlowNodeIndex === -1) return 0;
 
@@ -487,9 +458,7 @@ export default class extends Controller {
   // New comprehensive methods for enhanced functionality
 
   showLoadingIndicator() {
-    const chartContainer = this.fullscreenModal?.querySelector(
-      "#fullscreen-sankey-container",
-    );
+    const chartContainer = this.fullscreenModal?.querySelector("#fullscreen-sankey-container");
     if (chartContainer) {
       chartContainer.innerHTML = `
         <div class="flex items-center justify-center h-full">
@@ -511,9 +480,7 @@ export default class extends Controller {
     this.initializeFullscreenChart();
 
     // Update the period selector
-    const periodSelector = this.fullscreenModal?.querySelector(
-      "#fullscreen-period-selector",
-    );
+    const periodSelector = this.fullscreenModal?.querySelector("#fullscreen-period-selector");
     if (periodSelector) {
       periodSelector.value = this.periodValue;
     }
@@ -524,7 +491,7 @@ export default class extends Controller {
 
   updateFooterStats() {
     const footerStats = this.fullscreenModal?.querySelector(
-      ".flex.items-center.justify-between.text-sm.text-secondary",
+      ".flex.items-center.justify-between.text-sm.text-secondary"
     );
     if (footerStats?.children[0]) {
       footerStats.children[0].innerHTML = `
@@ -540,36 +507,29 @@ export default class extends Controller {
     const parser = new DOMParser();
     const doc = parser.parseFromString(responseHtml, "text/html");
     const newSankeySection = doc.querySelector(
-      '[data-controller*="sankey-chart"]:not([id="fullscreen-sankey-container"])',
+      '[data-controller*="sankey-chart"]:not([id="fullscreen-sankey-container"])'
     );
     const currentSankeySection = document.querySelector(
-      '[data-controller*="sankey-chart"]:not([id="fullscreen-sankey-container"])',
+      '[data-controller*="sankey-chart"]:not([id="fullscreen-sankey-container"])'
     );
 
     if (newSankeySection && currentSankeySection) {
       // Update data attributes
-      const newDataValue = newSankeySection.getAttribute(
-        "data-sankey-chart-data-value",
-      );
+      const newDataValue = newSankeySection.getAttribute("data-sankey-chart-data-value");
       const newCurrencyValue = newSankeySection.getAttribute(
-        "data-sankey-chart-currency-symbol-value",
+        "data-sankey-chart-currency-symbol-value"
       );
 
-      currentSankeySection.setAttribute(
-        "data-sankey-chart-data-value",
-        newDataValue,
-      );
+      currentSankeySection.setAttribute("data-sankey-chart-data-value", newDataValue);
       currentSankeySection.setAttribute(
         "data-sankey-chart-currency-symbol-value",
-        newCurrencyValue,
+        newCurrencyValue
       );
 
       // Trigger chart redraw
       if (window.Stimulus) {
         const controller = window.Stimulus.controllers.find(
-          (c) =>
-            c.element === currentSankeySection &&
-            c.identifier === "sankey-chart",
+          (c) => c.element === currentSankeySection && c.identifier === "sankey-chart"
         );
         if (controller && typeof controller.dataValueChanged === "function") {
           controller.dataValueChanged();
@@ -584,16 +544,14 @@ export default class extends Controller {
   async handleExport() {
     try {
       const chartContainer = this.fullscreenModal?.querySelector(
-        "#fullscreen-sankey-container svg",
+        "#fullscreen-sankey-container svg"
       );
       if (!chartContainer) {
         throw new Error("Chart not found");
       }
 
       // Show loading state
-      const exportBtn = this.fullscreenModal?.querySelector(
-        "#fullscreen-export-btn",
-      );
+      const exportBtn = this.fullscreenModal?.querySelector("#fullscreen-export-btn");
       const _originalContent = exportBtn?.innerHTML;
       if (exportBtn) {
         exportBtn.disabled = true;
@@ -610,23 +568,16 @@ export default class extends Controller {
       // Set proper dimensions
       svgElement.setAttribute("width", svgRect.width);
       svgElement.setAttribute("height", svgRect.height);
-      svgElement.setAttribute(
-        "viewBox",
-        `0 0 ${svgRect.width} ${svgRect.height}`,
-      );
+      svgElement.setAttribute("viewBox", `0 0 ${svgRect.width} ${svgRect.height}`);
 
       // Add background
-      const backgroundRect = document.createElementNS(
-        "http://www.w3.org/2000/svg",
-        "rect",
-      );
+      const backgroundRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
       backgroundRect.setAttribute("width", "100%");
       backgroundRect.setAttribute("height", "100%");
       backgroundRect.setAttribute(
         "fill",
-        getComputedStyle(document.documentElement).getPropertyValue(
-          "--color-background",
-        ) || "#ffffff",
+        getComputedStyle(document.documentElement).getPropertyValue("--color-background") ||
+          "#ffffff"
       );
       svgElement.insertBefore(backgroundRect, svgElement.firstChild);
 
@@ -653,9 +604,7 @@ export default class extends Controller {
       alert("Export failed. Please try again.");
     } finally {
       // Restore button
-      const exportBtn = this.fullscreenModal?.querySelector(
-        "#fullscreen-export-btn",
-      );
+      const exportBtn = this.fullscreenModal?.querySelector("#fullscreen-export-btn");
       const _originalContent = exportBtn?.innerHTML;
       if (exportBtn) {
         exportBtn.disabled = false;
@@ -686,9 +635,8 @@ export default class extends Controller {
 
       img.onload = () => {
         ctx.fillStyle =
-          getComputedStyle(document.documentElement).getPropertyValue(
-            "--color-background",
-          ) || "#ffffff";
+          getComputedStyle(document.documentElement).getPropertyValue("--color-background") ||
+          "#ffffff";
         ctx.fillRect(0, 0, svgRect.width, svgRect.height);
         ctx.drawImage(img, 0, 0);
 
@@ -740,10 +688,7 @@ export default class extends Controller {
     const bodyElement = document.body;
 
     // Method 1: Check for 'dark' class on html or body
-    if (
-      htmlElement.classList.contains("dark") ||
-      bodyElement.classList.contains("dark")
-    ) {
+    if (htmlElement.classList.contains("dark") || bodyElement.classList.contains("dark")) {
       return true;
     }
 
@@ -766,8 +711,7 @@ export default class extends Controller {
     if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) {
       // Only use this if no explicit theme is set
       const hasLightClass =
-        htmlElement.classList.contains("light") ||
-        bodyElement.classList.contains("light");
+        htmlElement.classList.contains("light") || bodyElement.classList.contains("light");
       if (!hasLightClass) {
         return true;
       }
@@ -796,12 +740,8 @@ export default class extends Controller {
   showLoadingIndicatorWithStaleData() {
     if (!this.fullscreenModal) return;
 
-    const chartContainer = this.fullscreenModal.querySelector(
-      "#fullscreen-sankey-container",
-    );
-    const periodSelector = this.fullscreenModal.querySelector(
-      "#fullscreen-period-selector",
-    );
+    const chartContainer = this.fullscreenModal.querySelector("#fullscreen-sankey-container");
+    const periodSelector = this.fullscreenModal.querySelector("#fullscreen-period-selector");
 
     if (chartContainer) {
       const isDark = this.detectDarkTheme();
@@ -823,9 +763,7 @@ export default class extends Controller {
   showErrorState(errorMessage) {
     if (!this.fullscreenModal) return;
 
-    const chartContainer = this.fullscreenModal.querySelector(
-      "#fullscreen-sankey-container",
-    );
+    const chartContainer = this.fullscreenModal.querySelector("#fullscreen-sankey-container");
     if (chartContainer) {
       const isDark = this.detectDarkTheme();
       chartContainer.innerHTML = `

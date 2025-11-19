@@ -8,9 +8,7 @@ export async function eagerLoadControllersFrom(prefix, application) {
     if (!importmapScript) return;
 
     const { imports = {} } = JSON.parse(importmapScript.textContent || "{}");
-    const specifiers = Object.keys(imports).filter((key) =>
-      key.startsWith(`${prefix}/`),
-    );
+    const specifiers = Object.keys(imports).filter((key) => key.startsWith(`${prefix}/`));
 
     // Use Promise.all to ensure all controllers are loaded before continuing
     await Promise.all(

@@ -17,9 +17,7 @@ export default class extends Controller {
   }
 
   update() {
-    const checked = this.hasCheckboxTarget
-      ? this.checkboxTarget.checked
-      : false;
+    const checked = this.hasCheckboxTarget ? this.checkboxTarget.checked : false;
     this.sectionTargets.forEach((section) => {
       // Toggle visibility
       if (checked) {

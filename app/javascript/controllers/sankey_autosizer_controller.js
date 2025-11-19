@@ -58,7 +58,7 @@ export default class extends Controller {
       {
         debounceMs: this.debounceMs,
         initialSize,
-      },
+      }
     );
   }
 
@@ -77,14 +77,8 @@ export default class extends Controller {
 
   constrainDimensions({ width, height }) {
     // Apply min/max constraints
-    let constrainedWidth = Math.max(
-      this.minWidthValue,
-      Math.min(this.maxWidthValue, width),
-    );
-    let constrainedHeight = Math.max(
-      this.minHeightValue,
-      Math.min(this.maxHeightValue, height),
-    );
+    let constrainedWidth = Math.max(this.minWidthValue, Math.min(this.maxWidthValue, width));
+    let constrainedHeight = Math.max(this.minHeightValue, Math.min(this.maxHeightValue, height));
 
     // Apply aspect ratio if specified
     if (this.aspectRatioValue) {
@@ -123,16 +117,12 @@ export default class extends Controller {
 
   updateSingleChart(chartElement, dimensions) {
     // If the chart element has a Stimulus controller, call its resize method
-    const chartController =
-      this.application.getControllerForElementAndIdentifier(
-        chartElement,
-        "sankey-chart",
-      );
+    const chartController = this.application.getControllerForElementAndIdentifier(
+      chartElement,
+      "sankey-chart"
+    );
 
-    if (
-      chartController &&
-      typeof chartController.updateDimensions === "function"
-    ) {
+    if (chartController && typeof chartController.updateDimensions === "function") {
       chartController.updateDimensions(dimensions);
     } else if (chartController && typeof chartController.draw === "function") {
       // Fallback: trigger redraw if updateDimensions method doesn't exist
@@ -192,16 +182,11 @@ export default class extends Controller {
    * Update constraints dynamically
    */
   updateConstraints(constraints = {}) {
-    if (constraints.minWidth !== undefined)
-      this.minWidthValue = constraints.minWidth;
-    if (constraints.minHeight !== undefined)
-      this.minHeightValue = constraints.minHeight;
-    if (constraints.maxWidth !== undefined)
-      this.maxWidthValue = constraints.maxWidth;
-    if (constraints.maxHeight !== undefined)
-      this.maxHeightValue = constraints.maxHeight;
-    if (constraints.aspectRatio !== undefined)
-      this.aspectRatioValue = constraints.aspectRatio;
+    if (constraints.minWidth !== undefined) this.minWidthValue = constraints.minWidth;
+    if (constraints.minHeight !== undefined) this.minHeightValue = constraints.minHeight;
+    if (constraints.maxWidth !== undefined) this.maxWidthValue = constraints.maxWidth;
+    if (constraints.maxHeight !== undefined) this.maxHeightValue = constraints.maxHeight;
+    if (constraints.aspectRatio !== undefined) this.aspectRatioValue = constraints.aspectRatio;
 
     // Trigger resize with new constraints
     this.forceResize();
