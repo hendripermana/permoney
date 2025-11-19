@@ -94,87 +94,103 @@ jobs:
       - name: Generate changelog
         id: changelog
         if: steps.version.outputs.should_release == 'true'
+        shell: ruby {0}
         run: |
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          NEW_VERSION="${{ steps.version.outputs.new_version }}"
-          TAG_NAME="${{ steps.version.outputs.tag_name }}"
+          require 'date'
           
-          # Generate changelog from commits since last tag
-          if [ -z "$LATEST_TAG" ]; then
-            COMMITS=$(git log --pretty=format:"- %s (%h)" -n 50)
-            COMPARE_URL="https://github.com/hendripermana/permoney/compare/$TAG_NAME"
+          latest_tag = `git describe --tags --abbrev=0 2>/dev/null`.strip
+          new_version = "${{ steps.version.outputs.new_version }}"
+          tag_name = "${{ steps.version.outputs.tag_name }}"
+          
+          if latest_tag.empty?
+            # Initial release or no tags found
+            commits_raw = `git log --pretty=format:"%s (%h)" -n 50`
+            compare_url = "https://github.com/hendripermana/permoney/compare/#{tag_name}"
           else
-            COMMITS=$(git log $LATEST_TAG..HEAD --pretty=format:"- %s (%h)")
-            COMPARE_URL="https://github.com/hendripermana/permoney/compare/$LATEST_TAG...$TAG_NAME"
-          fi
+            commits_raw = `git log #{latest_tag}..HEAD --pretty=format:"%s (%h)"`
+            compare_url = "https://github.com/hendripermana/permoney/compare/#{latest_tag}...#{tag_name}"
+          end
           
-          # Categorize commits
-          FEATURES=$(echo "$COMMITS" | grep -iE "^(feat|feature):" || true)
-          FIXES=$(echo "$COMMITS" | grep -iE "^(fix|bugfix):" || true)
-          DOCS=$(echo "$COMMITS" | grep -iE "^(docs|doc):" || true)
-          PERF=$(echo "$COMMITS" | grep -iE "^(perf|performance):" || true)
-          REFACTOR=$(echo "$COMMITS" | grep -iE "^(refactor):" || true)
-          OTHER=$(echo "$COMMITS" | grep -vE "^(feat|feature|fix|bugfix|docs|doc|perf|performance|refactor):" || true)
+          commits = commits_raw.split("\n")
           
-          # Build changelog entry
-          CHANGELOG="## [$NEW_VERSION]($COMPARE_URL) ($(date +%Y-%m-%d))"
-          CHANGELOG+=$'\n\n'
+          features = []
+          fixes = []
+          docs = []
+          perf = []
+          refactor = []
+          other = []
           
-          if [ -n "$FEATURES" ]; then
-            CHANGELOG+="### Features"$'\n\n'
-            CHANGELOG+=$(echo "$FEATURES" | sed 's/^\(feat\|feature\):/\1:/i' | sed 's/^/- /')
-            CHANGELOG+=$'\n\n'
-          fi
+          commits.each do |commit|
+            case commit
+            when /^(feat|feature):/i
+              features << commit
+            when /^(fix|bugfix):/i
+              fixes << commit
+            when /^(docs|doc):/i
+              docs << commit
+            when /^(perf|performance):/i
+              perf << commit
+            when /^refactor:/i
+              refactor << commit
+            else
+              other << commit
+            end
+          end
           
-          if [ -n "$FIXES" ]; then
-            CHANGELOG+="### Bug Fixes"$'\n\n'
-            CHANGELOG+=$(echo "$FIXES" | sed 's/^\(fix\|bugfix\):/\1:/i' | sed 's/^/- /')
-            CHANGELOG+=$'\n\n'
-          fi
+          changelog = "## [#{new_version}](#{compare_url}) (#{Date.today.to_s})\n\n"
           
-          if [ -n "$PERF" ]; then
-            CHANGELOG+="### Performance"$'\n\n'
-            CHANGELOG+=$(echo "$PERF" | sed 's/^perf:/\1:/i' | sed 's/^/- /')
-            CHANGELOG+=$'\n\n'
-          fi
+          unless features.empty?
+            changelog += "### Features\n\n"
+            features.each { |c| changelog += "- #{c}\n" }
+            changelog += "\n"
+          end
           
-          if [ -n "$DOCS" ]; then
-            CHANGELOG+="### Documentation"$'\n\n'
-            CHANGELOG+=$(echo "$DOCS" | sed 's/^docs:/\1:/i' | sed 's/^/- /')
-            CHANGELOG+=$'\n\n'
-          fi
+          unless fixes.empty?
+            changelog += "### Bug Fixes\n\n"
+            fixes.each { |c| changelog += "- #{c}\n" }
+            changelog += "\n"
+          end
           
-          if [ -n "$REFACTOR" ]; then
-            CHANGELOG+="### Refactoring"$'\n\n'
-            CHANGELOG+=$(echo "$REFACTOR" | sed 's/^refactor:/\1:/i' | sed 's/^/- /')
-            CHANGELOG+=$'\n\n'
-          fi
+          unless perf.empty?
+            changelog += "### Performance\n\n"
+            perf.each { |c| changelog += "- #{c}\n" }
+            changelog += "\n"
+          end
           
-          if [ -n "$OTHER" ]; then
-            CHANGELOG+="### Other Changes"$'\n\n'
-            CHANGELOG+=$(echo "$OTHER" | sed 's/^/- /')
-            CHANGELOG+=$'\n\n'
-          fi
+          unless docs.empty?
+            changelog += "### Documentation\n\n"
+            docs.each { |c| changelog += "- #{c}\n" }
+            changelog += "\n"
+          end
+
+          unless refactor.empty?
+            changelog += "### Refactoring\n\n"
+            refactor.each { |c| changelog += "- #{c}\n" }
+            changelog += "\n"
+          end
           
-          # Save to file
-          echo "$CHANGELOG" > release_notes.md
+          unless other.empty?
+            changelog += "### Other Changes\n\n"
+            other.each { |c| changelog += "- #{c}\n" }
+            changelog += "\n"
+          end
+          
+          File.write('release_notes.md', changelog)
           
           # Update CHANGELOG.md
-          if [ -f CHANGELOG.md ]; then
-            # Prepend new changelog to existing file
-            cat release_notes.md CHANGELOG.md > CHANGELOG.md.tmp
-            mv CHANGELOG.md.tmp CHANGELOG.md
+          if File.exist?('CHANGELOG.md')
+            current_content = File.read('CHANGELOG.md')
+            File.write('CHANGELOG.md', changelog + current_content)
           else
-            # Create new CHANGELOG.md
-            echo "# Changelog" > CHANGELOG.md
-            echo "" >> CHANGELOG.md
-            cat release_notes.md >> CHANGELOG.md
-          fi
+            File.write('CHANGELOG.md', "# Changelog\n\n" + changelog)
+          end
           
           # Output for release body
-          echo "changelog<<EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGELOG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          File.open(ENV['GITHUB_OUTPUT'], 'a') do |f|
+            f.puts "changelog<<EOF"
+            f.puts changelog
+            f.puts "EOF"
+          end
 
       - name: Update version.rb
         if: steps.version.outputs.should_release == 'true'

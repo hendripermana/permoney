@@ -132,6 +132,13 @@ jobs:
             LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.96.0")
             VERSION=$(echo $LATEST_TAG | sed 's/^v//')
           fi
+          
+          # Validate version format (semver)
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: Version '$VERSION' does not match semver format X.Y.Z"
+            exit 1
+          fi
+
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "APP_VERSION=v$VERSION" >> $GITHUB_ENV
 

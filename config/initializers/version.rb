@@ -23,7 +23,11 @@ module Permoney
     private
       def semver
         # Priority 1: Environment variable (for production builds)
-        return ENV["APP_VERSION"].sub(/^v/, "") if ENV["APP_VERSION"].present?
+        if ENV["APP_VERSION"].present?
+          version = ENV["APP_VERSION"].sub(/^v/, "")
+          # Validate version format (simple semver check)
+          return version if version.match?(/\A\d+\.\d+\.\d+\z/)
+        end
 
         # Priority 2: Read from git tag (for development/test)
         git_version = read_version_from_git_tag
