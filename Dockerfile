@@ -8,6 +8,7 @@ FROM registry.docker.com/library/ruby:$RUBY_VERSION-slim AS base
 
 # Set build arguments early to leverage cache better
 ARG BUILD_COMMIT_SHA
+ARG APP_VERSION
 
 # Set production environment with performance optimizations
 ENV RAILS_ENV="production" \
@@ -15,6 +16,7 @@ ENV RAILS_ENV="production" \
     BUNDLE_PATH="/usr/local/bundle" \
     BUNDLE_WITHOUT="development" \
     BUILD_COMMIT_SHA=${BUILD_COMMIT_SHA} \
+    APP_VERSION=${APP_VERSION} \
     Ruby_GC_HEAP_OLDOBJECT_LIMIT_FACTOR="1.5" \
     Ruby_GC_MALLOC_LIMIT="90000000"
 

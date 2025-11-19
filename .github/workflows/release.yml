@@ -1,0 +1,211 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - '.github/**'
+      - 'docs/**'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Get latest version
+        id: version
+        run: |
+          # Get latest tag or use 0.9.7 as default (current latest)
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.9.7")
+          CURRENT_VERSION=$(echo $LATEST_TAG | sed 's/^v//')
+          
+          # Check if there are any commits since last tag
+          COMMITS_SINCE_TAG=$(git rev-list $LATEST_TAG..HEAD --count 2>/dev/null || echo "0")
+          
+          if [ "$COMMITS_SINCE_TAG" -eq "0" ]; then
+            echo "No new commits since last tag $LATEST_TAG, skipping release"
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "should_release=true" >> $GITHUB_OUTPUT
+          
+          # Parse version components
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+          
+          # Determine version bump based on commit messages since last tag
+          COMMITS=$(git log $LATEST_TAG..HEAD --pretty=format:"%s" || echo "")
+          
+          BUMP_TYPE="patch"  # Default to patch
+          
+          if echo "$COMMITS" | grep -qiE "^(feat|feature):"; then
+            BUMP_TYPE="minor"
+          fi
+          
+          if echo "$COMMITS" | grep -qiE "^(breaking|BREAKING):"; then
+            BUMP_TYPE="major"
+          fi
+          
+          # Calculate new version
+          case $BUMP_TYPE in
+            major)
+              NEW_MAJOR=$((MAJOR + 1))
+              NEW_VERSION="$NEW_MAJOR.0.0"
+              ;;
+            minor)
+              NEW_MINOR=$((MINOR + 1))
+              NEW_VERSION="$MAJOR.$NEW_MINOR.0"
+              ;;
+            patch)
+              NEW_PATCH=$((PATCH + 1))
+              NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
+              ;;
+          esac
+          
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "bump_type=$BUMP_TYPE" >> $GITHUB_OUTPUT
+          echo "tag_name=v$NEW_VERSION" >> $GITHUB_OUTPUT
+          
+          echo "Current version: $CURRENT_VERSION"
+          echo "New version: $NEW_VERSION"
+          echo "Bump type: $BUMP_TYPE"
+          echo "Commits since last tag: $COMMITS_SINCE_TAG"
+
+      - name: Generate changelog
+        id: changelog
+        if: steps.version.outputs.should_release == 'true'
+        run: |
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          NEW_VERSION="${{ steps.version.outputs.new_version }}"
+          TAG_NAME="${{ steps.version.outputs.tag_name }}"
+          
+          # Generate changelog from commits since last tag
+          if [ -z "$LATEST_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"- %s (%h)" -n 50)
+            COMPARE_URL="https://github.com/hendripermana/permoney/compare/$TAG_NAME"
+          else
+            COMMITS=$(git log $LATEST_TAG..HEAD --pretty=format:"- %s (%h)")
+            COMPARE_URL="https://github.com/hendripermana/permoney/compare/$LATEST_TAG...$TAG_NAME"
+          fi
+          
+          # Categorize commits
+          FEATURES=$(echo "$COMMITS" | grep -iE "^(feat|feature):" || true)
+          FIXES=$(echo "$COMMITS" | grep -iE "^(fix|bugfix):" || true)
+          DOCS=$(echo "$COMMITS" | grep -iE "^(docs|doc):" || true)
+          PERF=$(echo "$COMMITS" | grep -iE "^(perf|performance):" || true)
+          REFACTOR=$(echo "$COMMITS" | grep -iE "^(refactor):" || true)
+          OTHER=$(echo "$COMMITS" | grep -vE "^(feat|feature|fix|bugfix|docs|doc|perf|performance|refactor):" || true)
+          
+          # Build changelog entry
+          CHANGELOG="## [$NEW_VERSION]($COMPARE_URL) ($(date +%Y-%m-%d))"
+          CHANGELOG+=$'\n\n'
+          
+          if [ -n "$FEATURES" ]; then
+            CHANGELOG+="### Features"$'\n\n'
+            CHANGELOG+=$(echo "$FEATURES" | sed 's/^\(feat\|feature\):/\1:/i' | sed 's/^/- /')
+            CHANGELOG+=$'\n\n'
+          fi
+          
+          if [ -n "$FIXES" ]; then
+            CHANGELOG+="### Bug Fixes"$'\n\n'
+            CHANGELOG+=$(echo "$FIXES" | sed 's/^\(fix\|bugfix\):/\1:/i' | sed 's/^/- /')
+            CHANGELOG+=$'\n\n'
+          fi
+          
+          if [ -n "$PERF" ]; then
+            CHANGELOG+="### Performance"$'\n\n'
+            CHANGELOG+=$(echo "$PERF" | sed 's/^perf:/\1:/i' | sed 's/^/- /')
+            CHANGELOG+=$'\n\n'
+          fi
+          
+          if [ -n "$DOCS" ]; then
+            CHANGELOG+="### Documentation"$'\n\n'
+            CHANGELOG+=$(echo "$DOCS" | sed 's/^docs:/\1:/i' | sed 's/^/- /')
+            CHANGELOG+=$'\n\n'
+          fi
+          
+          if [ -n "$REFACTOR" ]; then
+            CHANGELOG+="### Refactoring"$'\n\n'
+            CHANGELOG+=$(echo "$REFACTOR" | sed 's/^refactor:/\1:/i' | sed 's/^/- /')
+            CHANGELOG+=$'\n\n'
+          fi
+          
+          if [ -n "$OTHER" ]; then
+            CHANGELOG+="### Other Changes"$'\n\n'
+            CHANGELOG+=$(echo "$OTHER" | sed 's/^/- /')
+            CHANGELOG+=$'\n\n'
+          fi
+          
+          # Save to file
+          echo "$CHANGELOG" > release_notes.md
+          
+          # Update CHANGELOG.md
+          if [ -f CHANGELOG.md ]; then
+            # Prepend new changelog to existing file
+            cat release_notes.md CHANGELOG.md > CHANGELOG.md.tmp
+            mv CHANGELOG.md.tmp CHANGELOG.md
+          else
+            # Create new CHANGELOG.md
+            echo "# Changelog" > CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            cat release_notes.md >> CHANGELOG.md
+          fi
+          
+          # Output for release body
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Update version.rb
+        if: steps.version.outputs.should_release == 'true'
+        run: |
+          NEW_VERSION="${{ steps.version.outputs.new_version }}"
+          
+          # Update version.rb fallback version (the hardcoded fallback value)
+          # Find the fallback line and update it
+          sed -i "s/\"[0-9]\\+\\.[0-9]\\+\\.[0-9]\\+\"/\"$NEW_VERSION\"/" config/initializers/version.rb
+          
+          # Commit changes
+          git add config/initializers/version.rb CHANGELOG.md
+          git commit -m "chore: bump version to $NEW_VERSION" || exit 0
+          git push origin main
+
+      - name: Create Git Tag
+        if: steps.version.outputs.should_release == 'true'
+        run: |
+          TAG_NAME="${{ steps.version.outputs.tag_name }}"
+          git tag -a "$TAG_NAME" -m "Release $TAG_NAME"
+          git push origin "$TAG_NAME"
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.should_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag_name }}
+          name: Release ${{ steps.version.outputs.tag_name }}
+          body: ${{ steps.changelog.outputs.changelog }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

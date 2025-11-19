@@ -122,12 +122,27 @@ jobs:
             org.opencontainers.image.title=Permoney
             org.opencontainers.image.description=A multi-arch Docker image for the Permoney Rails app
 
+      - name: Get version from tag or default
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            # Get latest tag or use default
+            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.96.0")
+            VERSION=$(echo $LATEST_TAG | sed 's/^v//')
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "APP_VERSION=v$VERSION" >> $GITHUB_ENV
+
       - name: Publish 'linux/${{ matrix.platform }}' image by digest
         uses: docker/build-push-action@v6.16.0
         id: build
         with:
           context: .
-          build-args: BUILD_COMMIT_SHA=${{ github.sha }}
+          build-args: |
+            BUILD_COMMIT_SHA=${{ github.sha }}
+            APP_VERSION=${{ env.APP_VERSION }}
           platforms: 'linux/${{ matrix.platform }}'
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cache-${{ matrix.platform }}
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cache-${{ matrix.platform }},mode=max
