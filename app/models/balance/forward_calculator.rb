@@ -84,12 +84,12 @@ class Balance::ForwardCalculator < Balance::BaseCalculator
   private
     # PERFORMANCE: Determine optimal start date for calculation
     # Priority order:
-    # 1. Sync window_start_date (if provided by sync operation)
+    # 1. Sync window_start_date (if provided by sync operation AND we have an anchor balance)
     # 2. Latest balance date + 1 (incremental calculation)
     # 3. Opening anchor date (full recalculation fallback)
     def determine_start_date
-      if window_start_date
-        # Explicit window provided by sync (e.g., transaction dated in past)
+      if window_start_date && balance_anchor_present?
+        # Explicit window provided by sync and we have an anchor balance to build from
         window_start_date
       else
         # Try incremental calculation from latest balance
@@ -116,6 +116,10 @@ class Balance::ForwardCalculator < Balance::BaseCalculator
         [ account.entries.order(:date).last&.date,
           account.holdings.order(:date).last&.date ].compact.max || Date.current
       end
+    end
+
+    def balance_anchor_present?
+      account.balances.where(currency: account.currency).exists?
     end
 
     # Legacy methods for backward compatibility (if needed by tests)
