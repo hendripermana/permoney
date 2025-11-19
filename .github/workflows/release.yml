@@ -199,7 +199,7 @@ jobs:
           
           # Update version.rb fallback version (the hardcoded fallback value)
           # Find the fallback line and update it
-          sed -i "s/\"[0-9]\\+\\.[0-9]\\+\\.[0-9]\\+\"/\"$NEW_VERSION\"/" config/initializers/version.rb
+          sed -i "s/\"[0-9]\+\(\.[0-9]\+\)\+\"/\"$NEW_VERSION\"/" config/initializers/version.rb
           
           # Commit changes
           git add config/initializers/version.rb CHANGELOG.md
