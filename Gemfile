@@ -89,6 +89,7 @@ gem "after_commit_everywhere", "~> 1.0"
 # AI
 gem "ruby-openai"
 gem "langfuse-ruby", "~> 0.1.4", require: "langfuse"
+gem "posthog-ruby"
 
 group :development, :test do
   gem "debug", platforms: %i[mri windows]
