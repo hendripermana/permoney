@@ -1,3 +1,9 @@
+## [0.11.2](https://github.com/hendripermana/permoney/compare/v0.11.1...v0.11.2) (2025-11-19)
+
+### Other Changes
+
+- Fix PostHog initializer: require gem and use correct client instantiation (#66) (30850f57)
+
 ## [0.11.1](https://github.com/hendripermana/permoney/compare/v0.11.0...v0.11.1) (2025-11-19)
 
 ### Other Changes
