@@ -1,3 +1,13 @@
+## [0.10.1](https://github.com/hendripermana/permoney/compare/v0.10.0...v0.10.1) (2025-11-19)
+
+### Bug Fixes
+
+- fix: sync version.rb with release v0.10.0 and fix release workflow regex (66a6b49d)
+
+### Other Changes
+
+- Merge pull request #62 from hendripermana/fix/version-sync-and-regex (4f5bdc35)
+
 ## [0.10.0](https://github.com/hendripermana/permoney/compare/v0.9.7...v0.10.0) (2025-11-19)
 
 ### Features
