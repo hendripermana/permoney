@@ -211,8 +211,9 @@ class ReportsController < ApplicationController
         category = transaction.category
         next unless category  # Skip if no category
 
-        type = entry.amount.negative? ? "expense" : "income"
-        target_hash = type == "expense" ? expense_data : income_data
+        # Match Entry#classification logic: negative amount = income, positive = expense
+        type = entry.amount.negative? ? "income" : "expense"
+        target_hash = type == "income" ? income_data : expense_data
 
         # Use category object as key so view can access .name, .color
         target_hash[category] ||= []
@@ -287,16 +288,21 @@ class ReportsController < ApplicationController
     end
 
     def transactions_for_date_range(start_date, end_date, type = nil)
+      # Exclude transfers, one-time, and CC payments (matching income_statement logic)
       entries = Current.family.entries
         .where(date: start_date..end_date)
         .where(entryable_type: "Transaction")
+        .joins("INNER JOIN transactions ON transactions.id = entries.entryable_id")
+        .where.not(transactions: { kind: [ "funds_movement", "one_time", "cc_payment" ] })
         .includes(:entryable)
 
       case type
       when :income
-        entries.where("amount > 0")
-      when :expense
+        # Negative amount = income (matches Entry#classification logic)
         entries.where("amount < 0")
+      when :expense
+        # Positive amount = expense (matches Entry#classification logic)
+        entries.where("amount > 0")
       else
         entries
       end
