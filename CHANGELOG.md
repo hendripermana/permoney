@@ -1,3 +1,9 @@
+## [0.11.4](https://github.com/hendripermana/permoney/compare/v0.11.3...v0.11.4) (2025-11-20)
+
+### Other Changes
+
+- Implement PostHog proxy to bypass ad blockers (#68) (611a5904)
+
 ## [0.11.3](https://github.com/hendripermana/permoney/compare/v0.11.2...v0.11.3) (2025-11-20)
 
 ### Other Changes
