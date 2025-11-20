@@ -350,6 +350,9 @@ Rails.application.routes.draw do
     end
   end
 
+  # PostHog Proxy
+  match "/ingest/*path", to: "posthog_proxy#proxy", via: :all
+
   resources :lunchflow_items, only: %i[index new create show edit update destroy] do
     collection do
       get :preload_accounts
