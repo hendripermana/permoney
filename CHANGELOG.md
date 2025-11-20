@@ -1,3 +1,9 @@
+## [0.11.3](https://github.com/hendripermana/permoney/compare/v0.11.2...v0.11.3) (2025-11-20)
+
+### Other Changes
+
+- Fix HTML escaping in PostHog partial (#67) (d4bc8158)
+
 ## [0.11.2](https://github.com/hendripermana/permoney/compare/v0.11.1...v0.11.2) (2025-11-19)
 
 ### Other Changes
