@@ -1,3 +1,10 @@
+## [0.11.6](https://github.com/hendripermana/permoney/compare/v0.11.5...v0.11.6) (2025-11-21)
+
+### Other Changes
+
+- Merge pull request #69 from hendripermana/fix-sync-refresh-and-posthog (bb2c4414)
+- Fix sync-all refresh UX and stabilize version checker (2000059f)
+
 ## [0.11.5](https://github.com/hendripermana/permoney/compare/v0.11.4...v0.11.5) (2025-11-21)
 
 ### Other Changes
