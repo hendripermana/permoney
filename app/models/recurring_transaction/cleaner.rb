@@ -34,6 +34,7 @@ class RecurringTransaction
 
       family.recurring_transactions
         .inactive
+        .where(manual: false)
         .where("updated_at < ?", six_months_ago)
         .destroy_all
     end

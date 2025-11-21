@@ -82,6 +82,12 @@ class RecurringTransaction
           find_conditions[:merchant_id] = nil
         end
 
+        # Check if a manual recurring transaction already exists for this pattern
+        # If so, we skip auto-creation to avoid duplicates, but we might want to update stats?
+        # For now, let's assume manual overrides auto
+        existing_manual = family.recurring_transactions.find_by(find_conditions.merge(manual: true))
+        next if existing_manual
+
         recurring_transaction = family.recurring_transactions.find_or_initialize_by(find_conditions)
 
         # Set the name or merchant_id on new records
