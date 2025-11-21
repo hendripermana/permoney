@@ -1,3 +1,9 @@
+## [0.12.0](https://github.com/hendripermana/permoney/compare/v0.11.8...v0.12.0) (2025-11-21)
+
+### Features
+
+- Feat: Manual Recurring Transactions (#71) (0a58664d)
+
 ## [0.11.8](https://github.com/hendripermana/permoney/compare/v0.11.7...v0.11.8) (2025-11-21)
 
 ### Other Changes
