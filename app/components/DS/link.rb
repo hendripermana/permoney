@@ -12,10 +12,16 @@ class DS::Link < DS::Buttonish
 
   def merged_opts
     merged_opts = opts.dup || {}
+    method = merged_opts.delete(:method)
     data = merged_opts.delete(:data) || {}
 
     if frame
       data = data.merge(turbo_frame: frame)
+    end
+
+    if method.present? && method.to_s != "get"
+      data = data.merge(turbo_method: method)
+      merged_opts[:rel] = class_names(merged_opts[:rel], "nofollow")
     end
 
     merged_opts.merge(
