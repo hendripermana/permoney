@@ -1,3 +1,9 @@
+## [0.12.1](https://github.com/hendripermana/permoney/compare/v0.12.0...v0.12.1) (2025-11-21)
+
+### Other Changes
+
+- chore: Remove temporary diff file (7ed50997)
+
 ## [0.12.0](https://github.com/hendripermana/permoney/compare/v0.11.8...v0.12.0) (2025-11-21)
 
 ### Features
