@@ -10,7 +10,7 @@
       Pending: <%= state[:pending] %> • Syncing: <%= state[:syncing] %> • Stale: <%= state[:stale] %> • Failed: <%= state[:failed] %>
     </p>
   </div>
-  <%= render DS::Link.new(
+  <%= render DS::Button.new(
     text: "Refresh",
     href: sync_all_accounts_path,
     variant: :outline,
