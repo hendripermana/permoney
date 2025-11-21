@@ -1,3 +1,9 @@
+## [0.11.5](https://github.com/hendripermana/permoney/compare/v0.11.4...v0.11.5) (2025-11-21)
+
+### Other Changes
+
+- Fix sync health refresh button and restore PostHog require (2d86df3a)
+
 ## [0.11.4](https://github.com/hendripermana/permoney/compare/v0.11.3...v0.11.4) (2025-11-20)
 
 ### Other Changes
