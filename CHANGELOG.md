@@ -1,3 +1,11 @@
+## [0.11.8](https://github.com/hendripermana/permoney/compare/v0.11.7...v0.11.8) (2025-11-21)
+
+### Other Changes
+
+- Merge pull request #70 from hendripermana/fix/recurring-cleanup-turbo (f79ab46b)
+- Add compose override for local hotfix builds (49e1b2cb)
+- Ensure DS::Link uses turbo method for non-GET links (c081e276)
+
 ## [0.11.7](https://github.com/hendripermana/permoney/compare/v0.11.6...v0.11.7) (2025-11-21)
 
 ### Other Changes
