@@ -327,10 +327,10 @@ class RecurringTransactionTest < ActiveSupport::TestCase
 
   test "create_from_transaction creates manual recurring transaction with variance" do
     account = @family.accounts.first
-    
+
     # Create past transactions with varying amounts
-    amounts = [100.00, 110.00, 95.00]
-    
+    amounts = [ 100.00, 110.00, 95.00 ]
+
     amounts.each_with_index do |amt, i|
       transaction = Transaction.create!(
         merchant: @merchant,
@@ -344,7 +344,7 @@ class RecurringTransactionTest < ActiveSupport::TestCase
         entryable: transaction
       )
     end
-    
+
     # Current transaction
     current_transaction = Transaction.create!(
       merchant: @merchant,
@@ -357,9 +357,9 @@ class RecurringTransactionTest < ActiveSupport::TestCase
       name: "Variable Bill",
       entryable: current_transaction
     )
-    
+
     recurring = RecurringTransaction.create_from_transaction(current_transaction)
-    
+
     assert recurring.persisted?
     assert recurring.manual?
     assert_equal 4, recurring.occurrence_count
@@ -381,9 +381,9 @@ class RecurringTransactionTest < ActiveSupport::TestCase
       expected_amount_max: 110.00,
       expected_amount_avg: 100.00
     )
-    
+
     account = @family.accounts.first
-    
+
     # Match within variance
     t1 = Transaction.create!(merchant: @merchant, category: categories(:food_and_drink))
     e1 = account.entries.create!(
@@ -393,7 +393,7 @@ class RecurringTransactionTest < ActiveSupport::TestCase
       entryable: t1,
       name: "Transaction 1"
     )
-    
+
     # No match (outside variance)
     t2 = Transaction.create!(merchant: @merchant, category: categories(:food_and_drink))
     e2 = account.entries.create!(
@@ -403,7 +403,7 @@ class RecurringTransactionTest < ActiveSupport::TestCase
       entryable: t2,
       name: "Transaction 2"
     )
-    
+
     matches = recurring.matching_transactions
     assert_includes matches, e1
     assert_not_includes matches, e2
@@ -420,7 +420,7 @@ class RecurringTransactionTest < ActiveSupport::TestCase
       status: "inactive",
       manual: true
     )
-    
+
     auto_recurring = @family.recurring_transactions.create!(
       merchant: merchants(:amazon),
       amount: 50.00,
@@ -431,13 +431,13 @@ class RecurringTransactionTest < ActiveSupport::TestCase
       status: "inactive",
       manual: false
     )
-    
+
     # Force updated_at to be old
     manual_recurring.update_columns(updated_at: 7.months.ago)
     auto_recurring.update_columns(updated_at: 7.months.ago)
-    
+
     RecurringTransaction::Cleaner.new(@family).remove_old_inactive_transactions
-    
+
     assert RecurringTransaction.exists?(manual_recurring.id)
     assert_not RecurringTransaction.exists?(auto_recurring.id)
   end
