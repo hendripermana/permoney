@@ -1,22 +1,22 @@
-<% state = sync_health_state %>
-<% total_active = state.values.compact.sum %>
-<% return if total_active.zero? %>
+<%= turbo_frame_tag "sync-health-banner" do %>
+  <% state = sync_health_state %>
+  <% total_active = state.values.compact.sum %>
+  <% return if total_active.zero? %>
 
-<div class="rounded-lg border border-secondary bg-surface p-3 flex items-center gap-3">
-  <div class="w-2 h-2 rounded-full bg-warning animate-pulse"></div>
-  <div class="flex-1 text-sm">
-    <p class="font-medium text-primary">Sync activity detected</p>
-    <p class="text-secondary">
-      Pending: <%= state[:pending] %> • Syncing: <%= state[:syncing] %> • Stale: <%= state[:stale] %> • Failed: <%= state[:failed] %>
-    </p>
+  <div class="rounded-lg border border-secondary bg-surface p-3 flex items-center gap-3">
+    <div class="w-2 h-2 rounded-full bg-warning animate-pulse"></div>
+    <div class="flex-1 text-sm">
+      <p class="font-medium text-primary">Sync activity detected</p>
+      <p class="text-secondary">
+        Pending: <%= state[:pending] %> • Syncing: <%= state[:syncing] %> • Stale: <%= state[:stale] %> • Failed: <%= state[:failed] %>
+      </p>
+    </div>
+    <%= button_to sync_all_accounts_path,
+          method: :post,
+          data: { controller: "sync-button", action: "click->sync-button#start", turbo_frame: "_top" },
+          class: "font-medium whitespace-nowrap inline-flex items-center gap-1 rounded-md justify-center w-24 h-9 text-sm hover:bg-gray-100 theme-dark:hover:bg-gray-700" do %>
+      <%= icon("refresh-cw", size: "sm") %>
+      Refresh
+    <% end %>
   </div>
-  <%= render DS::Button.new(
-    text: "Refresh",
-    href: sync_all_accounts_path,
-    variant: :outline,
-    size: :sm,
-    icon: "refresh-cw",
-    frame: :_top,
-    data: { controller: "sync-button", action: "click->sync-button#start" }
-  ) %>
-</div>
+<% end %>

@@ -53,6 +53,8 @@ class VersionCheckerTest < ActiveSupport::TestCase
     stub_request(:get, VersionChecker::GITHUB_API_URL)
       .to_return(status: 200, body: mock_release.to_json)
 
+    Permoney.stubs(:version).returns(Semver.new("0.96"))
+
     # Current version is 0.96, available is 1.0.0
     assert VersionChecker.update_available?
   end
@@ -69,6 +71,8 @@ class VersionCheckerTest < ActiveSupport::TestCase
 
     stub_request(:get, VersionChecker::GITHUB_API_URL)
       .to_return(status: 200, body: mock_release.to_json)
+
+    Permoney.stubs(:version).returns(Semver.new("0.96"))
 
     # Current version is 0.96, available is 0.96
     refute VersionChecker.update_available?

@@ -14,7 +14,21 @@ class AccountsController < ApplicationController
 
   def sync_all
     family.sync_later
-    redirect_to accounts_path, notice: "Syncing accounts..."
+
+    respond_to do |format|
+      format.html { redirect_to accounts_path, notice: "Syncing accounts..." }
+      format.turbo_stream do
+        render turbo_stream: [
+          turbo_stream.append("notification-tray",
+            partial: "shared/notifications/notice",
+            locals: { message: "Sync started for all accounts." }
+          ),
+          turbo_stream.replace("sync-health-banner",
+            partial: "shared/sync_health_banner"
+          )
+        ]
+      end
+    end
   end
 
   def show
