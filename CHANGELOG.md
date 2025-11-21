@@ -1,3 +1,9 @@
+## [0.11.7](https://github.com/hendripermana/permoney/compare/v0.11.6...v0.11.7) (2025-11-21)
+
+### Other Changes
+
+- Reduce sync health cache TTL for fresher banner (cc5757c3)
+
 ## [0.11.6](https://github.com/hendripermana/permoney/compare/v0.11.5...v0.11.6) (2025-11-21)
 
 ### Other Changes
