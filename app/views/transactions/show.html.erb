@@ -150,6 +150,22 @@
           ) %>
         </div>
 
+        <div class="flex items-center justify-between gap-4 p-3">
+          <div class="text-sm space-y-1">
+            <h4 class="text-primary"><%= t(".recurring_title") %></h4>
+            <p class="text-secondary"><%= t(".recurring_subtitle") %></p>
+          </div>
+
+          <%= render DS::Button.new(
+            text: t(".mark_as_recurring"),
+            icon: "repeat",
+            variant: "outline",
+            href: mark_as_recurring_transaction_path(@entry.transaction),
+            method: :post,
+            frame: "_top"
+          ) %>
+        </div>
+
         <!-- Delete Transaction Form -->
         <div class="flex items-center justify-between gap-2 p-3">
           <div class="text-sm space-y-1">

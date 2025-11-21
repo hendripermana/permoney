@@ -324,4 +324,121 @@ class RecurringTransactionTest < ActiveSupport::TestCase
     assert name_based.present?
     assert_equal "Monthly Rent", name_based.name
   end
+
+  test "create_from_transaction creates manual recurring transaction with variance" do
+    account = @family.accounts.first
+    
+    # Create past transactions with varying amounts
+    amounts = [100.00, 110.00, 95.00]
+    
+    amounts.each_with_index do |amt, i|
+      transaction = Transaction.create!(
+        merchant: @merchant,
+        category: categories(:food_and_drink)
+      )
+      account.entries.create!(
+        date: (i + 1).months.ago.beginning_of_month + 5.days,
+        amount: amt,
+        currency: "USD",
+        name: "Variable Bill",
+        entryable: transaction
+      )
+    end
+    
+    # Current transaction
+    current_transaction = Transaction.create!(
+      merchant: @merchant,
+      category: categories(:food_and_drink)
+    )
+    current_entry = account.entries.create!(
+      date: Date.current.beginning_of_month + 5.days,
+      amount: 105.00,
+      currency: "USD",
+      name: "Variable Bill",
+      entryable: current_transaction
+    )
+    
+    recurring = RecurringTransaction.create_from_transaction(current_transaction)
+    
+    assert recurring.persisted?
+    assert recurring.manual?
+    assert_equal 4, recurring.occurrence_count
+    assert_equal 95.00, recurring.expected_amount_min
+    assert_equal 110.00, recurring.expected_amount_max
+    assert_in_delta 102.5, recurring.expected_amount_avg, 0.01
+  end
+
+  test "matching_transactions handles variance for manual recurring transactions" do
+    recurring = @family.recurring_transactions.create!(
+      merchant: @merchant,
+      amount: 100.00,
+      currency: "USD",
+      expected_day_of_month: 5,
+      last_occurrence_date: Date.current,
+      next_expected_date: 1.month.from_now.to_date,
+      manual: true,
+      expected_amount_min: 90.00,
+      expected_amount_max: 110.00,
+      expected_amount_avg: 100.00
+    )
+    
+    account = @family.accounts.first
+    
+    # Match within variance
+    t1 = Transaction.create!(merchant: @merchant, category: categories(:food_and_drink))
+    e1 = account.entries.create!(
+      date: 1.month.ago.beginning_of_month + 5.days,
+      amount: 95.00,
+      currency: "USD",
+      entryable: t1,
+      name: "Transaction 1"
+    )
+    
+    # No match (outside variance)
+    t2 = Transaction.create!(merchant: @merchant, category: categories(:food_and_drink))
+    e2 = account.entries.create!(
+      date: 2.months.ago.beginning_of_month + 5.days,
+      amount: 150.00,
+      currency: "USD",
+      entryable: t2,
+      name: "Transaction 2"
+    )
+    
+    matches = recurring.matching_transactions
+    assert_includes matches, e1
+    assert_not_includes matches, e2
+  end
+
+  test "cleaner does not remove manual recurring transactions" do
+    manual_recurring = @family.recurring_transactions.create!(
+      merchant: @merchant,
+      amount: 100.00,
+      currency: "USD",
+      expected_day_of_month: 5,
+      last_occurrence_date: 7.months.ago.to_date,
+      next_expected_date: 6.months.ago.to_date,
+      status: "inactive",
+      manual: true
+    )
+    
+    auto_recurring = @family.recurring_transactions.create!(
+      merchant: merchants(:amazon),
+      amount: 50.00,
+      currency: "USD",
+      expected_day_of_month: 10,
+      last_occurrence_date: 7.months.ago.to_date,
+      next_expected_date: 6.months.ago.to_date,
+      status: "inactive",
+      manual: false
+    )
+    
+    # Force updated_at to be old
+    manual_recurring.update_columns(updated_at: 7.months.ago)
+    auto_recurring.update_columns(updated_at: 7.months.ago)
+    
+    RecurringTransaction::Cleaner.new(@family).remove_old_inactive_transactions
+    
+    assert RecurringTransaction.exists?(manual_recurring.id)
+    assert_not RecurringTransaction.exists?(auto_recurring.id)
+  end
 end

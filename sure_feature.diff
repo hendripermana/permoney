@@ -1,0 +1,1009 @@
+diff --git a/app/controllers/transactions_controller.rb b/app/controllers/transactions_controller.rb
+index 2036bd16859..aec15157b58 100644
+--- a/app/controllers/transactions_controller.rb
++++ b/app/controllers/transactions_controller.rb
+@@ -116,6 +116,49 @@ def update
+     end
+   end
+ 
++  def mark_as_recurring
++    transaction = Current.family.transactions.includes(entry: :account).find(params[:id])
++
++    # Check if a recurring transaction already exists for this pattern
++    existing = Current.family.recurring_transactions.find_by(
++      merchant_id: transaction.merchant_id,
++      name: transaction.merchant_id.present? ? nil : transaction.entry.name,
++      currency: transaction.entry.currency,
++      manual: true
++    )
++
++    if existing
++      flash[:alert] = t("recurring_transactions.already_exists")
++      redirect_back_or_to transactions_path
++      return
++    end
++
++    begin
++      recurring_transaction = RecurringTransaction.create_from_transaction(transaction)
++
++      respond_to do |format|
++        format.html do
++          flash[:notice] = t("recurring_transactions.marked_as_recurring")
++          redirect_back_or_to transactions_path
++        end
++      end
++    rescue ActiveRecord::RecordInvalid => e
++      respond_to do |format|
++        format.html do
++          flash[:alert] = t("recurring_transactions.creation_failed")
++          redirect_back_or_to transactions_path
++        end
++      end
++    rescue StandardError => e
++      respond_to do |format|
++        format.html do
++          flash[:alert] = t("recurring_transactions.unexpected_error")
++          redirect_back_or_to transactions_path
++        end
++      end
++    end
++  end
++
+   private
+     def per_page
+       params[:per_page].to_i.positive? ? params[:per_page].to_i : 20
+diff --git a/app/models/recurring_transaction.rb b/app/models/recurring_transaction.rb
+index b97ad858ba5..069440725b6 100644
+--- a/app/models/recurring_transaction.rb
++++ b/app/models/recurring_transaction.rb
+@@ -5,6 +5,9 @@ class RecurringTransaction < ApplicationRecord
+   belongs_to :merchant, optional: true
+ 
+   monetize :amount
++  monetize :expected_amount_min, allow_nil: true
++  monetize :expected_amount_max, allow_nil: true
++  monetize :expected_amount_avg, allow_nil: true
+ 
+   enum :status, { active: "active", inactive: "inactive" }
+ 
+@@ -12,6 +15,7 @@ class RecurringTransaction < ApplicationRecord
+   validates :currency, presence: true
+   validates :expected_day_of_month, presence: true, numericality: { greater_than: 0, less_than_or_equal_to: 31 }
+   validate :merchant_or_name_present
++  validate :amount_variance_consistency
+ 
+   def merchant_or_name_present
+     if merchant_id.blank? && name.blank?
+@@ -19,6 +23,16 @@ def merchant_or_name_present
+     end
+   end
+ 
++  def amount_variance_consistency
++    return unless manual?
++
++    if expected_amount_min.present? && expected_amount_max.present?
++      if expected_amount_min > expected_amount_max
++        errors.add(:expected_amount_min, "cannot be greater than expected_amount_max")
++      end
++    end
++  end
++
+   scope :for_family, ->(family) { where(family: family) }
+   scope :expected_soon, -> { active.where("next_expected_date <= ?", 1.month.from_now) }
+ 
+@@ -31,17 +45,147 @@ def self.cleanup_stale_for(family)
+     Cleaner.new(family).cleanup_stale_transactions
+   end
+ 
+-  # Find matching transactions for this recurring pattern
+-  def matching_transactions
++  # Create a manual recurring transaction from an existing transaction
++  # Automatically calculates amount variance from past 6 months of matching transactions
++  def self.create_from_transaction(transaction, date_variance: 2)
++    entry = transaction.entry
++    family = entry.account.family
++    expected_day = entry.date.day
++
++    # Find matching transactions from the past 6 months
++    matching_amounts = find_matching_transaction_amounts(
++      family: family,
++      merchant_id: transaction.merchant_id,
++      name: transaction.merchant_id.present? ? nil : entry.name,
++      currency: entry.currency,
++      expected_day: expected_day,
++      lookback_months: 6
++    )
++
++    # Calculate amount variance from historical data
++    expected_min = expected_max = expected_avg = nil
++    if matching_amounts.size > 1
++      # Multiple transactions found - calculate variance
++      expected_min = matching_amounts.min
++      expected_max = matching_amounts.max
++      expected_avg = matching_amounts.sum / matching_amounts.size
++    elsif matching_amounts.size == 1
++      # Single transaction - no variance yet
++      amount = matching_amounts.first
++      expected_min = amount
++      expected_max = amount
++      expected_avg = amount
++    end
++
++    # Calculate next expected date relative to today, not the transaction date
++    next_expected = calculate_next_expected_date_from_today(expected_day)
++
++    create!(
++      family: family,
++      merchant_id: transaction.merchant_id,
++      name: transaction.merchant_id.present? ? nil : entry.name,
++      amount: entry.amount,
++      currency: entry.currency,
++      expected_day_of_month: expected_day,
++      last_occurrence_date: entry.date,
++      next_expected_date: next_expected,
++      status: "active",
++      occurrence_count: matching_amounts.size,
++      manual: true,
++      expected_amount_min: expected_min,
++      expected_amount_max: expected_max,
++      expected_amount_avg: expected_avg
++    )
++  end
++
++  # Find matching transaction entries for variance calculation
++  def self.find_matching_transaction_entries(family:, merchant_id:, name:, currency:, expected_day:, lookback_months: 6)
++    lookback_date = lookback_months.months.ago.to_date
++
+     entries = family.entries
+       .where(entryable_type: "Transaction")
+       .where(currency: currency)
+-      .where("entries.amount = ?", amount)
++      .where("entries.date >= ?", lookback_date)
+       .where("EXTRACT(DAY FROM entries.date) BETWEEN ? AND ?",
+-             [ expected_day_of_month - 2, 1 ].max,
+-             [ expected_day_of_month + 2, 31 ].min)
++             [ expected_day - 2, 1 ].max,
++             [ expected_day + 2, 31 ].min)
+       .order(date: :desc)
+ 
++    # Filter by merchant or name
++    if merchant_id.present?
++      # Join with transactions table to filter by merchant_id in SQL (avoids N+1)
++      entries
++        .joins("INNER JOIN transactions ON transactions.id = entries.entryable_id")
++        .where(transactions: { merchant_id: merchant_id })
++        .to_a
++    else
++      entries.where(name: name).to_a
++    end
++  end
++
++  # Find matching transaction amounts for variance calculation
++  def self.find_matching_transaction_amounts(family:, merchant_id:, name:, currency:, expected_day:, lookback_months: 6)
++    matching_entries = find_matching_transaction_entries(
++      family: family,
++      merchant_id: merchant_id,
++      name: name,
++      currency: currency,
++      expected_day: expected_day,
++      lookback_months: lookback_months
++    )
++
++    matching_entries.map(&:amount)
++  end
++
++  # Calculate next expected date from today
++  def self.calculate_next_expected_date_from_today(expected_day)
++    today = Date.current
++
++    # Try this month first
++    begin
++      this_month_date = Date.new(today.year, today.month, expected_day)
++      return this_month_date if this_month_date > today
++    rescue ArgumentError
++      # Day doesn't exist in this month (e.g., 31st in February)
++    end
++
++    # Otherwise use next month
++    calculate_next_expected_date_for(today, expected_day)
++  end
++
++  def self.calculate_next_expected_date_for(from_date, expected_day)
++    next_month = from_date.next_month
++    begin
++      Date.new(next_month.year, next_month.month, expected_day)
++    rescue ArgumentError
++      next_month.end_of_month
++    end
++  end
++
++  # Find matching transactions for this recurring pattern
++  def matching_transactions
++    # For manual recurring with amount variance, match within range
++    # For automatic recurring, match exact amount
++    entries = if manual? && has_amount_variance?
++      family.entries
++        .where(entryable_type: "Transaction")
++        .where(currency: currency)
++        .where("entries.amount BETWEEN ? AND ?", expected_amount_min, expected_amount_max)
++        .where("EXTRACT(DAY FROM entries.date) BETWEEN ? AND ?",
++               [ expected_day_of_month - 2, 1 ].max,
++               [ expected_day_of_month + 2, 31 ].min)
++        .order(date: :desc)
++    else
++      family.entries
++        .where(entryable_type: "Transaction")
++        .where(currency: currency)
++        .where("entries.amount = ?", amount)
++        .where("EXTRACT(DAY FROM entries.date) BETWEEN ? AND ?",
++               [ expected_day_of_month - 2, 1 ].max,
++               [ expected_day_of_month + 2, 31 ].min)
++        .order(date: :desc)
++    end
++
+     # Filter by merchant or name
+     if merchant_id.present?
+       # Match by merchant through the entryable (Transaction)
+@@ -54,10 +198,17 @@ def matching_transactions
+     end
+   end
+ 
++  # Check if this recurring transaction has amount variance configured
++  def has_amount_variance?
++    expected_amount_min.present? && expected_amount_max.present?
++  end
++
+   # Check if this recurring transaction should be marked inactive
+   def should_be_inactive?
+     return false if last_occurrence_date.nil?
+-    last_occurrence_date < 2.months.ago
++    # Manual recurring transactions have a longer threshold
++    threshold = manual? ? 6.months.ago : 2.months.ago
++    last_occurrence_date < threshold
+   end
+ 
+   # Mark as inactive
+@@ -71,14 +222,42 @@ def mark_active!
+   end
+ 
+   # Update based on a new transaction occurrence
+-  def record_occurrence!(transaction_date)
++  def record_occurrence!(transaction_date, transaction_amount = nil)
+     self.last_occurrence_date = transaction_date
+     self.next_expected_date = calculate_next_expected_date(transaction_date)
++
++    # Update amount variance for manual recurring transactions BEFORE incrementing count
++    if manual? && transaction_amount.present?
++      update_amount_variance(transaction_amount)
++    end
++
+     self.occurrence_count += 1
+     self.status = "active"
+     save!
+   end
+ 
++  # Update amount variance tracking based on a new transaction
++  def update_amount_variance(transaction_amount)
++    # First sample - initialize everything
++    if expected_amount_avg.nil?
++      self.expected_amount_min = transaction_amount
++      self.expected_amount_max = transaction_amount
++      self.expected_amount_avg = transaction_amount
++      return
++    end
++
++    # Update min/max
++    self.expected_amount_min = [ expected_amount_min, transaction_amount ].min if expected_amount_min.present?
++    self.expected_amount_max = [ expected_amount_max, transaction_amount ].max if expected_amount_max.present?
++
++    # Calculate new average using incremental formula
++    # For n samples with average A_n, adding sample x_{n+1} gives:
++    # A_{n+1} = A_n + (x_{n+1} - A_n)/(n+1)
++    # occurrence_count includes the initial occurrence, so subtract 1 to get variance samples recorded
++    n = occurrence_count - 1  # Number of variance samples recorded so far
++    self.expected_amount_avg = expected_amount_avg + ((transaction_amount - expected_amount_avg) / (n + 1))
++  end
++
+   # Calculate the next expected date based on the last occurrence
+   def calculate_next_expected_date(from_date = last_occurrence_date)
+     # Start with next month
+@@ -98,14 +277,25 @@ def projected_entry
+     return nil unless active?
+     return nil unless next_expected_date.future?
+ 
++    # Use average amount for manual recurring with variance, otherwise use fixed amount
++    display_amount = if manual? && expected_amount_avg.present?
++      expected_amount_avg
++    else
++      amount
++    end
++
+     OpenStruct.new(
+       date: next_expected_date,
+-      amount: amount,
++      amount: display_amount,
+       currency: currency,
+       merchant: merchant,
+       name: merchant.present? ? merchant.name : name,
+       recurring: true,
+-      projected: true
++      projected: true,
++      amount_min: expected_amount_min,
++      amount_max: expected_amount_max,
++      amount_avg: expected_amount_avg,
++      has_variance: has_amount_variance?
+     )
+   end
+ 
+diff --git a/app/models/recurring_transaction/cleaner.rb b/app/models/recurring_transaction/cleaner.rb
+index ea709105133..4aecbb34347 100644
+--- a/app/models/recurring_transaction/cleaner.rb
++++ b/app/models/recurring_transaction/cleaner.rb
+@@ -6,18 +6,19 @@ def initialize(family)
+       @family = family
+     end
+ 
+-    # Mark recurring transactions as inactive if they haven't occurred in 2+ months
++    # Mark recurring transactions as inactive if they haven't occurred recently
++    # Uses 2 months for automatic recurring, 6 months for manual recurring
+     def cleanup_stale_transactions
+-      two_months_ago = 2.months.ago.to_date
++      stale_count = 0
+ 
+-      stale_transactions = family.recurring_transactions
+-        .active
+-        .where("last_occurrence_date < ?", two_months_ago)
++      family.recurring_transactions.active.find_each do |recurring_transaction|
++        next unless recurring_transaction.should_be_inactive?
++
++        # Determine threshold based on manual flag
++        threshold = recurring_transaction.manual? ? 6.months.ago.to_date : 2.months.ago.to_date
+ 
+-      stale_count = 0
+-      stale_transactions.find_each do |recurring_transaction|
+         # Double-check if there are any recent matching transactions
+-        recent_matches = recurring_transaction.matching_transactions.select { |entry| entry.date >= two_months_ago }
++        recent_matches = recurring_transaction.matching_transactions.select { |entry| entry.date >= threshold }
+ 
+         if recent_matches.empty?
+           recurring_transaction.mark_inactive!
+@@ -29,11 +30,13 @@ def cleanup_stale_transactions
+     end
+ 
+     # Remove inactive recurring transactions that have been inactive for 6+ months
++    # Manual recurring transactions are never automatically deleted
+     def remove_old_inactive_transactions
+       six_months_ago = 6.months.ago
+ 
+       family.recurring_transactions
+         .inactive
++        .where(manual: false)
+         .where("updated_at < ?", six_months_ago)
+         .destroy_all
+     end
+diff --git a/app/models/recurring_transaction/identifier.rb b/app/models/recurring_transaction/identifier.rb
+index 6d6374b53bf..33fc0d9bf9f 100644
+--- a/app/models/recurring_transaction/identifier.rb
++++ b/app/models/recurring_transaction/identifier.rb
+@@ -84,6 +84,13 @@ def identify_recurring_patterns
+ 
+         recurring_transaction = family.recurring_transactions.find_or_initialize_by(find_conditions)
+ 
++        # Handle manual recurring transactions specially
++        if recurring_transaction.persisted? && recurring_transaction.manual?
++          # Update variance for manual recurring transactions
++          update_manual_recurring_variance(recurring_transaction, pattern)
++          next
++        end
++
+         # Set the name or merchant_id on new records
+         if recurring_transaction.new_record?
+           if pattern[:merchant_id].present?
+@@ -91,6 +98,8 @@ def identify_recurring_patterns
+           else
+             recurring_transaction.name = pattern[:name]
+           end
++          # New auto-detected recurring transactions are not manual
++          recurring_transaction.manual = false
+         end
+ 
+         recurring_transaction.assign_attributes(
+@@ -104,9 +113,74 @@ def identify_recurring_patterns
+         recurring_transaction.save!
+       end
+ 
++      # Also check for manual recurring transactions that might need variance updates
++      update_manual_recurring_transactions(three_months_ago)
++
+       recurring_patterns.size
+     end
+ 
++    # Update variance for existing manual recurring transactions
++    def update_manual_recurring_transactions(since_date)
++      family.recurring_transactions.where(manual: true, status: "active").find_each do |recurring|
++        # Find matching transactions in the recent period
++        matching_entries = RecurringTransaction.find_matching_transaction_entries(
++          family: family,
++          merchant_id: recurring.merchant_id,
++          name: recurring.name,
++          currency: recurring.currency,
++          expected_day: recurring.expected_day_of_month,
++          lookback_months: 6
++        )
++
++        next if matching_entries.empty?
++
++        # Extract amounts and dates from all matching entries
++        matching_amounts = matching_entries.map(&:amount)
++        last_entry = matching_entries.max_by(&:date)
++
++        # Recalculate variance from all occurrences (including identical amounts)
++        recurring.update!(
++          expected_amount_min: matching_amounts.min,
++          expected_amount_max: matching_amounts.max,
++          expected_amount_avg: matching_amounts.sum / matching_amounts.size,
++          occurrence_count: matching_amounts.size,
++          last_occurrence_date: last_entry.date,
++          next_expected_date: calculate_next_expected_date(last_entry.date, recurring.expected_day_of_month)
++        )
++      end
++    end
++
++    # Update variance for a manual recurring transaction when pattern is found
++    def update_manual_recurring_variance(recurring_transaction, pattern)
++      # Check if this transaction's date is more recent
++      if pattern[:last_occurrence_date] > recurring_transaction.last_occurrence_date
++        # Find all matching transactions to recalculate variance
++        matching_entries = RecurringTransaction.find_matching_transaction_entries(
++          family: family,
++          merchant_id: recurring_transaction.merchant_id,
++          name: recurring_transaction.name,
++          currency: recurring_transaction.currency,
++          expected_day: recurring_transaction.expected_day_of_month,
++          lookback_months: 6
++        )
++
++        # Update if we have any matching transactions
++        if matching_entries.any?
++          matching_amounts = matching_entries.map(&:amount)
++
++          recurring_transaction.update!(
++            expected_amount_min: matching_amounts.min,
++            expected_amount_max: matching_amounts.max,
++            expected_amount_avg: matching_amounts.sum / matching_amounts.size,
++            occurrence_count: matching_amounts.size,
++            last_occurrence_date: pattern[:last_occurrence_date],
++            next_expected_date: calculate_next_expected_date(pattern[:last_occurrence_date], recurring_transaction.expected_day_of_month),
++            status: "active"
++          )
++        end
++      end
++    end
++
+     private
+       # Check if days cluster together (within ~5 days variance)
+       # Uses circular distance to handle month-boundary wrapping (e.g., 28, 29, 30, 31, 1, 2)
+diff --git a/app/views/recurring_transactions/_projected_transaction.html.erb b/app/views/recurring_transactions/_projected_transaction.html.erb
+index 050fd72fed8..201161f4c4c 100644
+--- a/app/views/recurring_transactions/_projected_transaction.html.erb
++++ b/app/views/recurring_transactions/_projected_transaction.html.erb
+@@ -54,6 +54,7 @@
+   </div>
+ 
+   <div class="col-span-2 ml-auto text-right">
+-    <%= content_tag :p, format_money(-recurring_transaction.amount_money), class: ["font-medium", recurring_transaction.amount.negative? ? "text-success" : "text-subdued"] %>
++    <% display_amount = recurring_transaction.manual? && recurring_transaction.expected_amount_avg.present? ? recurring_transaction.expected_amount_avg : recurring_transaction.amount %>
++    <%= content_tag :p, format_money(-Money.new(display_amount, recurring_transaction.currency)), class: ["font-medium", display_amount.negative? ? "text-success" : "text-subdued"] %>
+   </div>
+ </div>
+diff --git a/app/views/recurring_transactions/index.html.erb b/app/views/recurring_transactions/index.html.erb
+index 4f19258842e..1917a9624bd 100644
+--- a/app/views/recurring_transactions/index.html.erb
++++ b/app/views/recurring_transactions/index.html.erb
+@@ -100,10 +100,22 @@
+                       ) %>
+                       <span class="text-primary font-medium"><%= recurring_transaction.name %></span>
+                     <% end %>
++                    <% if recurring_transaction.manual? %>
++                      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-tint-10 text-link">
++                        <%= t("recurring_transactions.badges.manual") %>
++                      </span>
++                    <% end %>
+                   </div>
+                 </td>
+                 <td class="py-3 px-2 text-sm font-medium <%= recurring_transaction.amount.negative? ? "text-success" : "text-primary" %>">
+-                  <%= format_money(-recurring_transaction.amount_money) %>
++                  <% if recurring_transaction.manual? && recurring_transaction.has_amount_variance? %>
++                    <div class="inline-flex items-center gap-1 cursor-help group" title="<%= t('recurring_transactions.amount_range', min: format_money(-recurring_transaction.expected_amount_min_money), max: format_money(-recurring_transaction.expected_amount_max_money)) %>">
++                      <span class="text-xs text-secondary group-hover:text-primary transition-colors">~</span>
++                      <span class="border-b border-dashed border-subdued group-hover:border-primary transition-colors"><%= format_money(-recurring_transaction.expected_amount_avg_money) %></span>
++                    </div>
++                  <% else %>
++                    <%= format_money(-recurring_transaction.amount_money) %>
++                  <% end %>
+                 </td>
+                 <td class="py-3 px-2 text-sm text-secondary">
+                   <%= t("recurring_transactions.day_of_month", day: recurring_transaction.expected_day_of_month) %>
+diff --git a/app/views/transactions/show.html.erb b/app/views/transactions/show.html.erb
+index 770f1482beb..7cac8550f27 100644
+--- a/app/views/transactions/show.html.erb
++++ b/app/views/transactions/show.html.erb
+@@ -150,6 +150,23 @@
+           ) %>
+         </div>
+ 
++        <!-- Mark as Recurring Form -->
++        <div class="flex items-center justify-between gap-2 p-3">
++          <div class="text-sm space-y-1">
++            <h4 class="text-primary"><%= t(".mark_recurring_title") %></h4>
++            <p class="text-secondary"><%= t(".mark_recurring_subtitle") %></p>
++          </div>
++
++          <%= render DS::Button.new(
++            text: t(".mark_recurring"),
++            variant: "outline",
++            icon: "repeat",
++            href: mark_as_recurring_transaction_path(@entry.transaction),
++            method: :post,
++            frame: "_top"
++          ) %>
++        </div>
++
+         <!-- Delete Transaction Form -->
+         <div class="flex items-center justify-between gap-2 p-3">
+           <div class="text-sm space-y-1">
+diff --git a/config/locales/views/recurring_transactions/en.yml b/config/locales/views/recurring_transactions/en.yml
+index 421426c451e..7541c1f169c 100644
+--- a/config/locales/views/recurring_transactions/en.yml
++++ b/config/locales/views/recurring_transactions/en.yml
+@@ -22,6 +22,11 @@ en:
+     marked_active: Recurring transaction marked as active
+     deleted: Recurring transaction deleted
+     confirm_delete: Are you sure you want to delete this recurring transaction?
++    marked_as_recurring: Transaction marked as recurring
++    already_exists: A manual recurring transaction already exists for this pattern
++    creation_failed: Failed to create recurring transaction. Please check the transaction details and try again.
++    unexpected_error: An unexpected error occurred while creating the recurring transaction
++    amount_range: "Range: %{min} to %{max}"
+     empty:
+       title: No recurring transactions found
+       description: Click "Identify Patterns" to automatically detect recurring transactions from your transaction history.
+@@ -36,3 +41,5 @@ en:
+     status:
+       active: Active
+       inactive: Inactive
++    badges:
++      manual: Manual
+diff --git a/config/locales/views/transactions/en.yml b/config/locales/views/transactions/en.yml
+index 0655145f534..c5362457c60 100644
+--- a/config/locales/views/transactions/en.yml
++++ b/config/locales/views/transactions/en.yml
+@@ -30,6 +30,9 @@ en:
+         balances, and cannot be undone.
+       delete_title: Delete transaction
+       details: Details
++      mark_recurring: Mark as Recurring
++      mark_recurring_subtitle: Track this as a recurring transaction. Amount variance is automatically calculated from past 6 months of similar transactions.
++      mark_recurring_title: Recurring Transaction
+       merchant_label: Merchant
+       name_label: Name
+       nature: Type
+diff --git a/config/routes.rb b/config/routes.rb
+index 9d327f32fd8..5087ca0ea05 100644
+--- a/config/routes.rb
++++ b/config/routes.rb
+@@ -153,6 +153,10 @@
+     collection do
+       delete :clear_filter
+     end
++
++    member do
++      post :mark_as_recurring
++    end
+   end
+ 
+   resources :recurring_transactions, only: %i[index destroy] do
+diff --git a/db/migrate/20251110143516_add_manual_and_amount_variance_to_recurring_transactions.rb b/db/migrate/20251110143516_add_manual_and_amount_variance_to_recurring_transactions.rb
+new file mode 100644
+index 00000000000..d86e94b2207
+--- /dev/null
++++ b/db/migrate/20251110143516_add_manual_and_amount_variance_to_recurring_transactions.rb
+@@ -0,0 +1,8 @@
++class AddManualAndAmountVarianceToRecurringTransactions < ActiveRecord::Migration[7.2]
++  def change
++    add_column :recurring_transactions, :manual, :boolean, default: false, null: false
++    add_column :recurring_transactions, :expected_amount_min, :decimal, precision: 19, scale: 4
++    add_column :recurring_transactions, :expected_amount_max, :decimal, precision: 19, scale: 4
++    add_column :recurring_transactions, :expected_amount_avg, :decimal, precision: 19, scale: 4
++  end
++end
+diff --git a/test/controllers/transactions_controller_test.rb b/test/controllers/transactions_controller_test.rb
+index c2cc94b7f8f..f737ef82090 100644
+--- a/test/controllers/transactions_controller_test.rb
++++ b/test/controllers/transactions_controller_test.rb
+@@ -190,4 +190,97 @@ class TransactionsControllerTest < ActionDispatch::IntegrationTest
+     get transactions_url(q: { categories: [ "Food" ], types: [ "expense" ] })
+     assert_response :success
+   end
++
++  test "mark_as_recurring creates a manual recurring transaction" do
++    family = families(:empty)
++    sign_in users(:empty)
++    account = family.accounts.create! name: "Test", balance: 0, currency: "USD", accountable: Depository.new
++    merchant = family.merchants.create! name: "Test Merchant"
++    entry = create_transaction(account: account, amount: 100, merchant: merchant)
++    transaction = entry.entryable
++
++    assert_difference "family.recurring_transactions.count", 1 do
++      post mark_as_recurring_transaction_path(transaction)
++    end
++
++    assert_redirected_to transactions_path
++    assert_equal "Transaction marked as recurring", flash[:notice]
++
++    recurring = family.recurring_transactions.last
++    assert_equal true, recurring.manual, "Expected recurring transaction to be manual"
++    assert_equal merchant.id, recurring.merchant_id
++    assert_equal entry.currency, recurring.currency
++    assert_equal entry.date.day, recurring.expected_day_of_month
++  end
++
++  test "mark_as_recurring shows alert if recurring transaction already exists" do
++    family = families(:empty)
++    sign_in users(:empty)
++    account = family.accounts.create! name: "Test", balance: 0, currency: "USD", accountable: Depository.new
++    merchant = family.merchants.create! name: "Test Merchant"
++    entry = create_transaction(account: account, amount: 100, merchant: merchant)
++    transaction = entry.entryable
++
++    # Create existing recurring transaction
++    family.recurring_transactions.create!(
++      merchant: merchant,
++      amount: entry.amount,
++      currency: entry.currency,
++      expected_day_of_month: entry.date.day,
++      last_occurrence_date: entry.date,
++      next_expected_date: 1.month.from_now,
++      status: "active",
++      manual: true,
++      occurrence_count: 1
++    )
++
++    assert_no_difference "RecurringTransaction.count" do
++      post mark_as_recurring_transaction_path(transaction)
++    end
++
++    assert_redirected_to transactions_path
++    assert_equal "A manual recurring transaction already exists for this pattern", flash[:alert]
++  end
++
++  test "mark_as_recurring handles validation errors gracefully" do
++    family = families(:empty)
++    sign_in users(:empty)
++    account = family.accounts.create! name: "Test", balance: 0, currency: "USD", accountable: Depository.new
++    merchant = family.merchants.create! name: "Test Merchant"
++    entry = create_transaction(account: account, amount: 100, merchant: merchant)
++    transaction = entry.entryable
++
++    # Stub create_from_transaction to raise a validation error
++    RecurringTransaction.expects(:create_from_transaction).raises(
++      ActiveRecord::RecordInvalid.new(
++        RecurringTransaction.new.tap { |rt| rt.errors.add(:base, "Test validation error") }
++      )
++    )
++
++    assert_no_difference "RecurringTransaction.count" do
++      post mark_as_recurring_transaction_path(transaction)
++    end
++
++    assert_redirected_to transactions_path
++    assert_equal "Failed to create recurring transaction. Please check the transaction details and try again.", flash[:alert]
++  end
++
++  test "mark_as_recurring handles unexpected errors gracefully" do
++    family = families(:empty)
++    sign_in users(:empty)
++    account = family.accounts.create! name: "Test", balance: 0, currency: "USD", accountable: Depository.new
++    merchant = family.merchants.create! name: "Test Merchant"
++    entry = create_transaction(account: account, amount: 100, merchant: merchant)
++    transaction = entry.entryable
++
++    # Stub create_from_transaction to raise an unexpected error
++    RecurringTransaction.expects(:create_from_transaction).raises(StandardError.new("Unexpected error"))
++
++    assert_no_difference "RecurringTransaction.count" do
++      post mark_as_recurring_transaction_path(transaction)
++    end
++
++    assert_redirected_to transactions_path
++    assert_equal "An unexpected error occurred while creating the recurring transaction", flash[:alert]
++  end
+ end
+diff --git a/test/models/recurring_transaction_test.rb b/test/models/recurring_transaction_test.rb
+index 6ce2065c739..1e920d7cb6b 100644
+--- a/test/models/recurring_transaction_test.rb
++++ b/test/models/recurring_transaction_test.rb
+@@ -324,4 +324,283 @@ def setup
+     assert name_based.present?
+     assert_equal "Monthly Rent", name_based.name
+   end
++
++  # Manual recurring transaction tests
++  test "create_from_transaction creates a manual recurring transaction" do
++    account = @family.accounts.first
++    transaction = Transaction.create!(
++      merchant: @merchant,
++      category: categories(:food_and_drink)
++    )
++    entry = account.entries.create!(
++      date: 2.months.ago,
++      amount: 50.00,
++      currency: "USD",
++      name: "Test Transaction",
++      entryable: transaction
++    )
++
++    recurring = nil
++    assert_difference "@family.recurring_transactions.count", 1 do
++      recurring = RecurringTransaction.create_from_transaction(transaction)
++    end
++
++    assert recurring.present?
++    assert recurring.manual?
++    assert_equal @merchant, recurring.merchant
++    assert_equal 50.00, recurring.amount
++    assert_equal "USD", recurring.currency
++    assert_equal 2.months.ago.day, recurring.expected_day_of_month
++    assert_equal "active", recurring.status
++    assert_equal 1, recurring.occurrence_count
++    # Next expected date should be in the future (either this month or next month)
++    assert recurring.next_expected_date >= Date.current
++  end
++
++  test "create_from_transaction automatically calculates amount variance from history" do
++    account = @family.accounts.first
++
++    # Create multiple historical transactions with varying amounts on the same day of month
++    amounts = [ 90.00, 100.00, 110.00, 120.00 ]
++    amounts.each_with_index do |amount, i|
++      transaction = Transaction.create!(
++        merchant: @merchant,
++        category: categories(:food_and_drink)
++      )
++      account.entries.create!(
++        date: (amounts.size - i).months.ago.beginning_of_month + 14.days, # Day 15
++        amount: amount,
++        currency: "USD",
++        name: "Test Transaction",
++        entryable: transaction
++      )
++    end
++
++    # Mark the most recent one as recurring
++    most_recent_entry = account.entries.order(date: :desc).first
++    recurring = RecurringTransaction.create_from_transaction(most_recent_entry.transaction)
++
++    assert recurring.manual?
++    assert_equal 90.00, recurring.expected_amount_min
++    assert_equal 120.00, recurring.expected_amount_max
++    assert_equal 105.00, recurring.expected_amount_avg # (90 + 100 + 110 + 120) / 4
++    assert_equal 4, recurring.occurrence_count
++    # Next expected date should be in the future
++    assert recurring.next_expected_date >= Date.current
++  end
++
++  test "create_from_transaction with single transaction sets fixed amount" do
++    account = @family.accounts.first
++    transaction = Transaction.create!(
++      merchant: @merchant,
++      category: categories(:food_and_drink)
++    )
++    entry = account.entries.create!(
++      date: 1.month.ago,
++      amount: 50.00,
++      currency: "USD",
++      name: "Test Transaction",
++      entryable: transaction
++    )
++
++    recurring = RecurringTransaction.create_from_transaction(transaction)
++
++    assert recurring.manual?
++    assert_equal 50.00, recurring.expected_amount_min
++    assert_equal 50.00, recurring.expected_amount_max
++    assert_equal 50.00, recurring.expected_amount_avg
++    assert_equal 1, recurring.occurrence_count
++    # Next expected date should be in the future
++    assert recurring.next_expected_date >= Date.current
++  end
++
++  test "matching_transactions with amount variance matches within range" do
++    account = @family.accounts.first
++
++    # Create manual recurring with variance for day 15 of the month
++    recurring = @family.recurring_transactions.create!(
++      merchant: @merchant,
++      amount: 100.00,
++      currency: "USD",
++      expected_day_of_month: 15,
++      last_occurrence_date: 1.month.ago,
++      next_expected_date: Date.current.next_month.beginning_of_month + 14.days,
++      status: "active",
++      manual: true,
++      expected_amount_min: 80.00,
++      expected_amount_max: 120.00,
++      expected_amount_avg: 100.00
++    )
++
++    # Create transactions with varying amounts on day 14 (within ±2 days of day 15)
++    transaction_within_range = Transaction.create!(merchant: @merchant, category: categories(:food_and_drink))
++    entry_within = account.entries.create!(
++      date: Date.current.next_month.beginning_of_month + 13.days, # Day 14
++      amount: 90.00,
++      currency: "USD",
++      name: "Test Transaction",
++      entryable: transaction_within_range
++    )
++
++    transaction_outside_range = Transaction.create!(merchant: @merchant, category: categories(:food_and_drink))
++    entry_outside = account.entries.create!(
++      date: Date.current.next_month.beginning_of_month + 14.days, # Day 15
++      amount: 150.00,
++      currency: "USD",
++      name: "Test Transaction",
++      entryable: transaction_outside_range
++    )
++
++    matches = recurring.matching_transactions
++    assert_includes matches, entry_within
++    assert_not_includes matches, entry_outside
++  end
++
++  test "should_be_inactive? has longer threshold for manual recurring" do
++    # Manual recurring - 6 months threshold
++    manual_recurring = @family.recurring_transactions.create!(
++      merchant: @merchant,
++      amount: 50.00,
++      currency: "USD",
++      expected_day_of_month: 15,
++      last_occurrence_date: 5.months.ago,
++      next_expected_date: 15.days.from_now,
++      status: "active",
++      manual: true
++    )
++
++    # Auto recurring - 2 months threshold with different amount to avoid unique constraint
++    auto_recurring = @family.recurring_transactions.create!(
++      merchant: @merchant,
++      amount: 60.00,
++      currency: "USD",
++      expected_day_of_month: 15,
++      last_occurrence_date: 3.months.ago,
++      next_expected_date: 15.days.from_now,
++      status: "active",
++      manual: false
++    )
++
++    assert_not manual_recurring.should_be_inactive?
++    assert auto_recurring.should_be_inactive?
++  end
++
++  test "update_amount_variance updates min/max/avg correctly" do
++    recurring = @family.recurring_transactions.create!(
++      merchant: @merchant,
++      amount: 100.00,
++      currency: "USD",
++      expected_day_of_month: 15,
++      last_occurrence_date: Date.current,
++      next_expected_date: 1.month.from_now,
++      status: "active",
++      manual: true,
++      occurrence_count: 1
++    )
++
++    # Record first occurrence with amount variance
++    recurring.record_occurrence!(Date.current, 100.00)
++    assert_equal 100.00, recurring.expected_amount_min.to_f
++    assert_equal 100.00, recurring.expected_amount_max.to_f
++    assert_equal 100.00, recurring.expected_amount_avg.to_f
++
++    # Record second occurrence with different amount
++    recurring.record_occurrence!(1.month.from_now, 120.00)
++    assert_equal 100.00, recurring.expected_amount_min.to_f
++    assert_equal 120.00, recurring.expected_amount_max.to_f
++    assert_in_delta 110.00, recurring.expected_amount_avg.to_f, 0.01
++
++    # Record third occurrence with lower amount
++    recurring.record_occurrence!(2.months.from_now, 90.00)
++    assert_equal 90.00, recurring.expected_amount_min.to_f
++    assert_equal 120.00, recurring.expected_amount_max.to_f
++    assert_in_delta 103.33, recurring.expected_amount_avg.to_f, 0.01
++  end
++
++  test "identify_patterns_for updates variance for manual recurring transactions" do
++    account = @family.accounts.first
++
++    # Create a manual recurring transaction with initial variance
++    manual_recurring = @family.recurring_transactions.create!(
++      merchant: @merchant,
++      amount: 50.00,
++      currency: "USD",
++      expected_day_of_month: 15,
++      last_occurrence_date: 3.months.ago,
++      next_expected_date: 1.month.from_now,
++      status: "active",
++      manual: true,
++      occurrence_count: 1,
++      expected_amount_min: 50.00,
++      expected_amount_max: 50.00,
++      expected_amount_avg: 50.00
++    )
++
++    # Create new transactions with varying amounts that would match the pattern
++    amounts = [ 45.00, 55.00, 60.00 ]
++    amounts.each_with_index do |amount, i|
++      transaction = Transaction.create!(
++        merchant: @merchant,
++        category: categories(:food_and_drink)
++      )
++      account.entries.create!(
++        date: (amounts.size - i).months.ago.beginning_of_month + 14.days,
++        amount: amount,
++        currency: "USD",
++        name: "Test Transaction",
++        entryable: transaction
++      )
++    end
++
++    # Run pattern identification
++    assert_no_difference "@family.recurring_transactions.count" do
++      RecurringTransaction.identify_patterns_for(@family)
++    end
++
++    # Manual recurring should be updated with new variance
++    manual_recurring.reload
++    assert manual_recurring.manual?
++    assert_equal 45.00, manual_recurring.expected_amount_min
++    assert_equal 60.00, manual_recurring.expected_amount_max
++    assert_in_delta 53.33, manual_recurring.expected_amount_avg.to_f, 0.01 # (45 + 55 + 60) / 3
++    assert manual_recurring.occurrence_count > 1
++  end
++
++  test "cleaner does not delete manual recurring transactions" do
++    # Create inactive manual recurring
++    manual_recurring = @family.recurring_transactions.create!(
++      merchant: @merchant,
++      amount: 50.00,
++      currency: "USD",
++      expected_day_of_month: 15,
++      last_occurrence_date: 1.year.ago,
++      next_expected_date: 1.year.ago + 1.month,
++      status: "inactive",
++      manual: true,
++      occurrence_count: 1
++    )
++    # Set updated_at to be old enough for cleanup
++    manual_recurring.update_column(:updated_at, 1.year.ago)
++
++    # Create inactive auto recurring with different merchant
++    auto_recurring = @family.recurring_transactions.create!(
++      merchant: merchants(:amazon),
++      amount: 30.00,
++      currency: "USD",
++      expected_day_of_month: 10,
++      last_occurrence_date: 1.year.ago,
++      next_expected_date: 1.year.ago + 1.month,
++      status: "inactive",
++      manual: false,
++      occurrence_count: 1
++    )
++    # Set updated_at to be old enough for cleanup
++    auto_recurring.update_column(:updated_at, 1.year.ago)
++
++    cleaner = RecurringTransaction::Cleaner.new(@family)
++    cleaner.remove_old_inactive_transactions
++
++    assert RecurringTransaction.exists?(manual_recurring.id)
++    assert_not RecurringTransaction.exists?(auto_recurring.id)
++  end
+ end

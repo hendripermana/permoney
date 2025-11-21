@@ -40,6 +40,9 @@ en:
       settings: Settings
       tags_label: Tags
       uncategorized: "(uncategorized)"
+      recurring_title: Recurring Transaction
+      recurring_subtitle: Mark this transaction as recurring to track it automatically.
+      mark_as_recurring: Mark as Recurring
     header:
       edit_categories: Edit categories
       edit_imports: Edit imports

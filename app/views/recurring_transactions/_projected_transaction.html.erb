@@ -55,5 +55,12 @@
 
   <div class="col-span-2 ml-auto text-right">
     <%= content_tag :p, format_money(-recurring_transaction.amount_money), class: ["font-medium", recurring_transaction.amount.negative? ? "text-success" : "text-subdued"] %>
+    <% if recurring_transaction.has_amount_variance? %>
+      <p class="text-xs text-secondary mt-0.5">
+        <%= t("recurring_transactions.variance_range", 
+              min: format_money(-recurring_transaction.expected_amount_min), 
+              max: format_money(-recurring_transaction.expected_amount_max)) %>
+      </p>
+    <% end %>
   </div>
 </div>

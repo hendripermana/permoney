@@ -36,3 +36,8 @@ en:
     status:
       active: Active
       inactive: Inactive
+    variance_range: "%{min} - %{max}"
+    already_exists: "A manual recurring transaction already exists for this merchant/name."
+    marked_as_recurring: "Transaction marked as recurring."
+    creation_failed: "Failed to create recurring transaction."
+    unexpected_error: "An unexpected error occurred."
