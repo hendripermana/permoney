@@ -1,3 +1,9 @@
+## [0.13.3](https://github.com/hendripermana/permoney/compare/v0.13.2...v0.13.3) (2025-11-22)
+
+### Other Changes
+
+- Fix Chat Production Errors: 400 Bad Request & Turbo Frame Issues (#75) (ab401f09)
+
 ## [0.13.2](https://github.com/hendripermana/permoney/compare/v0.13.1...v0.13.2) (2025-11-22)
 
 ### Other Changes
