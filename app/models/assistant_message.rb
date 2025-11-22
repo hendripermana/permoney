@@ -20,12 +20,13 @@ class AssistantMessage < Message
   private
 
     def broadcast_replace_to_with_morph
+      return unless chat.present?
+
       # Use Turbo Stream morphing for smooth real-time updates
-      Turbo::StreamsChannel.broadcast_action_to(
+      # Using broadcast_replace_later_to for async, non-blocking updates
+      broadcast_replace_later_to(
         chat,
-        action: :replace,
-        target: dom_id(self),
-        attributes: { method: "morph" },
+        attributes: { method: :morph },
         partial: "assistant_messages/assistant_message",
         locals: { assistant_message: self }
       )

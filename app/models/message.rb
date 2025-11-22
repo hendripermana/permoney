@@ -17,8 +17,10 @@ class Message < ApplicationRecord
   scope :ordered, -> { order(created_at: :asc) }
 
   private
+
     def broadcast?
-      true
+      # Only broadcast if chat association is present
+      chat.present?
     end
 
     def broadcast_update?
