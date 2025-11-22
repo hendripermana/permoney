@@ -25,8 +25,22 @@ class ChatsController < ApplicationController
   end
 
   def create
-    @chat = Current.user.chats.start!(chat_params[:content], model: chat_params[:ai_model])
-    set_last_viewed_chat(@chat)
+    begin
+      @chat = Current.user.chats.start!(chat_params[:content], model: chat_params[:ai_model])
+      set_last_viewed_chat(@chat)
+    rescue => e
+      # If chat creation fails (e.g. API error), we might not have a persisted chat.
+      # But chats.start! creates the chat first.
+      # If start! fails during creation, @chat might be nil or invalid.
+      # We need to handle that.
+      Rails.logger.error("Chat creation failed: #{e.message}")
+      if @chat&.persisted?
+        @chat.add_error(e.message)
+      else
+        flash[:alert] = "Failed to start chat: #{e.message}"
+        redirect_to chats_path and return
+      end
+    end
 
     if turbo_frame_request?
       @message = UserMessage.new(chat: @chat)
@@ -56,7 +70,13 @@ class ChatsController < ApplicationController
   end
 
   def retry
-    @chat.retry_last_message!
+    begin
+      @chat.retry_last_message!
+    rescue => e
+      Rails.logger.error("Chat retry failed: #{e.message}")
+      @chat.add_error(e.message)
+    end
+
     @message ||= UserMessage.new(chat: @chat)
     if turbo_frame_request?
       render "chats/floating_show", layout: false
