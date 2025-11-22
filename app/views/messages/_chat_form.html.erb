@@ -1,6 +1,6 @@
 <%# locals: (chat: nil, message_hint: nil, floating: false, message: nil) %>
 
-<div id="chat-form" class="space-y-2">
+<div id="chat-form" class="w-full">
   <% message_hint = local_assigns.fetch(:message_hint, nil) %>
   <% floating = local_assigns.fetch(:floating, false) %>
   <% message_record = local_assigns.fetch(:message, nil) || (defined?(@message) && @message.is_a?(Message) ? @message : nil) %>
@@ -13,28 +13,31 @@
     message_record ||= Message.new
     [chat, message_record]
   else
-    Chat.new
+    chat || Chat.new
   end %>
   <% form_options = {
-    class: "flex lg:flex-col gap-2 bg-container px-2 py-1.5 rounded-full lg:rounded-lg shadow-border-xs",
+    class: "flex flex-col w-full bg-container",
     data: { chat_target: "form" }
   } %>
   <% if floating %>
     <% form_options[:url] =
       if chat && chat.persisted?
+        form_options[:scope] = :message
         chat_messages_path(chat, floating: true)
       else
         chats_path(floating: true)
       end %>
   <% elsif chat && chat.persisted? %>
     <% form_options[:url] = chat_messages_path(chat) %>
+    <% form_options[:scope] = :message %>
   <% else %>
     <% form_options[:url] = chats_path %>
   <% end %>
 
-  <% if message_record&.errors&.any? %>
+  <% error_model = model.is_a?(Array) ? model.last : model %>
+  <% if error_model&.errors&.any? %>
     <div class="px-2 py-1">
-      <%= render "shared/form_errors", model: message_record %>
+      <%= render "shared/form_errors", model: error_model %>
     </div>
   <% end %>
 
@@ -43,29 +46,31 @@
     <%# In the future, this will be a dropdown with different AI models %>
     <%= f.hidden_field :ai_model, value: default_ai_model %>
 
-    <% text_area_options = {
-      placeholder: "Ask anything ...",
-      class: "w-full border-0 focus:ring-0 text-sm resize-none px-1 bg-transparent",
-      data: { chat_target: "input", action: "input->chat#autoResize keydown->chat#handleInputKeyDown" },
-      rows: 1
-    } %>
-    <% if message_hint.present? %>
-      <% text_area_options[:value] = message_hint %>
-    <% end %>
+    <div class="flex items-center gap-2 px-3 py-2">
+      <% text_area_options = {
+        placeholder: "Ask anything ...",
+        class: "flex-1 border-0 focus:ring-0 text-sm resize-none bg-transparent placeholder:text-secondary min-h-[24px] max-h-[120px]",
+        data: { chat_target: "input", action: "input->chat#autoResize keydown->chat#handleInputKeyDown" },
+        rows: 1
+      } %>
+      <% if message_hint.present? %>
+        <% text_area_options[:value] = message_hint %>
+      <% end %>
 
-    <%= f.text_area :content, **text_area_options %>
+      <%= f.text_area :content, **text_area_options %>
 
-    <div class="flex items-center justify-between gap-1">
-      <div class="items-center gap-1 hidden lg:flex">
-        <%# These are disabled for now, but in the future, will all open specific menus with their own context and search %>
-        <% ["plus", "command", "at-sign", "mouse-pointer-click"].each do |icon| %>
-          <%= icon(icon, as_button: true, disabled: true, class: "cursor-not-allowed", title: "Coming soon") %>
-        <% end %>
-      </div>
-
-      <%= icon("arrow-up", as_button: true, type: "submit") %>
+      <button
+        type="submit"
+        class="flex-shrink-0 w-9 h-9 rounded-full bg-primary text-white flex items-center justify-center hover:bg-primary/90 transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
+        aria-label="Send message">
+        <%= icon("arrow-up", size: "sm") %>
+      </button>
     </div>
   <% end %>
 
-  <p class="text-xs text-secondary">AI responses are informational only and are not financial advice.</p>
+  <% if floating %>
+    <p class="text-xs text-secondary px-3 pb-2 text-center">AI responses are informational only.</p>
+  <% else %>
+    <p class="text-xs text-secondary px-2 pb-1">AI responses are informational only and are not financial advice.</p>
+  <% end %>
 </div>
