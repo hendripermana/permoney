@@ -23,7 +23,11 @@ class Account < ApplicationRecord
   scope :assets, -> { where(classification: "asset") }
   scope :liabilities, -> { where(classification: "liability") }
   scope :alphabetically, -> { order(:name) }
-  scope :manual, -> { left_joins(:account_providers).where(account_providers: { id: nil }) }
+  scope :manual, -> {
+    left_joins(:account_providers)
+      .where(account_providers: { id: nil })
+      .where(plaid_account_id: nil, simplefin_account_id: nil)
+  }
 
   # PERFORMANCE: Eager loading scopes to eliminate N+1 queries
   # Usage: Account.with_associations.visible
