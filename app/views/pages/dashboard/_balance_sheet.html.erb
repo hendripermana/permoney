@@ -2,8 +2,8 @@
 
 <div class="space-y-4" id="balance-sheet">
   <% balance_sheet.classification_groups.each do |classification_group| %>
-    <div class="bg-container shadow-border-xs rounded-xl space-y-4 p-4">
-      <div class="flex items-center gap-2">
+    <div class="bg-container shadow-border-xs rounded-xl space-y-4 py-4">
+      <div class="flex items-center gap-2 px-4">
         <h2 class="text-lg font-medium inline-flex items-center gap-1.5">
           <span class="<%= "animate-pulse" if classification_group.syncing? %>">
             <%= classification_group.name %>
