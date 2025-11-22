@@ -5,7 +5,7 @@
       <h2 class="text-lg font-medium inline-flex items-center gap-1.5">
         <%= t("pages.dashboard.outflows_donut.title") %>
       </h2>
-      <% if outflows_data[:categories].any? %>
+      <% if outflows_data[:categories]&.any? %>
         <span class="text-sm text-secondary">
           (<%= t("pages.dashboard.outflows_donut.categories_count", count: outflows_data[:categories].count) %>)
         </span>

@@ -21,9 +21,8 @@ class PagesController < ApplicationController
     expense_totals = Current.family.income_statement.expense_totals(period: @period)
     @cashflow_sankey_data = build_cashflow_sankey_data(income_totals, expense_totals, family_currency)
 
-    # Get data for outflows section (using shared period)
-    outflows_expense_totals = Current.family.income_statement.expense_totals(period: @period)
-    @outflows_data = build_outflows_donut_data(outflows_expense_totals)
+    # Get data for outflows section (using shared period and same expense_totals)
+    @outflows_data = build_outflows_donut_data(expense_totals)
 
     @breadcrumbs = [
       { text: "Home", href: root_path, icon: "home" },
