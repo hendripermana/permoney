@@ -1,3 +1,16 @@
+## [0.13.0](https://github.com/hendripermana/permoney/compare/v0.12.1...v0.13.0) (2025-11-22)
+
+### Features
+
+- feat: Add UI for linking/unlinking providers and locale updates (b542670c)
+- feat: Add unlink accounts functionality (Controllers & Models) (fe89c4f0)
+- feat: Ruby 3.4.7 compatibility and PWA overflow fix (ad00b8db)
+
+### Other Changes
+
+- Merge pull request #72 from hendripermana/feature/community-improvements (5dc8b90e)
+- test: Update flash notice expectation for account deletion (21896b22)
+
 ## [0.12.1](https://github.com/hendripermana/permoney/compare/v0.12.0...v0.12.1) (2025-11-21)
 
 ### Other Changes
