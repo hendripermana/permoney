@@ -37,8 +37,14 @@ class ChatsController < ApplicationController
       if @chat&.persisted?
         @chat.add_error(e.message)
       else
-        flash[:alert] = "Failed to start chat: #{e.message}"
-        redirect_to chats_path and return
+        if turbo_frame_request?
+          flash.now[:alert] = "Failed to start chat: #{e.message}"
+          render "chats/floating_new", layout: false, status: :unprocessable_entity
+          return
+        else
+          flash[:alert] = "Failed to start chat: #{e.message}"
+          redirect_to chats_path and return
+        end
       end
     end
 
