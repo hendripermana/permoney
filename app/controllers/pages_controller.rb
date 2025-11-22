@@ -13,40 +13,16 @@ class PagesController < ApplicationController
     @kpi_monthly_expenses = Current.family.kpi_monthly_expenses
     @kpi_savings_rate = Current.family.kpi_savings_rate
 
-    # Handle cashflow period
-    cashflow_period_param = params[:cashflow_period]
-    @cashflow_period = if cashflow_period_param.present?
-      begin
-        Period.from_key(cashflow_period_param)
-      rescue Period::InvalidKeyError
-        Period.last_30_days
-      end
-    else
-      Period.last_30_days
-    end
-
-    # Handle outflows period
-    outflows_period_param = params[:outflows_period]
-    @outflows_period = if outflows_period_param.present?
-      begin
-        Period.from_key(outflows_period_param)
-      rescue Period::InvalidKeyError
-        Period.last_30_days
-      end
-    else
-      Period.last_30_days
-    end
-
+    # Use the same period for all widgets (set by Periodable concern)
     family_currency = Current.family.currency
 
     # Get data for cashflow section
-    income_totals = Current.family.income_statement.income_totals(period: @cashflow_period)
-    cashflow_expense_totals = Current.family.income_statement.expense_totals(period: @cashflow_period)
-    @cashflow_sankey_data = build_cashflow_sankey_data(income_totals, cashflow_expense_totals, family_currency)
+    income_totals = Current.family.income_statement.income_totals(period: @period)
+    expense_totals = Current.family.income_statement.expense_totals(period: @period)
+    @cashflow_sankey_data = build_cashflow_sankey_data(income_totals, expense_totals, family_currency)
 
-    # Get data for outflows section (using its own period)
-    outflows_expense_totals = Current.family.income_statement.expense_totals(period: @outflows_period)
-    @outflows_data = build_outflows_donut_data(outflows_expense_totals)
+    # Get data for outflows section (using shared period and same expense_totals)
+    @outflows_data = build_outflows_donut_data(expense_totals)
 
     @breadcrumbs = [
       { text: "Home", href: root_path, icon: "home" },

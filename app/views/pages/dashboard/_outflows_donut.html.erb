@@ -1,12 +1,19 @@
 <%# locals: (outflows_data:, period:) %>
 <div id="outflows-donut-section">
-  <div class="flex justify-between items-center gap-4 px-4 mb-4">
-    <h2 class="text-lg font-medium inline-flex items-center gap-1.5">
-      <%= t("pages.dashboard.outflows_donut.title") %>
-    </h2>
+  <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 px-4 mb-4">
+    <div class="flex items-center gap-2 min-w-0">
+      <h2 class="text-lg font-medium inline-flex items-center gap-1.5">
+        <%= t("pages.dashboard.outflows_donut.title") %>
+      </h2>
+      <% if outflows_data[:categories]&.any? %>
+        <span class="text-sm text-secondary">
+          (<%= t("pages.dashboard.outflows_donut.categories_count", count: outflows_data[:categories].count) %>)
+        </span>
+      <% end %>
+    </div>
 
-    <%= form_with url: root_path, method: :get, data: { controller: "auto-submit-form", turbo_frame: "outflows_donut_section" } do |form| %>
-      <%= form.select :outflows_period,
+    <%= form_with url: root_path, method: :get, data: { controller: "auto-submit-form", turbo_frame: "_top" } do |form| %>
+      <%= form.select :period,
                 Period.as_options,
                 { selected: period.key },
                 data: { "auto-submit-form-target": "auto" },
@@ -14,7 +21,7 @@
     <% end %>
   </div>
 
-  <div class="px-4">
+  <div class="px-4 pb-4">
     <div class="flex flex-col lg:flex-row gap-8 items-center">
       <!-- Donut Chart -->
       <div class="w-full lg:w-1/3 max-w-[300px]">
