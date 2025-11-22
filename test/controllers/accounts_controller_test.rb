@@ -36,7 +36,7 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     delete account_url(@account)
     assert_redirected_to accounts_path
     assert_enqueued_with job: DestroyJob
-    assert_equal "Account scheduled for deletion", flash[:notice]
+    assert_equal "Depository account scheduled for deletion", flash[:notice]
   end
 
   test "syncing linked account triggers sync for all provider items" do
