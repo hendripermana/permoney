@@ -1,3 +1,11 @@
+## [0.13.4](https://github.com/hendripermana/permoney/compare/v0.13.3...v0.13.4) (2025-11-22)
+
+### Other Changes
+
+- Merge pull request #76 from hendripermana/feature/enhance-floating-ai-chat (de48bf65)
+- Fix broadcast methods with async and null safety (2789887f)
+- Enhance floating AI chat with real-time streaming and mobile UX improvements (f040cb8b)
+
 ## [0.13.3](https://github.com/hendripermana/permoney/compare/v0.13.2...v0.13.3) (2025-11-22)
 
 ### Other Changes
