@@ -4,6 +4,21 @@ en:
     account:
       link_lunchflow: Link with Lunch Flow
       troubleshoot: Troubleshoot
+      confirm_unlink:
+        title: "Confirm Unlink Account"
+        description_html: "Are you sure you want to unlink <strong>%{account_name}</strong> from %{provider_name}? This will stop syncing data and you will need to set up the account again manually."
+        warning_title: "Important notes"
+        warning_no_sync: "No further data will be synced for this account."
+        warning_manual_updates: "You will need to manually update balances and transactions."
+        warning_transactions_kept: "Existing transactions will remain in the system."
+        warning_can_delete: "You can delete the account later if you wish."
+        confirm_button: "Unlink Account"
+      select_provider:
+        title: "Link Provider"
+        description: "Select a provider to link with the account %{account_name}."
+      account:
+        link_provider: "Link to provider"
+        unlink_provider: "Unlink from provider"
     chart:
       data_not_available: Data not available for the selected period
     create:
