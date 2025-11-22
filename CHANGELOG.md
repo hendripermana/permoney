@@ -1,3 +1,9 @@
+## [0.13.2](https://github.com/hendripermana/permoney/compare/v0.13.1...v0.13.2) (2025-11-22)
+
+### Other Changes
+
+- Improve Chat AI Feature: Error Handling & Generic Provider Support (#74) (1acbf905)
+
 ## [0.13.1](https://github.com/hendripermana/permoney/compare/v0.13.0...v0.13.1) (2025-11-22)
 
 ### Other Changes
