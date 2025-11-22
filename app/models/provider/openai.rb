@@ -122,129 +122,26 @@ class Provider::Openai < Provider
     user_identifier: nil,
     family: nil
   )
-    if custom_provider?
-      generic_chat_response(
-        prompt: prompt,
-        model: model,
-        instructions: instructions,
-        functions: functions,
-        function_results: function_results,
-        streamer: streamer,
-        session_id: session_id,
-        user_identifier: user_identifier,
-        family: family
-      )
-    else
-      native_chat_response(
-        prompt: prompt,
-        model: model,
-        instructions: instructions,
-        functions: functions,
-        function_results: function_results,
-        streamer: streamer,
-        previous_response_id: previous_response_id,
-        session_id: session_id,
-        user_identifier: user_identifier,
-        family: family
-      )
-    end
+    # Always use generic_chat_response which uses the standard client.chat API
+    # This supports both OpenAI and OpenRouter (and other compatible providers)
+    generic_chat_response(
+      prompt: prompt,
+      model: model,
+      instructions: instructions,
+      functions: functions,
+      function_results: function_results,
+      streamer: streamer,
+      session_id: session_id,
+      user_identifier: user_identifier,
+      family: family
+    )
   end
 
   private
     attr_reader :client
 
-    def native_chat_response(
-      prompt:,
-      model:,
-      instructions: nil,
-      functions: [],
-      function_results: [],
-      streamer: nil,
-      previous_response_id: nil,
-      session_id: nil,
-      user_identifier: nil,
-      family: nil
-    )
-      with_provider_response do
-        chat_config = ChatConfig.new(
-          functions: functions,
-          function_results: function_results
-        )
-
-        collected_chunks = []
-
-        # Proxy that converts raw stream to "LLM Provider concept" stream
-        stream_proxy = if streamer.present?
-          proc do |chunk|
-            parsed_chunk = ChatStreamParser.new(chunk).parsed
-
-            unless parsed_chunk.nil?
-              streamer.call(parsed_chunk)
-              collected_chunks << parsed_chunk
-            end
-          end
-        else
-          nil
-        end
-
-        input_payload = chat_config.build_input(prompt)
-
-        begin
-          raw_response = client.responses.create(parameters: {
-            model: model,
-            input: input_payload,
-            instructions: instructions,
-            tools: chat_config.tools,
-            previous_response_id: previous_response_id,
-            stream: stream_proxy
-          })
-
-          # If streaming, Ruby OpenAI does not return anything, so to normalize this method's API, we search
-          # for the "response chunk" in the stream and return it (it is already parsed)
-          if stream_proxy.present?
-            response_chunk = collected_chunks.find { |chunk| chunk.type == "response" }
-            response = response_chunk.data
-            usage = response_chunk.usage
-            Rails.logger.debug("Stream response usage: #{usage.inspect}")
-            log_langfuse_generation(
-              name: "chat_response",
-              model: model,
-              input: input_payload,
-              output: response.messages.map(&:output_text).join("\n"),
-              usage: usage,
-              session_id: session_id,
-              user_identifier: user_identifier
-            )
-            record_llm_usage(family: family, model: model, operation: "chat", usage: usage)
-            response
-          else
-            parsed = ChatParser.new(raw_response).parsed
-            Rails.logger.debug("Non-stream raw_response['usage']: #{raw_response['usage'].inspect}")
-            log_langfuse_generation(
-              name: "chat_response",
-              model: model,
-              input: input_payload,
-              output: parsed.messages.map(&:output_text).join("\n"),
-              usage: raw_response["usage"],
-              session_id: session_id,
-              user_identifier: user_identifier
-            )
-            record_llm_usage(family: family, model: model, operation: "chat", usage: raw_response["usage"])
-            parsed
-          end
-        rescue => e
-          log_langfuse_generation(
-            name: "chat_response",
-            model: model,
-            input: input_payload,
-            error: e,
-            session_id: session_id,
-            user_identifier: user_identifier
-          )
-          raise
-        end
-      end
-    end
+    # native_chat_response is deprecated/unused as it targets a non-standard API
+    def native_chat_response(*args); end
 
     def generic_chat_response(
       prompt:,
@@ -266,45 +163,87 @@ class Provider::Openai < Provider
 
         tools = build_generic_tools(functions)
 
-        # Force synchronous calls for generic chat (streaming not supported for custom providers)
         params = {
           model: model,
           messages: messages
         }
         params[:tools] = tools if tools.present?
 
+        accumulated_content = ""
+        accumulated_usage = nil
+        response_id = nil
+
+        if streamer.present?
+          params[:stream] = proc do |chunk, _bytes|
+            # Handle standard OpenAI chunk
+            delta = chunk.dig("choices", 0, "delta")
+            content = delta&.dig("content")
+
+            # Capture ID from first chunk
+            response_id ||= chunk.dig("id")
+
+            if content.present?
+              accumulated_content += content
+              streamer.call(Provider::LlmConcept::ChatStreamChunk.new(type: "output_text", data: content, usage: nil))
+            end
+
+            # Handle usage if present (OpenRouter/OpenAI might send it in the last chunk)
+            if chunk.dig("usage")
+              accumulated_usage = chunk.dig("usage")
+            end
+          end
+        end
+
         begin
           raw_response = client.chat(parameters: params)
 
-          parsed = GenericChatParser.new(raw_response).parsed
-
-          log_langfuse_generation(
-            name: "chat_response",
-            model: model,
-            input: messages,
-            output: parsed.messages.map(&:output_text).join("\n"),
-            usage: raw_response["usage"],
-            session_id: session_id,
-            user_identifier: user_identifier
-          )
-
-          record_llm_usage(family: family, model: model, operation: "chat", usage: raw_response["usage"])
-
-          # If a streamer was provided, manually call it with the parsed response
-          # to maintain the same contract as the streaming version
           if streamer.present?
-            # Emit output_text chunks for each message
-            parsed.messages.each do |message|
-              if message.output_text.present?
-                streamer.call(Provider::LlmConcept::ChatStreamChunk.new(type: "output_text", data: message.output_text, usage: nil))
-              end
-            end
+            # Construct response from accumulated content
+            parsed = Provider::LlmConcept::ChatResponse.new(
+              id: response_id || "chatcmpl-streamed",
+              model: model,
+              messages: [
+                Provider::LlmConcept::ChatMessage.new(
+                  id: response_id || "msg-streamed",
+                  output_text: accumulated_content
+                )
+              ],
+              function_requests: []
+            )
 
-            # Emit response chunk
-            streamer.call(Provider::LlmConcept::ChatStreamChunk.new(type: "response", data: parsed, usage: raw_response["usage"]))
+            log_langfuse_generation(
+              name: "chat_response",
+              model: model,
+              input: messages,
+              output: accumulated_content,
+              usage: accumulated_usage,
+              session_id: session_id,
+              user_identifier: user_identifier
+            )
+
+            record_llm_usage(family: family, model: model, operation: "chat", usage: accumulated_usage)
+
+            # Emit response chunk for the streamer to finish
+            streamer.call(Provider::LlmConcept::ChatStreamChunk.new(type: "response", data: parsed, usage: accumulated_usage))
+
+            parsed
+          else
+            parsed = GenericChatParser.new(raw_response).parsed
+
+            log_langfuse_generation(
+              name: "chat_response",
+              model: model,
+              input: messages,
+              output: parsed.messages.map(&:output_text).join("\n"),
+              usage: raw_response["usage"],
+              session_id: session_id,
+              user_identifier: user_identifier
+            )
+
+            record_llm_usage(family: family, model: model, operation: "chat", usage: raw_response["usage"])
+
+            parsed
           end
-
-          parsed
         rescue => e
           log_langfuse_generation(
             name: "chat_response",
