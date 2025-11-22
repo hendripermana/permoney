@@ -1,3 +1,11 @@
+## [0.13.1](https://github.com/hendripermana/permoney/compare/v0.13.0...v0.13.1) (2025-11-22)
+
+### Other Changes
+
+- Merge pull request #73 from hendripermana/feature/dashboard-period-sync-and-ui-improvements (3e9f4aa7)
+- Apply code review feedback: optimize redundant method calls and add safe navigation (3ac7f1b9)
+- Implement community improvements: dashboard period sync and UI enhancements (b2348d93)
+
 ## [0.13.0](https://github.com/hendripermana/permoney/compare/v0.12.1...v0.13.0) (2025-11-22)
 
 ### Features
