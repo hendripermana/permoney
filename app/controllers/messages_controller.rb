@@ -23,7 +23,7 @@ class MessagesController < ApplicationController
     end
 
     def message_params
-      params.require(:message).permit(:content, :ai_model)
+      (params[:message] || params[:user_message]).permit(:content, :ai_model)
     end
 
     def respond_to_success

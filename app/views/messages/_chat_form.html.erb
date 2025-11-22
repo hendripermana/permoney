@@ -13,7 +13,7 @@
     message_record ||= Message.new
     [chat, message_record]
   else
-    Chat.new
+    chat || Chat.new
   end %>
   <% form_options = {
     class: "flex lg:flex-col gap-2 bg-container px-2 py-1.5 rounded-full lg:rounded-lg shadow-border-xs",
@@ -22,19 +22,22 @@
   <% if floating %>
     <% form_options[:url] =
       if chat && chat.persisted?
+        form_options[:scope] = :message
         chat_messages_path(chat, floating: true)
       else
         chats_path(floating: true)
       end %>
   <% elsif chat && chat.persisted? %>
     <% form_options[:url] = chat_messages_path(chat) %>
+    <% form_options[:scope] = :message %>
   <% else %>
     <% form_options[:url] = chats_path %>
   <% end %>
 
-  <% if message_record&.errors&.any? %>
+  <% error_model = model.is_a?(Array) ? model.last : model %>
+  <% if error_model&.errors&.any? %>
     <div class="px-2 py-1">
-      <%= render "shared/form_errors", model: message_record %>
+      <%= render "shared/form_errors", model: error_model %>
     </div>
   <% end %>
 
