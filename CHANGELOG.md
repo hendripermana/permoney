@@ -1,3 +1,13 @@
+## [0.13.5](https://github.com/hendripermana/permoney/compare/v0.13.4...v0.13.5) (2025-11-23)
+
+### Other Changes
+
+- Merge pull request #77 from hendripermana/fix/onboarding-loop-and-streaming-chat-improvements (e0bf3c3a)
+- Fix linting: Add missing semicolons in channels files (bdbd7458)
+- Fix 4 critical issues from code review (research-based) (d8758b5c)
+- Add conditional console logging for production security (30016ead)
+- Fix onboarding loop, floating chat z-index, and enable real-time streaming (d2c5705e)
+
 ## [0.13.4](https://github.com/hendripermana/permoney/compare/v0.13.3...v0.13.4) (2025-11-22)
 
 ### Other Changes
