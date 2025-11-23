@@ -4,7 +4,8 @@ class Balance::Materializer
   def initialize(account, strategy:, window_start_date: nil, window_end_date: nil)
     @account = account
     @strategy = strategy
-    @window_start_date = window_start_date
+    # SAFETY: Only honor windowed recalcs if we have an anchor balance. Otherwise, do full rebuild.
+    @window_start_date = anchor_present? ? window_start_date : nil
     @window_end_date = window_end_date
   end
 
@@ -78,6 +79,10 @@ class Balance::Materializer
   private
     def materialize_holdings
       @holdings = Holding::Materializer.new(account, strategy: strategy).materialize_holdings
+    end
+
+    def anchor_present?
+      account.balances.where(currency: account.currency).exists?
     end
 
     def update_account_info
