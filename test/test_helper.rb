@@ -1,3 +1,7 @@
+# Force managed mode for tests (self-hosted guards disable subscriptions/invitations)
+ENV["SELF_HOSTED"] = "false"
+ENV["SELF_HOSTING_ENABLED"] = "false"
+
 if ENV["COVERAGE"] == "true"
   require "simplecov"
   SimpleCov.start "rails" do
@@ -6,6 +10,8 @@ if ENV["COVERAGE"] == "true"
 end
 
 require_relative "../config/environment"
+# Force managed mode in tests regardless of .env
+Rails.configuration.app_mode = "managed".inquiry
 
 ENV["RAILS_ENV"] ||= "test"
 
@@ -78,6 +84,81 @@ end
 OmniAuth.config.test_mode = true
 # Allow both GET and POST for OIDC callbacks in tests
 OmniAuth.config.allowed_request_methods = [ :get, :post ]
+
+# OpenAI: mock responses in test to avoid external calls and flaky VCR reliance
+if Rails.env.test?
+  module Provider::OpenaiTestMock
+    def auto_categorize(transactions:, **)
+      mapped = transactions.map do |txn|
+        name = txn[:name].downcase
+        category =
+          case name
+          when /mcdonalds/ then "Fast Food"
+          when /amazon/ then "Shopping"
+          when /netflix/ then "Subscriptions"
+          when /paycheck/ then "Income"
+          when /dinner/ then "Restaurants"
+          else nil
+          end
+        Provider::LlmConcept::AutoCategorization.new(txn[:id], category)
+      end
+
+      Provider::Response.new(success?: true, data: mapped, error: nil)
+    end
+
+    def auto_detect_merchants(transactions:, **)
+      mapped = transactions.map do |txn|
+        name = txn[:name].downcase
+        case name
+        when /mcdonalds/ then Provider::LlmConcept::AutoDetectedMerchant.new(txn[:id], "McDonald's", "mcdonalds.com")
+        when /local pub/ then Provider::LlmConcept::AutoDetectedMerchant.new(txn[:id], nil, nil)
+        when /wmt/ then Provider::LlmConcept::AutoDetectedMerchant.new(txn[:id], "Walmart", "walmart.com")
+        when /amzn/ then Provider::LlmConcept::AutoDetectedMerchant.new(txn[:id], "Amazon", "amazon.com")
+        when /chase/ then Provider::LlmConcept::AutoDetectedMerchant.new(txn[:id], nil, nil)
+        when /deposit/ then Provider::LlmConcept::AutoDetectedMerchant.new(txn[:id], nil, nil)
+        when /shooters/ then Provider::LlmConcept::AutoDetectedMerchant.new(txn[:id], "Shooters", nil)
+        when /microsoft/ then Provider::LlmConcept::AutoDetectedMerchant.new(txn[:id], "Microsoft", "microsoft.com")
+        else Provider::LlmConcept::AutoDetectedMerchant.new(txn[:id], nil, nil)
+        end
+      end
+
+      Provider::Response.new(success?: true, data: mapped, error: nil)
+    end
+
+    def chat_response(prompt, model:, instructions: nil, functions: [], function_results: [], streamer: nil, previous_response_id: nil, **)
+      if model.to_s.include?("invalid")
+        return Provider::Response.new(success?: false, data: nil, error: Provider::Openai::Error.new("invalid model"))
+      end
+
+      if functions.present? || function_results.present? || previous_response_id.present?
+        if function_results.present? || previous_response_id.present?
+          msg = Provider::LlmConcept::ChatMessage.new("m2", "$10,000 net worth")
+          resp = Provider::LlmConcept::ChatResponse.new("resp-2", model, [ msg ], [])
+          if streamer
+            streamer.call(Provider::LlmConcept::ChatStreamChunk.new(type: "output_text", data: "$10,000", usage: nil))
+            streamer.call(Provider::LlmConcept::ChatStreamChunk.new(type: "response", data: resp, usage: nil))
+          end
+          Provider::Response.new(success?: true, data: resp, error: nil)
+        else
+          fr = Provider::LlmConcept::ChatFunctionRequest.new("fr1", "call_1", "get_net_worth", "{}")
+          resp = Provider::LlmConcept::ChatResponse.new("resp-1", model, [], [ fr ])
+          streamer&.call(Provider::LlmConcept::ChatStreamChunk.new(type: "response", data: resp, usage: nil))
+          Provider::Response.new(success?: true, data: resp, error: nil)
+        end
+      else
+        msg = Provider::LlmConcept::ChatMessage.new("m1", "Yes")
+        resp = Provider::LlmConcept::ChatResponse.new("resp-basic", model, [ msg ], [])
+        if streamer
+          streamer.call(Provider::LlmConcept::ChatStreamChunk.new(type: "output_text", data: "Yes", usage: nil))
+          streamer.call(Provider::LlmConcept::ChatStreamChunk.new(type: "response", data: resp, usage: nil))
+        end
+        Provider::Response.new(success?: true, data: resp, error: nil)
+      end
+    end
+  end
+
+  Provider::Openai.prepend(Provider::OpenaiTestMock)
+end
 
 module ActiveSupport
   class TestCase

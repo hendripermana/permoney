@@ -33,11 +33,8 @@ class SubscriptionsController < ApplicationController
       # Mark user as onboarded when trial starts
       Current.user.mark_onboarded!
       redirect_to root_path, notice: "Welcome to #{Rails.configuration.x.product_name}!"
-    elsif Current.family.trialing?
-      # User already in trial but not onboarded yet, just mark as onboarded
-      Current.user.mark_onboarded!
-      redirect_to root_path, notice: "Welcome back! Your trial is active."
     else
+      # User already trialed or still in trial - prevent new trial
       redirect_to root_path, alert: "You have already started or completed a trial. Please upgrade to continue."
     end
   end
