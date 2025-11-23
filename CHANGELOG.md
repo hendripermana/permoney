@@ -1,3 +1,9 @@
+## [0.13.8](https://github.com/hendripermana/permoney/compare/v0.13.7...v0.13.8) (2025-11-23)
+
+### Other Changes
+
+- HOTFIX: Fix importmap paths for Action Cable - CRITICAL #3 (21fca680)
+
 ## [0.13.7](https://github.com/hendripermana/permoney/compare/v0.13.6...v0.13.7) (2025-11-23)
 
 ### Other Changes
