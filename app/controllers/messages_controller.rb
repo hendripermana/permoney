@@ -11,6 +11,9 @@ class MessagesController < ApplicationController
     )
 
     if @message.save
+      # Trigger streaming response in background
+      enqueue_streaming_response(@message)
+
       respond_to_success
     else
       respond_to_failure
@@ -24,6 +27,22 @@ class MessagesController < ApplicationController
 
     def message_params
       (params[:message] || params[:user_message]).permit(:content, :ai_model)
+    end
+
+    def enqueue_streaming_response(message)
+      # Use streaming job for real-time responses
+      if streaming_enabled?
+        StreamingAssistantResponseJob.perform_later(message.id)
+      else
+        # Fallback to legacy job
+        AssistantResponseJob.perform_later(message.id)
+      end
+    end
+
+    def streaming_enabled?
+      # Enable streaming by default
+      # Can be disabled via params or feature flag
+      params[:streaming] != "false"
     end
 
     def respond_to_success

@@ -1,9 +1,13 @@
 <%= turbo_frame_tag "floating_chat_content" do %>
-  <div class="flex flex-col h-full min-h-0" data-controller="chat">
+  <div class="flex flex-col h-full min-h-0" 
+       data-controller="chat chat-streaming" 
+       data-chat-streaming-chat-id-value="<%= @chat.id %>">
     <%= turbo_stream_from @chat %>
 
     <%# Messages Area %>
-    <div class="flex-1 overflow-y-auto px-4 py-3 space-y-4 scroll-smooth" data-chat-target="messages">
+    <div class="flex-1 overflow-y-auto px-4 py-3 space-y-4 scroll-smooth" 
+         data-chat-target="messages"
+         data-chat-streaming-target="messages">
       <% if @chat.conversation_messages.any? %>
         <% @chat.conversation_messages.ordered.each do |message| %>
           <%= render message %>
@@ -12,9 +16,8 @@
         <%= render "chats/ai_greeting" %>
       <% end %>
 
-      <% if params[:thinking].present? %>
-        <%= render "chats/thinking_indicator", chat: @chat %>
-      <% end %>
+      <%# Typing Indicator (hidden by default, shown during streaming) %>
+      <%= render "chats/typing_indicator", chat: @chat %>
 
       <% if @chat.error.present? && @chat.needs_assistant_response? %>
         <%= render "chats/error", chat: @chat, floating: true %>

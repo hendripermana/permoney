@@ -37,10 +37,11 @@
         data: { turbo: false }
       ) %>
       <% elsif Current.family.trialing? %>
-        <%= render DS::Link.new(
+        <%= render DS::Button.new(
           text: "Continue trial",
-          href: root_path,
+          href: subscription_path,
           full_width: true,
+          method: :post
         ) %>
       <% else %>
         <%= render DS::Link.new(

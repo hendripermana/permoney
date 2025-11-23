@@ -28,7 +28,7 @@ export default class extends Controller {
     }
   }
 
-  handleBeforeVisit(event) {
+  handleBeforeVisit(_event) {
     // Close dialog before navigation if it's open
     if (this.element.open) {
       this.element.close();
