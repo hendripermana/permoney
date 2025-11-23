@@ -1,5 +1,5 @@
 import { Controller } from "@hotwired/stimulus";
-import consumer from "../channels/consumer";
+import consumer from "channels/consumer";
 
 // Real-time AI chat streaming controller
 // Handles WebSocket connection and message rendering

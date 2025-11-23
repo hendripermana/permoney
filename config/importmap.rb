@@ -12,8 +12,9 @@ pin_all_from "app/javascript/controllers", under: "controllers"
 # Action Cable - CRITICAL: Must be pinned for WebSocket support
 pin "@rails/actioncable", to: "actioncable.esm.js"
 
-# Action Cable channels
-pin_all_from "app/javascript/channels", under: "channels"
+# Action Cable channels - explicitly pin consumer
+pin "channels/consumer", to: "channels/consumer.js"
+pin "channels", to: "channels/index.js"
 
 # Services, hooks, and components - load on demand
 pin_all_from "app/javascript/services", under: "services", to: "services"

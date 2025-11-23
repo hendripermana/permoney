@@ -1,3 +1,3 @@
 // Import all the channels to be used by Action Cable
-// Note: Must use absolute import path for importmap, not relative
-import "channels/consumer";
+// Note: Consumer is imported directly by controllers that need it
+// No need to import here to avoid circular dependency issues
