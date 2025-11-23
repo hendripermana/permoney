@@ -1,3 +1,9 @@
+## [0.13.6](https://github.com/hendripermana/permoney/compare/v0.13.5...v0.13.6) (2025-11-23)
+
+### Other Changes
+
+- HOTFIX: Fix Action Cable import - CRITICAL PRODUCTION BUG (7c834498)
+
 ## [0.13.5](https://github.com/hendripermana/permoney/compare/v0.13.4...v0.13.5) (2025-11-23)
 
 ### Other Changes
