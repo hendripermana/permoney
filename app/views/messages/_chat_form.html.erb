@@ -41,7 +41,7 @@
     </div>
   <% end %>
 
-  <%= form_with model: model, **form_options do |f| %>
+  <%= form_with model: model, **form_options.merge(data: { controller: "chat-input", chat_target: "form" }) do |f| %>
 
     <%# In the future, this will be a dropdown with different AI models %>
     <%= f.hidden_field :ai_model, value: default_ai_model %>
@@ -50,7 +50,11 @@
       <% text_area_options = {
         placeholder: "Ask anything ...",
         class: "flex-1 border-0 focus:ring-0 text-sm resize-none bg-transparent placeholder:text-secondary min-h-[24px] max-h-[120px]",
-        data: { chat_target: "input", action: "input->chat#autoResize keydown->chat#handleInputKeyDown" },
+        data: { 
+          chat_target: "input",
+          chat_input_target: "textarea",
+          action: "input->chat#autoResize input->chat-input#autoResize keydown->chat#handleInputKeyDown keydown->chat-input#handleKeydown" 
+        },
         rows: 1
       } %>
       <% if message_hint.present? %>
@@ -59,9 +63,21 @@
 
       <%= f.text_area :content, **text_area_options %>
 
+      <%# Stop generation button (shown during streaming) %>
+      <button
+        type="button"
+        data-chat-streaming-target="stopButton"
+        data-action="click->chat-streaming#stopGeneration"
+        class="hidden flex-shrink-0 w-9 h-9 rounded-full border border-primary text-primary flex items-center justify-center hover:bg-container-hover transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
+        aria-label="Stop generation">
+        <%= icon("square", size: "sm") %>
+      </button>
+
+      <%# Send button %>
       <button
         type="submit"
-        class="flex-shrink-0 w-9 h-9 rounded-full bg-primary text-white flex items-center justify-center hover:bg-primary/90 transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
+        data-chat-input-target="submitButton"
+        class="flex-shrink-0 w-9 h-9 rounded-full bg-primary text-white flex items-center justify-center hover:bg-primary/90 transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
         aria-label="Send message">
         <%= icon("arrow-up", size: "sm") %>
       </button>

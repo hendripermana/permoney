@@ -131,9 +131,6 @@
       <%= yield %>
     <% end %>
 
-    <%# Floating AI Chat - Available everywhere %>
-    <%= render FloatingChatComponent.new(user: Current.user) %>
-
     <%# MOBILE - Bottom Nav %>
     <%= tag.nav class: "lg:hidden bg-surface shrink-0 z-10 pb-[env(safe-area-inset-bottom)] border-t border-tertiary flex justify-around" do %>
       <% mobile_nav_items.each do |nav_item| %>
@@ -141,4 +138,7 @@
       <% end %>
     <% end %>
   </div>
+
+  <%# Floating AI Chat - Outside stacking context for proper z-index %>
+  <%= render FloatingChatComponent.new(user: Current.user) %>
 <% end %>

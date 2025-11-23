@@ -9,6 +9,9 @@ pin "@hotwired/stimulus-loading", to: "stimulus-loading.js", preload: true
 # Controllers - eager load with Stimulus (includes nested directories)
 pin_all_from "app/javascript/controllers", under: "controllers"
 
+# Action Cable channels
+pin_all_from "app/javascript/channels", under: "channels"
+
 # Services, hooks, and components - load on demand
 pin_all_from "app/javascript/services", under: "services", to: "services"
 pin_all_from "app/javascript/hooks", under: "hooks"

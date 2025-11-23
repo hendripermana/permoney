@@ -1,7 +1,7 @@
 class ChatsController < ApplicationController
   include ActionView::RecordIdentifier
 
-  before_action :set_chat, only: [ :show, :edit, :update, :destroy ]
+  before_action :set_chat, only: [ :show, :edit, :update, :destroy, :retry ]
 
   def index
     @chats = Current.user.chats.order(created_at: :desc)

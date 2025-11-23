@@ -1,6 +1,7 @@
 // Configure your import map in config/importmap.rb. Read more: https://github.com/rails/importmap-rails
 import "@hotwired/turbo-rails";
 import "controllers";
+import "channels";
 
 // Rails 8.1 - Custom Turbo Stream Actions
 Turbo.StreamActions.redirect = function () {

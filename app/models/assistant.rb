@@ -69,6 +69,26 @@ class Assistant
     chat.add_error(e)
   end
 
+  # Streaming version of respond_to
+  # Yields progress events to the caller (typically a background job)
+  def respond_streaming(message, &progress_block)
+    llm_provider = get_model_provider(message.ai_model)
+
+    unless llm_provider
+      error_message = build_no_provider_error_message(message.ai_model)
+      raise StandardError, error_message
+    end
+
+    responder = Assistant::Responder.new(
+      message: message,
+      instructions: instructions,
+      function_tool_caller: function_tool_caller,
+      llm: llm_provider
+    )
+
+    responder.respond_streaming(&progress_block)
+  end
+
   private
     attr_reader :functions
 
