@@ -22,6 +22,9 @@ class StreamingAssistantResponseJob < ApplicationJob
       status: :pending
     )
 
+    # Initialize content accumulator (prevents N+1 DB writes)
+    @accumulated_content = ""
+
     # Broadcast initial message creation
     ChatStreamingChannel.broadcast_to(chat, {
       type: "message_created",
@@ -35,8 +38,26 @@ class StreamingAssistantResponseJob < ApplicationJob
 
       # Enhanced responder with streaming support
       assistant.respond_streaming(message) do |event|
+        # Check if user requested stop (via Redis cache flag)
+        stop_key = "chat:#{chat.id}:stop_generation"
+        if Rails.cache.read(stop_key)
+          Rails.logger.info("StreamingAssistantResponseJob: Stop flag detected, terminating stream for message #{message_id}")
+
+          # Save accumulated content before stopping
+          assistant_message.update!(content: @accumulated_content, status: :complete)
+
+          # Clear stop flag
+          Rails.cache.delete(stop_key)
+
+          # Break out of streaming loop
+          break
+        end
+
         handle_stream_event(event, assistant_message, chat)
       end
+
+      # Save final accumulated content to database (single write)
+      assistant_message.update!(content: @accumulated_content) if assistant_message.status == :pending
 
       Rails.logger.info("StreamingAssistantResponseJob: Completed for message #{message_id}")
 
@@ -65,11 +86,11 @@ class StreamingAssistantResponseJob < ApplicationJob
     def handle_stream_event(event, assistant_message, chat)
       case event[:type]
       when :text_delta
-        # Append to message content
-        assistant_message.content += event[:content]
-        assistant_message.save!
+        # Accumulate content in memory (avoid N+1 database writes)
+        # A 500-character response = 500 DB writes without this optimization
+        @accumulated_content += event[:content]
 
-        # Broadcast text delta via Action Cable
+        # Broadcast text delta via Action Cable (streaming to frontend)
         ChatStreamingChannel.broadcast_to(chat, {
           type: "text_delta",
           message_id: assistant_message.id,

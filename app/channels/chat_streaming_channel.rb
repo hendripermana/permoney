@@ -36,6 +36,11 @@ class ChatStreamingChannel < ApplicationCable::Channel
   def stop_generation
     return unless @chat
 
+    # Signal backend job to stop via Redis cache
+    # This prevents wasted API credits and server resources
+    stop_key = "chat:#{@chat.id}:stop_generation"
+    Rails.cache.write(stop_key, true, expires_in: 1.minute)
+
     @generation_active = false
 
     # Broadcast stop event to all subscribers
@@ -44,7 +49,7 @@ class ChatStreamingChannel < ApplicationCable::Channel
       timestamp: Time.current.iso8601
     })
 
-    Rails.logger.info("ChatStreamingChannel: Generation stopped for chat #{@chat.id}")
+    Rails.logger.info("ChatStreamingChannel: Generation stopped for chat #{@chat.id} (backend job will terminate)")
   end
 
   # Mark generation as active (called from job)

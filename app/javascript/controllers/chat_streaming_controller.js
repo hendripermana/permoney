@@ -6,9 +6,10 @@ import consumer from "../channels/consumer";
 //
 // Debug logging: Enabled in development, disabled in production
 // Production detection: Based on hostname (not localhost/ngrok = production)
-const DEBUG = window.location.hostname === "localhost" || 
-              window.location.hostname.includes("ngrok") ||
-              window.location.hostname.includes("127.0.0.1");
+const DEBUG =
+  window.location.hostname === "localhost" ||
+  window.location.hostname.includes("ngrok") ||
+  window.location.hostname.includes("127.0.0.1");
 
 export default class extends Controller {
   static targets = ["messages", "stopButton", "typingIndicator"];
@@ -179,8 +180,12 @@ export default class extends Controller {
   }
 
   createMessageElement(messageId) {
+    // Escape messageId to prevent XSS attacks
+    // messageId could be manipulated via API, e.g., '" onload="alert('XSS')"
+    const escapedId = this.escapeHtml(messageId.toString());
+
     const template = `
-      <div data-message-id="${messageId}" class="flex gap-3 animate-fadeIn">
+      <div data-message-id="${escapedId}" class="flex gap-3 animate-fadeIn">
         <div class="shrink-0">
           <div class="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
             <svg class="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">

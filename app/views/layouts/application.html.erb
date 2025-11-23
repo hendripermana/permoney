@@ -137,8 +137,8 @@
         <%= render "layouts/shared/nav_item", **nav_item %>
       <% end %>
     <% end %>
+    
+    <%# Floating AI Chat - At body level for proper z-index stacking %>
+    <%= render FloatingChatComponent.new(user: Current.user) %>
   </div>
-
-  <%# Floating AI Chat - Outside stacking context for proper z-index %>
-  <%= render FloatingChatComponent.new(user: Current.user) %>
 <% end %>
