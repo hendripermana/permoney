@@ -216,6 +216,12 @@ class Sync < ApplicationRecord
     def report_error(error)
       Sentry.capture_exception(error) do |scope|
         scope.set_tags(sync_id: id)
+        scope.set_extras(
+          window_start_date: window_start_date,
+          window_end_date: window_end_date,
+          syncable_type: syncable_type,
+          syncable_id: syncable_id
+        )
       end
     end
 

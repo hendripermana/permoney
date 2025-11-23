@@ -59,3 +59,10 @@ cache_monitoring:
   class: "CacheMonitoringJob"
   queue: "low_priority"
   description: "Monitors cache statistics and performance"
+
+# Balance audit: sample accounts, recalc recent window, auto-heal if mismatch
+balance_audit:
+  cron: "15 3 * * *" # daily at 03:15 server time
+  class: "BalanceAuditJob"
+  queue: "low_priority"
+  description: "Samples accounts and queues windowed resync (last 7 days) to auto-heal backdated edits"

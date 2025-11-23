@@ -33,16 +33,19 @@ class Account::Syncer
     # instead of recalculating entire history from opening_anchor_date
     def materialize_balances(sync)
       strategy = account.linked? ? :reverse : :forward
+      anchor_present = account.balances.where(currency: account.currency).exists?
+      effective_window_start = anchor_present ? sync.window_start_date : nil
 
       Rails.logger.info(
         "Materializing balances with window: " \
-        "start=#{sync.window_start_date || 'nil'}, end=#{sync.window_end_date || 'nil'}"
+        "start=#{effective_window_start || 'nil'}, end=#{sync.window_end_date || 'nil'}" \
+        "#{anchor_present ? '' : ' (anchor missing -> full rebuild)'}"
       )
 
       Balance::Materializer.new(
         account,
         strategy: strategy,
-        window_start_date: sync.window_start_date,
+        window_start_date: effective_window_start,
         window_end_date: sync.window_end_date
       ).materialize_balances
     end
