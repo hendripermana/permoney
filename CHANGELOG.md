@@ -1,3 +1,11 @@
+## [0.13.11](https://github.com/hendripermana/permoney/compare/v0.13.10...v0.13.11) (2025-11-23)
+
+### Other Changes
+
+- Merge pull request #78 from hendripermana/feature/balance-audit-and-mocks (7e8a4358)
+- Namespace advisory lock for balance materializer (ef58edfb)
+- Add balance audit job and harden sync safeguards (4cd3b4da)
+
 ## [0.13.10](https://github.com/hendripermana/permoney/compare/v0.13.9...v0.13.10) (2025-11-23)
 
 ### Other Changes
