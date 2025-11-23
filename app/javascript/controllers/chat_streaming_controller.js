@@ -3,6 +3,13 @@ import consumer from "../channels/consumer";
 
 // Real-time AI chat streaming controller
 // Handles WebSocket connection and message rendering
+//
+// Debug logging: Enabled in development, disabled in production
+// Production detection: Based on hostname (not localhost/ngrok = production)
+const DEBUG = window.location.hostname === "localhost" || 
+              window.location.hostname.includes("ngrok") ||
+              window.location.hostname.includes("127.0.0.1");
+
 export default class extends Controller {
   static targets = ["messages", "stopButton", "typingIndicator"];
   static values = {
@@ -11,7 +18,7 @@ export default class extends Controller {
   };
 
   connect() {
-    console.log("ChatStreamingController: Connected", { chatId: this.chatIdValue });
+    if (DEBUG) console.log("ChatStreamingController: Connected", { chatId: this.chatIdValue });
 
     // Subscribe to chat streaming channel
     this.subscription = consumer.subscriptions.create(
@@ -28,21 +35,21 @@ export default class extends Controller {
   }
 
   disconnect() {
-    console.log("ChatStreamingController: Disconnecting");
+    if (DEBUG) console.log("ChatStreamingController: Disconnecting");
     this.subscription?.unsubscribe();
   }
 
   handleConnected() {
-    console.log("ChatStreamingController: WebSocket connected");
+    if (DEBUG) console.log("ChatStreamingController: WebSocket connected");
   }
 
   handleDisconnected() {
-    console.log("ChatStreamingController: WebSocket disconnected");
+    if (DEBUG) console.log("ChatStreamingController: WebSocket disconnected");
     this.streamingValue = false;
   }
 
   handleStreamData(data) {
-    console.log("ChatStreamingController: Received data", data);
+    if (DEBUG) console.log("ChatStreamingController: Received data", data);
 
     switch (data.type) {
       case "message_created":
@@ -61,12 +68,12 @@ export default class extends Controller {
         this.handleError(data);
         break;
       default:
-        console.warn("ChatStreamingController: Unknown event type", data.type);
+        if (DEBUG) console.warn("ChatStreamingController: Unknown event type", data.type);
     }
   }
 
   handleMessageCreated(data) {
-    console.log("ChatStreamingController: Message created", data.message_id);
+    if (DEBUG) console.log("ChatStreamingController: Message created", data.message_id);
     this.streamingValue = true;
 
     // Show typing indicator
@@ -109,7 +116,7 @@ export default class extends Controller {
   }
 
   handleComplete(messageId, data) {
-    console.log("ChatStreamingController: Streaming complete", { messageId, data });
+    if (DEBUG) console.log("ChatStreamingController: Streaming complete", { messageId, data });
 
     this.streamingValue = false;
 
@@ -129,7 +136,7 @@ export default class extends Controller {
   }
 
   handleStopped() {
-    console.log("ChatStreamingController: Generation stopped");
+    if (DEBUG) console.log("ChatStreamingController: Generation stopped");
     this.streamingValue = false;
 
     // Hide typing indicator
@@ -160,7 +167,7 @@ export default class extends Controller {
 
   stopGeneration(event) {
     event?.preventDefault();
-    console.log("ChatStreamingController: Stopping generation");
+    if (DEBUG) console.log("ChatStreamingController: Stopping generation");
 
     this.subscription.perform("stop_generation");
     this.streamingValue = false;
@@ -227,7 +234,7 @@ export default class extends Controller {
   }
 
   streamingValueChanged() {
-    console.log("ChatStreamingController: Streaming state changed", this.streamingValue);
+    if (DEBUG) console.log("ChatStreamingController: Streaming state changed", this.streamingValue);
 
     // Toggle stop button visibility
     if (this.hasStopButtonTarget) {
