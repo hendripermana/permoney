@@ -57,7 +57,13 @@ class StreamingAssistantResponseJob < ApplicationJob
       end
 
       # Save final accumulated content to database (single write)
-      assistant_message.update!(content: @accumulated_content) if assistant_message.status == :pending
+      # Only update if we have content to avoid validation errors
+      if assistant_message.status == :pending && @accumulated_content.present?
+        assistant_message.update!(content: @accumulated_content, status: :complete)
+      elsif assistant_message.status == :pending
+        # If no content received, mark as failed
+        assistant_message.update!(content: "No response received", status: :failed)
+      end
 
       Rails.logger.info("StreamingAssistantResponseJob: Completed for message #{message_id}")
 
