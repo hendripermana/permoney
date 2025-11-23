@@ -1,3 +1,9 @@
+## [0.13.9](https://github.com/hendripermana/permoney/compare/v0.13.8...v0.13.9) (2025-11-23)
+
+### Other Changes
+
+- HOTFIX: Fix blank content validation error in streaming job (984e5960)
+
 ## [0.13.8](https://github.com/hendripermana/permoney/compare/v0.13.7...v0.13.8) (2025-11-23)
 
 ### Other Changes
