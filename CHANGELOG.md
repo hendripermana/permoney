@@ -1,3 +1,9 @@
+## [0.13.7](https://github.com/hendripermana/permoney/compare/v0.13.6...v0.13.7) (2025-11-23)
+
+### Other Changes
+
+- HOTFIX: Add @rails/actioncable to importmap - CRITICAL (cf27a232)
+
 ## [0.13.6](https://github.com/hendripermana/permoney/compare/v0.13.5...v0.13.6) (2025-11-23)
 
 ### Other Changes
