@@ -1,5 +1,6 @@
 class Balance::Materializer
   require "zlib"
+  ADVISORY_LOCK_NAMESPACE = 42_001
   attr_reader :account, :strategy, :window_start_date, :window_end_date, :downgraded_full_rebuild, :requested_window_start_date, :downgraded_reason
   MAX_RECALCULATION_PASSES = 2
 
@@ -125,8 +126,9 @@ class Balance::Materializer
 
   private
     def with_account_lock
-      key = Zlib.crc32(account.id.to_s)
-      sql = ActiveRecord::Base.send(:sanitize_sql_array, [ "SELECT pg_try_advisory_lock(?)", key ])
+      locked = false
+      key = account.id.to_i
+      sql = ActiveRecord::Base.send(:sanitize_sql_array, [ "SELECT pg_try_advisory_lock(?, ?)", ADVISORY_LOCK_NAMESPACE, key ])
       locked = ActiveRecord::Base.connection.select_value(sql)
 
       unless locked
@@ -143,7 +145,7 @@ class Balance::Materializer
       yield
     ensure
       if locked
-        unlock_sql = ActiveRecord::Base.send(:sanitize_sql_array, [ "SELECT pg_advisory_unlock(?)", key ])
+        unlock_sql = ActiveRecord::Base.send(:sanitize_sql_array, [ "SELECT pg_advisory_unlock(?, ?)", ADVISORY_LOCK_NAMESPACE, key ])
         ActiveRecord::Base.connection.select_value(unlock_sql)
       end
     end
