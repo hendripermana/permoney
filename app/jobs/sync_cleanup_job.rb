@@ -119,7 +119,36 @@ class SyncCleanupJob < ApplicationJob
     # Cleans syncs older than 24 hours that never completed
     # This is a fallback for edge cases not caught by other cleanup methods
     def cleanup_stale_syncs
-      Sync.clean
+      cleaned = Sync.clean
+
+      stale = Sync.where(status: "stale")
+      return cleaned if stale.empty?
+
+      stale.find_each do |sync|
+        begin
+          syncable = sync.syncable
+          next unless syncable
+
+          # Force a fresh full rebuild (no window) to self-heal
+          syncable.syncs.incomplete.delete_all
+          syncable.sync_later(window_start_date: nil, window_end_date: nil)
+
+          Rails.logger.warn("[SyncCleanup] Auto-heal stale sync #{sync.id} for #{sync.syncable_type} #{sync.syncable_id}")
+
+          Sentry.capture_message(
+            "Auto-healed stale sync",
+            level: :info,
+            tags: { syncable_type: sync.syncable_type, syncable_id: sync.syncable_id, stale_sync_id: sync.id }
+          ) if defined?(Sentry)
+        rescue => e
+          Rails.logger.error("[SyncCleanup] Failed to auto-heal stale sync #{sync.id}: #{e.class} - #{e.message}")
+          Sentry.capture_exception(e, level: :warning, tags: { job: "sync_cleanup", stale_sync_id: sync.id }) if defined?(Sentry)
+        ensure
+          sync.destroy
+        end
+      end
+
+      cleaned + stale.size
     end
 
     # Observability: alert if any lingering syncs remain beyond expected windows

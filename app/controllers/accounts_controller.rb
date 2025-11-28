@@ -14,6 +14,7 @@ class AccountsController < ApplicationController
 
   def sync_all
     family.sync_later
+    Rails.cache.delete(family.build_cache_key("sync_health_banner"))
 
     respond_to do |format|
       format.html { redirect_to accounts_path, notice: t("accounts.sync_all.syncing") }
