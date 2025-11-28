@@ -61,6 +61,20 @@ class Balance::Materializer
             "(#{calc_duration.positive? ? (@balances.size / calc_duration).round(1) : 0} balances/sec)"
           )
 
+          if @balances.blank? && recalc_passes < MAX_RECALCULATION_PASSES
+            Sentry.capture_message(
+              "Balance calc produced no rows, retrying with full rebuild",
+              level: :warning,
+              tags: { account_id: account.id, strategy: strategy, reason: "empty_calc" },
+              extra: delta_spike_metadata.merge(reason: "empty_calc")
+            )
+
+            @window_start_date = nil
+            @downgraded_full_rebuild = true
+            @downgraded_reason = "empty_calc"
+            next
+          end
+
           # Safety net: detect delta spikes and retry with full rebuild once
           if delta_spike_detected? && window_start_date && recalc_passes < MAX_RECALCULATION_PASSES
             Sentry.capture_message(

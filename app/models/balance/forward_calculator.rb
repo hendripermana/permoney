@@ -88,23 +88,14 @@ class Balance::ForwardCalculator < Balance::BaseCalculator
     # 2. Latest balance date + 1 (incremental calculation)
     # 3. Opening anchor date (full recalculation fallback)
     def determine_start_date
-      if window_start_date && balance_anchor_present?
-        # Explicit window provided by sync and we have an anchor balance to build from
-        window_start_date
-      else
-        # Try incremental calculation from latest balance
-        latest_balance_date = account.balances
-          .where(currency: account.currency)
-          .maximum(:date)
+      # Full rebuild (no window): always start from opening anchor to avoid skipping old entries
+      return account.opening_anchor_date if window_start_date.nil?
 
-        if latest_balance_date
-          # Start from day after latest balance
-          latest_balance_date + 1.day
-        else
-          # No balances exist, start from opening anchor
-          account.opening_anchor_date
-        end
-      end
+      # Windowed recalculation requires an anchor
+      return window_start_date if balance_anchor_present?
+
+      # Fallback when anchor missing: start from opening anchor
+      account.opening_anchor_date
     end
 
     # Determine end date for calculation
