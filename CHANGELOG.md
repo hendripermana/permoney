@@ -1,3 +1,9 @@
+## [0.13.12](https://github.com/hendripermana/permoney/compare/v0.13.11...v0.13.12) (2025-11-28)
+
+### Other Changes
+
+- Force full rebuild start from opening anchor; retry if calc empty (e91ede2e)
+
 ## [0.13.11](https://github.com/hendripermana/permoney/compare/v0.13.10...v0.13.11) (2025-11-23)
 
 ### Other Changes
