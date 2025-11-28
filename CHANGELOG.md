@@ -1,3 +1,9 @@
+## [0.13.13](https://github.com/hendripermana/permoney/compare/v0.13.12...v0.13.13) (2025-11-28)
+
+### Other Changes
+
+- Auto-heal stale syncs and clear sync banner cache on refresh (62b359c6)
+
 ## [0.13.12](https://github.com/hendripermana/permoney/compare/v0.13.11...v0.13.12) (2025-11-28)
 
 ### Other Changes
