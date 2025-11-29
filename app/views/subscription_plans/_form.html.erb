@@ -1,0 +1,124 @@
+<%= form_with model: @subscription_plan, local: true, class: "space-y-6" do |f| %>
+  <% if @subscription_plan.errors.any? %>
+    <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+      <div class="flex items-center gap-2 mb-2">
+        <%= icon "alert-circle", class: "h-5 w-5 text-red-500" %>
+        <h3 class="text-red-800 font-medium">Please correct the following errors:</h3>
+      </div>
+      <ul class="list-disc pl-5 text-red-700 text-sm">
+        <% @subscription_plan.errors.full_messages.each do |message| %>
+          <li><%= message %></li>
+        <% end %>
+      </ul>
+    </div>
+  <% end %>
+
+  <div class="bg-container rounded-lg p-6 border border-primary">
+    <h3 class="text-lg font-semibold text-primary mb-4">Subscription Details</h3>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div>
+        <%= f.label :name, "Subscription Name", class: "block text-sm font-medium text-secondary mb-1" %>
+        <%= f.text_field :name, class: "w-full rounded-lg border border-primary bg-container px-3 py-2 text-primary focus:ring-2 focus:ring-blue-500 focus:border-transparent", placeholder: "e.g., Netflix Premium" %>
+      </div>
+
+      <div>
+        <%= f.label :service_id, "Service", class: "block text-sm font-medium text-secondary mb-1" %>
+        <%= f.collection_select :service_id, @services, :id, :name, { include_blank: "Select a service..." }, class: "w-full rounded-lg border border-primary bg-container px-3 py-2 text-primary focus:ring-2 focus:ring-blue-500 focus:border-transparent" %>
+      </div>
+
+      <div>
+        <%= f.label :account_id, "Payment Account", class: "block text-sm font-medium text-secondary mb-1" %>
+        <%= f.collection_select :account_id, @accounts, :id, :name, { include_blank: "Select an account..." }, class: "w-full rounded-lg border border-primary bg-container px-3 py-2 text-primary focus:ring-2 focus:ring-blue-500 focus:border-transparent" %>
+      </div>
+
+      <div>
+        <%= f.label :description, "Description (optional)", class: "block text-sm font-medium text-secondary mb-1" %>
+        <%= f.text_area :description, rows: 2, class: "w-full rounded-lg border border-primary bg-container px-3 py-2 text-primary focus:ring-2 focus:ring-blue-500 focus:border-transparent", placeholder: "Add notes about this subscription..." %>
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-container rounded-lg p-6 border border-primary">
+    <h3 class="text-lg font-semibold text-primary mb-4">Billing Information</h3>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div>
+        <%= f.label :amount, "Amount", class: "block text-sm font-medium text-secondary mb-1" %>
+        <%= f.number_field :amount, step: 0.01, min: 0, class: "w-full rounded-lg border border-primary bg-container px-3 py-2 text-primary focus:ring-2 focus:ring-blue-500 focus:border-transparent", placeholder: "0.00" %>
+      </div>
+
+      <div>
+        <%= f.label :currency, "Currency", class: "block text-sm font-medium text-secondary mb-1" %>
+        <%= f.select :currency, [["USD", "USD"], ["EUR", "EUR"], ["GBP", "GBP"], ["IDR", "IDR"], ["JPY", "JPY"], ["AUD", "AUD"], ["CAD", "CAD"]], {}, class: "w-full rounded-lg border border-primary bg-container px-3 py-2 text-primary focus:ring-2 focus:ring-blue-500 focus:border-transparent" %>
+      </div>
+
+      <div>
+        <%= f.label :billing_cycle, "Billing Cycle", class: "block text-sm font-medium text-secondary mb-1" %>
+        <%= f.select :billing_cycle, billing_cycle_options, {}, class: "w-full rounded-lg border border-primary bg-container px-3 py-2 text-primary focus:ring-2 focus:ring-blue-500 focus:border-transparent" %>
+      </div>
+
+      <div>
+        <%= f.label :payment_method, "Payment Method", class: "block text-sm font-medium text-secondary mb-1" %>
+        <%= f.select :payment_method, payment_method_options, {}, class: "w-full rounded-lg border border-primary bg-container px-3 py-2 text-primary focus:ring-2 focus:ring-blue-500 focus:border-transparent" %>
+      </div>
+
+      <div>
+        <%= f.label :status, "Status", class: "block text-sm font-medium text-secondary mb-1" %>
+        <%= f.select :status, status_options, {}, class: "w-full rounded-lg border border-primary bg-container px-3 py-2 text-primary focus:ring-2 focus:ring-blue-500 focus:border-transparent" %>
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-container rounded-lg p-6 border border-primary">
+    <h3 class="text-lg font-semibold text-primary mb-4">Schedule</h3>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div>
+        <%= f.label :started_at, "Start Date", class: "block text-sm font-medium text-secondary mb-1" %>
+        <%= f.date_field :started_at, class: "w-full rounded-lg border border-primary bg-container px-3 py-2 text-primary focus:ring-2 focus:ring-blue-500 focus:border-transparent" %>
+      </div>
+
+      <div>
+        <%= f.label :next_billing_at, "Next Billing Date", class: "block text-sm font-medium text-secondary mb-1" %>
+        <%= f.date_field :next_billing_at, class: "w-full rounded-lg border border-primary bg-container px-3 py-2 text-primary focus:ring-2 focus:ring-blue-500 focus:border-transparent" %>
+      </div>
+
+      <div>
+        <%= f.label :trial_ends_at, "Trial Ends (optional)", class: "block text-sm font-medium text-secondary mb-1" %>
+        <%= f.date_field :trial_ends_at, class: "w-full rounded-lg border border-primary bg-container px-3 py-2 text-primary focus:ring-2 focus:ring-blue-500 focus:border-transparent" %>
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-container rounded-lg p-6 border border-primary">
+    <h3 class="text-lg font-semibold text-primary mb-4">Additional Options</h3>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div class="flex items-center gap-3">
+        <%= f.check_box :auto_renew, class: "h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" %>
+        <%= f.label :auto_renew, "Auto-renew subscription", class: "text-sm text-primary" %>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <%= f.check_box :shared_within_family, class: "h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" %>
+        <%= f.label :shared_within_family, "Shared with family members", class: "text-sm text-primary" %>
+      </div>
+
+      <div>
+        <%= f.label :max_usage_allowed, "Max Usage Allowed (optional)", class: "block text-sm font-medium text-secondary mb-1" %>
+        <%= f.number_field :max_usage_allowed, min: 0, class: "w-full rounded-lg border border-primary bg-container px-3 py-2 text-primary focus:ring-2 focus:ring-blue-500 focus:border-transparent", placeholder: "Leave blank for unlimited" %>
+      </div>
+
+      <div>
+        <%= f.label :payment_notes, "Payment Notes (optional)", class: "block text-sm font-medium text-secondary mb-1" %>
+        <%= f.text_area :payment_notes, rows: 2, class: "w-full rounded-lg border border-primary bg-container px-3 py-2 text-primary focus:ring-2 focus:ring-blue-500 focus:border-transparent", placeholder: "Add any payment-related notes..." %>
+      </div>
+    </div>
+  </div>
+
+  <div class="flex items-center justify-end gap-4">
+    <%= link_to "Cancel", subscription_plans_path, class: "px-4 py-2 text-sm font-medium text-secondary hover:text-primary transition-colors" %>
+    <%= f.submit @subscription_plan.new_record? ? "Create Subscription" : "Update Subscription", class: "px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium cursor-pointer" %>
+  </div>
+<% end %>

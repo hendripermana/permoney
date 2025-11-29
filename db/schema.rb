@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2025_11_21_230249) do
+ActiveRecord::Schema[8.1].define(version: 2025_11_29_043428) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -965,6 +965,30 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_21_230249) do
     t.index ["security_id"], name: "index_security_prices_on_security_id"
   end
 
+  create_table "services", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.boolean "auto_detected", default: false, null: false
+    t.decimal "avg_monthly_cost", precision: 19, scale: 4
+    t.string "billing_frequency", default: "monthly"
+    t.string "category", null: false
+    t.datetime "created_at", null: false
+    t.text "description"
+    t.string "logo"
+    t.string "name", null: false
+    t.boolean "popular", default: false, null: false
+    t.string "stripe_plan_id"
+    t.string "stripe_product_id"
+    t.string "support_email"
+    t.datetime "updated_at", null: false
+    t.integer "usage_count", default: 0
+    t.string "website"
+    t.index ["auto_detected"], name: "index_services_on_auto_detected"
+    t.index ["category"], name: "index_services_on_category"
+    t.index ["name"], name: "index_services_on_name", unique: true
+    t.index ["popular"], name: "index_services_on_popular"
+    t.index ["stripe_plan_id"], name: "index_services_on_stripe_plan_id", unique: true, where: "(stripe_plan_id IS NOT NULL)"
+    t.index ["stripe_product_id"], name: "index_services_on_stripe_product_id", unique: true, where: "(stripe_product_id IS NOT NULL)"
+  end
+
   create_table "sessions", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.uuid "active_impersonator_session_id"
     t.datetime "created_at", null: false
@@ -1030,6 +1054,46 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_21_230249) do
     t.index ["institution_id"], name: "index_simplefin_items_on_institution_id"
     t.index ["institution_name"], name: "index_simplefin_items_on_institution_name"
     t.index ["status"], name: "index_simplefin_items_on_status"
+  end
+
+  create_table "subscription_plans", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "account_id", null: false
+    t.decimal "amount", precision: 19, scale: 4, null: false
+    t.boolean "archived", default: false, null: false
+    t.boolean "auto_renew", default: true, null: false
+    t.string "billing_cycle", default: "monthly", null: false
+    t.date "cancelled_at"
+    t.datetime "created_at", null: false
+    t.string "currency", default: "USD", null: false
+    t.text "description"
+    t.date "expires_at"
+    t.boolean "failed_payment_alert_sent", default: false, null: false
+    t.uuid "family_id", null: false
+    t.date "last_renewal_at"
+    t.integer "max_usage_allowed"
+    t.jsonb "metadata", default: {}
+    t.string "name", null: false
+    t.date "next_billing_at", null: false
+    t.string "payment_method", default: "manual", null: false
+    t.text "payment_notes"
+    t.uuid "service_id", null: false
+    t.boolean "shared_within_family", default: false, null: false
+    t.date "started_at", null: false
+    t.string "status", default: "active", null: false
+    t.string "stripe_customer_id"
+    t.string "stripe_subscription_id"
+    t.date "trial_ends_at"
+    t.datetime "updated_at", null: false
+    t.integer "usage_count", default: 0
+    t.index ["account_id"], name: "index_subscription_plans_on_account_id"
+    t.index ["archived"], name: "index_subscription_plans_on_archived"
+    t.index ["family_id", "next_billing_at"], name: "index_subscription_plans_on_family_id_and_next_billing_at"
+    t.index ["family_id", "service_id"], name: "index_subscription_plans_on_family_id_and_service_id", unique: true
+    t.index ["family_id", "status"], name: "index_subscription_plans_on_family_id_and_status"
+    t.index ["family_id"], name: "index_subscription_plans_on_family_id"
+    t.index ["service_id"], name: "index_subscription_plans_on_service_id"
+    t.index ["status", "next_billing_at"], name: "index_subscription_plans_on_status_and_next_billing_at"
+    t.index ["stripe_subscription_id"], name: "index_subscription_plans_on_stripe_subscription_id", unique: true, where: "(stripe_subscription_id IS NOT NULL)"
   end
 
   create_table "subscriptions", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -1252,6 +1316,9 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_21_230249) do
   add_foreign_key "sessions", "users"
   add_foreign_key "simplefin_accounts", "simplefin_items"
   add_foreign_key "simplefin_items", "families"
+  add_foreign_key "subscription_plans", "accounts"
+  add_foreign_key "subscription_plans", "families"
+  add_foreign_key "subscription_plans", "services"
   add_foreign_key "subscriptions", "families"
   add_foreign_key "syncs", "syncs", column: "parent_id"
   add_foreign_key "taggings", "tags"

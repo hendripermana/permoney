@@ -1,0 +1,28 @@
+# Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
+
+netflix:
+  name: Netflix
+  description: Streaming video service
+  category: streaming
+  billing_frequency: monthly
+  avg_monthly_cost: 15.99
+  auto_detected: false
+  popular: true
+
+spotify:
+  name: Spotify Premium
+  description: Music streaming service
+  category: streaming
+  billing_frequency: monthly
+  avg_monthly_cost: 9.99
+  auto_detected: false
+  popular: true
+
+adobe:
+  name: Adobe Creative Cloud
+  description: Design software suite
+  category: software
+  billing_frequency: monthly
+  avg_monthly_cost: 52.99
+  auto_detected: false
+  popular: true
