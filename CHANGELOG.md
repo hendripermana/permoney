@@ -1,3 +1,9 @@
+## [0.16.3](https://github.com/hendripermana/permoney/compare/v0.16.2...v0.16.3) (2025-11-30)
+
+### Bug Fixes
+
+- fix: Subscription form FK violation and services category title wrapping (8dc5a0cc)
+
 ## [0.16.2](https://github.com/hendripermana/permoney/compare/v0.16.1...v0.16.2) (2025-11-30)
 
 ### Bug Fixes
