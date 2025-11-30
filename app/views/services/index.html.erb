@@ -29,12 +29,12 @@
         <% if category_services.any? %>
           <section class="space-y-2">
             <div class="flex items-center gap-2 px-3">
-              <h3 class="uppercase text-secondary font-medium text-xs flex items-center gap-2">
+              <h3 class="uppercase text-secondary font-medium text-xs flex items-center gap-2 whitespace-nowrap">
                 <span><%= ServiceMerchant.new(subscription_category: category).category_icon %></span>
                 <%= category.humanize %>
               </h3>
-              <span class="text-subdued text-xs">(<%= category_services.count %>)</span>
-              <%= render "shared/ruler", classes: "w-full" %>
+              <span class="text-subdued text-xs whitespace-nowrap">(<%= category_services.count %>)</span>
+              <%= render "shared/ruler", classes: "grow" %>
             </div>
 
             <div class="bg-container rounded-lg shadow-border-xs overflow-hidden">

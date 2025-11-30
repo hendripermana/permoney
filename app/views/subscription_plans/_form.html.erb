@@ -7,7 +7,7 @@
     <%= f.text_field :name, label: "Subscription Name", placeholder: "e.g., Netflix Premium", required: true %>
 
     <div class="flex items-center gap-2">
-      <%= f.collection_select :service_id, @services, :id, :name,
+      <%= f.collection_select :merchant_id, @services, :id, :name,
           { prompt: "Select a service...", label: "Service" },
           { required: true, class: "form-field__input" } %>
       <%= render DS::Link.new(
