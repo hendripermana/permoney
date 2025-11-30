@@ -1,6 +1,9 @@
 module SubscriptionPlansHelper
   def subscription_row_class(subscription)
-    if subscription.days_until_renewal <= 3 && subscription.active?
+    return "" unless subscription.present?
+
+    days_until = subscription.days_until_renewal
+    if days_until.present? && days_until <= 3 && subscription.active?
       "bg-red-50"
     elsif subscription.paused?
       "bg-yellow-50"
@@ -12,8 +15,8 @@ module SubscriptionPlansHelper
   end
 
   def service_icon(service)
-    return "📋" unless service
-    service.category_icon
+    return "📋" unless service.present?
+    service.category_icon || "📋"
   end
 
   def status_color_class(status)

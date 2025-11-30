@@ -16,10 +16,10 @@ class SubscriptionMailer < ApplicationMailer
       "Reminder: Your #{subscription.name} subscription renews in #{days_until_renewal} days"
     end
 
-    mail(
-      to: @family.primary_user&.email || @subscription.account&.users&.first&.email,
-      subject: subject
-    )
+    recipient = safe_recipient_email(@family)
+    return unless recipient.present?
+
+    mail(to: recipient, subject: subject)
   end
 
   # Payment failed notification
@@ -28,10 +28,10 @@ class SubscriptionMailer < ApplicationMailer
     @error_message = error_message
     @family = subscription.family
 
-    mail(
-      to: @family.primary_user&.email || @subscription.account&.users&.first&.email,
-      subject: "Payment failed for #{subscription.name}"
-    )
+    recipient = safe_recipient_email(@family)
+    return unless recipient.present?
+
+    mail(to: recipient, subject: "Payment failed for #{subscription.name}")
   end
 
   # Renewal confirmation
@@ -39,10 +39,10 @@ class SubscriptionMailer < ApplicationMailer
     @subscription = subscription
     @family = subscription.family
 
-    mail(
-      to: @family.primary_user&.email || @subscription.account&.users&.first&.email,
-      subject: "Your #{subscription.name} has been renewed!"
-    )
+    recipient = safe_recipient_email(@family)
+    return unless recipient.present?
+
+    mail(to: recipient, subject: "Your #{subscription.name} has been renewed!")
   end
 
   # Trial ending notification
@@ -51,10 +51,10 @@ class SubscriptionMailer < ApplicationMailer
     @days_left = days_left
     @family = subscription.family
 
-    mail(
-      to: @family.primary_user&.email || @subscription.account&.users&.first&.email,
-      subject: "Your #{subscription.name} trial ends in #{days_left} days"
-    )
+    recipient = safe_recipient_email(@family)
+    return unless recipient.present?
+
+    mail(to: recipient, subject: "Your #{subscription.name} trial ends in #{days_left} days")
   end
 
   # Trial expired notification
@@ -62,10 +62,10 @@ class SubscriptionMailer < ApplicationMailer
     @subscription = subscription
     @family = subscription.family
 
-    mail(
-      to: @family.primary_user&.email || @subscription.account&.users&.first&.email,
-      subject: "Your #{subscription.name} trial has expired"
-    )
+    recipient = safe_recipient_email(@family)
+    return unless recipient.present?
+
+    mail(to: recipient, subject: "Your #{subscription.name} trial has expired")
   end
 
   # Subscription cancelled confirmation
@@ -73,10 +73,10 @@ class SubscriptionMailer < ApplicationMailer
     @subscription = subscription
     @family = subscription.family
 
-    mail(
-      to: @family.primary_user&.email || @subscription.account&.users&.first&.email,
-      subject: "Your #{subscription.name} subscription has been cancelled"
-    )
+    recipient = safe_recipient_email(@family)
+    return unless recipient.present?
+
+    mail(to: recipient, subject: "Your #{subscription.name} subscription has been cancelled")
   end
 
   # Welcome email for new subscription
@@ -84,10 +84,10 @@ class SubscriptionMailer < ApplicationMailer
     @subscription = subscription
     @family = subscription.family
 
-    mail(
-      to: @family.primary_user&.email || @subscription.account&.users&.first&.email,
-      subject: "Welcome to #{subscription.name}!"
-    )
+    recipient = safe_recipient_email(@family)
+    return unless recipient.present?
+
+    mail(to: recipient, subject: "Welcome to #{subscription.name}!")
   end
 
   # Monthly subscription summary
@@ -104,6 +104,19 @@ class SubscriptionMailer < ApplicationMailer
   end
 
   private
+
+    # Safely get recipient email - only use family's primary user
+    # Never fall back to arbitrary account users for security
+    def safe_recipient_email(family)
+      return nil unless family.present?
+
+      primary_email = family.primary_user&.email
+      return primary_email if primary_email.present?
+
+      # Log warning if no primary user email found
+      Rails.logger.warn("No primary user email found for family #{family.id}")
+      nil
+    end
 
     def format_amount(amount, currency = "USD")
       number_to_currency(amount, unit: currency)

@@ -126,11 +126,7 @@ class SubscriptionRenewalJob < ApplicationJob
         currency: subscription.currency,
         date: Date.current,
         description: "Subscription renewal: #{subscription.name}",
-        category: Category.find_or_create_by(
-          name: "Subscription Fees",
-          family: subscription.family,
-          classification: "expense"
-        ),
+        category: find_subscription_category(subscription.family),
         metadata: {
           subscription_id: subscription.id,
           stripe_subscription_id: subscription.stripe_subscription_id,
@@ -149,11 +145,7 @@ class SubscriptionRenewalJob < ApplicationJob
         currency: subscription.currency,
         date: Date.current,
         description: "Manual subscription payment: #{subscription.name}",
-        category: Category.find_or_create_by(
-          name: "Subscription Fees",
-          family: subscription.family,
-          classification: "expense"
-        ),
+        category: find_subscription_category(subscription.family),
         metadata: {
           subscription_id: subscription.id,
           payment_method: subscription.payment_method
@@ -162,6 +154,25 @@ class SubscriptionRenewalJob < ApplicationJob
 
       # Update subscription with transaction reference
       subscription.update!(last_transaction_id: transaction.id)
+    end
+
+    # Safely find or create subscription category scoped to family
+    def find_subscription_category(family)
+      return nil unless family.present?
+
+      # First try to find existing category
+      category = family.categories.find_by(name: "Subscription Fees", classification: "expense")
+      return category if category.present?
+
+      # Create only if not exists, with proper validation
+      family.categories.create!(
+        name: "Subscription Fees",
+        classification: "expense"
+      )
+    rescue ActiveRecord::RecordInvalid => e
+      Rails.logger.warn("Failed to create Subscription Fees category: #{e.message}")
+      # Fall back to finding any expense category or nil
+      family.categories.find_by(classification: "expense")
     end
 
     def handle_renewal_failure(subscription, error)

@@ -72,7 +72,6 @@ class Service < ApplicationRecord
       { name: "Figma", category: "software", billing_frequency: "monthly", avg_monthly_cost: 15.00, popular: true },
 
       # Utilities
-      { name: "Netflix", category: "utilities", billing_frequency: "monthly", avg_monthly_cost: 85.00, popular: true },
       { name: "Electricity", category: "utilities", billing_frequency: "monthly", avg_monthly_cost: 150.00, popular: true },
       { name: "Internet", category: "utilities", billing_frequency: "monthly", avg_monthly_cost: 65.00, popular: true },
       { name: "Water", category: "utilities", billing_frequency: "monthly", avg_monthly_cost: 50.00, popular: true },

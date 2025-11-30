@@ -155,14 +155,18 @@ class SubscriptionAnalytics
   # Subscription health score (0-100)
   def subscription_health_score
     scores = []
+    total_active = @family.subscription_plans.active.count
 
     # Score based on payment method (auto billing = better)
-    auto_payment_score = (@family.subscription_plans.active.payment_method_auto.count.to_f / @family.subscription_plans.active.count * 50) || 0
+    auto_payment_score = if total_active.zero?
+      0
+    else
+      (@family.subscription_plans.active.payment_method_auto.count.to_f / total_active * 50)
+    end
     scores << auto_payment_score
 
     # Score based on upcoming renewals (fewer renewals due = better)
     upcoming_renewals = @family.subscription_plans.active.upcoming_renewals(7).count
-    total_active = @family.subscription_plans.active.count
     renewal_score = total_active.zero? ? 50 : [ 50 - (upcoming_renewals.to_f / total_active * 50), 0 ].max
     scores << renewal_score
 

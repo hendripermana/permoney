@@ -21,7 +21,7 @@ class SubscriptionPlansController < ApplicationController
 
     respond_to do |format|
       format.html
-      format.json { render json: @subscription_plans }
+      format.json { render json: safe_subscription_json(@subscription_plans) }
     end
   end
 
@@ -29,7 +29,7 @@ class SubscriptionPlansController < ApplicationController
   def show
     respond_to do |format|
       format.html
-      format.json { render json: @subscription_plan }
+      format.json { render json: safe_subscription_json(@subscription_plan) }
     end
   end
 
@@ -42,7 +42,7 @@ class SubscriptionPlansController < ApplicationController
 
     respond_to do |format|
       format.html
-      format.json { render json: @subscription_plan }
+      format.json { render json: safe_subscription_json(@subscription_plan) }
     end
   end
 
@@ -57,7 +57,7 @@ class SubscriptionPlansController < ApplicationController
           redirect_to subscription_plans_path,
           notice: "Subscription plan created successfully!"
         }
-        format.json { render json: @subscription_plan, status: :created }
+        format.json { render json: safe_subscription_json(@subscription_plan), status: :created }
       else
         @services = Service.popular.order(:name)
         @accounts = Current.family.accounts
@@ -75,7 +75,7 @@ class SubscriptionPlansController < ApplicationController
 
     respond_to do |format|
       format.html
-      format.json { render json: @subscription_plan }
+      format.json { render json: safe_subscription_json(@subscription_plan) }
     end
   end
 
@@ -87,7 +87,7 @@ class SubscriptionPlansController < ApplicationController
           redirect_to subscription_plans_path,
           notice: "Subscription plan updated successfully!"
         }
-        format.json { render json: @subscription_plan }
+        format.json { render json: safe_subscription_json(@subscription_plan) }
       else
         @services = Service.all.order(:name)
         @accounts = Current.family.accounts
@@ -119,7 +119,7 @@ class SubscriptionPlansController < ApplicationController
         redirect_to subscription_plans_path,
         notice: "Subscription plan paused!"
       }
-      format.json { render json: @subscription_plan }
+      format.json { render json: safe_subscription_json(@subscription_plan) }
     end
   end
 
@@ -132,7 +132,7 @@ class SubscriptionPlansController < ApplicationController
         redirect_to subscription_plans_path,
         notice: "Subscription plan resumed!"
       }
-      format.json { render json: @subscription_plan }
+      format.json { render json: safe_subscription_json(@subscription_plan) }
     end
   end
 
@@ -145,7 +145,7 @@ class SubscriptionPlansController < ApplicationController
         redirect_to subscription_plans_path,
         notice: "Subscription plan cancelled!"
       }
-      format.json { render json: @subscription_plan }
+      format.json { render json: safe_subscription_json(@subscription_plan) }
     end
   end
 
@@ -158,7 +158,7 @@ class SubscriptionPlansController < ApplicationController
         redirect_to subscription_plans_path,
         notice: "Subscription plan renewed!"
       }
-      format.json { render json: @subscription_plan }
+      format.json { render json: safe_subscription_json(@subscription_plan) }
     end
   end
 
@@ -181,6 +181,31 @@ class SubscriptionPlansController < ApplicationController
         :auto_renew, :payment_method, :shared_within_family,
         :max_usage_allowed, :payment_notes
       )
+    end
+
+    # Sanitize subscription data for JSON responses to prevent data exposure
+    def safe_subscription_json(subscriptions)
+      safe_attributes = %i[
+        id name description amount currency billing_cycle status
+        started_at trial_ends_at next_billing_at auto_renew
+        payment_method shared_within_family created_at updated_at
+      ]
+
+      if subscriptions.respond_to?(:map)
+        subscriptions.map { |sub| subscription_to_safe_hash(sub, safe_attributes) }
+      else
+        subscription_to_safe_hash(subscriptions, safe_attributes)
+      end
+    end
+
+    def subscription_to_safe_hash(subscription, safe_attributes)
+      hash = subscription.as_json(only: safe_attributes)
+      hash["service_name"] = subscription.service&.name
+      hash["service_category"] = subscription.service&.category
+      hash["account_name"] = subscription.account&.name
+      hash["days_until_renewal"] = subscription.days_until_renewal
+      hash["monthly_equivalent_amount"] = subscription.monthly_equivalent_amount
+      hash
     end
 
     def track_subscription_created(subscription_plan)

@@ -194,11 +194,14 @@ class SubscriptionPlan < ApplicationRecord
 
   # Lifecycle management
   def mark_as_renewed!
+    new_billing_date = calculate_next_billing_date
+    raise ArgumentError, "Cannot renew subscription without a valid billing date" unless new_billing_date.present?
+
     update!(
-      next_billing_at: calculate_next_billing_date,
+      next_billing_at: new_billing_date,
       last_renewal_at: Date.current,
       failed_payment_alert_sent: false,
-      usage_count: usage_count + 1
+      usage_count: (usage_count || 0) + 1
     )
   end
 
@@ -269,10 +272,11 @@ class SubscriptionPlan < ApplicationRecord
 
   # Integration with Stripe
   def create_stripe_subscription(customer_id)
-    return unless payment_method_auto?
+    return false unless payment_method_auto?
+    return false unless service.present?
 
     stripe_plan = service.stripe_plan_id
-    return unless stripe_plan.present?
+    return false unless stripe_plan.present?
 
     begin
       stripe_subscription = Stripe::Subscription.create({
@@ -345,6 +349,7 @@ class SubscriptionPlan < ApplicationRecord
 
     def calculate_trial_end_date
       # Default trial period of 7 days
+      return nil unless started_at.present?
       started_at + 7.days
     end
 end

@@ -20,17 +20,17 @@
       </div>
       
       <div class="content">
-        <h2>Hello <%= @family.primary_user&.first_name || 'there' %>!</h2>
+        <h2>Hello <%= @family&.primary_user&.first_name || 'there' %>!</h2>
         
         <p>This is a reminder that your subscription will renew soon:</p>
         
         <div class="subscription-details">
-          <h3><%= @subscription.service.category_icon %> <%= @subscription.name %></h3>
-          <p><strong>Service:</strong> <%= @subscription.service.name %></p>
-          <p><strong>Amount:</strong> <%= number_to_currency(@subscription.amount, locale: 'en') %> / <%= @subscription.billing_cycle %></p>
-          <p><strong>Next Billing Date:</strong> <%= @subscription.next_billing_at.strftime("%B %d, %Y") %></p>
+          <h3><%= @subscription.service&.category_icon || '📋' %> <%= @subscription.name %></h3>
+          <p><strong>Service:</strong> <%= @subscription.service&.name || 'Unknown Service' %></p>
+          <p><strong>Amount:</strong> <%= number_to_currency(@subscription.amount, unit: @subscription.currency + " ") %> / <%= @subscription.billing_cycle %></p>
+          <p><strong>Next Billing Date:</strong> <%= @subscription.next_billing_at&.strftime("%B %d, %Y") || 'Not scheduled' %></p>
           <% if @subscription.auto_renewal_enabled? %>
-            <p><strong>Payment Method:</strong> <%= @subscription.payment_method.humanize %></p>
+            <p><strong>Payment Method:</strong> <%= @subscription.payment_method&.humanize %></p>
           <% end %>
         </div>
         
