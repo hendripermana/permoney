@@ -35,7 +35,11 @@ class SubscriptionPlansController < ApplicationController
 
   # GET /subscription_plans/new
   def new
-    @subscription_plan = Current.family.subscription_plans.new
+    @subscription_plan = Current.family.subscription_plans.new(
+      currency: Current.family.currency,
+      started_at: Date.current,
+      next_billing_at: 1.month.from_now.to_date
+    )
     @services = load_services
     @accounts = Current.family.accounts
 

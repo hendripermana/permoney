@@ -20,8 +20,9 @@ class ServicesController < ApplicationController
 
     respond_to do |format|
       if @service.save
+        flash[:notice] = "Service created successfully!"
         format.html { redirect_to services_path, notice: "Service created successfully!" }
-        format.turbo_stream { redirect_to services_path, notice: "Service created successfully!" }
+        format.turbo_stream { render turbo_stream: turbo_stream.action(:redirect, services_path) }
       else
         @categories = ServiceMerchant::CATEGORIES
         format.html { render :new, status: :unprocessable_entity }
@@ -37,8 +38,9 @@ class ServicesController < ApplicationController
   def update
     respond_to do |format|
       if @service.update(service_params)
+        flash[:notice] = "Service updated successfully!"
         format.html { redirect_to services_path, notice: "Service updated successfully!" }
-        format.turbo_stream { redirect_to services_path, notice: "Service updated successfully!" }
+        format.turbo_stream { render turbo_stream: turbo_stream.action(:redirect, services_path) }
       else
         @categories = ServiceMerchant::CATEGORIES
         format.html { render :edit, status: :unprocessable_entity }

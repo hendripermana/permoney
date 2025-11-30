@@ -36,9 +36,9 @@
   </section>
 
   <section class="space-y-2">
-    <%= f.date_field :started_at, label: "Start Date", required: true, value: @subscription_plan.started_at || Date.current %>
+    <%= f.date_field :started_at, label: "Start Date", required: true %>
 
-    <%= f.date_field :next_billing_at, label: "Next Billing Date", required: true, value: @subscription_plan.next_billing_at || 1.month.from_now.to_date %>
+    <%= f.date_field :next_billing_at, label: "Next Billing Date", required: true %>
 
     <%= f.date_field :trial_ends_at, label: "Trial Ends (optional)" %>
   </section>
