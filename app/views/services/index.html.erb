@@ -1,0 +1,116 @@
+<header class="flex items-center justify-between">
+  <h1 class="text-primary text-xl font-medium">Services</h1>
+
+  <div class="flex items-center gap-2">
+    <%= render DS::Menu.new do |menu| %>
+      <% menu.with_item(
+          variant: "button",
+          text: "Add popular services",
+          href: seed_popular_services_path,
+          method: :post,
+          icon: "sparkles") %>
+    <% end %>
+
+    <%= render DS::Link.new(
+      text: "New Service",
+      variant: "primary",
+      icon: "plus",
+      href: new_service_path,
+      frame: :modal
+    ) %>
+  </div>
+</header>
+
+<div class="bg-container rounded-xl shadow-border-xs p-4">
+  <% if @services.any? %>
+    <div class="space-y-4">
+      <% Service.categories.keys.each do |category| %>
+        <% category_services = @services.where(category: category) %>
+        <% if category_services.any? %>
+          <section class="space-y-2">
+            <div class="flex items-center gap-2 px-3">
+              <h3 class="uppercase text-secondary font-medium text-xs flex items-center gap-2">
+                <span><%= Service.new(category: category).category_icon %></span>
+                <%= category.humanize %>
+              </h3>
+              <span class="text-subdued text-xs">(<%= category_services.count %>)</span>
+              <%= render "shared/ruler", classes: "w-full" %>
+            </div>
+
+            <div class="bg-container rounded-lg shadow-border-xs overflow-hidden">
+              <table class="w-full">
+                <tbody>
+                  <% category_services.each do |service| %>
+                    <tr class="border-b border-subdued last:border-0 hover:bg-surface-hover">
+                      <td class="py-3 px-4 text-sm">
+                        <div class="flex items-center gap-3">
+                          <span class="text-lg"><%= service.category_icon %></span>
+                          <div>
+                            <p class="font-medium text-primary"><%= service.name %></p>
+                            <p class="text-xs text-secondary"><%= service.billing_frequency.humanize %></p>
+                          </div>
+                        </div>
+                      </td>
+                      <td class="py-3 px-4 text-sm text-secondary">
+                        <% if service.avg_monthly_cost.present? && service.avg_monthly_cost > 0 %>
+                          ~<%= number_to_currency(service.avg_monthly_cost) %>/mo
+                        <% end %>
+                      </td>
+                      <td class="py-3 px-4 text-sm">
+                        <% if service.popular? %>
+                          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-700">
+                            Popular
+                          </span>
+                        <% end %>
+                      </td>
+                      <td class="py-3 px-4 text-sm text-right">
+                        <div class="flex items-center justify-end gap-2">
+                          <%= link_to edit_service_path(service), class: "text-secondary hover:text-primary", data: { turbo_frame: :modal } do %>
+                            <%= icon "pencil", size: "sm" %>
+                          <% end %>
+                          <% if service.subscription_plans.empty? %>
+                            <%= link_to service_path(service),
+                                data: { turbo_method: :delete, turbo_confirm: "Are you sure you want to delete this service?" },
+                                class: "text-secondary hover:text-destructive" do %>
+                              <%= icon "trash-2", size: "sm" %>
+                            <% end %>
+                          <% end %>
+                        </div>
+                      </td>
+                    </tr>
+                  <% end %>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        <% end %>
+      <% end %>
+    </div>
+  <% else %>
+    <div class="flex justify-center items-center py-20">
+      <div class="text-center flex flex-col items-center max-w-[500px]">
+        <p class="text-4xl mb-4">📦</p>
+        <h3 class="text-lg font-medium text-primary mb-2">No Services Yet</h3>
+        <p class="text-sm text-secondary mb-4">
+          Services are categories for your subscriptions like Netflix, Spotify, etc.
+          Add popular services or create your own.
+        </p>
+        <div class="flex items-center gap-2">
+          <%= render DS::Button.new(
+            text: "Add Popular Services",
+            href: seed_popular_services_path,
+            method: :post
+          ) %>
+
+          <%= render DS::Link.new(
+            text: "Create Custom",
+            variant: "outline",
+            icon: "plus",
+            href: new_service_path,
+            frame: :modal
+          ) %>
+        </div>
+      </div>
+    </div>
+  <% end %>
+</div>

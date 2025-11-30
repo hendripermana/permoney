@@ -49,6 +49,13 @@ Rails.application.routes.draw do
     end
   end
 
+  # Services management
+  resources :services, except: :show do
+    collection do
+      post :seed_popular
+    end
+  end
+
   # Legacy subscription routes (for backward compatibility)
   get "/subscriptions", to: redirect("/subscription_plans")
   get "/subscriptions/new", to: redirect("/subscription_plans/new")

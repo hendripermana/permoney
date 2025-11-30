@@ -1,0 +1,7 @@
+<%= turbo_frame_tag :modal do %>
+  <%= render DS::Modal.new(title: "New Service") do |modal| %>
+    <% modal.with_body do %>
+      <%= render "form" %>
+    <% end %>
+  <% end %>
+<% end %>

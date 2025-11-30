@@ -1,0 +1,39 @@
+<%= styled_form_with model: @service, class: "space-y-4" do |f| %>
+  <% if @service.errors.any? %>
+    <%= render "shared/form_errors", model: @service %>
+  <% end %>
+
+  <section class="space-y-2">
+    <%= f.text_field :name, label: "Service Name", placeholder: "e.g., Netflix, Spotify", required: true %>
+
+    <%= f.select :category,
+        @categories.map { |c| [c.humanize, c] },
+        { prompt: "Select a category...", label: "Category" },
+        { required: true } %>
+
+    <%= f.select :billing_frequency,
+        Service.billing_frequencies.keys.map { |b| [b.humanize, b] },
+        { label: "Default Billing Frequency" },
+        { required: true } %>
+  </section>
+
+  <%= render DS::Disclosure.new(title: "Optional Details") do %>
+    <div class="space-y-2">
+      <%= f.number_field :avg_monthly_cost, label: "Average Monthly Cost", min: 0, step: 0.01, placeholder: "0.00" %>
+
+      <%= f.text_field :website_url, label: "Website URL", placeholder: "https://example.com" %>
+
+      <%= f.text_area :description, label: "Description", placeholder: "Brief description of the service...", rows: 2 %>
+    </div>
+  <% end %>
+
+  <section class="flex items-center justify-end gap-4">
+    <%= render DS::Link.new(
+      text: "Cancel",
+      variant: "ghost",
+      href: services_path,
+      data: { turbo_frame: "_top" }
+    ) %>
+    <%= f.submit %>
+  </section>
+<% end %>
