@@ -1,3 +1,9 @@
+## [0.16.4](https://github.com/hendripermana/permoney/compare/v0.16.3...v0.16.4) (2025-11-30)
+
+### Bug Fixes
+
+- fix: Make service_id nullable on subscription_plans (e492f6c4)
+
 ## [0.16.3](https://github.com/hendripermana/permoney/compare/v0.16.2...v0.16.3) (2025-11-30)
 
 ### Bug Fixes
