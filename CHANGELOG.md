@@ -1,3 +1,10 @@
+## [0.16.0](https://github.com/hendripermana/permoney/compare/v0.15.0...v0.16.0) (2025-11-30)
+
+### Features
+
+- feat: Merge Service into Merchant, fix Brandfetch logos, remove recurring remnants (139282c4)
+- feat: Improve subscription form consistency and add Services management (b54b6448)
+
 ## [0.15.0](https://github.com/hendripermana/permoney/compare/v0.14.0...v0.15.0) (2025-11-30)
 
 ### Features
