@@ -1,3 +1,9 @@
+## [0.15.0](https://github.com/hendripermana/permoney/compare/v0.14.0...v0.15.0) (2025-11-30)
+
+### Features
+
+- feat: Add Subscription Manager to navigation (c1064117)
+
 ## [0.14.0](https://github.com/hendripermana/permoney/compare/v0.13.13...v0.14.0) (2025-11-30)
 
 ### Features
