@@ -106,6 +106,7 @@ en:
       preferences_label: Preferences
       profile_label: Profile Info
       recurring_transactions_label: Recurring
+      subscription_plans_label: Subscriptions
       rules_label: Rules
       security_label: Security
       self_hosting_label: Self-Hosting
