@@ -1,3 +1,9 @@
+## [0.16.2](https://github.com/hendripermana/permoney/compare/v0.16.1...v0.16.2) (2025-11-30)
+
+### Bug Fixes
+
+- fix: Currency defaulting and modal UX for services (8d4e9276)
+
 ## [0.16.1](https://github.com/hendripermana/permoney/compare/v0.16.0...v0.16.1) (2025-11-30)
 
 ### Bug Fixes
