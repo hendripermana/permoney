@@ -38,6 +38,20 @@ Rails.application.routes.draw do
   resource :current_session, only: %i[update]
 
   resource :registration, only: %i[new create]
+
+  # Subscription Manager routes
+  resources :subscription_plans do
+    member do
+      patch :pause
+      patch :resume
+      patch :cancel
+      patch :renew
+    end
+  end
+
+  # Legacy subscription routes (for backward compatibility)
+  get "/subscriptions", to: redirect("/subscription_plans")
+  get "/subscriptions/new", to: redirect("/subscription_plans/new")
   resources :sessions, only: %i[new create destroy]
   match "/auth/:provider/callback", to: "sessions#openid_connect", via: %i[get post]
   match "/auth/failure", to: "sessions#failure", via: %i[get post]

@@ -1,0 +1,255 @@
+<div class="container mx-auto px-4 py-6">
+  <div class="mb-8">
+    <nav class="flex items-center gap-2 text-sm text-secondary mb-4">
+      <%= link_to "Subscriptions", subscription_plans_path, class: "hover:text-primary" %>
+      <%= icon "chevron-right", class: "h-4 w-4" %>
+      <span class="text-primary"><%= @subscription_plan.name %></span>
+    </nav>
+
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <span class="text-4xl"><%= service_icon(@subscription_plan.service) %></span>
+        <div>
+          <h1 class="text-2xl font-bold text-primary"><%= @subscription_plan.name %></h1>
+          <p class="text-secondary"><%= @subscription_plan.service&.category&.humanize %></p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <%= link_to edit_subscription_plan_path(@subscription_plan), class: "inline-flex items-center gap-2 px-4 py-2 bg-container border border-primary rounded-lg hover:bg-gray-50 transition-colors" do %>
+          <%= icon "edit", class: "h-4 w-4" %>
+          Edit
+        <% end %>
+
+        <% if @subscription_plan.active? %>
+          <%= link_to pause_subscription_plan_path(@subscription_plan), method: :patch, class: "inline-flex items-center gap-2 px-4 py-2 bg-yellow-50 text-yellow-700 border border-yellow-200 rounded-lg hover:bg-yellow-100 transition-colors" do %>
+            <%= icon "pause", class: "h-4 w-4" %>
+            Pause
+          <% end %>
+        <% elsif @subscription_plan.paused? %>
+          <%= link_to resume_subscription_plan_path(@subscription_plan), method: :patch, class: "inline-flex items-center gap-2 px-4 py-2 bg-green-50 text-green-700 border border-green-200 rounded-lg hover:bg-green-100 transition-colors" do %>
+            <%= icon "play", class: "h-4 w-4" %>
+            Resume
+          <% end %>
+        <% end %>
+
+        <% unless @subscription_plan.cancelled? || @subscription_plan.expired? %>
+          <%= link_to cancel_subscription_plan_path(@subscription_plan), method: :patch, data: { confirm: "Are you sure you want to cancel this subscription?" }, class: "inline-flex items-center gap-2 px-4 py-2 bg-red-50 text-red-700 border border-red-200 rounded-lg hover:bg-red-100 transition-colors" do %>
+            <%= icon "x-circle", class: "h-4 w-4" %>
+            Cancel
+          <% end %>
+        <% end %>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div class="lg:col-span-2 space-y-6">
+      <div class="bg-container rounded-lg border border-primary p-6">
+        <h2 class="text-lg font-semibold text-primary mb-4">Subscription Details</h2>
+
+        <dl class="grid grid-cols-2 gap-4">
+          <div>
+            <dt class="text-sm text-secondary">Status</dt>
+            <dd class="mt-1">
+              <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium <%= @subscription_plan.status_badge_class %>">
+                <%= @subscription_plan.status_icon %> <%= @subscription_plan.status.humanize %>
+              </span>
+            </dd>
+          </div>
+
+          <div>
+            <dt class="text-sm text-secondary">Amount</dt>
+            <dd class="mt-1 text-lg font-semibold text-primary">
+              <%= number_to_currency(@subscription_plan.amount, unit: @subscription_plan.currency + " ") %>
+              <span class="text-sm font-normal text-secondary">/ <%= @subscription_plan.billing_cycle %></span>
+            </dd>
+          </div>
+
+          <div>
+            <dt class="text-sm text-secondary">Monthly Equivalent</dt>
+            <dd class="mt-1 text-primary"><%= @subscription_plan.formatted_monthly_amount %></dd>
+          </div>
+
+          <div>
+            <dt class="text-sm text-secondary">Billing Cycle</dt>
+            <dd class="mt-1 text-primary"><%= @subscription_plan.formatted_billing_cycle %></dd>
+          </div>
+
+          <div>
+            <dt class="text-sm text-secondary">Payment Method</dt>
+            <dd class="mt-1 text-primary"><%= @subscription_plan.payment_method.humanize %></dd>
+          </div>
+
+          <div>
+            <dt class="text-sm text-secondary">Auto-Renew</dt>
+            <dd class="mt-1 text-primary">
+              <% if @subscription_plan.auto_renew %>
+                <span class="text-green-600"><%= icon "check-circle", class: "h-4 w-4 inline" %> Enabled</span>
+              <% else %>
+                <span class="text-gray-500"><%= icon "x-circle", class: "h-4 w-4 inline" %> Disabled</span>
+              <% end %>
+            </dd>
+          </div>
+
+          <% if @subscription_plan.shared_within_family %>
+            <div>
+              <dt class="text-sm text-secondary">Shared</dt>
+              <dd class="mt-1 text-blue-600"><%= icon "users", class: "h-4 w-4 inline" %> Shared with family</dd>
+            </div>
+          <% end %>
+
+          <% if @subscription_plan.description.present? %>
+            <div class="col-span-2">
+              <dt class="text-sm text-secondary">Description</dt>
+              <dd class="mt-1 text-primary"><%= @subscription_plan.description %></dd>
+            </div>
+          <% end %>
+        </dl>
+      </div>
+
+      <div class="bg-container rounded-lg border border-primary p-6">
+        <h2 class="text-lg font-semibold text-primary mb-4">Schedule</h2>
+
+        <dl class="grid grid-cols-2 gap-4">
+          <div>
+            <dt class="text-sm text-secondary">Started</dt>
+            <dd class="mt-1 text-primary"><%= @subscription_plan.started_at.strftime("%B %d, %Y") %></dd>
+          </div>
+
+          <div>
+            <dt class="text-sm text-secondary">Next Billing Date</dt>
+            <dd class="mt-1 text-primary">
+              <%= @subscription_plan.next_billing_at&.strftime("%B %d, %Y") || "N/A" %>
+              <% if @subscription_plan.days_until_renewal <= 3 && @subscription_plan.active? %>
+                <span class="text-red-600 text-sm font-medium ml-2">(<%= @subscription_plan.days_until_renewal %> days away)</span>
+              <% end %>
+            </dd>
+          </div>
+
+          <% if @subscription_plan.trial_ends_at %>
+            <div>
+              <dt class="text-sm text-secondary">Trial Ends</dt>
+              <dd class="mt-1 text-primary">
+                <%= @subscription_plan.trial_ends_at.strftime("%B %d, %Y") %>
+                <% if @subscription_plan.trial_days_remaining.positive? %>
+                  <span class="text-blue-600 text-sm">(<%= @subscription_plan.trial_days_remaining %> days left)</span>
+                <% end %>
+              </dd>
+            </div>
+          <% end %>
+
+          <% if @subscription_plan.last_renewal_at %>
+            <div>
+              <dt class="text-sm text-secondary">Last Renewed</dt>
+              <dd class="mt-1 text-primary"><%= @subscription_plan.last_renewal_at.strftime("%B %d, %Y") %></dd>
+            </div>
+          <% end %>
+
+          <% if @subscription_plan.cancelled_at %>
+            <div>
+              <dt class="text-sm text-secondary">Cancelled On</dt>
+              <dd class="mt-1 text-red-600"><%= @subscription_plan.cancelled_at.strftime("%B %d, %Y") %></dd>
+            </div>
+          <% end %>
+        </dl>
+      </div>
+
+      <% if @subscription_plan.payment_notes.present? %>
+        <div class="bg-container rounded-lg border border-primary p-6">
+          <h2 class="text-lg font-semibold text-primary mb-4">Payment Notes</h2>
+          <p class="text-primary"><%= @subscription_plan.payment_notes %></p>
+        </div>
+      <% end %>
+    </div>
+
+    <div class="space-y-6">
+      <div class="bg-container rounded-lg border border-primary p-6">
+        <h2 class="text-lg font-semibold text-primary mb-4">Quick Stats</h2>
+
+        <div class="space-y-4">
+          <div>
+            <div class="text-sm text-secondary">Usage Count</div>
+            <div class="text-2xl font-bold text-primary"><%= @subscription_plan.usage_count %></div>
+          </div>
+
+          <% if @subscription_plan.max_usage_allowed %>
+            <div>
+              <div class="text-sm text-secondary">Max Usage Allowed</div>
+              <div class="text-lg text-primary"><%= @subscription_plan.max_usage_allowed %></div>
+            </div>
+          <% end %>
+
+          <div>
+            <div class="text-sm text-secondary">Days Until Renewal</div>
+            <div class="text-2xl font-bold <%= @subscription_plan.days_until_renewal <= 3 ? "text-red-600" : "text-primary" %>">
+              <%= @subscription_plan.days_until_renewal %>
+            </div>
+          </div>
+
+          <div>
+            <div class="text-sm text-secondary">Yearly Cost</div>
+            <div class="text-lg font-semibold text-primary">
+              <%= number_to_currency(@subscription_plan.yearly_equivalent_amount, unit: @subscription_plan.currency + " ") %>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-container rounded-lg border border-primary p-6">
+        <h2 class="text-lg font-semibold text-primary mb-4">Service Info</h2>
+
+        <% if @subscription_plan.service %>
+          <div class="space-y-3">
+            <div>
+              <div class="text-sm text-secondary">Service Name</div>
+              <div class="text-primary font-medium"><%= @subscription_plan.service.name %></div>
+            </div>
+
+            <div>
+              <div class="text-sm text-secondary">Category</div>
+              <div class="text-primary">
+                <span class="mr-1"><%= @subscription_plan.service.category_icon %></span>
+                <%= @subscription_plan.service.category.humanize %>
+              </div>
+            </div>
+
+            <% if @subscription_plan.service.website.present? %>
+              <div>
+                <div class="text-sm text-secondary">Website</div>
+                <%= link_to @subscription_plan.service.website, @subscription_plan.service.website, target: "_blank", class: "text-blue-600 hover:underline text-sm" %>
+              </div>
+            <% end %>
+          </div>
+        <% else %>
+          <p class="text-secondary">No service linked</p>
+        <% end %>
+      </div>
+
+      <div class="bg-container rounded-lg border border-primary p-6">
+        <h2 class="text-lg font-semibold text-primary mb-4">Payment Account</h2>
+
+        <% if @subscription_plan.account %>
+          <div class="space-y-3">
+            <div>
+              <div class="text-sm text-secondary">Account Name</div>
+              <div class="text-primary font-medium"><%= @subscription_plan.account.name %></div>
+            </div>
+
+            <div>
+              <div class="text-sm text-secondary">Account Type</div>
+              <div class="text-primary"><%= @subscription_plan.account.accountable_type.underscore.humanize %></div>
+            </div>
+
+            <%= link_to @subscription_plan.account, class: "inline-flex items-center gap-2 text-blue-600 hover:underline text-sm" do %>
+              <%= icon "external-link", class: "h-4 w-4" %>
+              View Account
+            <% end %>
+          </div>
+        <% else %>
+          <p class="text-secondary">No account linked</p>
+        <% end %>
+      </div>
+    </div>
+  </div>
+</div>

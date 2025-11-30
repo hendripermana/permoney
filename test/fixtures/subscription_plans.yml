@@ -1,0 +1,59 @@
+# Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
+
+netflix_subscription:
+  family: dylan_family
+  service: netflix
+  account: depository
+  name: Netflix Premium
+  description: Family streaming plan
+  status: active
+  billing_cycle: monthly
+  amount: 22.99
+  currency: USD
+  started_at: <%= 6.months.ago.to_date %>
+  next_billing_at: <%= 15.days.from_now.to_date %>
+  payment_method: auto
+  auto_renew: true
+  failed_payment_alert_sent: false
+  usage_count: 6
+  shared_within_family: true
+  archived: false
+
+spotify_subscription:
+  family: dylan_family
+  service: spotify
+  account: credit_card
+  name: Spotify Premium
+  description: Music streaming
+  status: active
+  billing_cycle: monthly
+  amount: 9.99
+  currency: USD
+  started_at: <%= 3.months.ago.to_date %>
+  next_billing_at: <%= 2.days.from_now.to_date %>
+  payment_method: manual
+  auto_renew: true
+  failed_payment_alert_sent: false
+  usage_count: 3
+  shared_within_family: false
+  archived: false
+
+adobe_subscription:
+  family: dylan_family
+  service: adobe
+  account: credit_card
+  name: Adobe Creative Cloud
+  description: Design tools
+  status: trial
+  billing_cycle: annual
+  amount: 599.88
+  currency: USD
+  started_at: <%= 7.days.ago.to_date %>
+  trial_ends_at: <%= 7.days.from_now.to_date %>
+  next_billing_at: <%= 14.days.from_now.to_date %>
+  payment_method: auto
+  auto_renew: true
+  failed_payment_alert_sent: false
+  usage_count: 0
+  shared_within_family: false
+  archived: false

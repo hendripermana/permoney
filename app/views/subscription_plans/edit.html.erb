@@ -1,0 +1,23 @@
+<div class="container mx-auto px-4 py-6">
+  <div class="mb-8">
+    <nav class="flex items-center gap-2 text-sm text-secondary mb-4">
+      <%= link_to "Subscriptions", subscription_plans_path, class: "hover:text-primary" %>
+      <%= icon "chevron-right", class: "h-4 w-4" %>
+      <%= link_to @subscription_plan.name, subscription_plan_path(@subscription_plan), class: "hover:text-primary" %>
+      <%= icon "chevron-right", class: "h-4 w-4" %>
+      <span class="text-primary">Edit</span>
+    </nav>
+
+    <div class="flex items-center gap-3">
+      <%= icon "edit", class: "h-8 w-8 text-blue-600" %>
+      <div>
+        <h1 class="text-2xl font-bold text-primary">Edit <%= @subscription_plan.name %></h1>
+        <p class="text-secondary">Update subscription details</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="max-w-3xl">
+    <%= render "form" %>
+  </div>
+</div>
