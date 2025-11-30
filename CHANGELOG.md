@@ -1,3 +1,9 @@
+## [0.16.1](https://github.com/hendripermana/permoney/compare/v0.16.0...v0.16.1) (2025-11-30)
+
+### Bug Fixes
+
+- fix: Use DS::Dialog instead of non-existent DS::Modal for services views (5847f9a6)
+
 ## [0.16.0](https://github.com/hendripermana/permoney/compare/v0.15.0...v0.16.0) (2025-11-30)
 
 ### Features
