@@ -32,14 +32,21 @@ class Family::AutoMerchantDetector
 
       merchant_id = user_merchants_input.find { |m| m[:name] == auto_detection&.business_name }&.dig(:id)
 
-      if merchant_id.nil? && auto_detection&.business_url.present? && auto_detection&.business_name.present? && Setting.brand_fetch_client_id.present?
-        ai_provider_merchant = ProviderMerchant.find_or_create_by!(
+      if merchant_id.nil? && auto_detection&.business_url.present? && auto_detection&.business_name.present?
+        ai_provider_merchant = ProviderMerchant.find_or_initialize_by(
           source: "ai",
-          name: auto_detection.business_name,
-          website_url: auto_detection.business_url,
-        ) do |pm|
-          pm.logo_url = "#{default_logo_provider_url}/#{auto_detection.business_url}/icon/fallback/lettermark/w/40/h/40?c=#{Setting.brand_fetch_client_id}"
+          name: auto_detection.business_name
+        )
+
+        # Always update website_url and logo if we have better data
+        ai_provider_merchant.website_url ||= auto_detection.business_url
+
+        # Set or update logo_url if Brandfetch is configured
+        if Setting.brand_fetch_client_id.present? && ai_provider_merchant.logo_url.blank?
+          ai_provider_merchant.logo_url = brandfetch_logo_url(auto_detection.business_url)
         end
+
+        ai_provider_merchant.save!
       end
 
       merchant_id = merchant_id || ai_provider_merchant&.id
@@ -66,8 +73,9 @@ class Family::AutoMerchantDetector
       Provider::Registry.get_provider(:openai)
     end
 
-    def default_logo_provider_url
-      "https://cdn.brandfetch.io"
+    def brandfetch_logo_url(domain)
+      return nil unless Setting.brand_fetch_client_id.present?
+      "https://cdn.brandfetch.io/#{domain}/icon/fallback/lettermark/w/40/h/40?c=#{Setting.brand_fetch_client_id}"
     end
 
     def user_merchants_input

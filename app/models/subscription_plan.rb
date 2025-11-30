@@ -2,8 +2,14 @@ class SubscriptionPlan < ApplicationRecord
   include Monetizable
 
   belongs_to :family
-  belongs_to :service
+  belongs_to :service, optional: true  # Deprecated: Use merchant instead
+  belongs_to :merchant, optional: true # New: ServiceMerchant reference
   belongs_to :account
+
+  # Returns the associated service (ServiceMerchant or legacy Service)
+  def service_merchant
+    merchant || service
+  end
 
   # Include monetize after associations for proper setup
   monetize :amount
@@ -273,9 +279,11 @@ class SubscriptionPlan < ApplicationRecord
   # Integration with Stripe
   def create_stripe_subscription(customer_id)
     return false unless payment_method_auto?
-    return false unless service.present?
 
-    stripe_plan = service.stripe_plan_id
+    sm = service_merchant
+    return false unless sm.present?
+
+    stripe_plan = sm.respond_to?(:stripe_plan_id) ? sm.stripe_plan_id : nil
     return false unless stripe_plan.present?
 
     begin

@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2025_11_29_043428) do
+ActiveRecord::Schema[8.1].define(version: 2025_11_30_120025) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -616,20 +616,32 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_29_043428) do
   end
 
   create_table "merchants", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.decimal "avg_monthly_cost", precision: 19, scale: 4
+    t.string "billing_frequency"
     t.string "color"
     t.datetime "created_at", null: false
+    t.text "description"
     t.uuid "family_id"
     t.string "logo_url"
     t.string "name", null: false
+    t.boolean "popular", default: false
     t.string "provider_merchant_id"
     t.string "source"
+    t.string "stripe_plan_id"
+    t.string "stripe_product_id"
+    t.string "subscription_category"
+    t.string "support_email"
     t.string "type", null: false
     t.datetime "updated_at", null: false
     t.string "website_url"
     t.index ["family_id", "name"], name: "index_merchants_on_family_id_and_name", unique: true, where: "((type)::text = 'FamilyMerchant'::text)"
     t.index ["family_id"], name: "index_merchants_on_family_id"
+    t.index ["popular"], name: "index_merchants_on_popular"
     t.index ["provider_merchant_id", "source"], name: "index_merchants_on_provider_merchant_id_and_source", unique: true, where: "((provider_merchant_id IS NOT NULL) AND ((type)::text = 'ProviderMerchant'::text))"
     t.index ["source", "name"], name: "index_merchants_on_source_and_name", unique: true, where: "((type)::text = 'ProviderMerchant'::text)"
+    t.index ["stripe_plan_id"], name: "index_merchants_on_stripe_plan_id", unique: true, where: "(stripe_plan_id IS NOT NULL)"
+    t.index ["stripe_product_id"], name: "index_merchants_on_stripe_product_id", unique: true, where: "(stripe_product_id IS NOT NULL)"
+    t.index ["subscription_category"], name: "index_merchants_on_subscription_category"
     t.index ["type"], name: "index_merchants_on_type"
   end
 
@@ -1071,6 +1083,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_29_043428) do
     t.uuid "family_id", null: false
     t.date "last_renewal_at"
     t.integer "max_usage_allowed"
+    t.uuid "merchant_id"
     t.jsonb "metadata", default: {}
     t.string "name", null: false
     t.date "next_billing_at", null: false
@@ -1091,6 +1104,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_29_043428) do
     t.index ["family_id", "service_id"], name: "index_subscription_plans_on_family_id_and_service_id", unique: true
     t.index ["family_id", "status"], name: "index_subscription_plans_on_family_id_and_status"
     t.index ["family_id"], name: "index_subscription_plans_on_family_id"
+    t.index ["merchant_id"], name: "index_subscription_plans_on_merchant_id"
     t.index ["service_id"], name: "index_subscription_plans_on_service_id"
     t.index ["status", "next_billing_at"], name: "index_subscription_plans_on_status_and_next_billing_at"
     t.index ["stripe_subscription_id"], name: "index_subscription_plans_on_stripe_subscription_id", unique: true, where: "(stripe_subscription_id IS NOT NULL)"
@@ -1318,6 +1332,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_29_043428) do
   add_foreign_key "simplefin_items", "families"
   add_foreign_key "subscription_plans", "accounts"
   add_foreign_key "subscription_plans", "families"
+  add_foreign_key "subscription_plans", "merchants", on_delete: :nullify
   add_foreign_key "subscription_plans", "services"
   add_foreign_key "subscriptions", "families"
   add_foreign_key "syncs", "syncs", column: "parent_id"

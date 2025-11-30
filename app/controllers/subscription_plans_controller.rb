@@ -6,7 +6,7 @@ class SubscriptionPlansController < ApplicationController
   # GET /subscription_plans
   def index
     @subscription_plans = Current.family.subscription_plans
-      .includes(:service, :account)
+      .includes(:service, :merchant, :account)
       .unarchived
       .order(:name)
 
@@ -36,9 +36,8 @@ class SubscriptionPlansController < ApplicationController
   # GET /subscription_plans/new
   def new
     @subscription_plan = Current.family.subscription_plans.new
-    @services = Service.popular.order(:name)
+    @services = load_services
     @accounts = Current.family.accounts
-    @categories = Service.categories.keys
 
     respond_to do |format|
       format.html
@@ -59,9 +58,8 @@ class SubscriptionPlansController < ApplicationController
         }
         format.json { render json: safe_subscription_json(@subscription_plan), status: :created }
       else
-        @services = Service.popular.order(:name)
+        @services = load_services
         @accounts = Current.family.accounts
-        @categories = Service.categories.keys
         format.html { render :new, status: :unprocessable_entity }
         format.json { render json: @subscription_plan.errors, status: :unprocessable_entity }
       end
@@ -70,7 +68,7 @@ class SubscriptionPlansController < ApplicationController
 
   # GET /subscription_plans/1/edit
   def edit
-    @services = Service.all.order(:name)
+    @services = load_services
     @accounts = Current.family.accounts
 
     respond_to do |format|
@@ -175,7 +173,7 @@ class SubscriptionPlansController < ApplicationController
 
     def subscription_plan_params
       params.require(:subscription_plan).permit(
-        :name, :description, :service_id, :account_id,
+        :name, :description, :service_id, :merchant_id, :account_id,
         :amount, :currency, :billing_cycle, :status,
         :started_at, :trial_ends_at, :next_billing_at,
         :auto_renew, :payment_method, :shared_within_family,
@@ -199,23 +197,40 @@ class SubscriptionPlansController < ApplicationController
     end
 
     def subscription_to_safe_hash(subscription, safe_attributes)
+      sm = subscription.service_merchant
       hash = subscription.as_json(only: safe_attributes)
-      hash["service_name"] = subscription.service&.name
-      hash["service_category"] = subscription.service&.category
+      hash["service_name"] = sm&.name
+      hash["service_category"] = sm.respond_to?(:subscription_category) ? sm.subscription_category : sm&.category
       hash["account_name"] = subscription.account&.name
       hash["days_until_renewal"] = subscription.days_until_renewal
       hash["monthly_equivalent_amount"] = subscription.monthly_equivalent_amount
       hash
     end
 
+    # Load services from both ServiceMerchant and legacy Service tables
+    def load_services
+      # Prefer ServiceMerchant, fallback to Service for backward compatibility
+      service_merchants = ServiceMerchant.popular.order(:name)
+
+      if service_merchants.any?
+        service_merchants
+      elsif defined?(Service) && Service.table_exists?
+        Service.popular.order(:name)
+      else
+        []
+      end
+    end
+
     def track_subscription_created(subscription_plan)
+      sm = subscription_plan.service_merchant
+
       # Analytics tracking
       if defined?(Ahoy)
         ahoy.track(
           "subscription_created",
           {
             subscription_id: subscription_plan.id,
-            service: subscription_plan.service&.name,
+            service: sm&.name,
             amount: subscription_plan.amount,
             billing_cycle: subscription_plan.billing_cycle,
             payment_method: subscription_plan.payment_method
@@ -228,7 +243,7 @@ class SubscriptionPlansController < ApplicationController
         "Subscription created",
         level: :info,
         tags: {
-          service: subscription_plan.service&.name,
+          service: sm&.name,
           billing_cycle: subscription_plan.billing_cycle
         },
         extra: {

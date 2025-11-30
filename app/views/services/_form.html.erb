@@ -1,4 +1,4 @@
-<%= styled_form_with model: @service, class: "space-y-4" do |f| %>
+<%= styled_form_with model: @service, url: @service.new_record? ? services_path : service_path(@service), class: "space-y-4" do |f| %>
   <% if @service.errors.any? %>
     <%= render "shared/form_errors", model: @service %>
   <% end %>
@@ -6,13 +6,13 @@
   <section class="space-y-2">
     <%= f.text_field :name, label: "Service Name", placeholder: "e.g., Netflix, Spotify", required: true %>
 
-    <%= f.select :category,
+    <%= f.select :subscription_category,
         @categories.map { |c| [c.humanize, c] },
         { prompt: "Select a category...", label: "Category" },
         { required: true } %>
 
     <%= f.select :billing_frequency,
-        Service.billing_frequencies.keys.map { |b| [b.humanize, b] },
+        ServiceMerchant::BILLING_FREQUENCIES.map { |b| [b.humanize, b] },
         { label: "Default Billing Frequency" },
         { required: true } %>
   </section>

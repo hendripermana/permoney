@@ -24,20 +24,6 @@ class TransactionsController < ApplicationController
                        .references(:entries, :accounts) # Force join for better performance
 
     @pagy, @transactions = pagy(:offset, base_scope, limit: per_page)
-
-    # PERFORMANCE: Cache projected recurring transactions for 5 minutes
-    @projected_recurring = Rails.cache.fetch(
-      "family:#{Current.family.id}:projected_recurring:#{Date.current}",
-      expires_in: 5.minutes
-    ) do
-      Current.family.recurring_transactions
-                    .active
-                    .where("next_expected_date <= ? AND next_expected_date >= ?",
-                           1.month.from_now.to_date,
-                           Date.current)
-                    .includes(:merchant)
-                    .to_a # Materialize to cache
-    end
   end
 
   def clear_filter

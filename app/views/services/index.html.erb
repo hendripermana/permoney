@@ -24,13 +24,13 @@
 <div class="bg-container rounded-xl shadow-border-xs p-4">
   <% if @services.any? %>
     <div class="space-y-4">
-      <% Service.categories.keys.each do |category| %>
-        <% category_services = @services.where(category: category) %>
+      <% ServiceMerchant::CATEGORIES.each do |category| %>
+        <% category_services = @services.where(subscription_category: category) %>
         <% if category_services.any? %>
           <section class="space-y-2">
             <div class="flex items-center gap-2 px-3">
               <h3 class="uppercase text-secondary font-medium text-xs flex items-center gap-2">
-                <span><%= Service.new(category: category).category_icon %></span>
+                <span><%= ServiceMerchant.new(subscription_category: category).category_icon %></span>
                 <%= category.humanize %>
               </h3>
               <span class="text-subdued text-xs">(<%= category_services.count %>)</span>
@@ -44,10 +44,14 @@
                     <tr class="border-b border-subdued last:border-0 hover:bg-surface-hover">
                       <td class="py-3 px-4 text-sm">
                         <div class="flex items-center gap-3">
-                          <span class="text-lg"><%= service.category_icon %></span>
+                          <% if service.display_logo_url.present? %>
+                            <%= image_tag service.display_logo_url, class: "w-8 h-8 rounded-full", loading: "lazy" %>
+                          <% else %>
+                            <span class="text-lg"><%= service.category_icon %></span>
+                          <% end %>
                           <div>
                             <p class="font-medium text-primary"><%= service.name %></p>
-                            <p class="text-xs text-secondary"><%= service.billing_frequency.humanize %></p>
+                            <p class="text-xs text-secondary"><%= service.billing_frequency&.humanize || "Monthly" %></p>
                           </div>
                         </div>
                       </td>
