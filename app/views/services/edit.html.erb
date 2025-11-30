@@ -1,7 +1,6 @@
-<%= turbo_frame_tag :modal do %>
-  <%= render DS::Modal.new(title: "Edit Service") do |modal| %>
-    <% modal.with_body do %>
-      <%= render "form" %>
-    <% end %>
+<%= render DS::Dialog.new do |dialog| %>
+  <% dialog.with_header(title: "Edit Service") %>
+  <% dialog.with_body do %>
+    <%= render "form" %>
   <% end %>
 <% end %>
