@@ -1,3 +1,17 @@
+## [0.14.0](https://github.com/hendripermana/permoney/compare/v0.13.13...v0.14.0) (2025-11-30)
+
+### Features
+
+- feat: Add subscription manager feature (6a04cbea)
+
+### Bug Fixes
+
+- fix: Address security and null safety issues from PR review (c0c24569)
+
+### Other Changes
+
+- Merge pull request #79 from hendripermana/feature/subscription-manager (418036be)
+
 ## [0.13.13](https://github.com/hendripermana/permoney/compare/v0.13.12...v0.13.13) (2025-11-28)
 
 ### Other Changes
