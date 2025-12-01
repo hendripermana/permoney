@@ -315,7 +315,7 @@ class TransactionsController < ApplicationController
       end
 
       transaction = @entry.entryable
-      if transaction.is_a?(Transaction)
+      if transaction.present? && transaction.is_a?(Transaction)
         service_merchant = subscription_plan.service_merchant
         transaction.merchant ||= service_merchant if service_merchant.is_a?(Merchant)
       end
@@ -344,11 +344,19 @@ class TransactionsController < ApplicationController
       subscription = Current.family.subscription_plans.find_by(id: subscription_plan_id)
       return unless subscription
 
-      # Only treat outflows, matching currency and account, as valid
-      # subscription payments.
+      # Only treat outflows, matching currency, account, and a similar amount
+      # as valid subscription payments.
       return unless entry.amount.positive?
       return unless entry.currency == subscription.currency
       return unless subscription.account_id == entry.account_id
+
+      # Require the payment amount to be reasonably close to the
+      # subscription amount so that unrelated expenses do not
+      # accidentally advance the billing schedule. We accept payments
+      # within ~10% of the configured subscription amount.
+      amount_tolerance = subscription.amount / 10
+      difference = (entry.amount - subscription.amount).abs
+      return unless difference <= amount_tolerance
 
       subscription.record_manual_payment!(paid_at: entry.date)
     rescue StandardError => e
