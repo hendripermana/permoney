@@ -94,10 +94,32 @@ class SubscriptionPlanTest < ActiveSupport::TestCase
   end
 
   test "status badge class returns correct class for active status" do
-    assert_equal "bg-green-100 text-green-800", @subscription.status_badge_class
+    assert_equal "bg-green-100 text-green-800 theme-dark:bg-green-900/20 theme-dark:text-green-200", @subscription.status_badge_class
   end
 
   test "status badge class returns correct class for trial status" do
-    assert_equal "bg-blue-100 text-blue-800", @trial_subscription.status_badge_class
+    assert_equal "bg-blue-100 text-blue-800 theme-dark:bg-blue-900/20 theme-dark:text-blue-200", @trial_subscription.status_badge_class
+  end
+
+  test "record_manual_payment advances billing when payment is near billing date" do
+    @subscription.update!(next_billing_at: Date.current)
+    original_next = @subscription.next_billing_at
+
+    assert_changes -> { @subscription.reload.next_billing_at } do
+      @subscription.record_manual_payment!(paid_at: Date.current)
+    end
+
+    assert_equal original_next.next_month, @subscription.next_billing_at
+  end
+
+  test "record_manual_payment ignores payments far from billing date" do
+    @subscription.update!(next_billing_at: Date.current + 30.days)
+    original_next = @subscription.next_billing_at
+
+    assert_no_changes -> { @subscription.reload.next_billing_at } do
+      @subscription.record_manual_payment!(paid_at: Date.current)
+    end
+
+    assert_equal original_next, @subscription.next_billing_at
   end
 end

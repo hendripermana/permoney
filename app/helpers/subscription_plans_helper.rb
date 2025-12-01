@@ -1,22 +1,38 @@
 module SubscriptionPlansHelper
   def subscription_row_class(subscription)
-    return "" unless subscription.present?
+    base = "transition-colors"
+    return base unless subscription.present?
 
     days_until = subscription.days_until_renewal
+
     if days_until.present? && days_until <= 3 && subscription.active?
-      "bg-red-50"
+      # Highlight subscriptions that are due soon while staying theme-aware
+      class_names(base, "bg-orange-50 theme-dark:bg-orange-900/20")
     elsif subscription.paused?
-      "bg-yellow-50"
+      class_names(base, "bg-yellow-50 theme-dark:bg-yellow-900/20")
     elsif subscription.cancelled? || subscription.expired?
-      "bg-gray-50"
+      class_names(base, "bg-gray-50 theme-dark:bg-gray-900/40")
     else
-      ""
+      base
     end
   end
 
+  # Returns the emoji category icon for either a legacy Service or a ServiceMerchant
   def service_icon(service)
     return "📋" unless service.present?
-    service.category_icon || "📋"
+    service.respond_to?(:category_icon) ? service.category_icon : "📋"
+  end
+
+  # Normalized category label for a subscription's service/merchant
+  def subscription_service_category(subscription)
+    service = subscription.service_merchant
+    return nil unless service.present?
+
+    if service.respond_to?(:subscription_category)
+      service.subscription_category
+    else
+      service.respond_to?(:category) ? service.category : nil
+    end
   end
 
   def status_color_class(status)

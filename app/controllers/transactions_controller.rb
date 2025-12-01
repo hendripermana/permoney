@@ -5,6 +5,15 @@ class TransactionsController < ApplicationController
 
   def new
     super
+
+    if params[:subscription_plan_id].present?
+      @subscription_plan = Current.family.subscription_plans
+                                      .includes(:account, :merchant, :service)
+                                      .find_by(id: params[:subscription_plan_id])
+
+      prefill_entry_from_subscription(@subscription_plan) if @subscription_plan
+    end
+
     @income_categories = Current.family.categories.incomes.alphabetically
     @expense_categories = Current.family.categories.expenses.alphabetically
   end
@@ -83,11 +92,11 @@ class TransactionsController < ApplicationController
         #   account.asset? ? -entry_flows : entry_flows
         #
         # For ASSET accounts (checking, savings):
-        #   - Expense (+100): signed_flows = -100 → balance DECREASES by 100 ✓
-        #   - Income (-200): signed_flows = -(-200) = +200 → balance INCREASES by 200 ✓
+        #   - Expense (+100): signed_flows = -100  balance DECREASES by 100 04
+        #   - Income (-200): signed_flows = -(-200) = +200  balance INCREASES by 200 04
         # For LIABILITY accounts (credit card, loan):
-        #   - Expense (+100): signed_flows = +100 → balance INCREASES by 100 (more debt) ✓
-        #   - Payment (-200): signed_flows = -200 → balance DECREASES by 200 (less debt) ✓
+        #   - Expense (+100): signed_flows = +100  balance INCREASES by 100 (more debt) 04
+        #   - Payment (-200): signed_flows = -200  balance DECREASES by 200 (less debt) 04
         flows_factor = account.asset? ? 1 : -1
         balance_change = -entry_amount * flows_factor  # CRITICAL: Must negate entry_amount!
         new_balance = account.balance + balance_change
@@ -122,6 +131,8 @@ class TransactionsController < ApplicationController
 
       @entry.lock_saved_attributes!
       @entry.transaction.lock_attr!(:tag_ids) if @entry.transaction.tags.any?
+
+      link_subscription_payment(@entry)
 
       flash[:notice] = "Transaction created"
 
@@ -290,6 +301,26 @@ class TransactionsController < ApplicationController
       params[:per_page].to_i.positive? ? params[:per_page].to_i : 20
     end
 
+    def prefill_entry_from_subscription(subscription_plan)
+      return unless subscription_plan
+
+      @entry.account ||= subscription_plan.account
+      @entry.currency ||= subscription_plan.currency
+      @entry.amount ||= subscription_plan.amount
+
+      # Prefer subscription's next billing date when available so the
+      # manual payment aligns with the expected charge date.
+      if subscription_plan.next_billing_at.present?
+        @entry.date ||= subscription_plan.next_billing_at
+      end
+
+      transaction = @entry.entryable
+      if transaction.is_a?(Transaction)
+        service_merchant = subscription_plan.service_merchant
+        transaction.merchant ||= service_merchant if service_merchant.is_a?(Merchant)
+      end
+    end
+
     def needs_rule_notification?(transaction)
       return false if Current.user.rule_prompts_disabled
 
@@ -300,6 +331,31 @@ class TransactionsController < ApplicationController
 
       transaction.saved_change_to_category_id? && transaction.category_id.present? &&
       transaction.eligible_for_category_rule?
+    end
+
+    # When a transaction is created from the Subscription Manager, link it
+    # back to the corresponding SubscriptionPlan and advance the billing
+    # schedule when appropriate. This keeps subscription renewals in sync
+    # with real-world manual payments without introducing tight coupling.
+    def link_subscription_payment(entry)
+      subscription_plan_id = params[:subscription_plan_id]
+      return unless subscription_plan_id.present?
+
+      subscription = Current.family.subscription_plans.find_by(id: subscription_plan_id)
+      return unless subscription
+
+      # Only treat outflows, matching currency and account, as valid
+      # subscription payments.
+      return unless entry.amount.positive?
+      return unless entry.currency == subscription.currency
+      return unless subscription.account_id == entry.account_id
+
+      subscription.record_manual_payment!(paid_at: entry.date)
+    rescue StandardError => e
+      Rails.logger.warn(
+        "[SubscriptionPaymentLink] Failed to link entry #{entry.id} " \
+        "to subscription #{subscription_plan_id}: #{e.class}: #{e.message}"
+      )
     end
 
     def entry_params

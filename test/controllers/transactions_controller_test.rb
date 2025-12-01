@@ -74,6 +74,35 @@ class TransactionsControllerTest < ActionDispatch::IntegrationTest
     assert_enqueued_with(job: SyncJob)
   end
 
+  test "creating transaction with subscription_plan_id advances subscription billing date" do
+    subscription = subscription_plans(:spotify_subscription)
+    account = subscription.account
+    original_next_billing = subscription.next_billing_at
+
+    assert_difference [ "Entry.count", "Transaction.count" ], 1 do
+      post transactions_url, params: {
+        subscription_plan_id: subscription.id,
+        entry: {
+          account_id: account.id,
+          name: "Spotify payment",
+          date: Date.current,
+          currency: subscription.currency,
+          amount: subscription.amount,
+          nature: "outflow",
+          entryable_type: @entry.entryable_type,
+          entryable_attributes: {
+            tag_ids: [],
+            category_id: Category.first.id,
+            merchant_id: merchants(:netflix).id
+          }
+        }
+      }
+    end
+
+    subscription.reload
+    assert_equal original_next_billing.next_month, subscription.next_billing_at
+  end
+
   test "transaction count represents filtered total" do
     family = families(:empty)
     sign_in users(:empty)
