@@ -218,14 +218,21 @@
 
                 <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
                   <%= link_to "View", subscription_plan_path(subscription), class: "text-link hover:text-primary" %>
-                  <%= link_to "Record payment",
-                              new_transaction_path(
-                                account_id: subscription.account_id,
-                                nature: "outflow",
-                                subscription_plan_id: subscription.id
-                              ),
-                              class: "text-link hover:text-primary",
-                              data: { turbo_frame: :modal } %>
+                  <% if subscription.active_or_trial? %>
+                    <%= link_to "Record payment",
+                                new_transaction_path(
+                                  account_id: subscription.account_id,
+                                  nature: "outflow",
+                                  subscription_plan_id: subscription.id
+                                ),
+                                class: "text-link hover:text-primary",
+                                data: {
+                                  turbo_frame: :modal,
+                                  turbo_confirm: "Record payment of #{number_to_currency(subscription.amount, unit: subscription.currency + ' ')} for #{subscription.name}?\n\nThis will advance billing to the next cycle if within payment window."
+                                } %>
+                  <% else %>
+                    <span class="text-gray-400 cursor-not-allowed" title="Subscription is <%= subscription.status %>">Record payment</span>
+                  <% end %>
                   <% if subscription.active? %>
                     <%= button_to "Pause", pause_subscription_plan_path(subscription), method: :patch, class: "text-yellow-700 hover:text-yellow-900", form: { class: "inline" } %>
                   <% elsif subscription.paused? %>

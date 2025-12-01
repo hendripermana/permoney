@@ -204,19 +204,24 @@ class SubscriptionPlan < ApplicationRecord
   # with real-world payments without requiring a hard link table.
   #
   # @param paid_at [Date, Time] when the payment was made
+  # @return [Boolean] true if billing was advanced, false otherwise
   def record_manual_payment!(paid_at:)
-    return unless next_billing_at.present?
-    return unless active_or_trial?
+    return false unless next_billing_at.present?
+    return false unless active_or_trial?
 
     paid_date = paid_at.to_date
 
-    # Accept payments a few days before the billing date to account
-    # for weekends/holidays and early charges.
+    # Accept payments within a window around the billing date:
+    # - 5 days before: to account for weekends/holidays and early charges
+    # - 3 days after: grace period for late payments (bank delays, etc.)
     window_start = next_billing_at - 5.days
+    window_end = next_billing_at + 3.days
 
-    return if paid_date < window_start
+    return false if paid_date < window_start
+    return false if paid_date > window_end
 
     mark_as_renewed!
+    true
   end
 
   # Lifecycle management

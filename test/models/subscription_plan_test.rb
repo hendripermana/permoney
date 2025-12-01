@@ -122,4 +122,61 @@ class SubscriptionPlanTest < ActiveSupport::TestCase
 
     assert_equal original_next, @subscription.next_billing_at
   end
+
+  test "record_manual_payment accepts payments at window start" do
+    billing_date = Date.current + 10.days
+    @subscription.update!(next_billing_at: billing_date)
+
+    # Window start is 5 days before next_billing_at
+    paid_at = billing_date - 5.days
+
+    assert_changes -> { @subscription.reload.next_billing_at } do
+      @subscription.record_manual_payment!(paid_at: paid_at)
+    end
+  end
+
+  test "record_manual_payment ignores payments when subscription is not active or trial" do
+    @subscription.update!(status: "cancelled", next_billing_at: Date.current)
+    original_next = @subscription.next_billing_at
+
+    assert_no_changes -> { @subscription.reload.next_billing_at } do
+      @subscription.record_manual_payment!(paid_at: Date.current)
+    end
+
+    assert_equal original_next, @subscription.next_billing_at
+  end
+
+  test "record_manual_payment accepts late payments within grace period" do
+    billing_date = Date.current - 2.days
+    @subscription.update!(next_billing_at: billing_date)
+
+    # Payment 2 days after billing (within 3-day grace)
+    result = @subscription.record_manual_payment!(paid_at: Date.current)
+
+    assert result, "Should return true when billing is advanced"
+    assert_equal billing_date.next_month, @subscription.reload.next_billing_at
+  end
+
+  test "record_manual_payment rejects payments after grace period" do
+    billing_date = Date.current - 5.days
+    @subscription.update!(next_billing_at: billing_date)
+    original_next = @subscription.next_billing_at
+
+    # Payment 5 days after billing (outside 3-day grace)
+    result = @subscription.record_manual_payment!(paid_at: Date.current)
+
+    assert_not result, "Should return false when billing is NOT advanced"
+    assert_equal original_next, @subscription.reload.next_billing_at
+  end
+
+  test "record_manual_payment returns boolean indicating success" do
+    @subscription.update!(next_billing_at: Date.current)
+
+    result = @subscription.record_manual_payment!(paid_at: Date.current)
+    assert_equal true, result
+
+    # Second call should fail (billing already advanced)
+    result_second = @subscription.record_manual_payment!(paid_at: Date.current)
+    assert_equal false, result_second
+  end
 end

@@ -92,11 +92,11 @@ class TransactionsController < ApplicationController
         #   account.asset? ? -entry_flows : entry_flows
         #
         # For ASSET accounts (checking, savings):
-        #   - Expense (+100): signed_flows = -100  balance DECREASES by 100 04
-        #   - Income (-200): signed_flows = -(-200) = +200  balance INCREASES by 200 04
+        #   - Expense (+100): signed_flows = -100 → balance DECREASES by 100 ✓
+        #   - Income (-200): signed_flows = -(-200) = +200 → balance INCREASES by 200 ✓
         # For LIABILITY accounts (credit card, loan):
-        #   - Expense (+100): signed_flows = +100  balance INCREASES by 100 (more debt) 04
-        #   - Payment (-200): signed_flows = -200  balance DECREASES by 200 (less debt) 04
+        #   - Expense (+100): signed_flows = +100 → balance INCREASES by 100 (more debt) ✓
+        #   - Payment (-200): signed_flows = -200 → balance DECREASES by 200 (less debt) ✓
         flows_factor = account.asset? ? 1 : -1
         balance_change = -entry_amount * flows_factor  # CRITICAL: Must negate entry_amount!
         new_balance = account.balance + balance_change
@@ -132,9 +132,8 @@ class TransactionsController < ApplicationController
       @entry.lock_saved_attributes!
       @entry.transaction.lock_attr!(:tag_ids) if @entry.transaction.tags.any?
 
-      link_subscription_payment(@entry)
-
       flash[:notice] = "Transaction created"
+      link_subscription_payment(@entry)
 
       respond_to do |format|
         format.html do
@@ -358,7 +357,10 @@ class TransactionsController < ApplicationController
       difference = (entry.amount - subscription.amount).abs
       return unless difference <= amount_tolerance
 
-      subscription.record_manual_payment!(paid_at: entry.date)
+      billing_advanced = subscription.record_manual_payment!(paid_at: entry.date)
+      if billing_advanced
+        flash[:notice] = "Transaction created. #{subscription.name} billing advanced to #{subscription.next_billing_at.strftime('%b %d, %Y')}."
+      end
     rescue StandardError => e
       Rails.logger.warn(
         "[SubscriptionPaymentLink] Failed to link entry #{entry.id} " \

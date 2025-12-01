@@ -45,16 +45,25 @@
           <% end %>
         <% end %>
 
-        <%= link_to "Record payment",
-                    new_transaction_path(
-                      account_id: @subscription_plan.account_id,
-                      nature: "outflow",
-                      subscription_plan_id: @subscription_plan.id
-                    ),
-                    class: "inline-flex items-center gap-2 px-4 py-2 border border-secondary rounded-lg text-link hover:bg-surface-hover transition-colors",
-                    data: { turbo_frame: :modal } do %>
-          <%= icon "credit-card", class: "h-4 w-4" %>
-          Record payment
+        <% if @subscription_plan.active_or_trial? %>
+          <%= link_to new_transaction_path(
+                        account_id: @subscription_plan.account_id,
+                        nature: "outflow",
+                        subscription_plan_id: @subscription_plan.id
+                      ),
+                      class: "inline-flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-700 border border-blue-200 theme-dark:bg-blue-900/20 theme-dark:text-blue-200 theme-dark:border-blue-800 rounded-lg hover:bg-blue-100 transition-colors",
+                      data: {
+                        turbo_frame: :modal,
+                        turbo_confirm: "Record payment of #{number_to_currency(@subscription_plan.amount, unit: @subscription_plan.currency + ' ')} for #{@subscription_plan.name}?\n\nThis will advance billing to the next cycle if within payment window."
+                      } do %>
+            <%= icon "credit-card", class: "h-4 w-4" %>
+            Record payment
+          <% end %>
+        <% else %>
+          <span class="inline-flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-400 border border-gray-200 rounded-lg cursor-not-allowed theme-dark:bg-gray-800 theme-dark:text-gray-500 theme-dark:border-gray-700" title="Subscription is <%= @subscription_plan.status %>">
+            <%= icon "credit-card", class: "h-4 w-4" %>
+            Record payment
+          </span>
         <% end %>
       </div>
     </div>

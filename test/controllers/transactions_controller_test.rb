@@ -75,6 +75,76 @@ class TransactionsControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "creating transaction with subscription_plan_id advances subscription billing date" do
+    # Use netflix subscription which belongs to the same family
+    subscription = subscription_plans(:netflix_subscription)
+    account = subscription.account
+
+    # Set billing date to today to ensure payment is within window
+    subscription.update!(next_billing_at: Date.current)
+    original_next_billing = subscription.next_billing_at
+    original_usage_count = subscription.usage_count || 0
+
+    post transactions_url, params: {
+      subscription_plan_id: subscription.id,
+      entry: {
+        account_id: account.id,
+        name: "Subscription payment",
+        date: Date.current,
+        currency: subscription.currency,
+        amount: subscription.amount,
+        nature: "outflow",
+        entryable_type: @entry.entryable_type,
+        entryable_attributes: {
+          tag_ids: [],
+          category_id: Category.first.id,
+          merchant_id: Merchant.first.id
+        }
+      }
+    }
+
+    subscription.reload
+
+    # Verify billing was advanced
+    assert_equal original_next_billing.next_month, subscription.next_billing_at, "Billing date should advance"
+    assert_equal original_usage_count + 1, subscription.usage_count, "Usage count should increment"
+
+    # Flash should include subscription name and new billing date
+    assert_includes flash[:notice], subscription.name
+    assert_includes flash[:notice], "billing advanced"
+  end
+
+  test "does not advance subscription when payment amount is outside tolerance" do
+    subscription = subscription_plans(:spotify_subscription)
+    account = subscription.account
+    original_next_billing = subscription.next_billing_at
+
+    too_large_amount = subscription.amount * 2
+
+    assert_difference [ "Entry.count", "Transaction.count" ], 1 do
+      post transactions_url, params: {
+        subscription_plan_id: subscription.id,
+        entry: {
+          account_id: account.id,
+          name: "Spotify oversized payment",
+          date: Date.current,
+          currency: subscription.currency,
+          amount: too_large_amount,
+          nature: "outflow",
+          entryable_type: @entry.entryable_type,
+          entryable_attributes: {
+            tag_ids: [],
+            category_id: Category.first.id,
+            merchant_id: merchants(:netflix).id
+          }
+        }
+      }
+    end
+
+    subscription.reload
+    assert_equal original_next_billing, subscription.next_billing_at
+  end
+
+  test "does not advance subscription when currency does not match" do
     subscription = subscription_plans(:spotify_subscription)
     account = subscription.account
     original_next_billing = subscription.next_billing_at
@@ -84,7 +154,36 @@ class TransactionsControllerTest < ActionDispatch::IntegrationTest
         subscription_plan_id: subscription.id,
         entry: {
           account_id: account.id,
-          name: "Spotify payment",
+          name: "Spotify wrong currency",
+          date: Date.current,
+          currency: "EUR",
+          amount: subscription.amount,
+          nature: "outflow",
+          entryable_type: @entry.entryable_type,
+          entryable_attributes: {
+            tag_ids: [],
+            category_id: Category.first.id,
+            merchant_id: merchants(:netflix).id
+          }
+        }
+      }
+    end
+
+    subscription.reload
+    assert_equal original_next_billing, subscription.next_billing_at
+  end
+
+  test "does not advance subscription when account does not match" do
+    subscription = subscription_plans(:spotify_subscription)
+    other_account = accounts(:depository)
+    original_next_billing = subscription.next_billing_at
+
+    assert_difference [ "Entry.count", "Transaction.count" ], 1 do
+      post transactions_url, params: {
+        subscription_plan_id: subscription.id,
+        entry: {
+          account_id: other_account.id,
+          name: "Spotify wrong account",
           date: Date.current,
           currency: subscription.currency,
           amount: subscription.amount,
@@ -100,7 +199,7 @@ class TransactionsControllerTest < ActionDispatch::IntegrationTest
     end
 
     subscription.reload
-    assert_equal original_next_billing.next_month, subscription.next_billing_at
+    assert_equal original_next_billing, subscription.next_billing_at
   end
 
   test "transaction count represents filtered total" do
