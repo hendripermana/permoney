@@ -26,8 +26,18 @@
       <% categories = params[:nature] == "inflow" ? income_categories : expense_categories %>
       <%= ef.collection_select :category_id, categories, :id, :name, { prompt: t(".category_prompt"), label: t(".category") } %>
     <% end %>
-    <%= f.date_field :date, label: t(".date"), required: true, min: Entry.min_supported_date, max: Date.current, value: Date.current %>
+    <%= f.date_field :date,
+                     label: t(".date"),
+                     required: true,
+                     min: Entry.min_supported_date,
+                     max: Date.current,
+                     value: (entry.date || Date.current) %>
   </section>
+
+  <%# Preserve subscription context so the controller can link the payment back to the plan %>
+  <% if params[:subscription_plan_id].present? %>
+    <%= hidden_field_tag :subscription_plan_id, params[:subscription_plan_id] %>
+  <% end %>
 
   <%= render DS::Disclosure.new(title: t(".details")) do %>
     <%= f.fields_for :entryable do |ef| %>

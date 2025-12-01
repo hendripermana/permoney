@@ -165,17 +165,17 @@ class SubscriptionPlan < ApplicationRecord
   def status_badge_class
     case status
     when "active"
-      "bg-green-100 text-green-800"
+      "bg-green-100 text-green-800 theme-dark:bg-green-900/20 theme-dark:text-green-200"
     when "trial"
-      "bg-blue-100 text-blue-800"
+      "bg-blue-100 text-blue-800 theme-dark:bg-blue-900/20 theme-dark:text-blue-200"
     when "paused"
-      "bg-yellow-100 text-yellow-800"
+      "bg-yellow-100 text-yellow-800 theme-dark:bg-yellow-900/20 theme-dark:text-yellow-200"
     when "cancelled", "expired"
-      "bg-gray-100 text-gray-800"
+      "bg-gray-100 text-gray-800 theme-dark:bg-gray-900/40 theme-dark:text-gray-200"
     when "payment_failed"
-      "bg-red-100 text-red-800"
+      "bg-red-100 text-red-800 theme-dark:bg-red-900/30 theme-dark:text-red-300"
     else
-      "bg-gray-100 text-gray-800"
+      "bg-gray-100 text-gray-800 theme-dark:bg-gray-900/40 theme-dark:text-gray-200"
     end
   end
 
@@ -196,6 +196,32 @@ class SubscriptionPlan < ApplicationRecord
     else
       "📋"
     end
+  end
+
+  # Record a manual payment coming from an Entry/Transaction and
+  # advance the billing schedule when the payment is close to the
+  # current billing date. This keeps subscription renewals in sync
+  # with real-world payments without requiring a hard link table.
+  #
+  # @param paid_at [Date, Time] when the payment was made
+  # @return [Boolean] true if billing was advanced, false otherwise
+  def record_manual_payment!(paid_at:)
+    return false unless next_billing_at.present?
+    return false unless active_or_trial?
+
+    paid_date = paid_at.to_date
+
+    # Accept payments within a window around the billing date:
+    # - 5 days before: to account for weekends/holidays and early charges
+    # - 3 days after: grace period for late payments (bank delays, etc.)
+    window_start = next_billing_at - 5.days
+    window_end = next_billing_at + 3.days
+
+    return false if paid_date < window_start
+    return false if paid_date > window_end
+
+    mark_as_renewed!
+    true
   end
 
   # Lifecycle management

@@ -5,6 +5,15 @@ class TransactionsController < ApplicationController
 
   def new
     super
+
+    if params[:subscription_plan_id].present?
+      @subscription_plan = Current.family.subscription_plans
+                                      .includes(:account, :merchant, :service)
+                                      .find_by(id: params[:subscription_plan_id])
+
+      prefill_entry_from_subscription(@subscription_plan) if @subscription_plan
+    end
+
     @income_categories = Current.family.categories.incomes.alphabetically
     @expense_categories = Current.family.categories.expenses.alphabetically
   end
@@ -124,6 +133,7 @@ class TransactionsController < ApplicationController
       @entry.transaction.lock_attr!(:tag_ids) if @entry.transaction.tags.any?
 
       flash[:notice] = "Transaction created"
+      link_subscription_payment(@entry)
 
       respond_to do |format|
         format.html do
@@ -290,6 +300,26 @@ class TransactionsController < ApplicationController
       params[:per_page].to_i.positive? ? params[:per_page].to_i : 20
     end
 
+    def prefill_entry_from_subscription(subscription_plan)
+      return unless subscription_plan
+
+      @entry.account ||= subscription_plan.account
+      @entry.currency ||= subscription_plan.currency
+      @entry.amount ||= subscription_plan.amount
+
+      # Prefer subscription's next billing date when available so the
+      # manual payment aligns with the expected charge date.
+      if subscription_plan.next_billing_at.present?
+        @entry.date ||= subscription_plan.next_billing_at
+      end
+
+      transaction = @entry.entryable
+      if transaction.present? && transaction.is_a?(Transaction)
+        service_merchant = subscription_plan.service_merchant
+        transaction.merchant ||= service_merchant if service_merchant.is_a?(Merchant)
+      end
+    end
+
     def needs_rule_notification?(transaction)
       return false if Current.user.rule_prompts_disabled
 
@@ -300,6 +330,42 @@ class TransactionsController < ApplicationController
 
       transaction.saved_change_to_category_id? && transaction.category_id.present? &&
       transaction.eligible_for_category_rule?
+    end
+
+    # When a transaction is created from the Subscription Manager, link it
+    # back to the corresponding SubscriptionPlan and advance the billing
+    # schedule when appropriate. This keeps subscription renewals in sync
+    # with real-world manual payments without introducing tight coupling.
+    def link_subscription_payment(entry)
+      subscription_plan_id = params[:subscription_plan_id]
+      return unless subscription_plan_id.present?
+
+      subscription = Current.family.subscription_plans.find_by(id: subscription_plan_id)
+      return unless subscription
+
+      # Only treat outflows, matching currency, account, and a similar amount
+      # as valid subscription payments.
+      return unless entry.amount.positive?
+      return unless entry.currency == subscription.currency
+      return unless subscription.account_id == entry.account_id
+
+      # Require the payment amount to be reasonably close to the
+      # subscription amount so that unrelated expenses do not
+      # accidentally advance the billing schedule. We accept payments
+      # within ~10% of the configured subscription amount.
+      amount_tolerance = subscription.amount / 10
+      difference = (entry.amount - subscription.amount).abs
+      return unless difference <= amount_tolerance
+
+      billing_advanced = subscription.record_manual_payment!(paid_at: entry.date)
+      if billing_advanced
+        flash[:notice] = "Transaction created. #{subscription.name} billing advanced to #{subscription.next_billing_at.strftime('%b %d, %Y')}."
+      end
+    rescue StandardError => e
+      Rails.logger.warn(
+        "[SubscriptionPaymentLink] Failed to link entry #{entry.id} " \
+        "to subscription #{subscription_plan_id}: #{e.class}: #{e.message}"
+      )
     end
 
     def entry_params
