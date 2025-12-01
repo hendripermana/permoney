@@ -1,3 +1,12 @@
+## [0.16.5](https://github.com/hendripermana/permoney/compare/v0.16.4...v0.16.5) (2025-12-01)
+
+### Other Changes
+
+- Merge pull request #80 from hendripermana/subscription-manager-manual-payments-20251201 (7527df90)
+- Enhance subscription payment linking with grace period, confirmation dialogs, and comprehensive tests (72ce40b0)
+- Tighten subscription payment linking with amount tolerance (3f8519cf)
+- Link subscriptions with manual transactions and improve subscription manager UI (8ac0d022)
+
 ## [0.16.4](https://github.com/hendripermana/permoney/compare/v0.16.3...v0.16.4) (2025-11-30)
 
 ### Bug Fixes
