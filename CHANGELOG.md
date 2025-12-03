@@ -1,3 +1,9 @@
+## [0.16.6](https://github.com/hendripermana/permoney/compare/v0.16.5...v0.16.6) (2025-12-03)
+
+### Other Changes
+
+- Fix subscription service dropdown and add searchable combobox with logos (#81) (a2c9f124)
+
 ## [0.16.5](https://github.com/hendripermana/permoney/compare/v0.16.4...v0.16.5) (2025-12-01)
 
 ### Other Changes
