@@ -7,9 +7,14 @@
     <%= f.text_field :name, label: "Subscription Name", placeholder: "e.g., Netflix Premium", required: true %>
 
     <div class="flex items-center gap-2">
-      <%= f.collection_select :merchant_id, @services, :id, :name,
-          { prompt: "Select a service...", label: "Service" },
-          { required: true, class: "form-field__input" } %>
+      <div class="form-field combobox flex-1">
+        <%= f.combobox :merchant_id,
+                      services_path,
+                      value: @subscription_plan.merchant_id,
+                      label: "Service",
+                      placeholder: "Search for a service...",
+                      required: true %>
+      </div>
       <%= render DS::Link.new(
         text: "Add Service",
         variant: "ghost",

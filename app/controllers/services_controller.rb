@@ -5,9 +5,20 @@ class ServicesController < ApplicationController
   layout :determine_layout
 
   def index
-    @services = ServiceMerchant.order(:subscription_category, :name)
-    @popular_services = ServiceMerchant.popular.order(:name)
-    @custom_services = ServiceMerchant.where(popular: false).order(:name)
+    respond_to do |format|
+      format.html do
+        @services = ServiceMerchant.order(:subscription_category, :name)
+        @popular_services = ServiceMerchant.popular.order(:name)
+        @custom_services = ServiceMerchant.where(popular: false).order(:name)
+      end
+      format.turbo_stream do
+        # Combobox search endpoint - return services matching search query
+        @services = ServiceMerchant
+          .search(params[:q])
+          .order(Arel.sql("CASE WHEN popular = true THEN 0 ELSE 1 END"), :name)
+          .limit(20)
+      end
+    end
   end
 
   def new
