@@ -15,6 +15,21 @@ class ServiceMerchant < Merchant
 
   scope :popular, -> { where(popular: true) }
   scope :by_category, ->(category) { where(subscription_category: category) }
+  scope :search, ->(query) {
+    return all if query.blank?
+    where("LOWER(name) LIKE ?", "%#{query.downcase}%")
+  }
+
+  def to_combobox_option
+    ComboboxOption.new(
+      id: id,
+      name: name,
+      logo_url: display_logo_url,
+      category: subscription_category,
+      billing_frequency: billing_frequency,
+      avg_monthly_cost: avg_monthly_cost
+    )
+  end
 
   # Seed popular subscription services
   def self.seed_popular_services

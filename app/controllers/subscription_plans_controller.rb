@@ -91,7 +91,7 @@ class SubscriptionPlansController < ApplicationController
         }
         format.json { render json: safe_subscription_json(@subscription_plan) }
       else
-        @services = Service.all.order(:name)
+        @services = load_services
         @accounts = Current.family.accounts
         format.html { render :edit, status: :unprocessable_entity }
         format.json { render json: @subscription_plan.errors, status: :unprocessable_entity }
@@ -212,14 +212,16 @@ class SubscriptionPlansController < ApplicationController
     end
 
     # Load services from both ServiceMerchant and legacy Service tables
+    # Includes both popular services and user-created custom services
     def load_services
       # Prefer ServiceMerchant, fallback to Service for backward compatibility
-      service_merchants = ServiceMerchant.popular.order(:name)
+      # Load ALL services (not just popular) to include user-created custom services
+      service_merchants = ServiceMerchant.order(:name)
 
       if service_merchants.any?
         service_merchants
       elsif defined?(Service) && Service.table_exists?
-        Service.popular.order(:name)
+        Service.order(:name)
       else
         []
       end
