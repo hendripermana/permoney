@@ -1,3 +1,9 @@
+## [0.16.10](https://github.com/hendripermana/permoney/compare/v0.16.9...v0.16.10) (2025-12-05)
+
+### Other Changes
+
+- Add subscription analytics dashboard with wave charts and utility categories (a43de58a)
+
 ## [0.16.9](https://github.com/hendripermana/permoney/compare/v0.16.8...v0.16.9) (2025-12-05)
 
 ### Other Changes
