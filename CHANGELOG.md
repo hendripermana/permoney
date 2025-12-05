@@ -1,3 +1,9 @@
+## [0.16.7](https://github.com/hendripermana/permoney/compare/v0.16.6...v0.16.7) (2025-12-05)
+
+### Other Changes
+
+- Improve service dropdown to show all services with pagination (#82) (420f1c50)
+
 ## [0.16.6](https://github.com/hendripermana/permoney/compare/v0.16.5...v0.16.6) (2025-12-03)
 
 ### Other Changes
