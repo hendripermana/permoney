@@ -7,18 +7,16 @@ class ServicesController < ApplicationController
   def index
     respond_to do |format|
       format.html do
-        @services = ServiceMerchant.order(:subscription_category, :name)
-        @popular_services = ServiceMerchant.popular.order(:name)
-        @custom_services = ServiceMerchant.where(popular: false).order(:name)
+        # All services sorted alphabetically - no distinction between popular and custom
+        @services = ServiceMerchant.order(:name)
       end
       format.turbo_stream do
         # Combobox search endpoint - return services matching search query with pagination
         per_page = 50
         page = (params[:page] || 1).to_i
 
-        base_query = ServiceMerchant
-          .search(params[:q])
-          .order(Arel.sql("CASE WHEN popular = true THEN 0 ELSE 1 END"), :name)
+        # Sort all services alphabetically - no distinction between popular and custom
+        base_query = ServiceMerchant.search(params[:q]).order(:name)
 
         total_count = base_query.count
         @services = base_query.offset((page - 1) * per_page).limit(per_page)

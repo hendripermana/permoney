@@ -41,6 +41,9 @@ Rails.application.routes.draw do
 
   # Subscription Manager routes
   resources :subscription_plans do
+    collection do
+      get :check_duplicate
+    end
     member do
       patch :pause
       patch :resume
