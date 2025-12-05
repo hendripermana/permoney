@@ -1,0 +1,148 @@
+<%# Subscription Analytics Charts %>
+<% spending_data = @analytics.spending_chart_data %>
+<% category_data = @analytics.category_chart_data %>
+<% upcoming = @analytics.upcoming_payments_timeline.first(5) %>
+<% mom_change = @analytics.month_over_month_change %>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+  <!-- Monthly Spending Trend - Wave Chart -->
+  <div class="bg-container rounded-xl border border-primary p-6">
+    <div class="flex items-center justify-between mb-4">
+      <div>
+        <h3 class="text-lg font-semibold text-primary">Monthly Spending</h3>
+        <p class="text-sm text-secondary">Last 6 months trend</p>
+      </div>
+      <% if mom_change[:direction] != "flat" %>
+        <div class="flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium <%= mom_change[:direction] == 'up' ? 'bg-red-100 text-red-700 theme-dark:bg-red-900/20 theme-dark:text-red-300' : 'bg-green-100 text-green-700 theme-dark:bg-green-900/20 theme-dark:text-green-300' %>">
+          <%= icon mom_change[:direction] == 'up' ? 'trending-up' : 'trending-down', class: 'h-4 w-4' %>
+          <span><%= mom_change[:percent].abs %>%</span>
+        </div>
+      <% end %>
+    </div>
+    
+    <% if spending_data[:values].present? && spending_data[:values].size >= 2 %>
+      <div 
+        id="spending-wave-chart"
+        class="h-48 w-full"
+        data-controller="wave-area-chart"
+        data-wave-area-chart-data-value="<%= spending_data.to_json %>"
+        data-wave-area-chart-gradient-color-value="<%= mom_change[:direction] == 'up' ? '#EF4444' : '#22C55E' %>"
+        data-wave-area-chart-stroke-width-value="2"
+        data-wave-area-chart-fill-opacity-value="0.15"
+        data-wave-area-chart-curve-type-value="monotoneX"
+      ></div>
+    <% else %>
+      <div class="h-48 flex items-center justify-center text-secondary">
+        <div class="text-center">
+          <%= icon 'bar-chart-3', class: 'h-12 w-12 mx-auto mb-2 opacity-50' %>
+          <p>Add subscriptions to see spending trends</p>
+        </div>
+      </div>
+    <% end %>
+  </div>
+
+  <!-- Spending by Category - Donut Chart -->
+  <div class="bg-container rounded-xl border border-primary p-6">
+    <div class="mb-4">
+      <h3 class="text-lg font-semibold text-primary">Spending by Category</h3>
+      <p class="text-sm text-secondary">Monthly breakdown</p>
+    </div>
+    
+    <% if category_data.present? && category_data.any? %>
+      <div class="flex items-center gap-6">
+        <!-- Donut Chart -->
+        <div class="flex-shrink-0">
+          <div 
+            data-controller="donut-chart"
+            data-donut-chart-segments-value="<%= category_data.map { |c| { id: c[:id], name: c[:name], amount: c[:amount], color: c[:color] } }.to_json %>"
+            data-donut-chart-segment-height-value="8"
+            data-donut-chart-segment-opacity-value="0.9"
+          >
+            <div class="relative w-36 h-36">
+              <div data-donut-chart-target="chartContainer" class="w-full h-full"></div>
+              <div data-donut-chart-target="contentContainer" class="absolute inset-0 flex items-center justify-center">
+                <div data-donut-chart-target="defaultContent" class="text-center">
+                  <p class="text-2xl font-bold text-primary"><%= Money.new(@analytics.mrr, Current.family.currency).format(no_cents_if_whole: true) %></p>
+                  <p class="text-xs text-secondary">per month</p>
+                </div>
+                <% category_data.each do |cat| %>
+                  <div id="segment_<%= cat[:id] %>" class="hidden text-center">
+                    <p class="text-2xl font-bold text-primary"><%= cat[:formatted] %></p>
+                    <p class="text-xs text-secondary"><%= cat[:name] %></p>
+                  </div>
+                <% end %>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Legend -->
+        <div class="flex-1 space-y-2 max-h-36 overflow-y-auto">
+          <% category_data.first(6).each do |cat| %>
+            <div class="flex items-center justify-between text-sm">
+              <div class="flex items-center gap-2">
+                <div class="w-3 h-3 rounded-full" style="background-color: <%= cat[:color] %>;"></div>
+                <span class="text-secondary"><%= cat[:name] %></span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="font-medium text-primary"><%= cat[:percent_formatted] %></span>
+              </div>
+            </div>
+          <% end %>
+        </div>
+      </div>
+    <% else %>
+      <div class="h-36 flex items-center justify-center text-secondary">
+        <div class="text-center">
+          <%= icon 'pie-chart', class: 'h-12 w-12 mx-auto mb-2 opacity-50' %>
+          <p>No category data available</p>
+        </div>
+      </div>
+    <% end %>
+  </div>
+</div>
+
+<!-- Upcoming Payments Timeline -->
+<% if upcoming.any? %>
+  <div class="bg-container rounded-xl border border-primary p-6 mb-8">
+    <div class="flex items-center justify-between mb-4">
+      <div>
+        <h3 class="text-lg font-semibold text-primary">Upcoming Payments</h3>
+        <p class="text-sm text-secondary">Next 30 days</p>
+      </div>
+      <span class="text-sm text-secondary">
+        Total: <%= Money.new(upcoming.sum { |u| u[:amount] }, Current.family.currency).format %>
+      </span>
+    </div>
+    
+    <div class="space-y-3">
+      <% upcoming.each do |payment| %>
+        <div class="flex items-center justify-between p-3 rounded-lg bg-surface hover:bg-surface-hover transition-colors">
+          <div class="flex items-center gap-3">
+            <% if payment[:logo_url].present? %>
+              <%= image_tag payment[:logo_url], class: "w-10 h-10 rounded-lg object-cover", loading: "lazy" %>
+            <% else %>
+              <div class="w-10 h-10 rounded-lg bg-gray-100 theme-dark:bg-gray-800 flex items-center justify-center">
+                <%= icon 'receipt', class: 'h-5 w-5 text-gray-400' %>
+              </div>
+            <% end %>
+            <div>
+              <p class="font-medium text-primary"><%= payment[:name] %></p>
+              <p class="text-sm text-secondary"><%= payment[:due_date].strftime("%b %d, %Y") %></p>
+            </div>
+          </div>
+          <div class="text-right">
+            <p class="font-semibold text-primary"><%= payment[:formatted_amount] %></p>
+            <% if payment[:days_until] == 0 %>
+              <span class="text-xs font-medium text-orange-600 theme-dark:text-orange-400">Today</span>
+            <% elsif payment[:days_until] <= 3 %>
+              <span class="text-xs font-medium text-red-600 theme-dark:text-red-400"><%= payment[:days_until] %> days</span>
+            <% else %>
+              <span class="text-xs text-secondary"><%= payment[:days_until] %> days</span>
+            <% end %>
+          </div>
+        </div>
+      <% end %>
+    </div>
+  </div>
+<% end %>

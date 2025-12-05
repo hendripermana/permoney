@@ -3,7 +3,14 @@ class ServiceMerchant < Merchant
   CATEGORIES = %w[
     streaming software utilities subscriptions memberships insurance
     telecommunications cloud_services education entertainment health_wellness
-    finance transportation food_delivery other
+    finance transportation food_delivery housing energy water internet
+    mobile_phone garbage security parking gym other
+  ].freeze
+
+  # Utility-specific categories for recurring bills
+  UTILITY_CATEGORIES = %w[
+    utilities housing energy water internet mobile_phone garbage
+    security parking
   ].freeze
 
   BILLING_FREQUENCIES = %w[monthly annual quarterly biennial one_time].freeze
@@ -102,8 +109,22 @@ class ServiceMerchant < Merchant
     when "finance" then "💰"
     when "transportation" then "🚗"
     when "food_delivery" then "🍔"
+    when "housing" then "🏠"
+    when "energy" then "💡"
+    when "water" then "💧"
+    when "internet" then "🌐"
+    when "mobile_phone" then "📱"
+    when "garbage" then "🗑️"
+    when "security" then "🔒"
+    when "parking" then "🅿️"
+    when "gym" then "💪"
     else "📋"
     end
+  end
+
+  # Check if this service is a utility
+  def utility?
+    UTILITY_CATEGORIES.include?(subscription_category)
   end
 
   def display_name
@@ -204,7 +225,29 @@ class ServiceMerchant < Merchant
         # Food Delivery
         { name: "DoorDash", subscription_category: "food_delivery", billing_frequency: "monthly", avg_monthly_cost: 9.99, popular: true },
         { name: "Uber Eats", subscription_category: "food_delivery", billing_frequency: "monthly", avg_monthly_cost: 9.99, popular: true },
-        { name: "HelloFresh", subscription_category: "food_delivery", billing_frequency: "monthly", avg_monthly_cost: 60.00, popular: true }
+        { name: "HelloFresh", subscription_category: "food_delivery", billing_frequency: "monthly", avg_monthly_cost: 60.00, popular: true },
+
+        # Utilities & Bills (Templates - no specific cost as it varies)
+        { name: "Rent/Mortgage", subscription_category: "housing", billing_frequency: "monthly", popular: true },
+        { name: "Electricity", subscription_category: "energy", billing_frequency: "monthly", popular: true },
+        { name: "Gas", subscription_category: "energy", billing_frequency: "monthly", popular: true },
+        { name: "Water", subscription_category: "water", billing_frequency: "monthly", popular: true },
+        { name: "Internet", subscription_category: "internet", billing_frequency: "monthly", popular: true },
+        { name: "Mobile Phone", subscription_category: "mobile_phone", billing_frequency: "monthly", popular: true },
+        { name: "Home Insurance", subscription_category: "insurance", billing_frequency: "monthly", popular: true },
+        { name: "Car Insurance", subscription_category: "insurance", billing_frequency: "monthly", popular: true },
+        { name: "Gym Membership", subscription_category: "gym", billing_frequency: "monthly", popular: true },
+
+        # Indonesian Utilities (common providers)
+        { name: "PLN (Listrik)", subscription_category: "energy", billing_frequency: "monthly", popular: true },
+        { name: "PDAM (Air)", subscription_category: "water", billing_frequency: "monthly", popular: true },
+        { name: "IndiHome", subscription_category: "internet", billing_frequency: "monthly", avg_monthly_cost: 50.00, popular: true },
+        { name: "Biznet", subscription_category: "internet", billing_frequency: "monthly", avg_monthly_cost: 40.00, popular: true },
+        { name: "MyRepublic", subscription_category: "internet", billing_frequency: "monthly", avg_monthly_cost: 35.00, popular: true },
+        { name: "Telkomsel (Postpaid)", subscription_category: "mobile_phone", billing_frequency: "monthly", popular: true },
+        { name: "XL (Postpaid)", subscription_category: "mobile_phone", billing_frequency: "monthly", popular: true },
+        { name: "Indosat (Postpaid)", subscription_category: "mobile_phone", billing_frequency: "monthly", popular: true },
+        { name: "PGN (Gas)", subscription_category: "energy", billing_frequency: "monthly", popular: true }
       ]
     end
 end

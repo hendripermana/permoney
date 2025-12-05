@@ -181,6 +181,148 @@ class SubscriptionAnalytics
     scores.sum.round(0)
   end
 
+  # Monthly spending trend (last 6 months) for wave chart
+  def monthly_spending_trend(months = 6)
+    result = []
+    currency = @family.currency
+
+    (0...months).each do |i|
+      date = i.months.ago.beginning_of_month
+      month_start = date.to_date
+      month_end = date.end_of_month.to_date
+
+      # Calculate spending for this month based on active subscriptions at that time
+      monthly_total = @family.subscription_plans
+        .where("started_at <= ?", month_end)
+        .where("cancelled_at IS NULL OR cancelled_at >= ?", month_start)
+        .sum { |sub| sub.monthly_equivalent_amount || 0 }
+
+      result << {
+        date: month_start.strftime("%Y-%m-%d"),
+        date_formatted: month_start.strftime("%b %Y"),
+        value: monthly_total.round(2),
+        formatted: Money.new(monthly_total, currency).format
+      }
+    end
+
+    result.reverse
+  end
+
+  # Spending by category with Money objects for proper currency
+  def spending_by_category_with_currency
+    currency = @family.currency
+    categories = {}
+
+    @family.subscription_plans.active.includes(:service).each do |sub|
+      sm = sub.service_merchant
+      category = sm&.subscription_category || "other"
+      categories[category] ||= 0
+      categories[category] += sub.monthly_equivalent_amount || 0
+    end
+
+    categories.map do |category, amount|
+      {
+        id: category,
+        name: category.humanize,
+        amount: amount.round(2),
+        formatted: Money.new(amount, currency).format,
+        color: category_color(category),
+        icon: category_icon(category)
+      }
+    end.sort_by { |c| -c[:amount] }
+  end
+
+  # Comparison with previous month
+  def month_over_month_change
+    current_month = calculate_mrr
+    previous_month = calculate_mrr_for_month(1.month.ago)
+
+    return { change: 0, percent: 0, direction: "flat" } if previous_month.zero?
+
+    change = current_month - previous_month
+    percent = ((change / previous_month) * 100).round(1)
+    direction = change.positive? ? "up" : (change.negative? ? "down" : "flat")
+
+    {
+      current: current_month,
+      previous: previous_month,
+      change: change.round(2),
+      percent: percent,
+      direction: direction
+    }
+  end
+
+  # Chart data formatted for D3.js time series
+  def spending_chart_data
+    trend = monthly_spending_trend
+    return {} if trend.empty?
+
+    current = trend.last
+    previous = trend[-2] || trend.last
+    change = current[:value] - previous[:value]
+    percent = previous[:value].zero? ? 0 : ((change / previous[:value]) * 100).round(1)
+
+    {
+      values: trend.map do |point|
+        {
+          date: point[:date],
+          date_formatted: point[:date_formatted],
+          value: {
+            amount: point[:value],
+            formatted: point[:formatted]
+          },
+          trend: {
+            current: { amount: point[:value], formatted: point[:formatted] },
+            previous: { amount: previous[:value], formatted: previous[:formatted] },
+            value: change,
+            percent_formatted: "#{percent.abs}%",
+            color: change >= 0 ? "var(--color-red-500)" : "var(--color-green-500)"
+          }
+        }
+      end,
+      trend: {
+        color: change >= 0 ? "var(--color-red-500)" : "var(--color-green-500)",
+        direction: change >= 0 ? "up" : "down"
+      }
+    }
+  end
+
+  # Donut chart data for category breakdown
+  def category_chart_data
+    categories = spending_by_category_with_currency
+    total = categories.sum { |c| c[:amount] }
+
+    categories.map do |cat|
+      percent = total.zero? ? 0 : ((cat[:amount] / total) * 100).round(1)
+      cat.merge(
+        percent: percent,
+        percent_formatted: "#{percent}%"
+      )
+    end
+  end
+
+  # Upcoming payments for next 30 days with timeline
+  def upcoming_payments_timeline
+    @family.subscription_plans
+      .active
+      .where("next_billing_at BETWEEN ? AND ?", Date.current, 30.days.from_now)
+      .order(:next_billing_at)
+      .map do |sub|
+        sm = sub.service_merchant
+        {
+          id: sub.id,
+          name: sub.name,
+          amount: sub.amount,
+          currency: sub.currency,
+          formatted_amount: Money.new(sub.amount, sub.currency).format,
+          due_date: sub.next_billing_at,
+          days_until: (sub.next_billing_at - Date.current).to_i,
+          logo_url: sm&.display_logo_url,
+          category: sm&.subscription_category
+        }
+      end
+  end
+
   private
 
     def calculate_mrr
@@ -195,5 +337,72 @@ class SubscriptionAnalytics
         .active
         .sum { |sub| sub.yearly_equivalent_amount || 0 }
         .round(2)
+    end
+
+    def calculate_mrr_for_month(date)
+      month_end = date.end_of_month.to_date
+      @family.subscription_plans
+        .where("started_at <= ?", month_end)
+        .where("cancelled_at IS NULL OR cancelled_at >= ?", date.beginning_of_month.to_date)
+        .sum { |sub| sub.monthly_equivalent_amount || 0 }
+        .round(2)
+    end
+
+    def category_color(category)
+      colors = {
+        "streaming" => "#8B5CF6",
+        "software" => "#3B82F6",
+        "utilities" => "#F59E0B",
+        "memberships" => "#10B981",
+        "insurance" => "#EF4444",
+        "telecommunications" => "#EC4899",
+        "cloud_services" => "#6366F1",
+        "education" => "#14B8A6",
+        "health_wellness" => "#22C55E",
+        "finance" => "#F97316",
+        "transportation" => "#64748B",
+        "food_delivery" => "#EAB308",
+        "entertainment" => "#A855F7",
+        "housing" => "#0EA5E9",
+        "energy" => "#FACC15",
+        "water" => "#06B6D4",
+        "internet" => "#6366F1",
+        "mobile_phone" => "#EC4899",
+        "garbage" => "#78716C",
+        "security" => "#DC2626",
+        "parking" => "#4B5563",
+        "gym" => "#F97316",
+        "other" => "#94A3B8"
+      }
+      colors[category] || colors["other"]
+    end
+
+    def category_icon(category)
+      icons = {
+        "streaming" => "📺",
+        "software" => "💻",
+        "utilities" => "⚡",
+        "memberships" => "🤝",
+        "insurance" => "🛡️",
+        "telecommunications" => "📡",
+        "cloud_services" => "☁️",
+        "education" => "📚",
+        "health_wellness" => "🧘",
+        "finance" => "💰",
+        "transportation" => "🚗",
+        "food_delivery" => "🍔",
+        "entertainment" => "🎮",
+        "housing" => "🏠",
+        "energy" => "💡",
+        "water" => "💧",
+        "internet" => "🌐",
+        "mobile_phone" => "📱",
+        "garbage" => "🗑️",
+        "security" => "🔒",
+        "parking" => "🅿️",
+        "gym" => "💪",
+        "other" => "📋"
+      }
+      icons[category] || icons["other"]
     end
 end
