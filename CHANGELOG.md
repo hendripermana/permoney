@@ -1,3 +1,9 @@
+## [0.16.9](https://github.com/hendripermana/permoney/compare/v0.16.8...v0.16.9) (2025-12-05)
+
+### Other Changes
+
+- Fix service avg_monthly_cost currency display (#84) (2edcf4c0)
+
 ## [0.16.8](https://github.com/hendripermana/permoney/compare/v0.16.7...v0.16.8) (2025-12-05)
 
 ### Other Changes
