@@ -1,3 +1,9 @@
+## [0.16.8](https://github.com/hendripermana/permoney/compare/v0.16.7...v0.16.8) (2025-12-05)
+
+### Other Changes
+
+- Improve subscription manager: alphabetical sorting, currency fix, duplicate detection (#83) (c4eae297)
+
 ## [0.16.7](https://github.com/hendripermana/permoney/compare/v0.16.6...v0.16.7) (2025-12-05)
 
 ### Other Changes
