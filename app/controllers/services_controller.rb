@@ -12,11 +12,19 @@ class ServicesController < ApplicationController
         @custom_services = ServiceMerchant.where(popular: false).order(:name)
       end
       format.turbo_stream do
-        # Combobox search endpoint - return services matching search query
-        @services = ServiceMerchant
+        # Combobox search endpoint - return services matching search query with pagination
+        per_page = 50
+        page = (params[:page] || 1).to_i
+
+        base_query = ServiceMerchant
           .search(params[:q])
           .order(Arel.sql("CASE WHEN popular = true THEN 0 ELSE 1 END"), :name)
-          .limit(20)
+
+        total_count = base_query.count
+        @services = base_query.offset((page - 1) * per_page).limit(per_page)
+
+        # Calculate if there's a next page
+        @next_page = (page * per_page < total_count) ? page + 1 : nil
       end
     end
   end
