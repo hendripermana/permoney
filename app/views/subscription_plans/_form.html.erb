@@ -1,4 +1,9 @@
-<%= styled_form_with model: @subscription_plan, class: "space-y-4" do |f| %>
+<%= styled_form_with model: @subscription_plan, class: "space-y-4",
+    data: {
+      controller: "subscription-duplicate",
+      subscription_duplicate_check_url_value: check_duplicate_subscription_plans_path,
+      subscription_duplicate_exclude_id_value: @subscription_plan.persisted? ? @subscription_plan.id : nil
+    } do |f| %>
   <% if @subscription_plan.errors.any? %>
     <%= render "shared/form_errors", model: @subscription_plan %>
   <% end %>
@@ -23,6 +28,11 @@
         href: new_service_path,
         frame: :modal
       ) %>
+    </div>
+
+    <%# Duplicate warning message %>
+    <div data-subscription-duplicate-target="warning"
+         class="hidden p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm theme-dark:bg-amber-900/20 theme-dark:border-amber-700 theme-dark:text-amber-200">
     </div>
 
     <%= f.collection_select :account_id, @accounts, :id, :name,

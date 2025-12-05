@@ -23,7 +23,7 @@
         <div>
           <p class="text-green-100 text-sm font-medium">Monthly Recurring Revenue</p>
           <p class="text-3xl font-bold mt-1">
-            <%= number_to_currency(@analytics.mrr, locale: Current.family.locale) %>
+            <%= Money.new(@analytics.mrr, Current.family.currency).format %>
           </p>
         </div>
         <div class="text-green-100">

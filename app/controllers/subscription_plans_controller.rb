@@ -164,6 +164,32 @@ class SubscriptionPlansController < ApplicationController
     end
   end
 
+  # GET /subscription_plans/check_duplicate
+  # Check if user already has a subscription for the given service
+  def check_duplicate
+    service_id = params[:service_id]
+    exclude_id = params[:exclude_id]
+
+    return render json: { duplicate: false } if service_id.blank?
+
+    existing = Current.family.subscription_plans
+      .unarchived
+      .where(merchant_id: service_id)
+
+    # Exclude current subscription when editing
+    existing = existing.where.not(id: exclude_id) if exclude_id.present?
+
+    if existing.exists?
+      subscription = existing.first
+      render json: {
+        duplicate: true,
+        message: "You already have a subscription for this service: \"#{subscription.name}\" (#{subscription.status})"
+      }
+    else
+      render json: { duplicate: false }
+    end
+  end
+
   private
 
     def set_subscription_plan
