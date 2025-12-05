@@ -27,7 +27,8 @@ class ServiceMerchant < Merchant
       logo_url: display_logo_url,
       category: subscription_category,
       billing_frequency: billing_frequency,
-      avg_monthly_cost: avg_monthly_cost
+      avg_monthly_cost: avg_monthly_cost,
+      formatted_cost: formatted_avg_monthly_cost
     )
   end
 
@@ -118,6 +119,43 @@ class ServiceMerchant < Merchant
     when "biennial" then avg_monthly_cost / 24.0
     else avg_monthly_cost
     end
+  end
+
+  # Returns the source currency for avg_monthly_cost
+  # Popular services: seeded with USD prices
+  # Custom services: assumed to be in the user's family currency
+  def avg_cost_currency
+    popular? ? "USD" : (Current.family&.currency || "USD")
+  end
+
+  # Returns avg_monthly_cost as Money object with proper currency
+  def avg_monthly_cost_money
+    return nil unless avg_monthly_cost.present? && avg_monthly_cost > 0
+    Money.new(avg_monthly_cost, avg_cost_currency)
+  end
+
+  # Returns avg_monthly_cost converted to target currency (default: user's family currency)
+  # Uses existing ExchangeRate system for conversion
+  def avg_monthly_cost_in(target_currency = nil)
+    return nil unless avg_monthly_cost.present? && avg_monthly_cost > 0
+
+    target = target_currency || Current.family&.currency || "USD"
+    source = avg_cost_currency
+
+    # No conversion needed if same currency
+    return Money.new(avg_monthly_cost, target) if source == target
+
+    # Use Money's exchange_to with fallback rate
+    Money.new(avg_monthly_cost, source).exchange_to(target, fallback_rate: 1.0)
+  rescue Money::ConversionError
+    # Fallback: display in source currency if conversion fails
+    Money.new(avg_monthly_cost, source)
+  end
+
+  # Formatted avg_monthly_cost in user's currency
+  def formatted_avg_monthly_cost(target_currency = nil)
+    money = avg_monthly_cost_in(target_currency)
+    money&.format || nil
   end
 
   private
