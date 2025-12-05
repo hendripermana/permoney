@@ -10,8 +10,8 @@
     <span class="text-sm font-medium text-primary truncate"><%= combobox_service.name %></span>
     <span class="text-xs text-secondary">
       <%= combobox_service.category&.humanize || "Other" %>
-      <% if combobox_service.avg_monthly_cost.present? && combobox_service.avg_monthly_cost > 0 %>
-        &middot; ~<%= number_to_currency(combobox_service.avg_monthly_cost) %>/mo
+      <% if combobox_service.formatted_cost.present? %>
+        &middot; ~<%= combobox_service.formatted_cost %>/mo
       <% end %>
     </span>
   </div>

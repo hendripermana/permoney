@@ -57,7 +57,7 @@
                       </td>
                       <td class="py-3 px-4 text-sm text-secondary">
                         <% if service.avg_monthly_cost.present? && service.avg_monthly_cost > 0 %>
-                          ~<%= number_to_currency(service.avg_monthly_cost) %>/mo
+                          ~<%= service.formatted_avg_monthly_cost %>/mo
                         <% end %>
                       </td>
                       <td class="py-3 px-4 text-sm">
