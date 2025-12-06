@@ -1,3 +1,9 @@
+## [0.16.17](https://github.com/hendripermana/permoney/compare/v0.16.16...v0.16.17) (2025-12-06)
+
+### Other Changes
+
+- Patch connection_pool init early during boot (fb82eecf)
+
 ## [0.16.16](https://github.com/hendripermana/permoney/compare/v0.16.15...v0.16.16) (2025-12-06)
 
 ### Other Changes
