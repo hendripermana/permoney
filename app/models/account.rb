@@ -14,6 +14,7 @@ class Account < ApplicationRecord
   has_many :holdings, dependent: :destroy
   has_many :balances, dependent: :destroy
   has_many :loan_installments, dependent: :destroy
+  has_many :subscription_plans, dependent: :destroy
 
   monetize :balance, :cash_balance
 

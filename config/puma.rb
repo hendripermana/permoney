@@ -42,7 +42,8 @@ if workers_count > 0
     ActiveRecord::Base.connection_pool.disconnect! if defined?(ActiveRecord)
   end
 
-  on_worker_boot do
+  # Rails 8.1+: prefer before_worker_boot (on_worker_boot is deprecated)
+  before_worker_boot do
     ActiveRecord::Base.establish_connection if defined?(ActiveRecord)
   end
 end

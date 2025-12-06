@@ -2,6 +2,16 @@ class Service < ApplicationRecord
   has_many :subscription_plans, dependent: :destroy
   has_many :families, through: :subscription_plans
 
+  # Backwards-compatible API with ServiceMerchant
+  def subscription_category
+    category
+  end
+
+  # Return best available logo URL (legacy column)
+  def display_logo_url
+    logo.presence
+  end
+
   # Service categories based on financial best practices
   enum :category, {
     streaming: "streaming",        # Netflix, Spotify, Disney+

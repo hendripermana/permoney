@@ -55,9 +55,4 @@ if defined?(ActiveRecord)
   # Replaced Thread.new to avoid issues with Puma's worker forking
   # See app/jobs/database_pool_monitoring_job.rb
 
-  # Enable prepared statements for better performance
-  ActiveRecord::Base.connection.instance_variable_set(:@prepared_statements, true) rescue nil
-
-  # Configure statement cache size
-  ActiveRecord::Base.connection.instance_variable_set(:@statements_cache_size, 1000) rescue nil
 end

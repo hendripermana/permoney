@@ -2,7 +2,14 @@
 require "rubygems"
 require "bundler/setup"
 
-ARGV.unshift("--ensure-latest")
+# Prefer to enforce latest, but skip the flag if we cannot resolve the latest
+# version (e.g., offline environments) to avoid false failures.
+begin
+  latest = Gem.latest_version_for("brakeman")
+  ARGV.unshift("--ensure-latest") if latest
+rescue StandardError
+  warn "[brakeman] Skipping --ensure-latest because latest version lookup failed"
+end
 
 # Add --no-exit-on-warn unless --exit-on-warn is explicitly specified
 unless ARGV.include?("--exit-on-warn")

@@ -171,8 +171,6 @@ Rails.application.configure do
   config.assets.digest = true
 
   # Enable Rails cache to store assets digest
-  config.action_dispatch.perform_deep_munge = true
-
   # Suppress warnings during asset precompilation
   config.log_level = :error if ENV["RAILS_LOG_LEVEL"] != "debug"
 

@@ -390,13 +390,18 @@ class Loan::PayableTest < ActiveSupport::TestCase
     )
 
     # Should not raise error when trying to post already posted installment
+    test_date = Date.current
+
     assert_nothing_raised do
       @loan.post_installment(
         installment: installment,
         from_account: @cash_account,
-        date: Date.current
+        date: test_date
       )
     end
+
+    assert_equal "posted", installment.reload.status
+    assert_equal test_date, installment.posted_on
   end
 
   test "post_installment with concurrent access handles locking correctly" do
@@ -416,13 +421,18 @@ class Loan::PayableTest < ActiveSupport::TestCase
     end
 
     # Should handle the race condition gracefully
+    test_date = Date.current
+
     assert_nothing_raised do
       @loan.post_installment(
         installment: installment,
         from_account: @cash_account,
-        date: Date.current
+        date: test_date
       )
     end
+
+    assert_equal "posted", installment.reload.status
+    assert_equal test_date, installment.posted_on
   end
 
   private
