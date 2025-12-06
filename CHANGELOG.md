@@ -1,3 +1,9 @@
+## [0.16.19](https://github.com/hendripermana/permoney/compare/v0.16.18...v0.16.19) (2025-12-06)
+
+### Other Changes
+
+- Fix connection_pool shim recursion and support positional args (e4e8b382)
+
 ## [0.16.18](https://github.com/hendripermana/permoney/compare/v0.16.17...v0.16.18) (2025-12-06)
 
 ### Other Changes
