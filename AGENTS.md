@@ -431,6 +431,14 @@ document.addEventListener("turbo:before-visit", () => {
   - `config/application.rb`: Requires the shim before other gems boot
   - `lib/active_support/configurable.rb`: Shim implementation maintained until upstream gems remove the dependency
 
+**Issue 5: connection_pool 3.x keyword-only API + Sidekiq positional calls**
+- **Problem**: connection_pool 3.x initializer and `TimedStack#pop` are keyword-only; Sidekiq and legacy code still pass positional args (e.g., `ConnectionPool.new(5)` or `TimedStack#pop(10)`), leading to stack overflows or `ArgumentError` in production.
+- **Solution**: Early boot shim in `config/boot.rb`:
+  - Guarded (`@__permoney_patched`) to avoid re-alias recursion.
+  - Normalizes positional/Hash args to keywords before delegating to the original initializer via `bind_call`.
+  - Patches `ConnectionPool::TimedStack#pop` to map positional timeout to keyword `timeout`.
+- **Upgrade note**: Keep this shim until Sidekiq/Redis clients are fully keyword-safe; revisit after upgrading connection_pool/Sidekiq to versions that no longer use positional APIs.
+
 **Key Learnings:**
 - Rails 8.1 requires stricter Stimulus controller location conventions
 - Turbo Frames need explicit `_top` target to break out for full page navigation
