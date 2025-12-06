@@ -1,3 +1,9 @@
+## [0.16.16](https://github.com/hendripermana/permoney/compare/v0.16.15...v0.16.16) (2025-12-06)
+
+### Other Changes
+
+- Fix connection_pool keyword compatibility for Redis cache (3199d84b)
+
 ## [0.16.15](https://github.com/hendripermana/permoney/compare/v0.16.14...v0.16.15) (2025-12-06)
 
 ### Other Changes
