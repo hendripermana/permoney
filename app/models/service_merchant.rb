@@ -131,6 +131,13 @@ class ServiceMerchant < Merchant
     name
   end
 
+  # Required by hotwire_combobox for async combobox prefill (edit mode)
+  # When editing a record with an existing merchant_id, the gem looks up the ServiceMerchant
+  # and calls to_combobox_display directly on it to show the selected value
+  def to_combobox_display
+    name
+  end
+
   def monthly_equivalent_cost
     return avg_monthly_cost unless avg_monthly_cost.present?
 
