@@ -1,3 +1,9 @@
+## [0.16.13](https://github.com/hendripermana/permoney/compare/v0.16.12...v0.16.13) (2025-12-06)
+
+### Other Changes
+
+- Fix subscription table menu stacking and add clickable rows (a74161fe)
+
 ## [0.16.12](https://github.com/hendripermana/permoney/compare/v0.16.11...v0.16.12) (2025-12-06)
 
 ### Other Changes
