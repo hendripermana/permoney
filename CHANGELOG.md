@@ -1,3 +1,9 @@
+## [0.16.12](https://github.com/hendripermana/permoney/compare/v0.16.11...v0.16.12) (2025-12-06)
+
+### Other Changes
+
+- Fix edit subscription 500 error - add to_combobox_display to ServiceMerchant (a01407f7)
+
 ## [0.16.11](https://github.com/hendripermana/permoney/compare/v0.16.10...v0.16.11) (2025-12-06)
 
 ### Other Changes
