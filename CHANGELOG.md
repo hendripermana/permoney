@@ -1,3 +1,9 @@
+## [0.16.11](https://github.com/hendripermana/permoney/compare/v0.16.10...v0.16.11) (2025-12-06)
+
+### Other Changes
+
+- Improve subscription dashboard UI inspired by shadcnstudio (#85) (a7301830)
+
 ## [0.16.10](https://github.com/hendripermana/permoney/compare/v0.16.9...v0.16.10) (2025-12-05)
 
 ### Other Changes
