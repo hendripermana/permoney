@@ -16,14 +16,20 @@ begin
     ConnectionPool.instance_variable_set(:@__permoney_patched, true)
 
     ConnectionPool.class_eval do
-      alias_method :__permoney_orig_initialize, :initialize
+      __permoney_orig_initialize = instance_method(:initialize)
 
-      def initialize(*args, **kwargs, &block)
+      define_method(:initialize) do |*args, **kwargs, &block|
         if args.first.is_a?(Hash) && kwargs.empty?
           kwargs = args.shift.transform_keys { |k| k.respond_to?(:to_sym) ? k.to_sym : k }
+        elsif kwargs.empty? && args.length == 1
+          kwargs = { size: args.shift }
+        elsif kwargs.empty? && args.length == 2
+          timeout, size = args
+          kwargs = { timeout:, size: }
+          args = []
         end
 
-        __permoney_orig_initialize(**kwargs, &block)
+        __permoney_orig_initialize.bind_call(self, *args, **kwargs, &block)
       end
     end
   end
