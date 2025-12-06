@@ -1,3 +1,9 @@
+## [0.16.14](https://github.com/hendripermana/permoney/compare/v0.16.13...v0.16.14) (2025-12-06)
+
+### Other Changes
+
+- Fix DS::Menu controller - store direct element references (48dc4f26)
+
 ## [0.16.13](https://github.com/hendripermana/permoney/compare/v0.16.12...v0.16.13) (2025-12-06)
 
 ### Other Changes
