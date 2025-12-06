@@ -19,17 +19,32 @@ begin
       __permoney_orig_initialize = instance_method(:initialize)
 
       define_method(:initialize) do |*args, **kwargs, &block|
-        if args.first.is_a?(Hash) && kwargs.empty?
-          kwargs = args.shift.transform_keys { |k| k.respond_to?(:to_sym) ? k.to_sym : k }
-        elsif kwargs.empty? && args.length == 1
-          kwargs = { size: args.shift }
-        elsif kwargs.empty? && args.length == 2
-          timeout, size = args
-          kwargs = { timeout:, size: }
-          args = []
+        if kwargs.empty?
+          if args.first.is_a?(Hash)
+            kwargs = args.shift.transform_keys { |k| k.respond_to?(:to_sym) ? k.to_sym : k }
+          elsif args.length == 1
+            kwargs = { size: args.shift }
+            args = []
+          elsif args.length >= 2
+            timeout, size = args
+            kwargs = { timeout:, size: }
+            args = []
+          end
         end
 
         __permoney_orig_initialize.bind_call(self, *args, **kwargs, &block)
+      end
+    end
+
+    ConnectionPool::TimedStack.class_eval do
+      __permoney_orig_pop = instance_method(:pop)
+
+      define_method(:pop) do |*args, **kwargs|
+        if args.any? && !kwargs.key?(:timeout)
+          kwargs = kwargs.merge(timeout: args.first)
+        end
+
+        __permoney_orig_pop.bind_call(self, **kwargs)
       end
     end
   end
