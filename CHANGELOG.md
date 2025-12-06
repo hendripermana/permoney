@@ -1,3 +1,11 @@
+## [0.16.15](https://github.com/hendripermana/permoney/compare/v0.16.14...v0.16.15) (2025-12-06)
+
+### Other Changes
+
+- Merge pull request #86 from hendripermana/chore/test-db-docs (1664cad9)
+- Stabilize loan payable tests with fixed dates (5242f716)
+- Document isolated test DB flow and harden subscriptions (bed7be89)
+
 ## [0.16.14](https://github.com/hendripermana/permoney/compare/v0.16.13...v0.16.14) (2025-12-06)
 
 ### Other Changes
