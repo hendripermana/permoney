@@ -109,9 +109,11 @@
           <tbody class="divide-y divide-primary/10">
             <% @subscription_plans.each do |subscription| %>
               <% service = subscription.service_merchant %>
-              <tr class="hover:bg-surface-hover transition-colors <%= subscription_row_class(subscription) %>">
-                <%# Service Column - Avatar + Name + Category %>
-                <td class="px-6 py-4">
+              <tr class="group hover:bg-surface-hover transition-colors cursor-pointer <%= subscription_row_class(subscription) %>"
+                  data-controller="clickable-row"
+                  data-clickable-row-url-value="<%= subscription_plan_path(subscription) %>">
+                <%# Service Column - Avatar + Name + Category (Clickable) %>
+                <td class="px-6 py-4" data-clickable-row-target="cell">
                   <div class="flex items-center gap-3">
                     <% if service&.respond_to?(:display_logo_url) && service.display_logo_url.present? %>
                       <%= image_tag service.display_logo_url, class: "w-10 h-10 rounded-lg object-cover", loading: "lazy" %>
@@ -121,7 +123,7 @@
                       </div>
                     <% end %>
                     <div>
-                      <div class="font-medium text-primary"><%= subscription.name %></div>
+                      <div class="font-medium text-primary group-hover:text-blue-600 theme-dark:group-hover:text-blue-400 transition-colors"><%= subscription.name %></div>
                       <div class="text-xs text-secondary">
                         <%= subscription_service_category(subscription)&.humanize || "Subscription" %>
                         <% if subscription.shared_within_family %>
@@ -132,14 +134,14 @@
                   </div>
                 </td>
 
-                <%# Amount Column %>
-                <td class="px-6 py-4">
+                <%# Amount Column (Clickable) %>
+                <td class="px-6 py-4" data-clickable-row-target="cell">
                   <div class="font-semibold text-primary"><%= number_to_currency(subscription.amount, unit: subscription.currency + " ") %></div>
                   <div class="text-xs text-secondary"><%= subscription.billing_cycle.humanize %></div>
                 </td>
 
-                <%# Status Column %>
-                <td class="px-6 py-4">
+                <%# Status Column (Clickable) %>
+                <td class="px-6 py-4" data-clickable-row-target="cell">
                   <span class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium <%= subscription.status_badge_class %>">
                     <%= subscription.status.humanize %>
                   </span>
@@ -148,8 +150,8 @@
                   <% end %>
                 </td>
 
-                <%# Next Billing Column %>
-                <td class="px-6 py-4">
+                <%# Next Billing Column (Clickable) %>
+                <td class="px-6 py-4" data-clickable-row-target="cell">
                   <% if subscription.next_billing_at %>
                     <div class="text-sm text-primary"><%= subscription.next_billing_at.strftime("%b %d, %Y") %></div>
                     <% if subscription.days_until_renewal == 0 %>
@@ -164,8 +166,8 @@
                   <% end %>
                 </td>
 
-                <%# Actions Column - Clean Dropdown Menu %>
-                <td class="px-6 py-4 text-right">
+                <%# Actions Column - Dropdown Menu (Not Clickable for row navigation) %>
+                <td class="px-6 py-4 text-right" data-clickable-row-target="exclude">
                   <%= render DS::Menu.new(placement: "bottom-end") do |menu| %>
                     <% menu.with_item(variant: "link", text: "View details", href: subscription_plan_path(subscription), icon: "eye") %>
                     <% menu.with_item(variant: "link", text: "Edit", href: edit_subscription_plan_path(subscription), icon: "pencil", frame: "modal") %>

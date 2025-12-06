@@ -1,8 +1,13 @@
-import { autoUpdate, computePosition, offset, shift } from "@floating-ui/dom";
+import { autoUpdate, computePosition, flip, offset, shift } from "@floating-ui/dom";
 import { Controller } from "@hotwired/stimulus";
 
 /**
  * A "menu" can contain arbitrary content including non-clickable items, links, buttons, and forms.
+ *
+ * Key features:
+ * - Uses floating-ui with flip middleware for smart positioning (avoids overflow)
+ * - Moves content to body to avoid overflow:hidden clipping issues
+ * - Dispatches custom event to close other open menus (prevents stacking)
  */
 export default class extends Controller {
   static targets = ["button", "content"];
@@ -17,6 +22,9 @@ export default class extends Controller {
     this.show = this.showValue;
     this.boundUpdate = this.update.bind(this);
     this.addEventListeners();
+
+    // Move content to body to avoid overflow:hidden clipping
+    this.moveContentToBody();
     this.startAutoUpdate();
   }
 
@@ -24,6 +32,31 @@ export default class extends Controller {
     this.removeEventListeners();
     this.stopAutoUpdate();
     this.close();
+
+    // Remove content from body when disconnecting
+    this.removeContentFromBody();
+  }
+
+  // Move the dropdown content to body to escape overflow:hidden containers
+  moveContentToBody() {
+    if (this.hasContentTarget && this.contentTarget.parentElement !== document.body) {
+      this._originalParent = this.contentTarget.parentElement;
+      this._originalNextSibling = this.contentTarget.nextSibling;
+      document.body.appendChild(this.contentTarget);
+    }
+  }
+
+  // Restore content to original position when cleaning up
+  removeContentFromBody() {
+    if (this.hasContentTarget && this._originalParent) {
+      if (this._originalNextSibling) {
+        this._originalParent.insertBefore(this.contentTarget, this._originalNextSibling);
+      } else {
+        this._originalParent.appendChild(this.contentTarget);
+      }
+      this._originalParent = null;
+      this._originalNextSibling = null;
+    }
   }
 
   addEventListeners() {
@@ -32,13 +65,15 @@ export default class extends Controller {
     this.outsideClickHandler = this.handleOutsideClick.bind(this);
     this.turboLoadHandler = this.handleTurboLoad.bind(this);
     this.turboBeforeVisitHandler = this.handleTurboBeforeVisit.bind(this);
+    this.closeOtherMenusHandler = this.handleCloseOtherMenus.bind(this);
 
     this.buttonTarget.addEventListener("click", this.toggleHandler);
     this.element.addEventListener("keydown", this.keydownHandler);
     document.addEventListener("click", this.outsideClickHandler);
     document.addEventListener("turbo:load", this.turboLoadHandler);
-    // Rails 8.1: Close menu when Turbo navigation starts (before page changes)
     document.addEventListener("turbo:before-visit", this.turboBeforeVisitHandler);
+    // Listen for custom event to close other menus
+    document.addEventListener("ds:menu:close-others", this.closeOtherMenusHandler);
   }
 
   removeEventListeners() {
@@ -57,27 +92,39 @@ export default class extends Controller {
     if (this.turboBeforeVisitHandler) {
       document.removeEventListener("turbo:before-visit", this.turboBeforeVisitHandler);
     }
+    if (this.closeOtherMenusHandler) {
+      document.removeEventListener("ds:menu:close-others", this.closeOtherMenusHandler);
+    }
   }
 
   handleTurboLoad() {
     if (!this.show) this.close();
   }
 
-  // Rails 8.1: Close menu when Turbo navigation is about to start
-  // This allows links to navigate normally, then menu closes before page transition
   handleTurboBeforeVisit() {
     if (this.show) this.close();
   }
 
-  handleOutsideClick(event) {
-    if (this.show && !this.element.contains(event.target)) this.close();
+  // Handle custom event to close this menu if another menu opened
+  handleCloseOtherMenus(event) {
+    // Close this menu if the event was dispatched by a different menu
+    if (event.detail.sourceElement !== this.element && this.show) {
+      this.close();
+    }
   }
 
-  // Rails 8.1: Close menu when menu item is clicked
-  // Called explicitly via data-action on menu items
+  handleOutsideClick(event) {
+    // Check if click is outside both the button and the content (which is now in body)
+    if (
+      this.show &&
+      !this.element.contains(event.target) &&
+      !this.contentTarget.contains(event.target)
+    ) {
+      this.close();
+    }
+  }
+
   closeOnItemClick(_event) {
-    // Close menu immediately when item is clicked
-    // Don't prevent default - let the link/button work normally
     this.close();
   }
 
@@ -96,7 +143,15 @@ export default class extends Controller {
 
     this.show = !this.show;
     this.contentTarget.classList.toggle("hidden", !this.show);
+
     if (this.show) {
+      // Dispatch event to close other open menus (prevents stacking)
+      document.dispatchEvent(
+        new CustomEvent("ds:menu:close-others", {
+          detail: { sourceElement: this.element },
+        })
+      );
+
       this.update();
       this.focusFirstElement();
     }
@@ -136,7 +191,12 @@ export default class extends Controller {
 
     computePosition(this.buttonTarget, this.contentTarget, {
       placement: isSmallScreen ? "bottom" : this.placementValue,
-      middleware: [offset(this.offsetValue), shift({ padding: 5 })],
+      middleware: [
+        offset(this.offsetValue),
+        // flip() automatically flips to opposite side when not enough space
+        flip({ fallbackPlacements: ["top-end", "top-start", "bottom-start"] }),
+        shift({ padding: 8 }),
+      ],
       strategy: "fixed",
     }).then(({ x, y }) => {
       if (isSmallScreen) {
