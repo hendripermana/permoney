@@ -1,3 +1,9 @@
+## [0.16.18](https://github.com/hendripermana/permoney/compare/v0.16.17...v0.16.18) (2025-12-06)
+
+### Other Changes
+
+- Guard connection_pool patch to prevent recursion (3d3bb3fb)
+
 ## [0.16.17](https://github.com/hendripermana/permoney/compare/v0.16.16...v0.16.17) (2025-12-06)
 
 ### Other Changes
