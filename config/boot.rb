@@ -12,8 +12,10 @@ require "bootsnap/setup" # Speed up boot time by caching expensive operations.
 begin
   require "connection_pool"
 
-  class ConnectionPool
-    unless method_defined?(:__permoney_orig_initialize)
+  unless ConnectionPool.instance_variable_defined?(:@__permoney_patched)
+    ConnectionPool.instance_variable_set(:@__permoney_patched, true)
+
+    ConnectionPool.class_eval do
       alias_method :__permoney_orig_initialize, :initialize
 
       def initialize(*args, **kwargs, &block)
