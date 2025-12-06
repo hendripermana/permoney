@@ -8,6 +8,7 @@ import { Controller } from "@hotwired/stimulus";
  * - Uses floating-ui with flip middleware for smart positioning (avoids overflow)
  * - Moves content to body to avoid overflow:hidden clipping issues
  * - Dispatches custom event to close other open menus (prevents stacking)
+ * - Stores direct element references since targets are lost when moved to body
  */
 export default class extends Controller {
   static targets = ["button", "content"];
@@ -19,6 +20,15 @@ export default class extends Controller {
   };
 
   connect() {
+    // Store direct references before moving to body (targets won't work after move)
+    this._buttonEl = this.hasButtonTarget ? this.buttonTarget : null;
+    this._contentEl = this.hasContentTarget ? this.contentTarget : null;
+
+    if (!this._buttonEl || !this._contentEl) {
+      console.warn("DS--menu: Missing button or content target");
+      return;
+    }
+
     this.show = this.showValue;
     this.boundUpdate = this.update.bind(this);
     this.addEventListeners();
@@ -35,31 +45,41 @@ export default class extends Controller {
 
     // Remove content from body when disconnecting
     this.removeContentFromBody();
+
+    // Clear references
+    this._buttonEl = null;
+    this._contentEl = null;
   }
 
   // Move the dropdown content to body to escape overflow:hidden containers
   moveContentToBody() {
-    if (this.hasContentTarget && this.contentTarget.parentElement !== document.body) {
-      this._originalParent = this.contentTarget.parentElement;
-      this._originalNextSibling = this.contentTarget.nextSibling;
-      document.body.appendChild(this.contentTarget);
+    if (this._contentEl && this._contentEl.parentElement !== document.body) {
+      this._originalParent = this._contentEl.parentElement;
+      this._originalNextSibling = this._contentEl.nextSibling;
+      document.body.appendChild(this._contentEl);
     }
   }
 
   // Restore content to original position when cleaning up
   removeContentFromBody() {
-    if (this.hasContentTarget && this._originalParent) {
-      if (this._originalNextSibling) {
-        this._originalParent.insertBefore(this.contentTarget, this._originalNextSibling);
-      } else {
-        this._originalParent.appendChild(this.contentTarget);
+    if (this._contentEl && this._originalParent && document.body.contains(this._contentEl)) {
+      try {
+        if (this._originalNextSibling && this._originalParent.contains(this._originalNextSibling)) {
+          this._originalParent.insertBefore(this._contentEl, this._originalNextSibling);
+        } else if (document.contains(this._originalParent)) {
+          this._originalParent.appendChild(this._contentEl);
+        }
+      } catch {
+        // Parent may have been removed from DOM during Turbo navigation
       }
-      this._originalParent = null;
-      this._originalNextSibling = null;
     }
+    this._originalParent = null;
+    this._originalNextSibling = null;
   }
 
   addEventListeners() {
+    if (!this._buttonEl) return;
+
     this.toggleHandler = this.toggle.bind(this);
     this.keydownHandler = this.handleKeydown.bind(this);
     this.outsideClickHandler = this.handleOutsideClick.bind(this);
@@ -67,18 +87,17 @@ export default class extends Controller {
     this.turboBeforeVisitHandler = this.handleTurboBeforeVisit.bind(this);
     this.closeOtherMenusHandler = this.handleCloseOtherMenus.bind(this);
 
-    this.buttonTarget.addEventListener("click", this.toggleHandler);
+    this._buttonEl.addEventListener("click", this.toggleHandler);
     this.element.addEventListener("keydown", this.keydownHandler);
     document.addEventListener("click", this.outsideClickHandler);
     document.addEventListener("turbo:load", this.turboLoadHandler);
     document.addEventListener("turbo:before-visit", this.turboBeforeVisitHandler);
-    // Listen for custom event to close other menus
     document.addEventListener("ds:menu:close-others", this.closeOtherMenusHandler);
   }
 
   removeEventListeners() {
-    if (this.toggleHandler) {
-      this.buttonTarget.removeEventListener("click", this.toggleHandler);
+    if (this.toggleHandler && this._buttonEl) {
+      this._buttonEl.removeEventListener("click", this.toggleHandler);
     }
     if (this.keydownHandler) {
       this.element.removeEventListener("keydown", this.keydownHandler);
@@ -98,27 +117,26 @@ export default class extends Controller {
   }
 
   handleTurboLoad() {
-    if (!this.show) this.close();
+    this.close();
   }
 
   handleTurboBeforeVisit() {
-    if (this.show) this.close();
+    this.close();
   }
 
-  // Handle custom event to close this menu if another menu opened
   handleCloseOtherMenus(event) {
-    // Close this menu if the event was dispatched by a different menu
     if (event.detail.sourceElement !== this.element && this.show) {
       this.close();
     }
   }
 
   handleOutsideClick(event) {
-    // Check if click is outside both the button and the content (which is now in body)
+    if (!this._contentEl) return;
+
     if (
       this.show &&
       !this.element.contains(event.target) &&
-      !this.contentTarget.contains(event.target)
+      !this._contentEl.contains(event.target)
     ) {
       this.close();
     }
@@ -131,21 +149,22 @@ export default class extends Controller {
   handleKeydown(event) {
     if (event.key === "Escape") {
       this.close();
-      this.buttonTarget.focus();
+      if (this._buttonEl) this._buttonEl.focus();
     }
   }
 
   toggle(event) {
+    if (!this._contentEl) return;
+
     if (event) {
       event.preventDefault();
       event.stopPropagation();
     }
 
     this.show = !this.show;
-    this.contentTarget.classList.toggle("hidden", !this.show);
+    this._contentEl.classList.toggle("hidden", !this.show);
 
     if (this.show) {
-      // Dispatch event to close other open menus (prevents stacking)
       document.dispatchEvent(
         new CustomEvent("ds:menu:close-others", {
           detail: { sourceElement: this.element },
@@ -158,22 +177,26 @@ export default class extends Controller {
   }
 
   close() {
+    if (!this._contentEl) return;
+
     this.show = false;
-    this.contentTarget.classList.add("hidden");
+    this._contentEl.classList.add("hidden");
   }
 
   focusFirstElement() {
+    if (!this._contentEl) return;
+
     const focusableElements =
       'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-    const firstFocusableElement = this.contentTarget.querySelectorAll(focusableElements)[0];
+    const firstFocusableElement = this._contentEl.querySelectorAll(focusableElements)[0];
     if (firstFocusableElement) {
       firstFocusableElement.focus();
     }
   }
 
   startAutoUpdate() {
-    if (!this._cleanup) {
-      this._cleanup = autoUpdate(this.buttonTarget, this.contentTarget, this.boundUpdate);
+    if (!this._cleanup && this._buttonEl && this._contentEl) {
+      this._cleanup = autoUpdate(this._buttonEl, this._contentEl, this.boundUpdate);
     }
   }
 
@@ -185,29 +208,30 @@ export default class extends Controller {
   }
 
   update() {
-    if (!this.buttonTarget || !this.contentTarget) return;
+    if (!this._buttonEl || !this._contentEl) return;
 
     const isSmallScreen = !window.matchMedia("(min-width: 768px)").matches;
 
-    computePosition(this.buttonTarget, this.contentTarget, {
+    computePosition(this._buttonEl, this._contentEl, {
       placement: isSmallScreen ? "bottom" : this.placementValue,
       middleware: [
         offset(this.offsetValue),
-        // flip() automatically flips to opposite side when not enough space
         flip({ fallbackPlacements: ["top-end", "top-start", "bottom-start"] }),
         shift({ padding: 8 }),
       ],
       strategy: "fixed",
     }).then(({ x, y }) => {
+      if (!this._contentEl) return;
+
       if (isSmallScreen) {
-        Object.assign(this.contentTarget.style, {
+        Object.assign(this._contentEl.style, {
           position: "fixed",
           left: "0px",
           width: "100vw",
           top: `${y}px`,
         });
       } else {
-        Object.assign(this.contentTarget.style, {
+        Object.assign(this._contentEl.style, {
           position: "fixed",
           left: `${x}px`,
           top: `${y}px`,
