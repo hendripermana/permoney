@@ -397,6 +397,9 @@ class Loan::PayableTest < ActiveSupport::TestCase
         date: Date.current
       )
     end
+
+    assert_equal "posted", installment.reload.status
+    assert_equal Date.current, installment.posted_on
   end
 
   test "post_installment with concurrent access handles locking correctly" do
@@ -423,6 +426,9 @@ class Loan::PayableTest < ActiveSupport::TestCase
         date: Date.current
       )
     end
+
+    assert_equal "posted", installment.reload.status
+    assert installment.posted_on.present?
   end
 
   private

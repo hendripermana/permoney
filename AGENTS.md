@@ -116,6 +116,15 @@ The application is built around financial data management with these key relatio
 - **Lint/format JS/CSS**: `npm run lint` and `npm run format` — uses Biome
 - **Security scan**: `bin/brakeman` — static analysis for common Rails issues
 
+### Isolated Test DB (Docker, never touch production DB/volumes)
+- Start disposable Postgres for tests (credentials from `.env`):\
+  `sudo docker run --rm -d --name permoney-test-pg -p 5544:5432 -e POSTGRES_PASSWORD=$POSTGRES_PASSWORD -e POSTGRES_DB=permoney_test postgres:18`
+- Prepare test DB:\
+  `DB_HOST=127.0.0.1 DB_PORT=5544 POSTGRES_USER=$POSTGRES_USER POSTGRES_PASSWORD=$POSTGRES_PASSWORD POSTGRES_DB_TEST=permoney_test POSTGRES_DB=permoney_test RAILS_ENV=test bin/rails db:prepare`
+- Run tests (same env vars):\
+  `DB_HOST=127.0.0.1 DB_PORT=5544 POSTGRES_USER=$POSTGRES_USER POSTGRES_PASSWORD=$POSTGRES_PASSWORD POSTGRES_DB_TEST=permoney_test POSTGRES_DB=permoney_test RAILS_ENV=test bin/rails test`
+- Cleanup after: `sudo docker rm -f permoney-test-pg`
+
 ### Pre-Pull Request CI Workflow
 **ALWAYS run these commands before opening a pull request:**
 1. **Tests** (Required): `bin/rails test` — Run all tests (always required)

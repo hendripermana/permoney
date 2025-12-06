@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2025_11_30_120025) do
+ActiveRecord::Schema[8.1].define(version: 2025_11_30_155300) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -1089,7 +1089,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_30_120025) do
     t.date "next_billing_at", null: false
     t.string "payment_method", default: "manual", null: false
     t.text "payment_notes"
-    t.uuid "service_id", null: false
+    t.uuid "service_id"
     t.boolean "shared_within_family", default: false, null: false
     t.date "started_at", null: false
     t.string "status", default: "active", null: false
