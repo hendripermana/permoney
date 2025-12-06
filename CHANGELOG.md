@@ -1,3 +1,9 @@
+## [0.16.20](https://github.com/hendripermana/permoney/compare/v0.16.19...v0.16.20) (2025-12-06)
+
+### Other Changes
+
+- Harden connection_pool shim for Sidekiq/Redis compatibility (01b6a666)
+
 ## [0.16.19](https://github.com/hendripermana/permoney/compare/v0.16.18...v0.16.19) (2025-12-06)
 
 ### Other Changes
