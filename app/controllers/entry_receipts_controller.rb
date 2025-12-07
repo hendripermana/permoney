@@ -11,7 +11,8 @@ class EntryReceiptsController < ApplicationController
       @entry.receipt.purge_later # Async purge for better UX
 
       respond_to do |format|
-        format.html { redirect_back fallback_location: transaction_path(@entry), notice: t(".receipt_removed", default: "Receipt removed successfully") }
+        # Use transactions_path as safe fallback (entry_path via polymorphic routing)
+        format.html { redirect_back fallback_location: transactions_path, notice: t(".receipt_removed", default: "Receipt removed successfully") }
         format.turbo_stream do
           flash.now[:notice] = t(".receipt_removed", default: "Receipt removed successfully")
           render turbo_stream: [
@@ -21,7 +22,7 @@ class EntryReceiptsController < ApplicationController
         end
       end
     else
-      redirect_back fallback_location: transaction_path(@entry), alert: t(".no_receipt", default: "No receipt attached")
+      redirect_back fallback_location: transactions_path, alert: t(".no_receipt", default: "No receipt attached")
     end
   end
 

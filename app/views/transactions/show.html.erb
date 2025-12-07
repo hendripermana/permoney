@@ -143,8 +143,8 @@
           </div>
         <% else %>
           <%# Upload form when no receipt attached %>
-          <%= styled_form_with model: @entry, url: transaction_path(@entry), class: "space-y-2" do |f| %>
-            <div class="border-2 border-dashed border-secondary rounded-lg p-6 text-center hover:border-primary transition-colors">
+          <%= styled_form_with model: @entry, url: transaction_path(@entry), class: "space-y-2", html: { multipart: true } do |f| %>
+            <div class="relative border-2 border-dashed border-secondary rounded-lg p-6 text-center hover:border-primary transition-colors">
               <div class="space-y-2">
                 <%= lucide_icon "upload", class: "w-8 h-8 mx-auto text-tertiary" %>
                 <p class="text-sm text-secondary"><%= t(".receipt_upload_prompt", default: "Upload a receipt or document") %></p>

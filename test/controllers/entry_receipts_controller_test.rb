@@ -8,21 +8,22 @@ class EntryReceiptsControllerTest < ActionDispatch::IntegrationTest
     @entry = entries(:checking_one)
   end
 
-  test "should delete attached receipt" do
+  test "should delete attached receipt and enqueue purge job" do
     # Attach a test file first
     @entry.receipt.attach(
-      io: Rails.root.join("test/fixtures/files/test_receipt.png").open,
+      io: StringIO.new("fake image content"),
       filename: "test_receipt.png",
       content_type: "image/png"
     )
 
     assert @entry.receipt.attached?
 
-    delete entry_receipt_url(@entry)
+    # Verify purge job is enqueued
+    assert_enqueued_with(job: ActiveStorage::PurgeJob) do
+      delete entry_receipt_url(@entry)
+    end
 
-    assert_redirected_to transaction_path(@entry)
-    @entry.reload
-    # Note: purge_later is async, so we just check the redirect works
+    assert_redirected_to transactions_path
   end
 
   test "should redirect back when no receipt attached" do
@@ -30,6 +31,6 @@ class EntryReceiptsControllerTest < ActionDispatch::IntegrationTest
 
     delete entry_receipt_url(@entry)
 
-    assert_redirected_to transaction_path(@entry)
+    assert_redirected_to transactions_path
   end
 end

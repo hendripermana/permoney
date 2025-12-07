@@ -7,14 +7,10 @@
 # This initializer handles AWS SDK compatibility for R2
 
 Rails.application.config.after_initialize do
-  # Log R2 configuration status in production
+  # Log storage service status in production (without sensitive bucket details)
   if Rails.env.production?
-    if ENV["ACTIVE_STORAGE_SERVICE"] == "cloudflare"
-      Rails.logger.info "[Active Storage] Cloudflare R2 storage enabled"
-      Rails.logger.info "[Active Storage] Bucket: #{ENV['CLOUDFLARE_BUCKET']}"
-    else
-      Rails.logger.info "[Active Storage] Using service: #{Rails.configuration.active_storage.service}"
-    end
+    service = Rails.configuration.active_storage.service
+    Rails.logger.info "[Active Storage] Using service: #{service}"
   end
 end
 

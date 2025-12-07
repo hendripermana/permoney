@@ -124,14 +124,15 @@ class Entry < ApplicationRecord
     def receipt_content_type_valid
       unless receipt.content_type.in?(ALLOWED_RECEIPT_TYPES)
         errors.add(:receipt, :invalid_content_type, message: "must be JPEG, PNG, WebP, or PDF")
-        receipt.purge
+        # Don't purge here - let Rails clean up unattached blobs automatically
+        # Purging during validation can cause data loss and break user experience
       end
     end
 
     def receipt_size_valid
       if receipt.byte_size > MAX_RECEIPT_SIZE
         errors.add(:receipt, :invalid_file_size, max_megabytes: 10, message: "must be less than 10MB")
-        receipt.purge
+        # Don't purge here - let Rails clean up unattached blobs automatically
       end
     end
 end
