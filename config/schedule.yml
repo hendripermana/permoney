@@ -60,6 +60,12 @@ cache_monitoring:
   queue: "low_priority"
   description: "Monitors cache statistics and performance"
 
+redis_memory_monitoring:
+  cron: "*/5 * * * *" # every 5 minutes
+  class: "RedisMemoryMonitoringJob"
+  queue: "low_priority"
+  description: "Alerts if Redis memory usage approaches maxmemory to prevent job loss"
+
 # Balance audit: sample accounts, recalc recent window, auto-heal if mismatch
 balance_audit:
   cron: "15 3 * * *" # daily at 03:15 server time
