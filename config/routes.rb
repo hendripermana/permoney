@@ -204,6 +204,11 @@ Rails.application.routes.draw do
     end
   end
 
+  # Entry receipts - attachment management for transaction documentation (stored in R2)
+  resources :entries, only: [] do
+    resource :receipt, only: :destroy, controller: "entry_receipts"
+  end
+
   resources :rules, except: :show do
     member do
       get :confirm

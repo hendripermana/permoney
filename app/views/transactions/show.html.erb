@@ -97,6 +97,69 @@
       </div>
     <% end %>
 
+    <%# Receipt / Document Attachment Section %>
+    <% dialog.with_section(title: t(".receipt", default: "Receipt / Document")) do %>
+      <div class="pb-4 space-y-4">
+        <% if @entry.receipt.attached? %>
+          <div class="space-y-3">
+            <%# Display receipt thumbnail or icon %>
+            <% if @entry.receipt.content_type.start_with?("image/") %>
+              <div class="relative group">
+                <%= link_to rails_blob_path(@entry.receipt, disposition: "inline"), target: "_blank", class: "block" do %>
+                  <%= image_tag url_for(@entry.receipt.variant(:display)),
+                                alt: "Receipt",
+                                class: "rounded-lg max-w-full max-h-48 object-contain border border-primary" %>
+                  <span class="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg flex items-center justify-center text-white text-sm font-medium">
+                    <%= t(".view_full_size", default: "View full size") %>
+                  </span>
+                <% end %>
+              </div>
+            <% else %>
+              <%# PDF or other document type %>
+              <div class="flex items-center gap-3 p-3 bg-surface rounded-lg border border-primary">
+                <%= lucide_icon "file-text", class: "w-8 h-8 text-secondary" %>
+                <div class="flex-1 min-w-0">
+                  <p class="text-sm font-medium text-primary truncate"><%= @entry.receipt.filename %></p>
+                  <p class="text-xs text-tertiary"><%= number_to_human_size(@entry.receipt.byte_size) %></p>
+                </div>
+                <%= link_to rails_blob_path(@entry.receipt, disposition: "attachment"),
+                            class: "btn btn--outline btn--sm" do %>
+                  <%= lucide_icon "download", class: "w-4 h-4" %>
+                  <%= t(".download", default: "Download") %>
+                <% end %>
+              </div>
+            <% end %>
+
+            <%# Delete/Replace receipt %>
+            <div class="flex items-center gap-2">
+              <%= button_to entry_receipt_path(@entry),
+                            method: :delete,
+                            class: "text-xs text-destructive hover:underline",
+                            data: { confirm: t(".delete_receipt_confirm", default: "Remove this receipt?") } do %>
+                <%= lucide_icon "trash-2", class: "w-3 h-3 inline" %>
+                <%= t(".remove_receipt", default: "Remove receipt") %>
+              <% end %>
+            </div>
+          </div>
+        <% else %>
+          <%# Upload form when no receipt attached %>
+          <%= styled_form_with model: @entry, url: transaction_path(@entry), class: "space-y-2", html: { multipart: true } do |f| %>
+            <div class="relative border-2 border-dashed border-secondary rounded-lg p-6 text-center hover:border-primary transition-colors">
+              <div class="space-y-2">
+                <%= lucide_icon "upload", class: "w-8 h-8 mx-auto text-tertiary" %>
+                <p class="text-sm text-secondary"><%= t(".receipt_upload_prompt", default: "Upload a receipt or document") %></p>
+                <p class="text-xs text-tertiary"><%= t(".receipt_formats", default: "JPEG, PNG, WebP, or PDF (max 10MB)") %></p>
+              </div>
+              <%= f.file_field :receipt,
+                               accept: "image/jpeg,image/png,image/webp,application/pdf",
+                               class: "absolute inset-0 w-full h-full opacity-0 cursor-pointer",
+                               onchange: "this.form.submit()" %>
+            </div>
+          <% end %>
+        <% end %>
+      </div>
+    <% end %>
+
     <% dialog.with_section(title: t(".settings")) do %>
       <div class="pb-4">
         <%= styled_form_with model: @entry,
