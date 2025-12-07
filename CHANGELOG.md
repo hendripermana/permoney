@@ -1,3 +1,9 @@
+## [0.16.22](https://github.com/hendripermana/permoney/compare/v0.16.21...v0.16.22) (2025-12-07)
+
+### Other Changes
+
+- Add Redis memory monitoring and guard streaming assistant with test (6954ffdc)
+
 ## [0.16.21](https://github.com/hendripermana/permoney/compare/v0.16.20...v0.16.21) (2025-12-07)
 
 ### Other Changes
