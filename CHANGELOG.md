@@ -1,3 +1,17 @@
+## [0.16.25](https://github.com/hendripermana/permoney/compare/v0.16.24...v0.16.25) (2025-12-07)
+
+### Bug Fixes
+
+- fix: Handle missing profile images gracefully after R2 migration (087a8047)
+
+### Performance
+
+- perf: Use .url instead of .processed.url for avatar (af71633f)
+
+### Other Changes
+
+- Merge pull request #95 from hendripermana/fix/profile-image-file-not-found (6368dc4f)
+
 ## [0.16.24](https://github.com/hendripermana/permoney/compare/v0.16.23...v0.16.24) (2025-12-07)
 
 ### Other Changes
