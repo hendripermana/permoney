@@ -22,7 +22,7 @@ export default class extends Controller {
 
   connect() {
     // Generate unique ID for this menu instance to track its content
-    this._menuId = `ds-menu-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    this._menuId = `ds-menu-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 
     // Store direct references before moving to body (targets won't work after move)
     this._buttonEl = this.hasButtonTarget ? this.buttonTarget : null;
@@ -74,7 +74,8 @@ export default class extends Controller {
     if (this._contentEl && document.body.contains(this._contentEl)) {
       try {
         // Try to restore to original position first
-        if (this._originalParent && document.contains(this._originalParent)) {
+        // Use isConnected with optional chaining for cleaner DOM existence check
+        if (this._originalParent?.isConnected) {
           if (
             this._originalNextSibling &&
             this._originalParent.contains(this._originalNextSibling)
@@ -90,11 +91,8 @@ export default class extends Controller {
         }
       } catch {
         // Failsafe: remove content if any error occurs during restoration
-        try {
-          this._contentEl.remove();
-        } catch {
-          // Content already removed or inaccessible
-        }
+        // Element.remove() is safe and won't throw even if already removed
+        this._contentEl.remove();
       }
     }
     this._originalParent = null;
