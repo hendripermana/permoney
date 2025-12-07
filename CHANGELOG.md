@@ -1,3 +1,15 @@
+## [0.16.23](https://github.com/hendripermana/permoney/compare/v0.16.22...v0.16.23) (2025-12-07)
+
+### Documentation
+
+- docs: Simplify R2 initializer comments (abf53ba5)
+
+### Other Changes
+
+- Merge pull request #93 from hendripermana/feature/cloudflare-r2-integration (9f7405f5)
+- fix(security): Address AI code review suggestions (3636bab2)
+- feat(storage): Enable Cloudflare R2 for Active Storage with receipt attachments (ab0d5ff4)
+
 ## [0.16.22](https://github.com/hendripermana/permoney/compare/v0.16.21...v0.16.22) (2025-12-07)
 
 ### Other Changes
