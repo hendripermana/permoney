@@ -1,3 +1,10 @@
+## [0.16.21](https://github.com/hendripermana/permoney/compare/v0.16.20...v0.16.21) (2025-12-07)
+
+### Other Changes
+
+- Guard streaming assistant messages against blank content (6292679f)
+- Document connection_pool compatibility shim (749a0c6a)
+
 ## [0.16.20](https://github.com/hendripermana/permoney/compare/v0.16.19...v0.16.20) (2025-12-06)
 
 ### Other Changes
