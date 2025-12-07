@@ -9,6 +9,7 @@ import { Controller } from "@hotwired/stimulus";
  * - Moves content to body to avoid overflow:hidden clipping issues
  * - Dispatches custom event to close other open menus (prevents stacking)
  * - Stores direct element references since targets are lost when moved to body
+ * - Rails 8.1: Properly handles Turbo morph refreshes by cleaning up orphaned content
  */
 export default class extends Controller {
   static targets = ["button", "content"];
@@ -20,6 +21,9 @@ export default class extends Controller {
   };
 
   connect() {
+    // Generate unique ID for this menu instance to track its content
+    this._menuId = `ds-menu-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+
     // Store direct references before moving to body (targets won't work after move)
     this._buttonEl = this.hasButtonTarget ? this.buttonTarget : null;
     this._contentEl = this.hasContentTarget ? this.contentTarget : null;
@@ -28,6 +32,9 @@ export default class extends Controller {
       console.warn("DS--menu: Missing button or content target");
       return;
     }
+
+    // Mark content with unique ID for cleanup tracking
+    this._contentEl.setAttribute("data-ds-menu-id", this._menuId);
 
     this.show = this.showValue;
     this.boundUpdate = this.update.bind(this);
@@ -61,16 +68,31 @@ export default class extends Controller {
   }
 
   // Restore content to original position when cleaning up
+  // Rails 8.1: With Turbo morph refreshes, the original parent may be morphed/replaced,
+  // so we need to remove orphaned content from body to prevent accumulation
   removeContentFromBody() {
-    if (this._contentEl && this._originalParent && document.body.contains(this._contentEl)) {
+    if (this._contentEl && document.body.contains(this._contentEl)) {
       try {
-        if (this._originalNextSibling && this._originalParent.contains(this._originalNextSibling)) {
-          this._originalParent.insertBefore(this._contentEl, this._originalNextSibling);
-        } else if (document.contains(this._originalParent)) {
-          this._originalParent.appendChild(this._contentEl);
+        // Try to restore to original position first
+        // Use isConnected with optional chaining for cleaner DOM existence check
+        if (this._originalParent?.isConnected) {
+          if (
+            this._originalNextSibling &&
+            this._originalParent.contains(this._originalNextSibling)
+          ) {
+            this._originalParent.insertBefore(this._contentEl, this._originalNextSibling);
+          } else {
+            this._originalParent.appendChild(this._contentEl);
+          }
+        } else {
+          // Original parent no longer in DOM (Turbo morph replaced it)
+          // Remove the orphaned content element to prevent accumulation
+          this._contentEl.remove();
         }
       } catch {
-        // Parent may have been removed from DOM during Turbo navigation
+        // Failsafe: remove content if any error occurs during restoration
+        // Element.remove() is safe and won't throw even if already removed
+        this._contentEl.remove();
       }
     }
     this._originalParent = null;
@@ -85,6 +107,7 @@ export default class extends Controller {
     this.outsideClickHandler = this.handleOutsideClick.bind(this);
     this.turboLoadHandler = this.handleTurboLoad.bind(this);
     this.turboBeforeVisitHandler = this.handleTurboBeforeVisit.bind(this);
+    this.turboBeforeRenderHandler = this.handleTurboBeforeRender.bind(this);
     this.closeOtherMenusHandler = this.handleCloseOtherMenus.bind(this);
 
     this._buttonEl.addEventListener("click", this.toggleHandler);
@@ -92,6 +115,7 @@ export default class extends Controller {
     document.addEventListener("click", this.outsideClickHandler);
     document.addEventListener("turbo:load", this.turboLoadHandler);
     document.addEventListener("turbo:before-visit", this.turboBeforeVisitHandler);
+    document.addEventListener("turbo:before-render", this.turboBeforeRenderHandler);
     document.addEventListener("ds:menu:close-others", this.closeOtherMenusHandler);
   }
 
@@ -111,6 +135,9 @@ export default class extends Controller {
     if (this.turboBeforeVisitHandler) {
       document.removeEventListener("turbo:before-visit", this.turboBeforeVisitHandler);
     }
+    if (this.turboBeforeRenderHandler) {
+      document.removeEventListener("turbo:before-render", this.turboBeforeRenderHandler);
+    }
     if (this.closeOtherMenusHandler) {
       document.removeEventListener("ds:menu:close-others", this.closeOtherMenusHandler);
     }
@@ -122,6 +149,14 @@ export default class extends Controller {
 
   handleTurboBeforeVisit() {
     this.close();
+  }
+
+  // Rails 8.1: Handle Turbo morph refreshes - cleanup content before render
+  handleTurboBeforeRender() {
+    this.close();
+    // Proactively remove content from body before Turbo morphs the page
+    // This prevents orphaned content accumulation with morph refreshes
+    this.removeContentFromBody();
   }
 
   handleCloseOtherMenus(event) {
