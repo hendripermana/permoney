@@ -1,6 +1,12 @@
 <%# locals: (entry:, income_categories:, expense_categories:) %>
 
-<%= styled_form_with model: entry, url: transactions_path, class: "space-y-4" do |f| %>
+<%= styled_form_with model: entry,
+                     url: transactions_path,
+                     class: "space-y-4",
+                     data: {
+                       controller: "manual-entry",
+                       action: "turbo:submit-start->manual-entry#disable turbo:submit-end->manual-entry#enable"
+                     } do |f| %>
   <% if entry.errors.any? %>
     <%= render "shared/form_errors", model: entry %>
   <% end %>
@@ -58,6 +64,6 @@
   <% end %>
 
   <section>
-    <%= f.submit t(".submit") %>
+    <%= f.submit t(".submit"), data: { manual_entry_target: "submit" } %>
   </section>
 <% end %>
