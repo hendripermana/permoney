@@ -30,9 +30,9 @@
            class="h-full w-full flex justify-center items-center <%= user.profile_image.attached? ? "" : "hidden" %>">
           <% if user.profile_image.attached? %>
             <div class="h-full w-full">
-              <%# Use :medium variant with .processed.url for immediate generation %>
+              <%# Uses safe_avatar_url to handle missing files gracefully %>
               <%= render "settings/user_avatar", 
-                  avatar_url: user.profile_image.variant(:medium).processed.url,
+                  avatar_url: user.safe_avatar_url(:medium),
                   initials: user.initials %>
             </div>
           <% end %>
