@@ -3,6 +3,20 @@ class Entry < ApplicationRecord
 
   monetize :amount
 
+  # Receipt/document attachment for transaction documentation
+  # Stored in Cloudflare R2 for zero-egress cost and global CDN delivery
+  has_one_attached :receipt do |attachable|
+    # Preprocessed variants for instant display (generated immediately after upload)
+    attachable.variant :thumbnail, resize_to_fill: [ 100, 100 ], convert: :webp, saver: { quality: 80, strip: true }, preprocessed: true
+    attachable.variant :small, resize_to_fill: [ 200, 200 ], convert: :webp, saver: { quality: 85, strip: true }, preprocessed: true
+    # On-demand variant for full display
+    attachable.variant :display, resize_to_limit: [ 800, 800 ], convert: :webp, saver: { quality: 85, strip: true }
+  end
+
+  # Receipt validation
+  validate :receipt_content_type_valid, if: -> { receipt.attached? }
+  validate :receipt_size_valid, if: -> { receipt.attached? }
+
   # PERFORMANCE: Counter cache for blazing fast account.entries.count
   # Eliminates N+1 COUNT queries (50-100x faster than COUNT(*))
   # Touch account to invalidate caches when entries change
@@ -101,4 +115,23 @@ class Entry < ApplicationRecord
       all.size
     end
   end
+
+  private
+
+    ALLOWED_RECEIPT_TYPES = %w[image/jpeg image/png image/webp application/pdf].freeze
+    MAX_RECEIPT_SIZE = 10.megabytes
+
+    def receipt_content_type_valid
+      unless receipt.content_type.in?(ALLOWED_RECEIPT_TYPES)
+        errors.add(:receipt, :invalid_content_type, message: "must be JPEG, PNG, WebP, or PDF")
+        receipt.purge
+      end
+    end
+
+    def receipt_size_valid
+      if receipt.byte_size > MAX_RECEIPT_SIZE
+        errors.add(:receipt, :invalid_file_size, max_megabytes: 10, message: "must be less than 10MB")
+        receipt.purge
+      end
+    end
 end

@@ -55,6 +55,15 @@
                     placeholder: t(".note_placeholder"),
                     rows: 5,
                     "data-auto-submit-form-target": "auto" %>
+
+    <%# Receipt attachment - stored in R2 for zero-egress cost %>
+    <div class="space-y-1">
+      <label class="form-field__label"><%= t(".receipt_label", default: "Receipt / Document") %></label>
+      <%= f.file_field :receipt,
+                       accept: "image/jpeg,image/png,image/webp,application/pdf",
+                       class: "block w-full text-sm text-secondary file:rounded-md file:border-0 file:bg-container file:text-sm file:font-semibold file:text-primary hover:file:bg-surface-inset cursor-pointer" %>
+      <p class="text-xs text-tertiary"><%= t(".receipt_hint", default: "JPEG, PNG, WebP, or PDF (max 10MB)") %></p>
+    </div>
   <% end %>
 
   <section>
