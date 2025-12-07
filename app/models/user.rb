@@ -105,6 +105,18 @@ class User < ApplicationRecord
     show_ai_sidebar
   end
 
+  # Safe avatar URL helper - handles missing files gracefully
+  # This prevents 500 errors when profile images exist in DB but not in storage
+  # (e.g., after migration from local to R2 storage)
+  def safe_avatar_url(variant = :small)
+    return nil unless profile_image.attached?
+
+    profile_image.variant(variant).processed.url
+  rescue ActiveStorage::FileNotFoundError, ActiveStorage::InvariableError => e
+    Rails.logger.warn "[ActiveStorage] Profile image not found for user #{id}: #{e.message}"
+    nil
+  end
+
   def ai_available?
     env_token = ENV["OPENAI_ACCESS_TOKEN"]
     db_token = Setting.find_by(var: "openai_access_token")&.value
