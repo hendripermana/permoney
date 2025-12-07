@@ -15,9 +15,11 @@ class StreamingAssistantResponseJob < ApplicationJob
     Rails.logger.info("StreamingAssistantResponseJob: Starting for message #{message_id}, chat #{chat.id}")
 
     # Create assistant message upfront (empty content)
+    placeholder_content = "[generating]"
+
     assistant_message = AssistantMessage.create!(
       chat: chat,
-      content: "",
+      content: placeholder_content,
       ai_model: message.ai_model,
       status: :pending
     )
@@ -44,7 +46,10 @@ class StreamingAssistantResponseJob < ApplicationJob
           Rails.logger.info("StreamingAssistantResponseJob: Stop flag detected, terminating stream for message #{message_id}")
 
           # Save accumulated content before stopping
-          assistant_message.update!(content: @accumulated_content, status: :complete)
+          assistant_message.update!(
+            content: @accumulated_content.presence || placeholder_content,
+            status: :complete
+          )
 
           # Clear stop flag
           Rails.cache.delete(stop_key)
@@ -58,11 +63,9 @@ class StreamingAssistantResponseJob < ApplicationJob
 
       # Save final accumulated content to database (single write)
       # Only update if we have content to avoid validation errors
-      if assistant_message.status == :pending && @accumulated_content.present?
-        assistant_message.update!(content: @accumulated_content, status: :complete)
-      elsif assistant_message.status == :pending
-        # If no content received, mark as failed
-        assistant_message.update!(content: "No response received", status: :failed)
+      if assistant_message.pending?
+        final_content = @accumulated_content.presence || assistant_message.content.presence || placeholder_content
+        assistant_message.update!(content: final_content, status: :complete)
       end
 
       Rails.logger.info("StreamingAssistantResponseJob: Completed for message #{message_id}")
@@ -72,7 +75,10 @@ class StreamingAssistantResponseJob < ApplicationJob
       Rails.logger.error(e.backtrace.join("\n"))
 
       # Mark message as failed
-      assistant_message.update!(status: :failed)
+      assistant_message.update!(
+        content: @accumulated_content.presence || assistant_message.content.presence || placeholder_content,
+        status: :failed
+      )
 
       # Broadcast error
       ChatStreamingChannel.broadcast_to(chat, {
@@ -117,8 +123,12 @@ class StreamingAssistantResponseJob < ApplicationJob
         })
 
       when :complete
-        # Mark message as complete
-        assistant_message.update!(status: :complete)
+        final_content = @accumulated_content.presence || assistant_message.content.presence || "No response received"
+
+        assistant_message.update!(
+          content: final_content,
+          status: :complete
+        )
 
         # Update chat with response ID
         if event[:response_id]
@@ -140,7 +150,10 @@ class StreamingAssistantResponseJob < ApplicationJob
         # Handle streaming error
         Rails.logger.error("StreamingAssistantResponseJob: Streaming error for message #{assistant_message.id}: #{event[:error]}")
 
-        assistant_message.update!(status: :failed)
+        assistant_message.update!(
+          content: @accumulated_content.presence || assistant_message.content.presence || "No response received",
+          status: :failed
+        )
 
         ChatStreamingChannel.broadcast_to(chat, {
           type: "error",
