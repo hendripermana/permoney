@@ -1,3 +1,11 @@
+## [0.16.24](https://github.com/hendripermana/permoney/compare/v0.16.23...v0.16.24) (2025-12-07)
+
+### Other Changes
+
+- Merge pull request #94 from hendripermana/fix/menu-turbo-morph-cleanup (e2837bef)
+- refactor(ui): Address AI code review suggestions for menu controller (83c5109c)
+- fix(ui): Resolve menu button regression after transaction creation in Rails 8.1 (2430ee71)
+
 ## [0.16.23](https://github.com/hendripermana/permoney/compare/v0.16.22...v0.16.23) (2025-12-07)
 
 ### Documentation
