@@ -4,8 +4,8 @@
        data-chat-streaming-chat-id-value="<%= @chat.id %>">
     <%= turbo_stream_from @chat %>
 
-    <%# Messages Area %>
-    <div class="flex-1 overflow-y-auto px-4 py-3 space-y-4 scroll-smooth" 
+    <%# Messages Area - Optimized for streaming with smooth scrolling %>
+    <div class="flex-1 overflow-y-auto overflow-x-hidden px-3 lg:px-4 py-4 space-y-3 scroll-smooth min-h-0" 
          data-chat-target="messages"
          data-chat-streaming-target="messages">
       <% if @chat.conversation_messages.any? %>
@@ -16,16 +16,17 @@
         <%= render "chats/ai_greeting" %>
       <% end %>
 
-      <%# Typing Indicator (hidden by default, shown during streaming) %>
+      <%# Typing Indicator - Hidden by default, shown during streaming %>
       <%= render "chats/typing_indicator", chat: @chat %>
 
+      <%# Error Display - Shown only when there's an error and assistant response is needed %>
       <% if @chat.error.present? && @chat.needs_assistant_response? %>
         <%= render "chats/error", chat: @chat, floating: true %>
       <% end %>
     </div>
 
-    <%# Chat Form %>
-    <div class="shrink-0 border-t border-primary bg-container">
+    <%# Chat Form - Input area with stop button during streaming %>
+    <div class="shrink-0 border-t border-primary/10 bg-container">
       <%= render "messages/chat_form", chat: @chat, floating: true, message: @message %>
     </div>
   </div>

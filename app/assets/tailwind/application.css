@@ -48,6 +48,102 @@
   }
 }
 
+/* Enhanced animations for Floating Chat & Streaming */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes textUpdatePulse {
+  from {
+    opacity: 0.8;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes messageComplete {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@utility animate-scale-in {
+  animation: scaleIn 0.3s ease-out forwards;
+}
+
+@utility animate-fade-in {
+  animation: fadeIn 300ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@utility text-update-pulse {
+  animation: textUpdatePulse 100ms ease-out;
+}
+
+@utility message-complete {
+  animation: messageComplete 200ms ease-out;
+}
+
+/* GPU-accelerated animations for better performance */
+@utility gpu-accelerated {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+/* Content visibility optimization for large component trees */
+@utility content-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 500px;
+}
+
+/* Optimized scrollbar styling */
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+  
+  &::-webkit-scrollbar-thumb {
+    background-color: rgba(156, 163, 175, 0.5);
+    border-radius: 3px;
+  }
+  
+  &::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(156, 163, 175, 0.7);
+  }
+}
+
+/* Performance-optimized transitions */
+@utility transition-optimized {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Reduced motion support - improves accessibility and performance */
+@media (prefers-reduced-motion: reduce) {
+  .animate-scale-in,
+  .animate-fade-in,
+  .text-update-pulse,
+  .message-complete,
+  .gpu-accelerated {
+    animation: none;
+    transition: none;
+  }
+}
+
 @utility animate-scale-in {
   animation: scaleIn 0.3s ease-out forwards;
 }

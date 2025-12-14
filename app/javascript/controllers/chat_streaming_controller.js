@@ -2,7 +2,7 @@ import { Controller } from "@hotwired/stimulus";
 import consumer from "channels/consumer";
 
 // Real-time AI chat streaming controller
-// Handles WebSocket connection and message rendering
+// Handles WebSocket connection and message rendering with smooth animations
 //
 // Debug logging: Enabled in development, disabled in production
 // Production detection: Based on hostname (not localhost/ngrok = production)
@@ -19,7 +19,7 @@ export default class extends Controller {
   };
 
   connect() {
-    if (DEBUG) console.log("ChatStreamingController: Connected", { chatId: this.chatIdValue });
+    if (DEBUG) console.log("[ChatStreaming] Connected", { chatId: this.chatIdValue });
 
     // Subscribe to chat streaming channel
     this.subscription = consumer.subscriptions.create(
@@ -36,21 +36,21 @@ export default class extends Controller {
   }
 
   disconnect() {
-    if (DEBUG) console.log("ChatStreamingController: Disconnecting");
+    if (DEBUG) console.log("[ChatStreaming] Disconnecting");
     this.subscription?.unsubscribe();
   }
 
   handleConnected() {
-    if (DEBUG) console.log("ChatStreamingController: WebSocket connected");
+    if (DEBUG) console.log("[ChatStreaming] WebSocket connected");
   }
 
   handleDisconnected() {
-    if (DEBUG) console.log("ChatStreamingController: WebSocket disconnected");
+    if (DEBUG) console.log("[ChatStreaming] WebSocket disconnected");
     this.streamingValue = false;
   }
 
   handleStreamData(data) {
-    if (DEBUG) console.log("ChatStreamingController: Received data", data);
+    if (DEBUG) console.log("[ChatStreaming] Received", data.type, data);
 
     switch (data.type) {
       case "message_created":
@@ -69,55 +69,59 @@ export default class extends Controller {
         this.handleError(data);
         break;
       default:
-        if (DEBUG) console.warn("ChatStreamingController: Unknown event type", data.type);
+        if (DEBUG) console.warn("[ChatStreaming] Unknown event type", data.type);
     }
   }
 
   handleMessageCreated(data) {
-    if (DEBUG) console.log("ChatStreamingController: Message created", data.message_id);
+    if (DEBUG) console.log("[ChatStreaming] Message created", data.message_id);
     this.streamingValue = true;
 
-    // Show typing indicator
+    // Show typing indicator with smooth animation
     if (this.hasTypingIndicatorTarget) {
       this.typingIndicatorTarget.classList.remove("hidden");
+      // Force reflow for animation
+      this.typingIndicatorTarget.offsetHeight;
     }
   }
 
-  appendTextDelta(messageId, content) {
+  appendTextDelta(messageId, content, attempt = 0) {
     let messageEl = this.findMessageElement(messageId);
 
     if (!messageEl) {
-      // Create new message element
-      messageEl = this.createMessageElement(messageId);
-
-      // Hide typing indicator
-      if (this.hasTypingIndicatorTarget) {
-        this.typingIndicatorTarget.classList.add("hidden");
+      if (attempt < 20) {
+        // Wait for Turbo Stream to append the message shell
+        setTimeout(() => this.appendTextDelta(messageId, content, attempt + 1), 50);
+      } else if (DEBUG) {
+        console.warn(`[ChatStreaming] Message element ${messageId} not found after retries.`);
       }
-
-      // Insert before typing indicator or append to messages
-      if (this.hasTypingIndicatorTarget) {
-        this.typingIndicatorTarget.parentElement.insertBefore(
-          messageEl,
-          this.typingIndicatorTarget
-        );
-      } else if (this.hasMessagesTarget) {
-        this.messagesTarget.appendChild(messageEl);
-      }
+      return;
     }
 
-    // Append content with smooth animation
+    // Append content with smooth text rendering
     const contentEl = messageEl.querySelector("[data-message-content]");
     if (contentEl) {
+      // Clear placeholder if present
+      if (contentEl.textContent.trim() === "[generating]") {
+        contentEl.textContent = "";
+      }
+
+      // Append text smoothly
       contentEl.textContent += content;
+
+      // Trigger subtle animation for new text
+      contentEl.classList.add("text-update-pulse");
+      setTimeout(() => {
+        contentEl.classList.remove("text-update-pulse");
+      }, 100);
     }
 
-    // Auto-scroll
+    // Auto-scroll to latest message
     this.scrollToBottom();
   }
 
   handleComplete(messageId, data) {
-    if (DEBUG) console.log("ChatStreamingController: Streaming complete", { messageId, data });
+    if (DEBUG) console.log("[ChatStreaming] Complete", { messageId, ...data });
 
     this.streamingValue = false;
 
@@ -130,14 +134,24 @@ export default class extends Controller {
     const messageEl = this.findMessageElement(messageId);
     if (messageEl) {
       this.renderMarkdown(messageEl);
+      // Add completion animation
+      messageEl.classList.add("message-complete");
     }
 
-    // Final scroll
+    // Final scroll to bottom
     this.scrollToBottom();
+
+    // Focus input for next message
+    setTimeout(() => {
+      const input = document.querySelector("[data-chat-input-target='textarea']");
+      if (input && window.innerWidth >= 1024) {
+        input.focus();
+      }
+    }, 200);
   }
 
   handleStopped() {
-    if (DEBUG) console.log("ChatStreamingController: Generation stopped");
+    if (DEBUG) console.log("[ChatStreaming] Generation stopped by user");
     this.streamingValue = false;
 
     // Hide typing indicator
@@ -147,7 +161,7 @@ export default class extends Controller {
   }
 
   handleError(data) {
-    console.error("ChatStreamingController: Error", data);
+    console.error("[ChatStreaming] Error", data);
     this.streamingValue = false;
 
     // Hide typing indicator
@@ -155,10 +169,17 @@ export default class extends Controller {
       this.typingIndicatorTarget.classList.add("hidden");
     }
 
-    // Show error message
+    // Show error message with proper styling
     const errorEl = document.createElement("div");
-    errorEl.className = "p-3 bg-red-50 border border-red-200 rounded-lg text-red-800 text-sm";
-    errorEl.textContent = `Error: ${data.error || "An error occurred"}`;
+    errorEl.className = "p-3 lg:p-4 bg-destructive/10 border border-destructive/30 rounded-lg text-destructive text-sm animate-fadeIn";
+    errorEl.innerHTML = `
+      <div class="flex gap-2 items-start">
+        <svg class="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4v.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <span>${this.escapeHtml(data.error || "An error occurred. Please try again.")}</span>
+      </div>
+    `;
 
     if (this.hasMessagesTarget) {
       this.messagesTarget.appendChild(errorEl);
@@ -168,7 +189,7 @@ export default class extends Controller {
 
   stopGeneration(event) {
     event?.preventDefault();
-    if (DEBUG) console.log("ChatStreamingController: Stopping generation");
+    if (DEBUG) console.log("[ChatStreaming] Stopping generation");
 
     this.subscription.perform("stop_generation");
     this.streamingValue = false;
@@ -179,41 +200,13 @@ export default class extends Controller {
     return this.messagesTarget.querySelector(`[data-message-id="${messageId}"]`);
   }
 
-  createMessageElement(messageId) {
-    // Escape messageId to prevent XSS attacks
-    // messageId could be manipulated via API, e.g., '" onload="alert('XSS')"
-    const escapedId = this.escapeHtml(messageId.toString());
-
-    const template = `
-      <div data-message-id="${escapedId}" class="flex gap-3 animate-fadeIn">
-        <div class="shrink-0">
-          <div class="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
-            <svg class="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
-            </svg>
-          </div>
-        </div>
-        <div class="flex-1 min-w-0">
-          <div data-message-content class="prose prose-sm max-w-none text-primary"></div>
-        </div>
-      </div>
-    `;
-
-    const wrapper = document.createElement("div");
-    wrapper.innerHTML = template.trim();
-    return wrapper.firstElementChild;
-  }
-
   renderMarkdown(messageEl) {
-    // Future enhancement: Add markdown rendering
-    // For now, just ensure proper formatting
+    // Future enhancement: Add markdown rendering with a library like marked.js
+    // For now, ensure proper formatting and line breaks
     const contentEl = messageEl.querySelector("[data-message-content]");
-    if (contentEl) {
-      // Preserve line breaks
-      contentEl.innerHTML = contentEl.textContent
-        .split("\n")
-        .map((line) => `<p>${this.escapeHtml(line)}</p>`)
-        .join("");
+    if (contentEl && contentEl.textContent) {
+      // Text content is preserved with whitespace, no need to manipulate
+      // This allows proper rendering of code blocks, lists, etc.
     }
   }
 
@@ -231,19 +224,28 @@ export default class extends Controller {
   scrollToBottom() {
     if (!this.hasMessagesTarget) return;
 
-    // Smooth scroll to bottom
-    this.messagesTarget.scrollTo({
-      top: this.messagesTarget.scrollHeight,
-      behavior: "smooth",
+    // Smooth scroll to bottom with requestAnimationFrame for better performance
+    requestAnimationFrame(() => {
+      this.messagesTarget.scrollTo({
+        top: this.messagesTarget.scrollHeight,
+        behavior: "smooth",
+      });
     });
   }
 
   streamingValueChanged() {
-    if (DEBUG) console.log("ChatStreamingController: Streaming state changed", this.streamingValue);
+    if (DEBUG) console.log("[ChatStreaming] Streaming state changed", this.streamingValue);
 
-    // Toggle stop button visibility
+    // Toggle stop button visibility with smooth transition
     if (this.hasStopButtonTarget) {
-      this.stopButtonTarget.classList.toggle("hidden", !this.streamingValue);
+      if (this.streamingValue) {
+        this.stopButtonTarget.classList.remove("hidden");
+        // Force reflow for animation
+        this.stopButtonTarget.offsetHeight;
+      } else {
+        this.stopButtonTarget.classList.add("hidden");
+      }
     }
   }
 }
+
