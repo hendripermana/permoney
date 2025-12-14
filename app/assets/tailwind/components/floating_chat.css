@@ -1,6 +1,8 @@
-/* Floating Chat Component Styles */
+/* ================================================ */
+/* Floating Chat Component - Enhanced 2025 Design */
+/* ================================================ */
 
-/* Ensure chat button is always accessible above other content */
+/* Base container adjustments for proper z-stacking and positioning */
 [data-controller="floating-chat"] {
   /* Safe area insets for notched devices (iPhone X+, etc.) */
   bottom: calc(1rem + env(safe-area-inset-bottom));
@@ -14,82 +16,360 @@
   }
 }
 
-/* Mobile: Full screen chat panel */
-@media (max-width: 1023px) {
-  [data-floating-chat-target="panel"] {
-    /* Account for mobile browser chrome and safe areas */
-    padding-top: env(safe-area-inset-top);
-    padding-bottom: env(safe-area-inset-bottom);
-  }
-}
+/* ================================================ */
+/* Trigger Button Enhancements */
+/* ================================================ */
 
-/* Desktop: Floating panel with shadow */
-@media (min-width: 1024px) {
-  [data-floating-chat-target="panel"] {
-    /* Ensure panel doesn't go off-screen */
-    max-height: calc(100vh - 8rem);
-  }
-}
-
-/* Smooth transitions for panel */
-[data-floating-chat-target="panel"] {
-  transition-property: opacity, transform;
-  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-/* Backdrop blur effect */
-[data-floating-chat-target="backdrop"] {
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-}
-
-/* Prevent text selection on trigger button */
+/* Smooth trigger button interactions */
 [data-floating-chat-target="trigger"] {
   -webkit-user-select: none;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
+  position: relative;
+  will-change: transform;
+  
+  /* Enhanced shadow for depth */
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15), 0 2px 4px rgba(0, 0, 0, 0.1);
+  
+  /* Smooth transitions for all interactions */
+  transition-property: transform, box-shadow, background-color;
+  transition-duration: 200ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Subtle pulse animation for attention */
-@keyframes floating-chat-pulse {
+/* Enhanced hover state with elevation effect */
+[data-floating-chat-target="trigger"]:hover {
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2), 0 4px 8px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px);
+}
+
+/* Active/pressed state with tactile feedback */
+[data-floating-chat-target="trigger"]:active {
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  transform: scale(0.95);
+}
+
+/* Focus state for accessibility with proper ring offset */
+[data-floating-chat-target="trigger"]:focus-visible {
+  outline: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15), 
+              0 0 0 4px rgba(59, 130, 246, 0.5);
+}
+
+/* Notification badge styling */
+[data-floating-chat-target="badge"] {
+  animation: pulse-badge 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  box-shadow: 0 2px 6px rgba(239, 68, 68, 0.4);
+}
+
+@keyframes pulse-badge {
   0%, 100% {
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    opacity: 1;
+    transform: scale(1);
   }
   50% {
-    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    opacity: 0.8;
+    transform: scale(1.1);
   }
 }
 
-[data-floating-chat-target="trigger"]:not(:hover) {
-  animation: floating-chat-pulse 3s ease-in-out infinite;
+/* ================================================ */
+/* Backdrop / Modal Overlay */
+/* ================================================ */
+
+/* Full-screen backdrop with blur effect for mobile */
+[data-floating-chat-target="backdrop"] {
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  background-color: rgba(0, 0, 0, 0.4);
+  transition-property: opacity, background-color;
+  transition-duration: 300ms;
+  transition-timing-function: ease-out;
+  opacity: 0;
 }
 
-/* Optimize for touch devices */
-@media (hover: none) and (pointer: coarse) {
-  [data-floating-chat-target="trigger"] {
-    /* Larger touch target on mobile */
-    min-width: 56px;
-    min-height: 56px;
+[data-floating-chat-target="backdrop"]:not(.hidden) {
+  opacity: 1;
+}
+
+/* ================================================ */
+/* Chat Panel - Responsive Behavior */
+/* ================================================ */
+
+/* Mobile: Full-screen panel */
+@media (max-width: 1023px) {
+  [data-floating-chat-target="panel"] {
+    /* Proper positioning and sizing for mobile */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    border-radius: 24px 24px 0 0;
+    bottom: 0;
+    right: 0;
+    left: 0;
+    top: auto;
+    width: 100%;
+    height: auto;
+    max-height: 90vh;
+    animation-duration: 300ms;
   }
 }
 
-/* Reduce motion for accessibility */
+/* Desktop: Floating popover panel */
+@media (min-width: 1024px) {
+  [data-floating-chat-target="panel"] {
+    border-radius: 24px;
+    max-height: calc(100vh - 8rem);
+    will-change: transform, opacity;
+  }
+}
+
+/* Panel base styling and transitions */
+[data-floating-chat-target="panel"] {
+  transition-property: opacity, transform;
+  transition-duration: 300ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  
+  /* Enhanced shadow for floating effect */
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1),
+              0 8px 16px rgba(0, 0, 0, 0.08);
+}
+
+/* Dark mode enhanced shadows */
+@media (prefers-color-scheme: dark) {
+  [data-floating-chat-target="panel"] {
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3),
+                0 8px 16px rgba(0, 0, 0, 0.2);
+  }
+}
+
+/* Panel visible state */
+[data-floating-chat-target="panel"]:not(.hidden) {
+  opacity: 1;
+  transform: translate(0, 0) scale(1);
+}
+
+/* ================================================ */
+/* Animations & Transitions */
+/* ================================================ */
+
+/* Smooth fade-in animation for messages */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+[data-floating-chat-target="panel"] .animate-fadeIn {
+  animation: fadeIn 200ms ease-out;
+}
+
+/* Smooth scroll behavior */
+[data-chat-target="messages"] {
+  scroll-behavior: smooth;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.1) transparent;
+}
+
+[data-chat-target="messages"]::-webkit-scrollbar {
+  width: 6px;
+}
+
+[data-chat-target="messages"]::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+[data-chat-target="messages"]::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 3px;
+  transition: background 200ms;
+}
+
+[data-chat-target="messages"]::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+/* ================================================ */
+/* Text Input & Button Accessibility */
+/* ================================================ */
+
+/* Ensure textarea is fully accessible and responsive */
+[data-chat-target="input"] {
+  transition-property: border-color, box-shadow;
+  transition-duration: 200ms;
+}
+
+[data-chat-target="input"]:focus {
+  border-color: hsl(var(--primary));
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+/* Button interactions - Send & Stop buttons */
+[data-floating-chat-target="stopButton"],
+[data-chat-input-target="submitButton"] {
+  transition-property: transform, box-shadow, background-color;
+  transition-duration: 200ms;
+  will-change: transform;
+}
+
+[data-floating-chat-target="stopButton"]:hover,
+[data-chat-input-target="submitButton"]:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+[data-floating-chat-target="stopButton"]:active,
+[data-chat-input-target="submitButton"]:active {
+  transform: scale(0.95);
+}
+
+/* ================================================ */
+/* PWA Mode Optimizations */
+/* ================================================ */
+
+/* PWA Standalone mode adjustments */
+@media (display-mode: standalone) {
+  [data-controller="floating-chat"] {
+    bottom: calc(1.5rem + env(safe-area-inset-bottom));
+    right: calc(1.5rem + env(safe-area-inset-right));
+    z-index: 40;
+  }
+  
+  /* Ensure floating chat doesn't interfere with bottom nav in PWA */
+  @supports (padding: max(0px)) {
+    [data-controller="floating-chat"] {
+      bottom: max(1rem, env(safe-area-inset-bottom) + 1rem);
+      right: max(1rem, env(safe-area-inset-right) + 1rem);
+    }
+  }
+}
+
+/* ================================================ */
+/* Accessibility & Motion */
+/* ================================================ */
+
+/* Respect prefers-reduced-motion setting */
 @media (prefers-reduced-motion: reduce) {
   [data-floating-chat-target="panel"],
-  [data-floating-chat-target="trigger"] {
+  [data-floating-chat-target="trigger"],
+  [data-floating-chat-target="backdrop"],
+  [data-floating-chat-target="badge"] {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
 }
 
-/* PWA: Handle standalone mode */
-@media (display-mode: standalone) {
-  [data-controller="floating-chat"] {
-    /* Adjust positioning for PWA without browser chrome */
-    bottom: calc(1.5rem + env(safe-area-inset-bottom));
+/* Touch device optimizations */
+@media (hover: none) and (pointer: coarse) {
+  /* Larger touch targets on mobile */
+  [data-floating-chat-target="trigger"] {
+    min-width: 56px;
+    min-height: 56px;
+  }
+  
+  /* Increase tap target areas for form elements */
+  [data-floating-chat-target="panel"] button,
+  [data-floating-chat-target="panel"] textarea {
+    min-height: 44px;
+  }
+  
+  /* Disable hover states on touch devices */
+  [data-floating-chat-target="trigger"]:hover {
+    transform: none;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   }
 }
 
-/* Dark mode adjustments */
-[data-theme="dark"] [data-floating-chat-target="panel"] {
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2);
+/* High contrast mode support */
+@media (prefers-contrast: more) {
+  [data-floating-chat-target="trigger"],
+  [data-floating-chat-target="panel"] {
+    border: 2px solid currentColor;
+  }
+  
+  [data-floating-chat-target="backdrop"] {
+    background-color: rgba(0, 0, 0, 0.6);
+  }
 }
+
+/* ================================================ */
+/* Theme & Dark Mode Support */
+/* ================================================ */
+
+/* Dark mode specific styling */
+@media (prefers-color-scheme: dark) {
+  [data-floating-chat-target="backdrop"] {
+    background-color: rgba(0, 0, 0, 0.5);
+  }
+  
+  [data-floating-chat-target="panel"] {
+    background-color: hsl(var(--container));
+  }
+}
+
+/* Ensure proper contrast in light mode */
+@media (prefers-color-scheme: light) {
+  [data-floating-chat-target="panel"] {
+    background-color: hsl(var(--container));
+  }
+}
+
+/* ================================================ */
+/* Loading State Optimization */
+/* ================================================ */
+
+/* Spinner animation for loading indicator */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* ================================================ */
+/* Ensure z-index hierarchy is correct */
+/* ================================================ */
+
+/* Backstop: overlay is always behind panel */
+[data-floating-chat-target="backdrop"] {
+  z-index: 40;
+}
+
+/* Panel is above backdrop */
+[data-floating-chat-target="panel"] {
+  z-index: 50;
+}
+
+/* Trigger button hierarchy based on state */
+[data-floating-chat-target="trigger"] {
+  z-index: 40;
+}
+
+/* ================================================ */
+/* Performance Optimizations */
+/* ================================================ */
+
+/* Use will-change sparingly for critical elements */
+[data-floating-chat-target="panel"],
+[data-floating-chat-target="trigger"] {
+  backface-visibility: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Optimize scrolling performance */
+[data-chat-target="messages"] {
+  contain: layout style paint;
+}
+
+/* End of Floating Chat Component Styles */

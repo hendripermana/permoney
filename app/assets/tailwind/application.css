@@ -22,6 +22,7 @@
     transform: scale(0);
     opacity: 0;
   }
+
   to {
     transform: scale(1);
     opacity: 1;
@@ -32,6 +33,7 @@
   from {
     transform: translateX(100%);
   }
+
   to {
     transform: translateX(0);
   }
@@ -42,9 +44,110 @@
     opacity: 0;
     transform: translateY(20px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/* Enhanced animations for Floating Chat & Streaming */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes textUpdatePulse {
+  from {
+    opacity: 0.8;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes messageComplete {
+
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.01);
+  }
+}
+
+@utility animate-scale-in {
+  animation: scaleIn 0.3s ease-out forwards;
+}
+
+@utility animate-fade-in {
+  animation: fadeIn 300ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@utility text-update-pulse {
+  animation: textUpdatePulse 100ms ease-out;
+}
+
+@utility message-complete {
+  animation: messageComplete 200ms ease-out;
+}
+
+/* GPU-accelerated animations for better performance */
+@utility gpu-accelerated {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+/* Content visibility optimization for large component trees */
+@utility content-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 500px;
+}
+
+/* Optimized scrollbar styling */
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background-color: rgba(156, 163, 175, 0.5);
+    border-radius: 3px;
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(156, 163, 175, 0.7);
+  }
+}
+
+/* Performance-optimized transitions */
+@utility transition-optimized {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Reduced motion support - improves accessibility and performance */
+@media (prefers-reduced-motion: reduce) {
+
+  .animate-scale-in,
+  .animate-fade-in,
+  .text-update-pulse,
+  .message-complete,
+  .gpu-accelerated {
+    animation: none;
+    transition: none;
   }
 }
 
@@ -68,16 +171,16 @@
 /* Optimized scrollbar styling */
 @utility scrollbar-thin {
   scrollbar-width: thin;
-  
+
   &::-webkit-scrollbar {
     width: 6px;
   }
-  
+
   &::-webkit-scrollbar-thumb {
     background-color: rgba(156, 163, 175, 0.5);
     border-radius: 3px;
   }
-  
+
   &::-webkit-scrollbar-thumb:hover {
     background-color: rgba(156, 163, 175, 0.7);
   }
@@ -90,6 +193,7 @@
 
 /* Reduced motion support - improves accessibility and performance */
 @media (prefers-reduced-motion: reduce) {
+
   .animate-scale-in,
   .gpu-accelerated {
     animation: none;
@@ -115,32 +219,38 @@
 }
 
 @layer components {
-  .pcr-app{
+  .pcr-app {
     position: static !important;
     background: none !important;
     box-shadow: none !important;
     padding: 0 !important;
     width: 100% !important;
   }
-  .pcr-color-palette{
-      height: 12em !important;
+
+  .pcr-color-palette {
+    height: 12em !important;
   }
-  .pcr-palette{
-      border-radius: 10px !important;
+
+  .pcr-palette {
+    border-radius: 10px !important;
   }
-  .pcr-palette:before{
-      border-radius: 10px !important;
+
+  .pcr-palette:before {
+    border-radius: 10px !important;
   }
-  .pcr-color-chooser{
-      height: 1.5em !important;
+
+  .pcr-color-chooser {
+    height: 1.5em !important;
   }
-  .pcr-picker{
-      height: 20px !important;
-      width: 20px !important;
+
+  .pcr-picker {
+    height: 20px !important;
+    width: 20px !important;
   }
 }
 
 .combobox {
+
   .hw-combobox__main__wrapper,
   .hw-combobox__input {
     @apply bg-container text-primary w-full;
@@ -157,7 +267,7 @@
   .hw-combobox__label {
     @apply block text-xs text-gray-500 peer-disabled:text-gray-400;
   }
-  
+
   .hw-combobox__option {
     @apply bg-container hover:bg-container-hover;
   }
@@ -178,7 +288,7 @@
 
 /* Typography */
 .prose {
-  @apply max-w-none text-primary; 
+  @apply max-w-none text-primary;
 
   a {
     @apply text-link;
@@ -226,7 +336,8 @@
 .prose--ai-chat {
   @apply break-words;
 
-  p, li {
+  p,
+  li {
     @apply text-sm text-primary;
   }
 
@@ -236,7 +347,7 @@
 /* Custom scrollbar implementation for Windows browsers */
 .windows {
   @extend .scrollbar-thin;
-  
+
   &::-webkit-scrollbar {
     width: 4px;
   }
@@ -248,12 +359,12 @@
 
   &::-webkit-scrollbar-thumb:hover {
     background: #a6a6a6;
-  }  
+  }
 }
 
 .scrollbar {
   @extend .scrollbar-thin;
-  
+
   &::-webkit-scrollbar {
     width: 4px;
   }
@@ -273,6 +384,7 @@
   transition: opacity 0.2s;
   opacity: 1;
 }
+
 .invite_code .hidden {
   display: none !important;
   opacity: 0;

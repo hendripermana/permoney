@@ -1,6 +1,6 @@
 <%# locals: (assistant_message:) %>
 
-<div id="<%= dom_id(assistant_message) %>">
+<div id="<%= dom_id(assistant_message) %>" data-message-id="<%= assistant_message.id %>">
   <% if assistant_message.reasoning? %>
     <details class="group mb-1">
       <summary class="flex items-center gap-2">
@@ -8,7 +8,7 @@
         <%= icon("chevron-down", class: "group-open:transform group-open:rotate-180") %>
       </summary>
 
-      <div class="prose prose--ai-chat"><%= markdown(assistant_message.content) %></div>
+      <div class="prose prose--ai-chat" data-message-content><%= markdown(assistant_message.content) %></div>
     </details>
   <% else %>
     <% if assistant_message.chat.debug_mode? && assistant_message.tool_calls.any? %>
@@ -18,7 +18,7 @@
     <div class="flex items-start gap-3 mb-6">
       <%= render "chats/ai_avatar" %>
 
-      <div class="prose prose--ai-chat"><%= markdown(assistant_message.content) %></div>
+      <div class="prose prose--ai-chat" data-message-content><%= markdown(assistant_message.content) %></div>
     </div>
   <% end %>
 </div>

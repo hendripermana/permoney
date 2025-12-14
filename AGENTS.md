@@ -1128,7 +1128,7 @@ A Stimulus controller that displays current date and time with smooth anime.js a
 
 ## Floating Chat Component
 
-A modern floating AI chat widget that provides access to the AI assistant from anywhere in the application.
+A modern floating AI chat widget that provides access to the AI assistant from anywhere in the application with enhanced realtime streaming, smooth animations, and full PWA integration.
 
 ### Usage
 
@@ -1137,60 +1137,210 @@ A modern floating AI chat widget that provides access to the AI assistant from a
 ```
 
 ### Features
-- **Floating Button**: Fixed position button at bottom-right corner
-- **Responsive Design**: Full-screen on mobile, popover on desktop
-- **PWA Optimized**: Handles safe area insets for notched devices
-- **Smooth Animations**: CSS transitions for open/close states
-- **Keyboard Navigation**: Escape key to close, auto-focus on input
-- **Turbo Integration**: Uses Turbo Frames for chat content
+- **Realtime Streaming**: Full duplex communication with smooth text streaming animations
+- **Floating Button**: Fixed position button at bottom-right corner with enhanced interactions
+- **Responsive Design**: Full-screen on mobile, popover on desktop with adaptive behavior
+- **PWA Optimized**: 
+  - Handles safe area insets for notched devices
+  - Proper z-index integration with bottom menu (z-index: 40 button, 50 panel, 30 nav)
+  - Standalone mode detection for proper positioning
+- **Smooth Animations**: Modern 2025 design with CSS transitions and GPU-accelerated animations
+- **Keyboard Navigation**: Escape key to close, Tab navigation, Ctrl+Enter to send
+- **Turbo Integration**: Full Turbo Frame + Action Cable streaming support
 - **AI Consent**: Shows consent screen if AI not enabled
-- **Accessible**: ARIA labels, keyboard support, screen reader friendly
-- **Dark Mode**: Fully supports dark theme
+- **Accessible**: ARIA labels, keyboard support, screen reader friendly, high contrast mode support
+- **Dark Mode**: Fully supports theme switching with optimized shadows
+- **Touch Optimized**: 56px minimum touch targets on mobile, proper button spacing
 
 ### Component Structure
 - `FloatingChatComponent` - ViewComponent for the widget
-- `floating_chat_controller.js` - Stimulus controller for UI state
-- `floating_show.html.erb` - Chat view for existing conversations
+- `floating_chat_controller.js` - Enhanced Stimulus controller with mobile detection
+- `floating_show.html.erb` - Chat view for existing conversations with streaming support
 - `floating_new.html.erb` - Chat view for new conversations
 - `floating_ai_consent.html.erb` - Consent screen partial
+- `chat_streaming_controller.js` - Real-time message streaming with smooth animations
+- `floating_chat.css` - Comprehensive styling with modern design patterns
 
-### Stimulus Controller
-- **Targets**: `panel`, `backdrop`, `trigger`, `badge`
-- **Values**: `open` (Boolean)
-- **Actions**: `toggle`, `open`, `close`
-- **Features**: Body scroll lock on mobile, escape key handling, smooth animations
+### Stimulus Controller Enhancements
 
-### Styling
-- Uses design system tokens from `permoney-design-system.css`
-- Custom styles in `app/assets/stylesheets/components/floating_chat.css`
-- Responsive breakpoints: Mobile (< 1024px), Desktop (≥ 1024px)
-- PWA-specific styles for standalone mode
-- Reduced motion support for accessibility
+**Targets**: `panel`, `backdrop`, `trigger`, `badge`
+**Values**: `open` (Boolean), `isMobile` (Boolean)
+**Actions**: `toggle`, `open`, `close`
 
-### Mobile Behavior
-- Full-screen overlay with backdrop
+**New Features**:
+- Mobile state detection with debounced resize handling
+- Automatic panel closure when switching from desktop to mobile
+- Body scroll management for better mobile UX
+- Enhanced accessibility with ARIA attributes
+- Debug logging in development mode
+
+### Realtime Streaming System
+
+The floating chat now supports full duplex communication with:
+
+1. **Action Cable Subscription** - Real-time message delivery via WebSocket
+2. **Stream Event Types**:
+   - `message_created`: Assistant message placeholder created
+   - `text_delta`: Individual text chunks streamed to UI
+   - `complete`: Streaming finished, message saved
+   - `error`: Streaming error with user-friendly message
+   - `generation_stopped`: User stopped generation
+
+3. **Smooth Animations**:
+   - Message creation with `animate-fade-in` (300ms)
+   - Text updates with subtle pulse effect
+   - Auto-scroll to latest message with smooth behavior
+   - Typing indicator with proper show/hide transitions
+
+4. **Performance Optimizations**:
+   - Text accumulated in memory before database writes
+   - RequestAnimationFrame for scroll operations
+   - Proper cleanup on disconnect
+   - Minimal DOM manipulations
+
+### Mobile/PWA Behavior
+
+**Mobile View (<1024px)**:
+- Full-screen overlay with backdrop blur
 - Body scroll disabled when open
 - Touch-optimized button size (56px)
 - Safe area insets for notched devices
+- Auto-closes when switching to desktop
+- Positioned above bottom navigation menu (z-index stacking)
 
-### Desktop Behavior
-- Fixed popover (400px × 600px)
-- Bottom-right positioning
-- Smooth scale animation
-- No backdrop (non-modal)
+**Desktop View (≥1024px)**:
+- Floating popover (420px × 600px)
+- Bottom-right positioning with 6rem offset
+- No backdrop (non-modal interaction)
+- Hover elevation effect
+- Auto-focus on input when opened
 
-### Integration
-- Automatically added to `application.html.erb` layout
-- Replaces previous right sidebar AI chat
-- Works with existing Chat model and controllers
-- Supports both new and existing conversations
+**PWA Standalone Mode**:
+- Handles `display-mode: standalone` detection
+- Proper positioning with safe area support
+- Respects `max()` function for bottom nav collision avoidance
+- Touch-friendly interactions without hover states
 
-### PWA Considerations
-- Handles `display-mode: standalone`
-- Respects `safe-area-inset-*` for notched devices
-- Touch-friendly button sizing
-- Optimized for mobile performance
-- Works offline with cached chat history
+### Design System Integration
+
+- Uses Permoney design tokens (`text-primary`, `bg-container`, etc.)
+- Border colors: `border-primary/10` and `border-primary/20` for subtle hierarchy
+- Shadow system: Enhanced with multi-layer shadows for depth
+- Typography: Consistent font sizing and line heights
+- Spacing: Proper padding and margin with 4px baseline
+
+### Styling Details
+
+**Button Styling**:
+```css
+/* Enhanced shadow for depth */
+box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15), 0 2px 4px rgba(0, 0, 0, 0.1);
+
+/* Hover elevation */
+transform: translateY(-2px);
+box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2), 0 4px 8px rgba(0, 0, 0, 0.1);
+
+/* Active scale */
+transform: scale(0.95);
+```
+
+**Panel Styling**:
+```css
+/* Floating effect with backdrop blur */
+box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1), 0 8px 16px rgba(0, 0, 0, 0.08);
+border: 1px solid hsl(var(--primary) / 0.2);
+border-radius: 24px;
+```
+
+### Accessibility Features
+
+1. **Keyboard Navigation**:
+   - `Escape` key closes the panel
+   - `Tab` navigates through interactive elements
+   - `Ctrl+Enter` or `Cmd+Enter` sends messages
+   - Focus ring visible on all interactive elements
+
+2. **Screen Reader Support**:
+   - `aria-label` on trigger button
+   - `aria-expanded` state tracking
+   - `aria-modal="true"` on panel
+   - `aria-labelledby` connecting panel to header
+   - `role="dialog"` semantic element
+
+3. **Motion Accessibility**:
+   - `prefers-reduced-motion` respected
+   - Animations disabled for users who prefer reduced motion
+   - Transitions still work for layout stability
+
+4. **Color Contrast**:
+   - Text colors meet WCAG AA standards
+   - High contrast mode support with explicit borders
+   - Error messages styled for visibility
+
+5. **Touch Accessibility**:
+   - Minimum 44-56px touch targets
+   - No hover-only interactions
+   - `-webkit-tap-highlight-color: transparent` for clean interaction
+
+### Z-Index Hierarchy
+
+```
+Bottom navigation:     z-30
+Floating chat button:  z-40
+Floating chat backdrop: z-40
+Floating chat panel:   z-50
+```
+
+This ensures:
+- Floating chat doesn't obscure navigation on mobile
+- Panel appears above all other content
+- Proper stacking context management
+
+### Performance Optimizations
+
+1. **CSS Optimizations**:
+   - `will-change: transform` for animated elements
+   - `backface-visibility: hidden` for GPU acceleration
+   - `contain: layout style paint` for rendering optimization
+   - `animation-duration` reduced in development
+
+2. **JavaScript Optimizations**:
+   - Event listener cleanup on disconnect
+   - Debounced resize handling (150ms)
+   - RequestAnimationFrame for scroll operations
+   - Minimal state mutations
+
+3. **Animation Performance**:
+   - GPU-accelerated transforms
+   - Cubic-bezier easing for smooth motion
+   - Reduced motion support built-in
+   - No JavaScript-based animations
+
+### Testing Checklist
+
+- [ ] Desktop: Button appears, can open/close, displays chat correctly
+- [ ] Desktop: Hover effects work, shadow elevation visible
+- [ ] Desktop: Keyboard navigation (Escape, Tab, Ctrl+Enter)
+- [ ] Mobile: Full-screen overlay appears, backdrop blur visible
+- [ ] Mobile: Chat closes automatically when window resized to desktop
+- [ ] Mobile: Bottom nav not obscured (z-index check)
+- [ ] PWA: Proper positioning with safe area insets
+- [ ] Streaming: Messages appear realtime with smooth animations
+- [ ] Streaming: Stop button appears and works during generation
+- [ ] Streaming: Auto-scroll to latest message
+- [ ] Dark mode: Proper contrast and shadow rendering
+- [ ] Accessibility: All interactive elements keyboard accessible
+- [ ] Accessibility: Screen reader announces all content
+- [ ] Motion: Reduced motion setting respected
+
+### Future Enhancements
+
+1. **Markdown Rendering**: Add markdown rendering for formatted responses
+2. **Message History**: Persist floating chat history to localStorage
+3. **Customization**: Allow theme customization via data attributes
+4. **File Upload**: Support file uploads in floating chat context
+5. **Voice Input**: Add voice-to-text support for mobile
+6. **Multi-Modal Responses**: Support images and other content types
 
 ## Breadcrumb Component
 

@@ -1,19 +1,24 @@
 <div
   data-controller="floating-chat"
   data-floating-chat-open-value="false"
-  class="fixed bottom-4 right-4 z-50 lg:bottom-6 lg:right-6">
+  data-floating-chat-is-mobile-value="false"
+  class="fixed bottom-4 right-4 z-40 lg:bottom-6 lg:right-6 lg:z-50">
 
-  <%# Chat Trigger Button %>
+  <%# Chat Trigger Button - Desktop & Mobile (except PWA mode) %>
   <button
     data-action="click->floating-chat#toggle"
     data-floating-chat-target="trigger"
     type="button"
     aria-label="Open AI Chat"
-    class="flex items-center justify-center w-14 h-14 rounded-full bg-surface text-primary shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 focus:outline-none focus:ring-4 focus:ring-alpha-black-200 theme-dark:focus:ring-alpha-white-300">
-    <%= helpers.icon("message-circle", size: "lg") %>
+    aria-expanded="false"
+    class="flex items-center justify-center w-14 h-14 lg:w-16 lg:h-16 rounded-full bg-surface text-primary shadow-md hover:shadow-lg transition-all duration-200 hover:scale-110 focus:outline-none focus:ring-4 focus:ring-alpha-black-200 theme-dark:focus:ring-alpha-white-300 active:scale-95">
+    <%= helpers.icon("message-circle", size: "lg", class: "transition-transform duration-200") %>
 
-    <%# Notification Badge (if needed) %>
-    <span class="absolute -top-1 -right-1 w-5 h-5 bg-destructive text-white text-xs font-bold rounded-full hidden items-center justify-center" data-floating-chat-target="badge">
+    <%# Notification Badge %>
+    <span
+      class="absolute -top-1 -right-1 w-5 h-5 bg-destructive text-white text-xs font-bold rounded-full hidden items-center justify-center shadow-sm"
+      data-floating-chat-target="badge"
+      aria-label="New messages">
       1
     </span>
   </button>
@@ -22,28 +27,28 @@
   <div
     data-floating-chat-target="backdrop"
     data-action="click->floating-chat#closeOnBackdrop"
-    class="hidden opacity-0 fixed inset-0 z-40 bg-alpha-black-500 lg:!hidden transition-opacity duration-300"
+    class="hidden fixed inset-0 z-40 bg-black/40 lg:!hidden transition-all duration-300 backdrop-blur-sm"
     aria-hidden="true">
   </div>
 
-  <%# Chat Panel %>
+  <%# Chat Panel - Desktop Floating Window %>
   <div
     data-floating-chat-target="panel"
     data-action="click->floating-chat#preventClose"
-    class="hidden opacity-0 translate-y-4 lg:translate-y-0 lg:scale-95 fixed inset-0 z-50 lg:inset-auto lg:bottom-24 lg:right-6 lg:w-[400px] lg:h-[600px] lg:max-h-[80vh] bg-container lg:rounded-2xl shadow-2xl border border-primary overflow-hidden transition-all duration-300 ease-out"
+    class="hidden flex flex-col opacity-0 translate-y-4 scale-95 lg:flex lg:opacity-0 lg:translate-y-0 lg:scale-95 fixed inset-0 lg:inset-auto lg:bottom-24 lg:right-6 z-50 lg:w-[420px] lg:h-[600px] lg:max-h-[80vh] bg-container rounded-3xl lg:rounded-3xl shadow-2xl border border-primary/20 overflow-hidden transition-all duration-300 ease-out"
     role="dialog"
     aria-modal="true"
     aria-labelledby="floating-chat-title">
 
-    <%# Chat Header %>
-    <div class="flex items-center justify-between px-4 py-3 border-b border-primary bg-surface shrink-0">
+    <%# Chat Header with gradient background %>
+    <div class="flex items-center justify-between px-4 py-3.5 border-b border-primary/10 bg-gradient-to-r from-surface to-surface/50 shrink-0">
       <div class="flex items-center gap-3 min-w-0">
-        <div class="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shrink-0 shadow-sm">
+        <div class="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shrink-0 shadow-md">
           <%= helpers.icon("sparkles", size: "sm", color: "white") %>
         </div>
         <div class="min-w-0">
           <h2 id="floating-chat-title" class="text-sm font-semibold text-primary truncate">AI Assistant</h2>
-          <p class="text-xs text-secondary truncate">Ask about your finances</p>
+          <p class="text-xs text-secondary truncate">Financial insights & guidance</p>
         </div>
       </div>
 
@@ -51,12 +56,12 @@
         data-action="click->floating-chat#close"
         type="button"
         aria-label="Close chat"
-        class="p-2 rounded-lg hover:bg-surface-inset transition-colors shrink-0 -mr-2">
-        <%= helpers.icon("x", size: "sm") %>
+        class="p-2.5 rounded-xl hover:bg-surface-inset transition-colors duration-200 shrink-0 -mr-2.5 active:scale-95">
+        <%= helpers.icon("x", size: "sm", class: "transition-transform duration-200") %>
       </button>
     </div>
 
-    <%# Chat Content - Turbo Frame %>
+    <%# Chat Content - Turbo Frame with proper structure for streaming %>
     <div class="flex-1 overflow-hidden min-h-0">
       <% if @user.ai_enabled? %>
         <%= turbo_frame_tag "floating_chat_content",
@@ -65,8 +70,8 @@
           class: "h-full flex flex-col" do %>
           <div class="flex items-center justify-center h-full">
             <div class="flex flex-col items-center gap-3 text-secondary p-8">
-              <%= helpers.icon("loader-circle", size: "lg", class: "animate-spin") %>
-              <p class="text-sm">Loading chat...</p>
+              <%= helpers.icon("loader-circle", size: "lg", class: "animate-spin text-primary") %>
+              <p class="text-sm font-medium">Loading chat...</p>
             </div>
           </div>
         <% end %>
