@@ -86,7 +86,7 @@ export default class extends Controller {
   }
 
   appendTextDelta(messageId, content) {
-    let messageEl = this.findMessageElement(messageId);
+    const messageEl = this.findMessageElement(messageId);
 
     if (!messageEl) {
       // Use MutationObserver to wait for the element to be added by Turbo Streams
@@ -188,7 +188,8 @@ export default class extends Controller {
 
     // Show error message with proper styling
     const errorEl = document.createElement("div");
-    errorEl.className = "p-3 lg:p-4 bg-destructive/10 border border-destructive/30 rounded-lg text-destructive text-sm animate-fadeIn";
+    errorEl.className =
+      "p-3 lg:p-4 bg-destructive/10 border border-destructive/30 rounded-lg text-destructive text-sm animate-fadeIn";
     errorEl.innerHTML = `
       <div class="flex gap-2 items-start">
         <svg class="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -221,7 +222,7 @@ export default class extends Controller {
     // Future enhancement: Add markdown rendering with a library like marked.js
     // For now, ensure proper formatting and line breaks
     const contentEl = messageEl.querySelector("[data-message-content]");
-    if (contentEl && contentEl.textContent) {
+    if (contentEl?.textContent) {
       // Text content is preserved with whitespace, no need to manipulate
       // This allows proper rendering of code blocks, lists, etc.
     }
@@ -265,4 +266,3 @@ export default class extends Controller {
     }
   }
 }
-

@@ -9,7 +9,8 @@ export default class extends Controller {
 
   connect() {
     // Debug logging
-    this.debug = window.location.hostname === "localhost" ||
+    this.debug =
+      window.location.hostname === "localhost" ||
       window.location.hostname.includes("ngrok") ||
       window.location.hostname.includes("127.0.0.1");
 
@@ -226,4 +227,3 @@ export default class extends Controller {
     return window.innerWidth - document.documentElement.clientWidth;
   }
 }
-
