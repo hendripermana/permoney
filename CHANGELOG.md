@@ -1,3 +1,12 @@
+## [0.16.26](https://github.com/hendripermana/permoney/compare/v0.16.25...v0.16.26) (2025-12-14)
+
+### Other Changes
+
+- Merge pull request #96 from hendripermana/fix/chat-response-flow (dbcc4f24)
+- Fix linting errors and format code with Biome (45146e84)
+- Implement AI Review suggestions: MutationObserver, Security fixes, and Polish (d4589078)
+- Fix AI chat response flow: resolve DOM conflicts between JS streaming and Turbo Morphing (e5f833ae)
+
 ## [0.16.25](https://github.com/hendripermana/permoney/compare/v0.16.24...v0.16.25) (2025-12-07)
 
 ### Bug Fixes
