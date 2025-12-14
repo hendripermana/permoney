@@ -85,19 +85,36 @@ export default class extends Controller {
     }
   }
 
-  appendTextDelta(messageId, content, attempt = 0) {
+  appendTextDelta(messageId, content) {
     let messageEl = this.findMessageElement(messageId);
 
     if (!messageEl) {
-      if (attempt < 20) {
-        // Wait for Turbo Stream to append the message shell
-        setTimeout(() => this.appendTextDelta(messageId, content, attempt + 1), 50);
-      } else if (DEBUG) {
-        console.warn(`[ChatStreaming] Message element ${messageId} not found after retries.`);
+      // Use MutationObserver to wait for the element to be added by Turbo Streams
+      const observer = new MutationObserver((mutationsList, obs) => {
+        for (const mutation of mutationsList) {
+          if (mutation.type === "childList") {
+            const foundEl = this.findMessageElement(messageId);
+            if (foundEl) {
+              this.appendContent(foundEl, content);
+              obs.disconnect(); // Clean up the observer
+              return;
+            }
+          }
+        }
+      });
+
+      if (this.hasMessagesTarget) {
+        observer.observe(this.messagesTarget, { childList: true, subtree: true });
+        // Timeout to prevent observer from running indefinitely
+        setTimeout(() => observer.disconnect(), 2000);
       }
       return;
     }
 
+    this.appendContent(messageEl, content);
+  }
+
+  appendContent(messageEl, content) {
     // Append content with smooth text rendering
     const contentEl = messageEl.querySelector("[data-message-content]");
     if (contentEl) {
@@ -218,7 +235,7 @@ export default class extends Controller {
       '"': "&quot;",
       "'": "&#039;",
     };
-    return text.replace(/[&<>"']/g, (m) => map[m]);
+    return String(text).replace(/[&<>"']/g, (m) => map[m]);
   }
 
   scrollToBottom() {

@@ -9,9 +9,9 @@ export default class extends Controller {
 
   connect() {
     // Debug logging
-    this.debug = window.location.hostname === "localhost" || 
-                 window.location.hostname.includes("ngrok") ||
-                 window.location.hostname.includes("127.0.0.1");
+    this.debug = window.location.hostname === "localhost" ||
+      window.location.hostname.includes("ngrok") ||
+      window.location.hostname.includes("127.0.0.1");
 
     // Detect initial state
     this.updateMobileState();
@@ -196,7 +196,7 @@ export default class extends Controller {
   updateMobileState() {
     const wasKobile = this.isMobileValue;
     const isMobileNow = window.innerWidth < 1024;
-    
+
     if (wasKobile !== isMobileNow) {
       this.isMobileValue = isMobileNow;
     }
@@ -204,7 +204,7 @@ export default class extends Controller {
 
   disableBodyScroll() {
     // Only on mobile
-    if (window.innerWidth < 1024) {
+    if (this.isMobileValue) {
       document.body.style.overflow = "hidden";
       document.body.style.paddingRight = `${this.getScrollbarWidth()}px`;
       document.body.style.touchAction = "none";
@@ -213,10 +213,13 @@ export default class extends Controller {
   }
 
   enableBodyScroll() {
-    document.body.style.overflow = "";
-    document.body.style.paddingRight = "";
-    document.body.style.touchAction = "";
-    document.documentElement.style.overflow = "";
+    // Only on mobile
+    if (this.isMobileValue) {
+      document.body.style.overflow = "";
+      document.body.style.paddingRight = "";
+      document.body.style.touchAction = "";
+      document.documentElement.style.overflow = "";
+    }
   }
 
   getScrollbarWidth() {
