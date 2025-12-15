@@ -86,8 +86,7 @@ export default class extends Controller {
 
     // Ensure we stay at bottom when new message cycle starts, if user is already at the bottom
     const isScrolledToBottom =
-      this.messagesTarget.scrollHeight -
-      this.messagesTarget.clientHeight <=
+      this.messagesTarget.scrollHeight - this.messagesTarget.clientHeight <=
       this.messagesTarget.scrollTop + 50; // 50px tolerance
     if (isScrolledToBottom) {
       setTimeout(() => this.scrollToBottom(), 100);
