@@ -83,6 +83,9 @@ export default class extends Controller {
       // Force reflow for animation
       this.typingIndicatorTarget.offsetHeight;
     }
+
+    // Ensure we stay at bottom when new message cycle starts
+    setTimeout(() => this.scrollToBottom(), 100);
   }
 
   appendTextDelta(messageId, content) {

@@ -240,10 +240,11 @@
   }
   
   /* Ensure floating chat doesn't interfere with bottom nav in PWA */
+  /* Assuming bottom nav is approx 4rem + safe area-inset */
   @supports (padding: max(0px)) {
     [data-controller="floating-chat"] {
-      bottom: max(1rem, env(safe-area-inset-bottom) + 1rem);
-      right: max(1rem, env(safe-area-inset-right) + 1rem);
+      bottom: max(5rem, env(safe-area-inset-bottom) + 5rem);
+      right: max(1.5rem, env(safe-area-inset-right) + 1.5rem);
     }
   }
 }
