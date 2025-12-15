@@ -7,7 +7,7 @@ class ChatsController < ApplicationController
     @chats = Current.user.chats.order(created_at: :desc)
 
     if params[:floating]
-      render "chats/floating_index", layout: false
+      render "chats/floating_index", layout: false and return
     end
   end
 
