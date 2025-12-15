@@ -1,3 +1,10 @@
+## [0.17.1](https://github.com/hendripermana/permoney/compare/v0.17.0...v0.17.1) (2025-12-15)
+
+### Other Changes
+
+- Merge pull request #98 from hendripermana/fix/chat-deployment-lint (8fa2d194)
+- style: Fix Biome formatting in chat_streaming_controller (4c841cdd)
+
 ## [0.17.0](https://github.com/hendripermana/permoney/compare/v0.16.26...v0.17.0) (2025-12-15)
 
 ### Features
