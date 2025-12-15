@@ -11,16 +11,16 @@ class ChatStreamingChannel < ApplicationCable::Channel
 
   def subscribed
     # Verify user owns the chat
-    chat = Current.user.chats.find_by(id: params[:chat_id])
+    chat = current_user.chats.find_by(id: params[:chat_id])
 
     if chat
       stream_for chat
       @chat = chat
       @generation_active = false
 
-      Rails.logger.info("ChatStreamingChannel: User #{Current.user.id} subscribed to chat #{chat.id}")
+      Rails.logger.info("ChatStreamingChannel: User #{current_user.id} subscribed to chat #{chat.id}")
     else
-      Rails.logger.warn("ChatStreamingChannel: User #{Current.user.id} attempted to subscribe to unauthorized chat #{params[:chat_id]}")
+      Rails.logger.warn("ChatStreamingChannel: User #{current_user.id} attempted to subscribe to unauthorized chat #{params[:chat_id]}")
       reject
     end
   end
