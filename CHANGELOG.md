@@ -1,3 +1,9 @@
+## [0.17.2](https://github.com/hendripermana/permoney/compare/v0.17.1...v0.17.2) (2025-12-15)
+
+### Bug Fixes
+
+- fix: Authenticate WebSocket connection with session cookie (#99) (672445e3)
+
 ## [0.17.1](https://github.com/hendripermana/permoney/compare/v0.17.0...v0.17.1) (2025-12-15)
 
 ### Other Changes
