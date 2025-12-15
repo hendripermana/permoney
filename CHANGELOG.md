@@ -1,3 +1,17 @@
+## [0.17.0](https://github.com/hendripermana/permoney/compare/v0.16.26...v0.17.0) (2025-12-15)
+
+### Features
+
+- feat: Chat AI Modernization & Fixes (4a619bd8)
+
+### Bug Fixes
+
+- fix: Address PR feedback (dd6a25a4)
+
+### Other Changes
+
+- Merge pull request #97 from hendripermana/feature/chat-ai-modernization (ccd19d82)
+
 ## [0.16.26](https://github.com/hendripermana/permoney/compare/v0.16.25...v0.16.26) (2025-12-14)
 
 ### Other Changes
