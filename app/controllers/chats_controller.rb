@@ -5,6 +5,10 @@ class ChatsController < ApplicationController
 
   def index
     @chats = Current.user.chats.order(created_at: :desc)
+
+    if params[:floating]
+      render "chats/floating_index", layout: false and return
+    end
   end
 
   def show
