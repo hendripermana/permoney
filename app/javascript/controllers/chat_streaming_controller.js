@@ -1,276 +1,220 @@
 import { Controller } from "@hotwired/stimulus";
-import consumer from "channels/consumer";
+import { createConsumer } from "@rails/actioncable";
+import { marked } from "marked";
 
-// Real-time AI chat streaming controller
-// Handles WebSocket connection and message rendering with smooth animations
-//
-// Debug logging: Enabled in development, disabled in production
-// Production detection: Based on hostname (not localhost/ngrok = production)
-const DEBUG =
-  window.location.hostname === "localhost" ||
-  window.location.hostname.includes("ngrok") ||
-  window.location.hostname.includes("127.0.0.1");
+// Debug flag
+const DEBUG = true;
 
 export default class extends Controller {
-  static targets = ["messages", "stopButton", "typingIndicator"];
   static values = {
     chatId: String,
-    streaming: { type: Boolean, default: false },
+    stream: { type: Boolean, default: true },
   };
 
-  connect() {
-    if (DEBUG) console.log("[ChatStreaming] Connected", { chatId: this.chatIdValue });
+  static targets = ["messages", "form", "stopButton", "sendButton"];
 
-    // Subscribe to chat streaming channel
-    this.subscription = consumer.subscriptions.create(
+  connect() {
+    if (DEBUG) console.log("ChatStreamingController connected for chat:", this.chatIdValue);
+
+    // Configure marked for safety - basic configuration
+    marked.setOptions({
+      breaks: true,
+      gfm: true,
+      headerIds: false,
+      mangle: false,
+      sanitize: false,
+    });
+
+    this.subscription = createConsumer().subscriptions.create(
+      { channel: "ChatStreamingChannel", chat_id: this.chatIdValue },
       {
-        channel: "ChatStreamingChannel",
-        chat_id: this.chatIdValue,
-      },
-      {
-        received: this.handleStreamData.bind(this),
-        connected: this.handleConnected.bind(this),
-        disconnected: this.handleDisconnected.bind(this),
+        received: this.handleReceived.bind(this),
+        connected: () => {
+          if (DEBUG) console.log("ActionCable connected");
+          this.element.classList.add("connected");
+        },
+        disconnected: () => {
+          if (DEBUG) console.log("ActionCable disconnected");
+          this.element.classList.remove("connected");
+        },
+        rejected: () => {
+          console.error("ActionCable subscription rejected");
+        },
       }
     );
+
+    this.messageBuffer = {}; // Buffer for accumulating markdown text per message
+    this.generationTimeout = null; // Timeout handler
+    this.BIND_TIMEOUT_MS = 30000; // 30s timeout for generation
   }
 
   disconnect() {
-    if (DEBUG) console.log("[ChatStreaming] Disconnecting");
-    this.subscription?.unsubscribe();
+    if (DEBUG) console.log("ChatStreamingController disconnected");
+    if (this.subscription) {
+      this.subscription.unsubscribe();
+    }
+    this.clearGenerationTimeout();
   }
 
-  handleConnected() {
-    if (DEBUG) console.log("[ChatStreaming] WebSocket connected");
-  }
+  handleReceived(data) {
+    if (DEBUG) console.log("Received data:", data.type, data);
 
-  handleDisconnected() {
-    if (DEBUG) console.log("[ChatStreaming] WebSocket disconnected");
-    this.streamingValue = false;
-  }
-
-  handleStreamData(data) {
-    if (DEBUG) console.log("[ChatStreaming] Received", data.type, data);
+    // Reset timeout on any activity
+    this.resetGenerationTimeout();
 
     switch (data.type) {
       case "message_created":
         this.handleMessageCreated(data);
         break;
       case "text_delta":
-        this.appendTextDelta(data.message_id, data.content);
+        this.appendTextDelta(data);
         break;
       case "complete":
-        this.handleComplete(data.message_id, data);
-        break;
-      case "generation_stopped":
-        this.handleStopped();
+        this.handleComplete(data);
         break;
       case "error":
         this.handleError(data);
         break;
-      default:
-        if (DEBUG) console.warn("[ChatStreaming] Unknown event type", data.type);
+      case "generation_stopped":
+        this.handleStopped(data);
+        break;
     }
+  }
+
+  resetGenerationTimeout() {
+    this.clearGenerationTimeout();
+    if (this.isGenerating) {
+      this.generationTimeout = setTimeout(() => {
+        this.handleTimeout();
+      }, this.BIND_TIMEOUT_MS);
+    }
+  }
+
+  clearGenerationTimeout() {
+    if (this.generationTimeout) clearTimeout(this.generationTimeout);
+    this.generationTimeout = null;
+  }
+
+  handleTimeout() {
+    console.error("Chat generation timed out");
+    this.stopGeneration();
+
+    if (this.currentMessageId) {
+      const contentEl = this.findContentElement(this.currentMessageId);
+      if (contentEl) {
+        contentEl.innerHTML +=
+          "<br/><br/><em class='text-destructive'>Error: Response timed out.</em>";
+      }
+    }
+    this.handleComplete({ message_id: this.currentMessageId });
   }
 
   handleMessageCreated(data) {
-    if (DEBUG) console.log("[ChatStreaming] Message created", data.message_id);
-    this.streamingValue = true;
+    if (DEBUG) console.log("Message created:", data.message_id);
 
-    // Show typing indicator with smooth animation
-    if (this.hasTypingIndicatorTarget) {
-      this.typingIndicatorTarget.classList.remove("hidden");
-      // Force reflow for animation
-      this.typingIndicatorTarget.offsetHeight;
-    }
+    this.currentMessageId = data.message_id;
+    this.messageBuffer[data.message_id] = ""; // Init buffer
+    this.isGenerating = true;
+    this.resetGenerationTimeout();
 
-    // Ensure we stay at bottom when new message cycle starts, if user is already at the bottom
-    const isScrolledToBottom =
-      this.messagesTarget.scrollHeight - this.messagesTarget.clientHeight <=
-      this.messagesTarget.scrollTop + 50; // 50px tolerance
-    if (isScrolledToBottom) {
-      setTimeout(() => this.scrollToBottom(), 100);
-    }
+    this.toggleControls(true);
+    this.scrollToBottom();
   }
 
-  appendTextDelta(messageId, content) {
-    const messageEl = this.findMessageElement(messageId);
+  appendTextDelta(data) {
+    const contentEl = this.findContentElement(data.message_id);
 
-    if (!messageEl) {
-      // Use MutationObserver to wait for the element to be added by Turbo Streams
-      const observer = new MutationObserver((mutationsList, obs) => {
-        for (const mutation of mutationsList) {
-          if (mutation.type === "childList") {
-            const foundEl = this.findMessageElement(messageId);
-            if (foundEl) {
-              this.appendContent(foundEl, content);
-              obs.disconnect(); // Clean up the observer
-              return;
-            }
-          }
-        }
-      });
-
-      if (this.hasMessagesTarget) {
-        observer.observe(this.messagesTarget, { childList: true, subtree: true });
-        // Timeout to prevent observer from running indefinitely
-        setTimeout(() => observer.disconnect(), 2000);
-      }
-      return;
-    }
-
-    this.appendContent(messageEl, content);
-  }
-
-  appendContent(messageEl, content) {
-    // Append content with smooth text rendering
-    const contentEl = messageEl.querySelector("[data-message-content]");
     if (contentEl) {
-      // Clear placeholder if present
-      if (contentEl.textContent.trim() === "[generating]") {
-        contentEl.textContent = "";
+      // First delta? Clear pending state/skeleton
+      if (!this.messageBuffer[data.message_id]) {
+        contentEl.innerHTML = "";
+        contentEl.parentElement.classList.remove("animate-pulse");
       }
 
-      // Append text smoothly
-      contentEl.textContent += content;
+      this.messageBuffer[data.message_id] += data.content;
 
-      // Trigger subtle animation for new text
-      contentEl.classList.add("text-update-pulse");
-      setTimeout(() => {
-        contentEl.classList.remove("text-update-pulse");
-      }, 100);
-    }
+      // Render markdown
+      contentEl.innerHTML = marked.parse(this.messageBuffer[data.message_id]);
 
-    // Auto-scroll to latest message
-    this.scrollToBottom();
-  }
-
-  handleComplete(messageId, data) {
-    if (DEBUG) console.log("[ChatStreaming] Complete", { messageId, ...data });
-
-    this.streamingValue = false;
-
-    // Hide typing indicator
-    if (this.hasTypingIndicatorTarget) {
-      this.typingIndicatorTarget.classList.add("hidden");
-    }
-
-    // Trigger markdown rendering if needed
-    const messageEl = this.findMessageElement(messageId);
-    if (messageEl) {
-      this.renderMarkdown(messageEl);
-      // Add completion animation
-      messageEl.classList.add("message-complete");
-    }
-
-    // Final scroll to bottom
-    this.scrollToBottom();
-
-    // Focus input for next message
-    setTimeout(() => {
-      const input = document.querySelector("[data-chat-input-target='textarea']");
-      if (input && window.innerWidth >= 1024) {
-        input.focus();
-      }
-    }, 200);
-  }
-
-  handleStopped() {
-    if (DEBUG) console.log("[ChatStreaming] Generation stopped by user");
-    this.streamingValue = false;
-
-    // Hide typing indicator
-    if (this.hasTypingIndicatorTarget) {
-      this.typingIndicatorTarget.classList.add("hidden");
-    }
-  }
-
-  handleError(data) {
-    console.error("[ChatStreaming] Error", data);
-    this.streamingValue = false;
-
-    // Hide typing indicator
-    if (this.hasTypingIndicatorTarget) {
-      this.typingIndicatorTarget.classList.add("hidden");
-    }
-
-    // Show error message with proper styling
-    const errorEl = document.createElement("div");
-    errorEl.className =
-      "p-3 lg:p-4 bg-destructive/10 border border-destructive/30 rounded-lg text-destructive text-sm animate-fadeIn";
-    errorEl.innerHTML = `
-      <div class="flex gap-2 items-start">
-        <svg class="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4v.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-        </svg>
-        <span>${this.escapeHtml(data.error || "An error occurred. Please try again.")}</span>
-      </div>
-    `;
-
-    if (this.hasMessagesTarget) {
-      this.messagesTarget.appendChild(errorEl);
       this.scrollToBottom();
     }
   }
 
-  stopGeneration(event) {
-    event?.preventDefault();
-    if (DEBUG) console.log("[ChatStreaming] Stopping generation");
+  handleComplete(data) {
+    if (DEBUG) console.log("Generation complete");
+    this.isGenerating = false;
+    this.clearGenerationTimeout();
+    this.toggleControls(false);
 
-    this.subscription.perform("stop_generation");
-    this.streamingValue = false;
-  }
-
-  findMessageElement(messageId) {
-    if (!this.hasMessagesTarget) return null;
-    return this.messagesTarget.querySelector(`[data-message-id="${messageId}"]`);
-  }
-
-  renderMarkdown(messageEl) {
-    // Future enhancement: Add markdown rendering with a library like marked.js
-    // For now, ensure proper formatting and line breaks
-    const contentEl = messageEl.querySelector("[data-message-content]");
-    if (contentEl?.textContent) {
-      // Text content is preserved with whitespace, no need to manipulate
-      // This allows proper rendering of code blocks, lists, etc.
+    // Final clean render
+    if (data.message_id && this.messageBuffer[data.message_id]) {
+      const contentEl = this.findContentElement(data.message_id);
+      if (contentEl) {
+        contentEl.innerHTML = marked.parse(this.messageBuffer[data.message_id]);
+      }
     }
   }
 
-  escapeHtml(text) {
-    const map = {
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#039;",
-    };
-    return String(text).replace(/[&<>"']/g, (m) => map[m]);
+  handleError(data) {
+    console.error("Chat Error:", data.error);
+    this.isGenerating = false;
+    this.clearGenerationTimeout();
+    this.toggleControls(false);
+
+    const contentEl = this.findContentElement(data.message_id);
+    if (contentEl) {
+      contentEl.innerHTML += `<div class="text-destructive mt-2 text-sm">Error: ${data.message || data.error}</div>`;
+    }
   }
 
-  scrollToBottom() {
-    if (!this.hasMessagesTarget) return;
-
-    // Smooth scroll to bottom with requestAnimationFrame for better performance
-    requestAnimationFrame(() => {
-      this.messagesTarget.scrollTo({
-        top: this.messagesTarget.scrollHeight,
-        behavior: "smooth",
-      });
-    });
+  handleStopped(_data) {
+    if (DEBUG) console.log("Generation stopped");
+    this.isGenerating = false;
+    this.clearGenerationTimeout();
+    this.toggleControls(false);
   }
 
-  streamingValueChanged() {
-    if (DEBUG) console.log("[ChatStreaming] Streaming state changed", this.streamingValue);
+  stopGeneration(event) {
+    if (event) event.preventDefault();
+    if (DEBUG) console.log("Stopping generation...");
 
-    // Toggle stop button visibility with smooth transition
+    this.subscription.perform("stop_generation");
+    this.toggleControls(false);
+  }
+
+  // UI Helpers
+
+  findContentElement(messageId) {
+    const messageContainer = document.querySelector(`[data-message-id="${messageId}"]`);
+    if (messageContainer) {
+      return messageContainer.querySelector("[data-message-content]");
+    }
+    return null;
+  }
+
+  toggleControls(isGenerating) {
     if (this.hasStopButtonTarget) {
-      if (this.streamingValue) {
+      this.stopButtonTarget.classList.toggle("hidden", false); // Show stop button always if we have it? No, toggle it.
+      // Actually previous code logic was: if generating, show stop.
+      if (isGenerating) {
         this.stopButtonTarget.classList.remove("hidden");
-        // Force reflow for animation
-        this.stopButtonTarget.offsetHeight;
       } else {
         this.stopButtonTarget.classList.add("hidden");
       }
+    }
+  }
+
+  scrollToBottom() {
+    const messagesEl = this.messagesTarget;
+    if (!messagesEl) return;
+
+    // Smart auto-scroll
+    const threshold = 100;
+    const isNearBottom =
+      messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight <= threshold;
+
+    if (isNearBottom) {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
     }
   }
 }
