@@ -12,7 +12,7 @@ pin_all_from "app/javascript/controllers", under: "controllers"
 # Action Cable - CRITICAL: Must be pinned for WebSocket support
 pin "@rails/actioncable", to: "actioncable.esm.js"
 pin "marked", to: "https://ga.jspm.io/npm:marked@4.3.0/lib/marked.esm.js"
-pin "dompurify", to: "https://ga.jspm.io/npm:dompurify@3.0.6/dist/purify.es.js"
+pin "dompurify", to: "https://ga.jspm.io/npm:dompurify@3.2.4/dist/purify.es.js"
 
 # Action Cable channels - explicitly pin consumer
 pin "channels/consumer", to: "channels/consumer.js"
