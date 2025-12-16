@@ -19,13 +19,16 @@
       <%= render "chats/ai_avatar" %>
 
       <div class="prose prose--ai-chat" data-message-content>
-        <% if assistant_message.pending? %>
+        <%# Only show skeleton if pending and fresh (created < 2 mins ago) %>
+        <% if assistant_message.pending? && assistant_message.created_at > 2.minutes.ago %>
           <div class="flex flex-col gap-2 w-full min-w-[200px] animate-pulse">
             <div class="h-4 bg-surface-inset rounded w-3/4"></div>
             <div class="h-4 bg-surface-inset rounded w-1/2"></div>
           </div>
         <% else %>
-          <%= markdown(assistant_message.content) %>
+          <%# Fallback to content if stuck or complete. Filter out placeholder. %>
+          <% content = (assistant_message.content == "[generating]" ? "" : assistant_message.content) %>
+          <%= markdown(content.presence || "*(No response generated. Please retry.)*") %>
         <% end %>
       </div>
     </div>
