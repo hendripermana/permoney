@@ -16,13 +16,13 @@ export default class extends Controller {
   connect() {
     if (DEBUG) console.log("ChatStreamingController connected for chat:", this.chatIdValue);
 
-    // Configure marked for safety - basic configuration
+    // Configure marked for safety
     marked.setOptions({
       breaks: true,
       gfm: true,
       headerIds: false,
       mangle: false,
-      sanitize: false,
+      sanitize: true, // ENABLED per security review (prevents XSS)
     });
 
     this.subscription = createConsumer().subscriptions.create(
@@ -83,7 +83,8 @@ export default class extends Controller {
 
   resetGenerationTimeout() {
     this.clearGenerationTimeout();
-    if (this.isGenerating) {
+    // Reset timeout if we have an active message ID (generation in progress)
+    if (this.currentMessageId) {
       this.generationTimeout = setTimeout(() => {
         this.handleTimeout();
       }, this.BIND_TIMEOUT_MS);
@@ -99,6 +100,7 @@ export default class extends Controller {
     console.error("Chat generation timed out");
     this.stopGeneration();
 
+    // Visually indicate error
     if (this.currentMessageId) {
       const contentEl = this.findContentElement(this.currentMessageId);
       if (contentEl) {
@@ -143,6 +145,7 @@ export default class extends Controller {
   handleComplete(data) {
     if (DEBUG) console.log("Generation complete");
     this.isGenerating = false;
+    this.currentMessageId = null; // Clear active message ID
     this.clearGenerationTimeout();
     this.toggleControls(false);
 
@@ -158,6 +161,7 @@ export default class extends Controller {
   handleError(data) {
     console.error("Chat Error:", data.error);
     this.isGenerating = false;
+    this.currentMessageId = null;
     this.clearGenerationTimeout();
     this.toggleControls(false);
 
@@ -170,6 +174,7 @@ export default class extends Controller {
   handleStopped(_data) {
     if (DEBUG) console.log("Generation stopped");
     this.isGenerating = false;
+    this.currentMessageId = null;
     this.clearGenerationTimeout();
     this.toggleControls(false);
   }
@@ -193,14 +198,9 @@ export default class extends Controller {
   }
 
   toggleControls(isGenerating) {
+    // Simplify toggle logic per PR review
     if (this.hasStopButtonTarget) {
-      this.stopButtonTarget.classList.toggle("hidden", false); // Show stop button always if we have it? No, toggle it.
-      // Actually previous code logic was: if generating, show stop.
-      if (isGenerating) {
-        this.stopButtonTarget.classList.remove("hidden");
-      } else {
-        this.stopButtonTarget.classList.add("hidden");
-      }
+      this.stopButtonTarget.classList.toggle("hidden", !isGenerating);
     }
   }
 
