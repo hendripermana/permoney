@@ -96,23 +96,30 @@ export default class extends Controller {
   }
 
   clearGenerationTimeout() {
-    if (this.generationTimeout) clearTimeout(this.generationTimeout);
-    this.generationTimeout = null;
+    if (this.generationTimeout) {
+      clearTimeout(this.generationTimeout);
+      this.generationTimeout = null;
+    }
   }
 
   handleTimeout() {
     console.error("Chat generation timed out");
+
+    // Store message ID before stopping/clearing state
+    const timedOutMessageId = this.currentMessageId;
+
     this.stopGeneration();
 
-    // Visually indicate error
-    if (this.currentMessageId) {
-      const contentEl = this.findContentElement(this.currentMessageId);
+    // Visually indicate error if we have a valid ID
+    if (timedOutMessageId) {
+      const contentEl = this.findContentElement(timedOutMessageId);
       if (contentEl) {
         contentEl.innerHTML +=
           "<br/><br/><em class='text-destructive'>Error: Response timed out.</em>";
       }
     }
-    this.handleComplete({ message_id: this.currentMessageId });
+    // Force completion logic to clean up buffer
+    this.handleComplete({ message_id: timedOutMessageId });
   }
 
   handleMessageCreated(data) {
@@ -149,18 +156,24 @@ export default class extends Controller {
 
   handleComplete(data) {
     if (DEBUG) console.log("Generation complete");
+
+    // Ensure we process the passed message_id or fallback to current
+    const messageId = data ? data.message_id : this.currentMessageId;
+
     this.isGenerating = false;
     this.currentMessageId = null; // Clear active message ID
     this.clearGenerationTimeout();
     this.toggleControls(false);
 
     // Final clean render
-    if (data.message_id && this.messageBuffer[data.message_id]) {
-      const contentEl = this.findContentElement(data.message_id);
+    if (messageId && this.messageBuffer[messageId]) {
+      const contentEl = this.findContentElement(messageId);
       if (contentEl) {
-        const rawHtml = marked.parse(this.messageBuffer[data.message_id]);
+        const rawHtml = marked.parse(this.messageBuffer[messageId]);
         contentEl.innerHTML = DOMPurify.sanitize(rawHtml);
       }
+      // Clean up buffer
+      delete this.messageBuffer[messageId];
     }
   }
 
@@ -189,14 +202,26 @@ export default class extends Controller {
     if (event) event.preventDefault();
     if (DEBUG) console.log("Stopping generation...");
 
-    this.subscription.perform("stop_generation");
+    // Check for valid subscription before performing
+    if (this.subscription && typeof this.subscription.perform === "function") {
+      try {
+        this.subscription.perform("stop_generation");
+      } catch (err) {
+        console.error("Failed to stop generation:", err);
+      }
+    }
+
     this.toggleControls(false);
+    this.isGenerating = false;
+    this.clearGenerationTimeout();
   }
 
   // UI Helpers
 
   findContentElement(messageId) {
-    const messageContainer = document.querySelector(`[data-message-id="${messageId}"]`);
+    // Scope search to controller's element to prevent cross-chat contamination
+    // (Updated per code review)
+    const messageContainer = this.element.querySelector(`[data-message-id="${messageId}"]`);
     if (messageContainer) {
       return messageContainer.querySelector("[data-message-content]");
     }
