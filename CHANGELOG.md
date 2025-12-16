@@ -1,3 +1,10 @@
+## [0.17.4](https://github.com/hendripermana/permoney/compare/v0.17.3...v0.17.4) (2025-12-16)
+
+### Other Changes
+
+- Merge pull request #103 from hendripermana/fix/security-compliance-v2 (317037ed)
+- fix(security): upgrade dompurify to 3.2.4 to resolve CVEs [skip ci] (435be9d4)
+
 ## [0.17.3](https://github.com/hendripermana/permoney/compare/v0.17.2...v0.17.3) (2025-12-16)
 
 ### Bug Fixes
