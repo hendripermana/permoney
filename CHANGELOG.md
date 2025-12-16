@@ -1,3 +1,16 @@
+## [0.17.3](https://github.com/hendripermana/permoney/compare/v0.17.2...v0.17.3) (2025-12-16)
+
+### Bug Fixes
+
+- fix: chat reliability, navigation and formatting [skip ci] (23d878d1)
+
+### Other Changes
+
+- Merge pull request #102 from hendripermana/fix/security-compliance-v2 (44bb3d02)
+- fix(js): robust controller refactor (scoping, null checks, crash prevention) [skip ci] (8a7c29ad)
+- fix(security): switch to dompurify for sanitization and robustify timeout [skip ci] (c91551b8)
+- fix(security): enabling sanitize:true, fixing timeout logic and simplifying ui toggle [skip ci] (de6fc9ed)
+
 ## [0.17.2](https://github.com/hendripermana/permoney/compare/v0.17.1...v0.17.2) (2025-12-15)
 
 ### Bug Fixes
