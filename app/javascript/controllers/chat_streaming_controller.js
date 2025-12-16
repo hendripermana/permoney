@@ -1,5 +1,6 @@
 import { Controller } from "@hotwired/stimulus";
 import { createConsumer } from "@rails/actioncable";
+import DOMPurify from "dompurify";
 import { marked } from "marked";
 
 // Debug flag
@@ -16,13 +17,12 @@ export default class extends Controller {
   connect() {
     if (DEBUG) console.log("ChatStreamingController connected for chat:", this.chatIdValue);
 
-    // Configure marked for safety
+    // Configure marked - sanitize handled by DOMPurify
     marked.setOptions({
       breaks: true,
       gfm: true,
       headerIds: false,
       mangle: false,
-      sanitize: true, // ENABLED per security review (prevents XSS)
     });
 
     this.subscription = createConsumer().subscriptions.create(
@@ -60,7 +60,7 @@ export default class extends Controller {
     if (DEBUG) console.log("Received data:", data.type, data);
 
     // Reset timeout on any activity
-    this.resetGenerationTimeout();
+    this.resetGenerationTimeout(data);
 
     switch (data.type) {
       case "message_created":
@@ -81,10 +81,14 @@ export default class extends Controller {
     }
   }
 
-  resetGenerationTimeout() {
+  resetGenerationTimeout(data) {
     this.clearGenerationTimeout();
-    // Reset timeout if we have an active message ID (generation in progress)
-    if (this.currentMessageId) {
+    // Reset timeout if generation is active.
+    // We check either isGenerating flag OR if we are currently receiving a relevant event
+    const isActivity =
+      this.isGenerating || (data && ["message_created", "text_delta"].includes(data.type));
+
+    if (isActivity) {
       this.generationTimeout = setTimeout(() => {
         this.handleTimeout();
       }, this.BIND_TIMEOUT_MS);
@@ -117,7 +121,7 @@ export default class extends Controller {
     this.currentMessageId = data.message_id;
     this.messageBuffer[data.message_id] = ""; // Init buffer
     this.isGenerating = true;
-    this.resetGenerationTimeout();
+    this.resetGenerationTimeout(data);
 
     this.toggleControls(true);
     this.scrollToBottom();
@@ -135,8 +139,9 @@ export default class extends Controller {
 
       this.messageBuffer[data.message_id] += data.content;
 
-      // Render markdown
-      contentEl.innerHTML = marked.parse(this.messageBuffer[data.message_id]);
+      // Render markdown safely
+      const rawHtml = marked.parse(this.messageBuffer[data.message_id]);
+      contentEl.innerHTML = DOMPurify.sanitize(rawHtml);
 
       this.scrollToBottom();
     }
@@ -153,7 +158,8 @@ export default class extends Controller {
     if (data.message_id && this.messageBuffer[data.message_id]) {
       const contentEl = this.findContentElement(data.message_id);
       if (contentEl) {
-        contentEl.innerHTML = marked.parse(this.messageBuffer[data.message_id]);
+        const rawHtml = marked.parse(this.messageBuffer[data.message_id]);
+        contentEl.innerHTML = DOMPurify.sanitize(rawHtml);
       }
     }
   }
