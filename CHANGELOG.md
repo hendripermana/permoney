@@ -1,3 +1,10 @@
+## [0.17.5](https://github.com/hendripermana/permoney/compare/v0.17.4...v0.17.5) (2025-12-20)
+
+### Other Changes
+
+- Merge PR #104: Apply community updates and refresh Permoney icons (0d63490f)
+- Apply community updates and refresh icons (dbbe1d43)
+
 ## [0.17.4](https://github.com/hendripermana/permoney/compare/v0.17.3...v0.17.4) (2025-12-16)
 
 ### Other Changes
