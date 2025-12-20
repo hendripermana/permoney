@@ -104,6 +104,15 @@ class Provider::Openai::AutoMerchantDetector
       result
     rescue => e
       span&.end(output: { error: e.message }, level: "ERROR")
+      record_usage_error(
+        model.presence || Provider::Openai::DEFAULT_MODEL,
+        operation: "auto_detect_merchants",
+        error: e,
+        metadata: {
+          transaction_count: transactions.size,
+          merchant_count: user_merchants.size
+        }
+      )
       raise
     end
 
@@ -149,6 +158,15 @@ class Provider::Openai::AutoMerchantDetector
       result
     rescue => e
       span&.end(output: { error: e.message }, level: "ERROR")
+      record_usage_error(
+        model.presence || Provider::Openai::DEFAULT_MODEL,
+        operation: "auto_detect_merchants",
+        error: e,
+        metadata: {
+          transaction_count: transactions.size,
+          merchant_count: user_merchants.size
+        }
+      )
       raise
     end
 

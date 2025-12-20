@@ -26,3 +26,12 @@ document.addEventListener("turbo:frame-missing", (event) => {
 
 // Rails 8.1 - Enhanced Turbo Drive configuration
 // Progress bar is handled automatically by Turbo
+
+// Register service worker for PWA offline support
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/service-worker").catch((error) => {
+      console.warn("Service Worker registration failed:", error);
+    });
+  });
+}

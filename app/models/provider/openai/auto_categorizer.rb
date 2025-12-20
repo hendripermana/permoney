@@ -83,6 +83,15 @@ class Provider::Openai::AutoCategorizer
       result
     rescue => e
       span&.end(output: { error: e.message }, level: "ERROR")
+      record_usage_error(
+        model.presence || Provider::Openai::DEFAULT_MODEL,
+        operation: "auto_categorize",
+        error: e,
+        metadata: {
+          transaction_count: transactions.size,
+          category_count: user_categories.size
+        }
+      )
       raise
     end
 
@@ -128,6 +137,15 @@ class Provider::Openai::AutoCategorizer
       result
     rescue => e
       span&.end(output: { error: e.message }, level: "ERROR")
+      record_usage_error(
+        model.presence || Provider::Openai::DEFAULT_MODEL,
+        operation: "auto_categorize",
+        error: e,
+        metadata: {
+          transaction_count: transactions.size,
+          category_count: user_categories.size
+        }
+      )
       raise
     end
 
