@@ -57,11 +57,9 @@ class Family::AutoMerchantDetector
           merchant_id,
           source: "ai"
         )
-
+        # Lock so this rule doesn't re-run once a merchant is set
+        transaction.lock_attr!(:merchant_id)
       end
-
-      # We lock the attribute so that this Rule doesn't try to run again
-      transaction.lock_attr!(:merchant_id)
     end
   end
 

@@ -992,443 +992,356 @@ bin/rails console
 bin/rails tmp:cache:clear
 ```
 
-### Indonesian Finance Context
-When working with Indonesian finance features, remember:
-- **Islamic compliance** is important (Sharia vs conventional)
-- **Personal lending** is common (family, friends, informal agreements)
-- **Fintech integration** (Pinjol, P2P lending, e-wallets)
-- **Cultural sensitivity** in reminders and communications
-- **Local categories** (Arisan, Zakat, Infaq/Sadaqah)
-- **Multi-currency support** with IDR formatting
 
-## Box Carousel Component
+# Original File: .cursor/rules/general-rules.mdc
 
-A modern 3D carousel component built with Stimulus and Framer Motion for interactive content display.
+```markdown
+---
+description: Miscellaneous rules to get the AI to behave
+globs: *
+alwaysApply: true
+---
+# General rules for AI 
 
-### Usage
+- Use `Current.user` for the current user. Do NOT use `current_user`.
+- Use `Current.family` for the current family. Do NOT use `current_family`.
+- Prior to generating any code, carefully read the project conventions and guidelines
+  - Read [project-design.mdc](#original-file-cursorrulesproject-designmdc) to understand the codebase
+  - Read [project-conventions.mdc](#original-file-cursorrulesproject-conventionsmdc) to understand _how_ to write code for the codebase
+  - Read [ui-ux-design-guidelines.mdc](#original-file-cursorrulesui-ux-design-guidelinesmdc) to understand how to implement frontend code specifically
+- ActiveRecord migrations must inherit from `ActiveRecord::Migration[7.2]`. Do **not** use version 8.0 yet.
 
-```erb
-<%= render BoxCarouselComponent.new(
-  items: [
-    { id: "1", type: "image", src: "image-url.jpg", alt: "Description" },
-    { id: "2", type: "video", src: "video-url.mp4", poster: "poster.jpg" }
-  ],
-  width: 400,
-  height: 300,
-  direction: "right",  # "left", "right", "top", "bottom"
-  auto_play: true,
-  auto_play_interval: 3000,
-  enable_drag: true,
-  perspective: 1000
-) %>
+## Prohibited actions
+
+- Do not run `rails server` in your responses.
+- Do not run `touch tmp/restart.txt`
+- Do not run `rails credentials`
+- Do not automatically run migrations
 ```
 
-### Features
-- **3D Rotation**: Smooth cube rotation with 4 visible faces
-- **Drag Support**: Mouse and touch drag interactions
-- **Keyboard Navigation**: Arrow keys for navigation
-- **Auto-play Mode**: Automatic progression through items
-- **Mixed Media**: Supports both images and videos
-- **Responsive**: Adapts to different screen sizes
-- **Accessible**: ARIA labels and keyboard support
 
-### Demo
-Visit `/carousel-demo` to see the component in action.
+---
 
-## Variable Font Hover By Letter
+## Original File: .cursor/rules/project-design.mdc
 
-An interactive text animation component that animates font variation settings on hover, letter by letter.
+```markdown
+---
+description: This rule explains the system architecture and data flow of the Rails app
+globs: *
+alwaysApply: true
+---
 
-### Usage
+This file outlines how the codebase is structured and how data flows through the app.
 
-```erb
-<h1 
-  data-controller="variable-font-hover"
-  data-variable-font-hover-from-value="'wght' 400"
-  data-variable-font-hover-to-value="'wght' 700"
-  data-variable-font-hover-stagger-duration-value="30"
-  data-variable-font-hover-duration-value="500"
-  data-action="mouseenter->variable-font-hover#mouseenter mouseleave->variable-font-hover#mouseleave">
-  Your Text Here
-</h1>
+This is a personal finance application built in Ruby on Rails.  The primary domain entities for this app are outlined below.  For an authoritative overview of the relationships, [schema.rb](db/schema.rb) is the source of truth.
+
+## App Modes
+
+The codebase runs in two distinct "modes", dictated by `Rails.application.config.app_mode`, which can be `managed` or `self_hosted`.
+
+- "Managed" - in managed mode, a team operates and manages servers for users
+- "Self Hosted" - in self hosted mode, users host the codebase on their own infrastructure, typically through Docker Compose.  We have an example [docker-compose.example.yml](docker-compose.example.yml) file that runs [Dockerfile](Dockerfile) for this mode.
+
+## Families and Users
+
+- `Family` - all Stripe subscriptions, financial accounts, and the majority of preferences are stored at the [family.rb](app/models/family.rb) level.
+- `User` - all [session.rb](app/models/session.rb) happen at the [user.rb](app/models/user.rb) level.  A user belongs to a `Family` and can either be an `admin` or a `member`.  Typically, a `Family` has a single admin, or "head of household" that manages finances while there will be several `member` users who can see the family's finances from varying perspectives.
+
+## Currency Preference
+
+Each `Family` selects a currency preference.  This becomes the "main" currency in which all records are "normalized" to via [exchange_rate.rb](app/models/exchange_rate.rb) records so that the app can calculate metrics, historical graphs, and other insights in a single family currency.
+
+## Accounts
+
+The center of the app's domain is the [account.rb](app/models/account.rb).  This represents a single financial account that has a `balance` and `currency`.  For example, an `Account` could be "Chase Checking", which is a single financial account at Chase Bank.  A user could have multiple accounts at a single institution (i.e. "Chase Checking", "Chase Credit Card", "Chase Savings") or an account could be a standalone account, such as "My Home" (a primary residence).
+
+### Accountables
+
+In the app, [account.rb](app/models/account.rb) is a Rails "delegated type" with the following subtypes (separate DB tables).  Each account has a `classification` or either `asset` or `liability`.  While the types are a flat hierarchy, below, they have been organized by their classification:
+
+- Asset accountables
+  - [depository.rb](app/models/depository.rb) - a typical "bank account" such as a savings or checking account
+  - [investment.rb](app/models/investment.rb) - an account that has "holdings" such as a brokerage, 401k, etc.
+  - [crypto.rb](app/models/crypto.rb) - an account that tracks the value of one or more crypto holdings
+  - [property.rb](app/models/property.rb) - an account that tracks the value of a physical property such as a house or rental property
+  - [vehicle.rb](app/models/vehicle.rb) - an account that tracks the value of a vehicle
+  - [other_asset.rb](app/models/other_asset.rb) - an asset that cannot be classified by the other account types.  For example, "jewelry".
+- Liability accountables
+  - [credit_card.rb](app/models/credit_card.rb) - an account that tracks the debt owed on a credit card
+  - [loan.rb](app/models/loan.rb) - an account that tracks the debt owed on a loan (i.e. mortgage, student loan)
+  - [other_liability.rb](app/models/other_liability.rb) - a liability that cannot be classified by the other account types.  For example, "IOU to a friend"
+
+### Account Balances
+
+An account [balance.rb](app/models/account/balance.rb) represents a single balance value for an account on a specific `date`.  A series of balance records is generated daily for each account and is how we show a user's historical balance graph.  
+
+- For simple accounts like a "Checking Account", the balance represents the amount of cash in the account for a date.  
+- For a more complex account like "Investment Brokerage", the `balance` represents the combination of the "cash balance" + "holdings value".  Each accountable type has different components that make up the "balance", but in all cases, the "balance" represents "How much the account is worth" (when `classification` is `asset`) or "How much is owed on the account" (when `classification` is `liability`)
+
+All balances are calculated daily by [balance_calculator.rb](app/models/account/balance_calculator.rb).
+
+### Account Holdings
+
+An account [holding.rb](app/models/holding.rb) applies to [investment.rb](app/models/investment.rb) type accounts and represents a `qty` of a certain [security.rb](app/models/security.rb) at a specific `price` on a specific `date`.
+
+For investment accounts with holdings, [base_calculator.rb](app/models/holding/base_calculator.rb) is used to calculate the daily historical holding quantities and prices, which are then rolled up into a final "Balance" for the account in [base_calculator.rb](app/models/account/balance/base_calculator.rb).
+
+### Account Entries
+
+An account [entry.rb](app/models/entry.rb) is also a Rails "delegated type".  `Entry` represents any record that _modifies_ an `Account` [balance.rb](app/models/account/balance.rb) and/or [holding.rb](app/models/holding.rb).  Therefore, every entry must have a `date`, `amount`, and `currency`.
+
+The `amount` of an [entry.rb](app/models/entry.rb) is a signed value.  A _negative_ amount is an "inflow" of money to that account.  A _positive_ value is an "outflow" of money from that account.  For example:
+
+- A negative amount for a credit card account represents a "payment" to that account, which _reduces_ its balance (since it is a `liability`)
+- A negative amount for a checking account represents an "income" to that account, which _increases_ its balance (since it is an `asset`)
+- A negative amount for an investment/brokerage trade represents a "sell" transaction, which _increases_ the cash balance of the account 
+
+There are 3 entry types, defined as [entryable.rb](app/models/entryable.rb) records: 
+
+- `Valuation` - an account [valuation.rb](app/models/valuation.rb) is an entry that says, "here is the value of this account on this date".  It is an absolute measure of an account value / debt.  If there is an `Valuation` of 5,000 for today's date, that means that the account balance will be 5,000 today.
+- `Transaction` - an account [transaction.rb](app/models/transaction.rb) is an entry that alters the account balance by the `amount`.  This is the most common type of entry and can be thought of as an "income" or "expense".  
+- `Trade` - an account [trade.rb](app/models/trade.rb) is an entry that only applies to an investment account.  This represents a "buy" or "sell" of a holding and has a `qty` and `price`.
+
+### Account Transfers
+
+A [transfer.rb](app/models/transfer.rb) represents a movement of money between two accounts.  A transfer has an inflow [transaction.rb](app/models/transaction.rb) and an outflow [transaction.rb](app/models/transaction.rb).  The codebase auto-matches transfers based on the following criteria:
+
+- Must be from different accounts
+- Must be within 4 days of each other
+- Must be the same currency
+- Must be opposite values
+
+There are two primary forms of a transfer:
+
+- Regular transfer - a normal movement of money between two accounts.  For example, "Transfer $500 from Checking account to Brokerage account". 
+- Debt payment - a special form of transfer where the _receiver_ of funds is a [loan.rb](app/models/loan.rb) type account.  
+
+Regular transfers are typically _excluded_ from income and expense calculations while a debt payment is considered an "expense".
+
+## Plaid Items
+
+A [plaid_item.rb](app/models/plaid_item.rb) represents a "connection" maintained by our external data provider, Plaid in the "hosted" mode of the app.  An "Item" has 1 or more [plaid_account.rb](app/models/plaid_account.rb) records, which are each associated 1:1 with an internal app [account.rb](app/models/account.rb).
+
+All relevant metadata about the item and its underlying accounts are stored on [plaid_item.rb](app/models/plaid_item.rb) and [plaid_account.rb](app/models/plaid_account.rb), while the "normalized" data is then stored on internal app domain models.
+
+## "Syncs"
+
+The codebase has the concept of a [syncable.rb](app/models/concerns/syncable.rb), which represents any model which can have its data "synced" in the background.  "Syncables" include:
+
+- `Account` - an account "sync" will sync account holdings, balances, and enhance transaction metadata
+- `PlaidItem` - a Plaid Item "sync" fetches data from Plaid APIs, normalizes that data, stores it on internal app models, and then finally performs an "Account sync" for each of the underlying accounts created from the Plaid Item.
+- `Family` - a Family "sync" loops through the family's Plaid Items and individual Accounts and "syncs" each of them.  A family is synced once per day, automatically through [auto_sync.rb](app/controllers/concerns/auto_sync.rb).
+
+Each "sync" creates a [sync.rb](app/models/sync.rb) record in the database, which keeps track of the status of the sync, any errors that it encounters, and acts as an "audit table" for synced data.
+
+Below are brief descriptions of each type of sync in more detail.
+
+### Account Syncs
+
+The most important type of sync is the account sync.  It is orchestrated by the account's `sync_data` method, which performs a few important tasks:
+
+- Auto-matches transfer records for the account
+- Calculates daily [balance.rb](app/models/account/balance.rb) records for the account from `account.start_date` to `Date.current` using [base_calculator.rb](app/models/account/balance/base_calculator.rb)
+  - Balances are dependent on the calculation of [holding.rb](app/models/holding.rb), which uses [base_calculator.rb](app/models/account/holding/base_calculator.rb) 
+- Enriches transaction data if enabled by user
+
+An account sync happens every time an [entry.rb](app/models/entry.rb) is updated.
+
+### Plaid Item Syncs
+
+A Plaid Item sync is an ETL (extract, transform, load) operation:
+
+1. [plaid_item.rb](app/models/plaid_item.rb) fetches data from the external Plaid API
+2. [plaid_item.rb](app/models/plaid_item.rb) creates and loads this data to [plaid_account.rb](app/models/plaid_account.rb) records
+3. [plaid_item.rb](app/models/plaid_item.rb) and [plaid_account.rb](app/models/plaid_account.rb) transform and load data to [account.rb](app/models/account.rb) and [entry.rb](app/models/entry.rb), the internal codebase representations of the data.
+
+### Family Syncs
+
+A family sync happens once daily via [auto_sync.rb](app/controllers/concerns/auto_sync.rb).  A family sync is an "orchestrator" of Account and Plaid Item syncs.
+
+## Data Providers
+
+The codebase utilizes several 3rd party data services to calculate historical account balances, enrich data, and more.  Since the app can be run in both "hosted" and "self hosted" mode, this means that data providers are _optional_ for self hosted users and must be configured.
+
+Because of this optionality, data providers must be configured at _runtime_ through [registry.rb](app/models/provider/registry.rb) utilizing [setting.rb](app/models/setting.rb) for runtime parameters like API keys:
+
+There are two types of 3rd party data in the codebase:
+
+1. "Concept" data
+2. One-off data
+
+### "Concept" data
+
+Since the app is self hostable, users may prefer using different providers for generic data like exchange rates and security prices.  When data is generic enough where we can easily swap out different providers, we call it a data "concept".
+
+Each "concept" has an interface defined in the `app/models/provider/concepts` directory.
+
+```plain
+app/models/
+  exchange_rate/
+    provided.rb # <- Responsible for selecting the concept provider from the registry
+  provider.rb # <- Base provider class
+  provider/
+    registry.rb <- Defines available providers by concept
+    concepts/
+      exchange_rate.rb <- defines the interface required for the exchange rate concept
 ```
 
-### Features
-- **Variable Font Animation**: Animates font-variation-settings on hover
-- **Stagger Effect**: Letters animate in sequence with configurable delay
-- **Customizable**: Control animation duration, stagger timing, and font settings
-- **Smooth Transitions**: Uses native CSS transitions for optimal performance
-- **Lightweight**: No external animation libraries required
+### One-off data
 
-### Data Attributes
-- `data-variable-font-hover-from-value`: Initial font variation settings (default: "'wght' 400")
-- `data-variable-font-hover-to-value`: Target font variation settings on hover (default: "'wght' 700")
-- `data-variable-font-hover-stagger-duration-value`: Delay between each letter in milliseconds (default: 30)
-- `data-variable-font-hover-duration-value`: Animation duration in milliseconds (default: 500)
+For data that does not fit neatly into a "concept", an interface is not required and the concrete provider may implement ad-hoc methods called directly in code.
 
-### Requirements
-- Works only with variable fonts (e.g., Geist, Inter Variable, etc.)
-- Uses native CSS transitions for optimal performance
-- No external animation libraries required
+## "Provided" Concerns
 
-## Time-Based Greeting Helper
+In general, domain models should not be calling [registry.rb](app/models/provider/registry.rb) directly.  When 3rd party data is required for a domain model, we use the `Provided` concern within that model's namespace.  This concern is primarily responsible for:
 
-A helper method that returns appropriate greeting based on current time.
+- Choosing the provider to use for this "concept"
+- Providing convenience methods on the model for accessing data
 
-### Usage
+For example, [exchange_rate.rb](app/models/exchange_rate.rb) has a [provided.rb](app/models/exchange_rate/provided.rb) concern with the following convenience methods:
 
-```erb
-<%= time_based_greeting %>, <%= Current.user.first_name %>!
-```
+```rb
+module ExchangeRate::Provided
+  extend ActiveSupport::Concern
 
-### Returns
-- "Good morning" (5:00 AM - 11:59 AM)
-- "Good afternoon" (12:00 PM - 5:59 PM)
-- "Good evening" (6:00 PM - 4:59 AM)
+  class_methods do
+    def provider
+      registry = Provider::Registry.for_concept(:exchange_rates)
+      registry.get_provider(:synth)
+    end
 
-### Implementation
-Uses `Time.current` to respect application timezone settings.
+    def find_or_fetch_rate(from:, to:, date: Date.current, cache: true)
+      # Implementation 
+    end
 
-## Realtime Clock Component
-
-A Stimulus controller that displays current date and time with smooth anime.js animations.
-
-### Usage
-
-```erb
-<div data-controller="realtime-clock">
-  <div data-realtime-clock-target="date">Loading...</div>
-  <div data-realtime-clock-target="time">--:--:--</div>
-</div>
-```
-
-### Features
-- **Realtime Updates**: Updates every second automatically
-- **Smooth Animations**: Uses native CSS transitions for fade in/out effects
-- **Date Format**: Displays full date (e.g., "Monday, October 20, 2025")
-- **Time Format**: 24-hour format with seconds (HH:MM:SS)
-- **Auto Cleanup**: Properly clears interval on disconnect
-- **Smart Updates**: Only animates when values actually change
-
-### Targets
-- `date`: Element to display formatted date
-- `time`: Element to display formatted time
-
-### Animation
-- Fade out with upward translation (300ms)
-- Text update
-- Fade in with downward translation (300ms)
-- Uses CSS `ease-out` timing function for smooth transitions
-
-### Requirements
-- No external animation libraries required
-- Uses native CSS transitions for optimal performance
-- Updates automatically every second
-- Respects browser's locale for date formatting
-
-## Floating Chat Component
-
-A modern floating AI chat widget that provides access to the AI assistant from anywhere in the application with enhanced realtime streaming, smooth animations, and full PWA integration.
-
-### Usage
-
-```erb
-<%= render FloatingChatComponent.new(user: Current.user) %>
-```
-
-### Features
-- **Realtime Streaming**: Full duplex communication with smooth text streaming animations
-- **Floating Button**: Fixed position button at bottom-right corner with enhanced interactions
-- **Responsive Design**: Full-screen on mobile, popover on desktop with adaptive behavior
-- **PWA Optimized**: 
-  - Handles safe area insets for notched devices
-  - Proper z-index integration with bottom menu (z-index: 40 button, 50 panel, 30 nav)
-  - Standalone mode detection for proper positioning
-- **Smooth Animations**: Modern 2025 design with CSS transitions and GPU-accelerated animations
-- **Keyboard Navigation**: Escape key to close, Tab navigation, Ctrl+Enter to send
-- **Turbo Integration**: Full Turbo Frame + Action Cable streaming support
-- **AI Consent**: Shows consent screen if AI not enabled
-- **Accessible**: ARIA labels, keyboard support, screen reader friendly, high contrast mode support
-- **Dark Mode**: Fully supports theme switching with optimized shadows
-- **Touch Optimized**: 56px minimum touch targets on mobile, proper button spacing
-
-### Component Structure
-- `FloatingChatComponent` - ViewComponent for the widget
-- `floating_chat_controller.js` - Enhanced Stimulus controller with mobile detection
-- `floating_show.html.erb` - Chat view for existing conversations with streaming support
-- `floating_new.html.erb` - Chat view for new conversations
-- `floating_ai_consent.html.erb` - Consent screen partial
-- `chat_streaming_controller.js` - Real-time message streaming with smooth animations
-- `floating_chat.css` - Comprehensive styling with modern design patterns
-
-### Stimulus Controller Enhancements
-
-**Targets**: `panel`, `backdrop`, `trigger`, `badge`
-**Values**: `open` (Boolean), `isMobile` (Boolean)
-**Actions**: `toggle`, `open`, `close`
-
-**New Features**:
-- Mobile state detection with debounced resize handling
-- Automatic panel closure when switching from desktop to mobile
-- Body scroll management for better mobile UX
-- Enhanced accessibility with ARIA attributes
-- Debug logging in development mode
-
-### Realtime Streaming System
-
-The floating chat now supports full duplex communication with:
-
-1. **Action Cable Subscription** - Real-time message delivery via WebSocket
-2. **Stream Event Types**:
-   - `message_created`: Assistant message placeholder created
-   - `text_delta`: Individual text chunks streamed to UI
-   - `complete`: Streaming finished, message saved
-   - `error`: Streaming error with user-friendly message
-   - `generation_stopped`: User stopped generation
-
-3. **Smooth Animations**:
-   - Message creation with `animate-fade-in` (300ms)
-   - Text updates with subtle pulse effect
-   - Auto-scroll to latest message with smooth behavior
-   - Typing indicator with proper show/hide transitions
-
-4. **Performance Optimizations**:
-   - Text accumulated in memory before database writes
-   - RequestAnimationFrame for scroll operations
-   - Proper cleanup on disconnect
-   - Minimal DOM manipulations
-
-### Mobile/PWA Behavior
-
-**Mobile View (<1024px)**:
-- Full-screen overlay with backdrop blur
-- Body scroll disabled when open
-- Touch-optimized button size (56px)
-- Safe area insets for notched devices
-- Auto-closes when switching to desktop
-- Positioned above bottom navigation menu (z-index stacking)
-
-**Desktop View (≥1024px)**:
-- Floating popover (420px × 600px)
-- Bottom-right positioning with 6rem offset
-- No backdrop (non-modal interaction)
-- Hover elevation effect
-- Auto-focus on input when opened
-
-**PWA Standalone Mode**:
-- Handles `display-mode: standalone` detection
-- Proper positioning with safe area support
-- Respects `max()` function for bottom nav collision avoidance
-- Touch-friendly interactions without hover states
-
-### Design System Integration
-
-- Uses Permoney design tokens (`text-primary`, `bg-container`, etc.)
-- Border colors: `border-primary/10` and `border-primary/20` for subtle hierarchy
-- Shadow system: Enhanced with multi-layer shadows for depth
-- Typography: Consistent font sizing and line heights
-- Spacing: Proper padding and margin with 4px baseline
-
-### Styling Details
-
-**Button Styling**:
-```css
-/* Enhanced shadow for depth */
-box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15), 0 2px 4px rgba(0, 0, 0, 0.1);
-
-/* Hover elevation */
-transform: translateY(-2px);
-box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2), 0 4px 8px rgba(0, 0, 0, 0.1);
-
-/* Active scale */
-transform: scale(0.95);
-```
-
-**Panel Styling**:
-```css
-/* Floating effect with backdrop blur */
-box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1), 0 8px 16px rgba(0, 0, 0, 0.08);
-border: 1px solid hsl(var(--primary) / 0.2);
-border-radius: 24px;
-```
-
-### Accessibility Features
-
-1. **Keyboard Navigation**:
-   - `Escape` key closes the panel
-   - `Tab` navigates through interactive elements
-   - `Ctrl+Enter` or `Cmd+Enter` sends messages
-   - Focus ring visible on all interactive elements
-
-2. **Screen Reader Support**:
-   - `aria-label` on trigger button
-   - `aria-expanded` state tracking
-   - `aria-modal="true"` on panel
-   - `aria-labelledby` connecting panel to header
-   - `role="dialog"` semantic element
-
-3. **Motion Accessibility**:
-   - `prefers-reduced-motion` respected
-   - Animations disabled for users who prefer reduced motion
-   - Transitions still work for layout stability
-
-4. **Color Contrast**:
-   - Text colors meet WCAG AA standards
-   - High contrast mode support with explicit borders
-   - Error messages styled for visibility
-
-5. **Touch Accessibility**:
-   - Minimum 44-56px touch targets
-   - No hover-only interactions
-   - `-webkit-tap-highlight-color: transparent` for clean interaction
-
-### Z-Index Hierarchy
-
-```
-Bottom navigation:     z-30
-Floating chat button:  z-40
-Floating chat backdrop: z-40
-Floating chat panel:   z-50
-```
-
-This ensures:
-- Floating chat doesn't obscure navigation on mobile
-- Panel appears above all other content
-- Proper stacking context management
-
-### Performance Optimizations
-
-1. **CSS Optimizations**:
-   - `will-change: transform` for animated elements
-   - `backface-visibility: hidden` for GPU acceleration
-   - `contain: layout style paint` for rendering optimization
-   - `animation-duration` reduced in development
-
-2. **JavaScript Optimizations**:
-   - Event listener cleanup on disconnect
-   - Debounced resize handling (150ms)
-   - RequestAnimationFrame for scroll operations
-   - Minimal state mutations
-
-3. **Animation Performance**:
-   - GPU-accelerated transforms
-   - Cubic-bezier easing for smooth motion
-   - Reduced motion support built-in
-   - No JavaScript-based animations
-
-### Testing Checklist
-
-- [ ] Desktop: Button appears, can open/close, displays chat correctly
-- [ ] Desktop: Hover effects work, shadow elevation visible
-- [ ] Desktop: Keyboard navigation (Escape, Tab, Ctrl+Enter)
-- [ ] Mobile: Full-screen overlay appears, backdrop blur visible
-- [ ] Mobile: Chat closes automatically when window resized to desktop
-- [ ] Mobile: Bottom nav not obscured (z-index check)
-- [ ] PWA: Proper positioning with safe area insets
-- [ ] Streaming: Messages appear realtime with smooth animations
-- [ ] Streaming: Stop button appears and works during generation
-- [ ] Streaming: Auto-scroll to latest message
-- [ ] Dark mode: Proper contrast and shadow rendering
-- [ ] Accessibility: All interactive elements keyboard accessible
-- [ ] Accessibility: Screen reader announces all content
-- [ ] Motion: Reduced motion setting respected
-
-### Future Enhancements
-
-1. **Markdown Rendering**: Add markdown rendering for formatted responses
-2. **Message History**: Persist floating chat history to localStorage
-3. **Customization**: Allow theme customization via data attributes
-4. **File Upload**: Support file uploads in floating chat context
-5. **Voice Input**: Add voice-to-text support for mobile
-6. **Multi-Modal Responses**: Support images and other content types
-
-## Breadcrumb Component
-
-A modern breadcrumb navigation component built with ViewComponent for Rails 8.1.
-
-### Usage
-
-```erb
-<%# Block syntax with icons %>
-<%= render BreadcrumbComponent.new do |breadcrumb| %>
-  <%= breadcrumb.with_item(text: "Home", href: root_path, icon: "home") %>
-  <%= breadcrumb.with_item(text: "Accounts", href: accounts_path, icon: "wallet") %>
-  <%= breadcrumb.with_item(text: "Details", current: true, icon: "file-text") %>
-<% end %>
-
-<%# Array syntax (programmatic) %>
-<% items = [
-  { text: "Home", href: root_path, icon: "home" },
-  { text: "Accounts", href: accounts_path, icon: "wallet" },
-  { text: "Details", current: true, icon: "file-text" }
-] %>
-<%= render BreadcrumbComponent.new(items: items) %>
-
-<%# From controller using helper %>
-class AccountsController < ApplicationController
-  before_action :set_breadcrumbs
-
-  private
-  def set_breadcrumbs
-    helper.set_breadcrumbs([
-      { text: "Home", href: root_path, icon: "home" },
-      { text: "Accounts", href: accounts_path, icon: "wallet" },
-      { text: @account.name, icon: "landmark" }
-    ])
+    def sync_provider_rates(from:, to:, start_date:, end_date: Date.current)
+      # Implementation 
+    end
   end
 end
 ```
 
-### Features
-- **Icon Support**: Add Lucide icons to any breadcrumb item
-- **Semantic HTML**: Proper `<nav>` element with ARIA attributes
-- **Accessible**: Screen reader friendly with proper roles and labels
-- **Design System Integration**: Uses Permoney design tokens and colors
-- **Backward Compatible**: Works with existing array format `[["Name", "/path"], ...]`
-- **Dark Mode**: Fully supports theme switching
-- **ViewComponent Architecture**: Modern Rails 8.1 component pattern
+This exposes a generic access pattern where the caller does not care _which_ provider has been chosen for the concept of exchange rates and can get a predictable response:
 
-### Component Structure
-- `BreadcrumbComponent` - Main breadcrumb container
-- `BreadcrumbItemComponent` - Individual breadcrumb items
-- Auto-renders separators between items
-- Smart current page detection
+```rb
+def access_patterns_example
+  # Call exchange rate provider directly
+  ExchangeRate.provider.fetch_exchange_rate(from: "USD", to: "CAD", date: Date.current)
 
-### Item Properties
-- `text` (String, required): Display text for the breadcrumb item
-- `href` (String, optional): URL for link items
-- `icon` (String, optional): Lucide icon name (e.g., "home", "folder", "file-text")
-- `current` (Boolean, optional): Whether this is the current page (default: false)
-
-### Configuration
-- `aria_label` (String): Accessible label for navigation (default: "Breadcrumb")
-- `separator_icon` (String): Icon name for separator (default: "chevron-right")
-
-### Backward Compatibility
-Existing breadcrumb format still works:
-```ruby
-@breadcrumbs = [
-  ["Home", root_path],
-  ["Accounts", accounts_path],
-  ["Show", nil]
-]
+  # Call convenience method
+  ExchangeRate.sync_provider_rates(from: "USD", to: "CAD", start_date: 2.days.ago.to_date)
+end
 ```
-The partial automatically converts to new format.
 
-### Recommended Icons
-- `home` - Home page
-- `layout-dashboard` - Dashboard
-- `folder` - Category/folder
-- `file-text` - Document/details
-- `wallet` - Financial accounts
-- `landmark` - Bank/institution
-- `receipt` - Transactions
-- `settings` - Settings
-- `user` - Profile
+## Concrete provider implementations
 
-### Styling
-Uses design system tokens:
-- Links: `text-gray-500` with `hover:text-primary`
-- Current page: `text-primary`
-- Icons: Auto-sized with proper spacing
-- Separators: Subtle gray with dark mode support
+Each 3rd party data provider should have a class under the `Provider::` namespace that inherits from `Provider` and returns `with_provider_response`, which will return a `Provider::ProviderResponse` object:
+
+```rb
+class ConcreteProvider < Provider
+  def fetch_some_data
+    with_provider_response do
+      ExampleData.new(
+        example: "data"
+      )
+    end
+  end
+end
+```
+
+The `with_provider_response` automatically catches provider errors, so concrete provider classes should raise when valid data is not possible:
+
+```rb
+class ConcreteProvider < Provider
+  def fetch_some_data
+    with_provider_response do
+      data = nil
+
+      # Raise an error if data cannot be returned
+      raise ProviderError.new("Could not find the data you need") if data.nil?
+
+      data
+    end
+  end
+end
+```
+```
+
+---
+
+## Original File: .cursor/rules/project-conventions.mdc
+
+```markdown
+---
+description: 
+globs: 
+alwaysApply: true
+---
+This rule serves as high-level documentation for how you should write code in this codebase. 
+
+## Project Tech Stack
+
+- Web framework: Ruby on Rails
+  - Minitest + fixtures for testing
+  - Propshaft for asset pipeline
+  - Hotwire Turbo/Stimulus for SPA-like UI/UX
+  - TailwindCSS for styles
+  - Lucide Icons for icons
+  - OpenAI for AI chat
+- Database: PostgreSQL
+- Jobs: Sidekiq + Redis
+- External
+  - Payments: Stripe
+  - User bank data syncing: Plaid
+
+## Project conventions
+
+These conventions should be used when writing code for the project.
+
+### Convention 1: Minimize dependencies, vanilla Rails is plenty
+
+Dependencies are a natural part of building software, but we aim to minimize them when possible to keep this open-source codebase easy to understand, maintain, and contribute to.
+
+- Push Rails to its limits before adding new dependencies
+- When a new dependency is added, there must be a strong technical or business reason to add it
+- When adding dependencies, you should favor old and reliable over new and flashy 
+
+### Convention 2: Leverage POROs and concerns over "service objects"
+
+This codebase adopts a "skinny controller, fat models" convention.  Furthermore, we put almost _everything_ directly in the `app/models/` folder and avoid separate folders for business logic such as `app/services/`.
+
+- Organize large pieces of business logic into Rails concerns and POROs (Plain ole' Ruby Objects)
+- While a Rails concern _may_ offer shared functionality (i.e. "duck types"), it can also be a "one-off" concern that is only included in one place for better organization and readability.
+- When concerns are used for code organization, they should be organized around the "traits" of a model; not for simply moving code to another spot in the codebase.
+- When possible, models should answer questions about themselves—for example, we might have a method, `account.balance_series` that returns a time-series of the account's most recent balances.  We prefer this over something more service-like such as `AccountSeries.new(account).call`.
+
+### Convention 3: Leverage Hotwire, write semantic HTML, CSS, and JS, prefer server-side solutions
+
+- Native HTML is always preferred over JS-based components
+  - Example 1: Use `<dialog>` element for modals instead of creating a custom component
+  - Example 2: Use `<details><summary>...</summary></details>` for disclosures rather than custom components
+- Leverage Turbo frames to break up the page over JS-driven client-side solutions
+  - Example 1: A good example of turbo frame usage is in [application.html.erb](app/views/layouts/application.html.erb) where we load [chats_controller.rb](app/controllers/chats_controller.rb) actions in a turbo frame in the global layout
+- Leverage query params in the URL for state over local storage and sessions.  If absolutely necessary, utilize the DB for persistent state.
+- Use Turbo streams to enhance functionality, but do not solely depend on it
+- Format currencies, numbers, dates, and other values server-side, then pass to Stimulus controllers for display only
+- Keep client-side code for where it truly shines.  For example, @bulk_select_controller.js is a case where server-side solutions would degrade the user experience significantly.  When bulk-selecting entries, client-side solutions are the way to go and Stimulus provides the right toolset to achieve this.
+- Always use the `icon` helper in [application_helper.rb](app/helpers/application_helper.rb) for icons.  NEVER use `lucide_icon` helper directly.
+
+The Hotwire suite (Turbo/Stimulus) works very well with these native elements and we optimize for this.
+
+### Convention 4: Optimize for simplicitly and clarity
+
+All code should maximize readability and simplicity.
+
+- Prioritize good OOP domain design over performance
+- Only focus on performance for critical and global areas of the codebase; otherwise, don't sweat the small stuff.
+  - Example 1: be mindful of loading large data payloads in global layouts
+  - Example 2: Avoid N+1 queries
+
+### Convention 5: Use ActiveRecord for complex validations, DB for simple ones, keep business logic out of DB
+
+- Enforce `null` checks, unique indexes, and other simple validations in the DB
+- ActiveRecord validations _may_ mirror the DB level ones, but not 100% necessary.  These are for convenience when error handling in forms.  Always prefer client-side form validation when possible.
+- Complex validations and business logic should remain in ActiveRecord
+```

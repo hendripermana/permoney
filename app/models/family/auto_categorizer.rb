@@ -45,9 +45,9 @@ class Family::AutoCategorizer
           category_id,
           source: "ai"
         )
-      end
 
-      transaction.lock_attr!(:category_id)
+        transaction.lock_attr!(:category_id)
+      end
     end
   end
 
