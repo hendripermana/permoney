@@ -1,5 +1,6 @@
 require "set"
 class SimplefinItem::Importer
+  include CurrencyNormalizable
   class RateLimitedError < StandardError; end
   attr_reader :simplefin_item, :simplefin_provider, :sync
 
@@ -93,7 +94,13 @@ class SimplefinItem::Importer
       sfa.assign_attributes(
         name: account_data[:name],
         account_type: (account_data["type"].presence || account_data[:type].presence || sfa.account_type.presence || "unknown"),
-        currency: (account_data[:currency].presence || account_data["currency"].presence || sfa.currency.presence || sfa.current_account&.currency.presence || simplefin_item.family&.currency.presence || "USD"),
+        currency: resolve_currency(
+          account_data[:currency],
+          account_data["currency"],
+          sfa.currency,
+          sfa.current_account&.currency,
+          simplefin_item.family&.currency
+        ) || "USD",
         current_balance: account_data[:balance],
         available_balance: account_data[:"available-balance"],
         balance_date: (account_data["balance-date"] || account_data[:"balance-date"]),
@@ -207,7 +214,7 @@ class SimplefinItem::Importer
 
       stats["errors"] ||= []
       buckets = stats["error_buckets"] ||= { "auth" => 0, "api" => 0, "network" => 0, "other" => 0 }
-      
+
       if first_time
         stats["total_errors"] = stats.fetch("total_errors", 0) + 1
         buckets[cat] = buckets.fetch(cat, 0) + 1
@@ -223,6 +230,14 @@ class SimplefinItem::Importer
       return unless sync && sync.respond_to?(:sync_stats)
       merged = (sync.sync_stats || {}).merge(stats)
       sync.update_columns(sync_stats: merged) # avoid callbacks/validations during tight loops
+    end
+
+    def resolve_currency(*values)
+      values.each do |value|
+        normalized = parse_currency(value)
+        return normalized if normalized.present?
+      end
+      nil
     end
 
     def import_with_chunked_history
@@ -515,7 +530,13 @@ class SimplefinItem::Importer
       attrs = {
         name: account_data[:name],
         account_type: (account_data["type"].presence || account_data[:type].presence || "unknown"),
-        currency: (account_data[:currency].presence || account_data["currency"].presence || simplefin_account.currency.presence || simplefin_account.current_account&.currency.presence || simplefin_item.family&.currency.presence || "USD"),
+        currency: resolve_currency(
+          account_data[:currency],
+          account_data["currency"],
+          simplefin_account.currency,
+          simplefin_account.current_account&.currency,
+          simplefin_item.family&.currency
+        ) || "USD",
         current_balance: account_data[:balance],
         available_balance: account_data[:"available-balance"],
         balance_date: (account_data["balance-date"] || account_data[:"balance-date"]),

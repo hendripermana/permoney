@@ -200,6 +200,22 @@ class SyncTest < ActiveSupport::TestCase
     assert_equal "stale", stale_syncing.reload.status
   end
 
+  test "latest_stats_map_for returns latest sync stats per syncable" do
+    plaid_item = plaid_items(:one)
+
+    Sync.where(syncable: plaid_item).delete_all
+
+    older = Sync.create!(syncable: plaid_item, sync_stats: { "total_accounts" => 1 })
+    newer = Sync.create!(syncable: plaid_item, sync_stats: { "total_accounts" => 3 })
+
+    older.update_columns(created_at: 2.days.ago)
+    newer.update_columns(created_at: 1.day.ago)
+
+    map = Sync.latest_stats_map_for(syncable_type: "PlaidItem", syncable_ids: [ plaid_item.id ])
+
+    assert_equal 3, map[plaid_item.id]["total_accounts"]
+  end
+
   test "expand_window_if_needed widens start and end dates on a pending sync" do
     initial_start = 1.day.ago.to_date
     initial_end   = 1.day.ago.to_date

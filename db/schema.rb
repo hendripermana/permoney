@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_01_10_000002) do
+ActiveRecord::Schema[8.1].define(version: 2026_01_10_000003) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -1214,6 +1214,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_01_10_000002) do
     t.uuid "category_id"
     t.datetime "created_at", null: false
     t.string "external_id"
+    t.jsonb "extra", default: {}, null: false
     t.boolean "is_sharia_compliant", default: true
     t.string "islamic_transaction_type"
     t.string "kind", default: "standard", null: false
@@ -1222,6 +1223,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_01_10_000002) do
     t.datetime "updated_at", null: false
     t.index ["category_id"], name: "index_transactions_on_category_id"
     t.index ["external_id"], name: "index_transactions_on_external_id"
+    t.index ["extra"], name: "index_transactions_on_extra", using: :gin
     t.index ["is_sharia_compliant"], name: "index_transactions_on_is_sharia_compliant"
     t.index ["islamic_transaction_type"], name: "index_transactions_on_islamic_transaction_type"
     t.index ["kind"], name: "index_transactions_on_kind"

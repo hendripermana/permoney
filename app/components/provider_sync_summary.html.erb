@@ -1,0 +1,105 @@
+<details class="group bg-surface rounded-lg border border-surface-inset/50">
+  <summary class="flex items-center justify-between gap-2 p-3 cursor-pointer">
+    <div class="flex items-center gap-2">
+      <%= helpers.icon "chevron-right", class: "group-open:transform group-open:rotate-90" %>
+      <span class="text-sm text-primary font-medium">Sync Details</span>
+    </div>
+    <div class="flex items-center gap-2 text-xs text-secondary">
+      <% if last_synced_at %>
+        <span>Last synced <%= last_synced_ago %> ago</span>
+      <% end %>
+    </div>
+  </summary>
+
+  <div class="p-3 text-sm text-secondary grid grid-cols-1 md:grid-cols-2 gap-3">
+    <%# Accounts section - always shown if we have account stats %>
+    <% if total_accounts > 0 || stats.key?("total_accounts") %>
+      <div>
+        <h4 class="text-primary font-medium mb-1">Accounts</h4>
+        <div class="flex items-center gap-3 flex-wrap">
+          <span><%= total_accounts %> total</span>
+          <span><%= linked_accounts %> linked</span>
+          <span><%= unlinked_accounts %> unlinked</span>
+          <% if institutions_count.present? %>
+            <span><%= institutions_count %> institutions</span>
+          <% end %>
+        </div>
+      </div>
+    <% end %>
+
+    <%# Transactions section - shown if provider collects transaction stats %>
+    <% if has_transaction_stats? %>
+      <div>
+        <h4 class="text-primary font-medium mb-1">Transactions</h4>
+        <div class="flex items-center gap-3 flex-wrap">
+          <span><%= tx_seen %> seen</span>
+          <span><%= tx_imported %> imported</span>
+          <span><%= tx_updated %> updated</span>
+          <span><%= tx_skipped %> skipped</span>
+        </div>
+      </div>
+    <% end %>
+
+    <%# Holdings section - shown if provider collects holdings stats %>
+    <% if has_holdings_stats? %>
+      <div>
+        <h4 class="text-primary font-medium mb-1">Holdings</h4>
+        <div class="flex items-center gap-3">
+          <span><%= holdings_count %> <%= holdings_label_key %></span>
+        </div>
+      </div>
+    <% end %>
+
+    <%# Health section - always shown %>
+    <div>
+      <h4 class="text-primary font-medium mb-1">Health Status</h4>
+      <div class="flex flex-col gap-1">
+        <div class="flex items-center gap-3 flex-wrap">
+          <% if rate_limited? %>
+            <span class="text-warning">
+              Rate limited <%= rate_limited_ago || "recently" %> ago
+            </span>
+          <% end %>
+          <% if has_errors? %>
+            <span class="text-destructive"><%= total_errors %> errors</span>
+          <% elsif import_started? %>
+            <span class="text-success">No errors</span>
+          <% else %>
+            <span>No errors</span>
+          <% end %>
+        </div>
+
+        <%# Data quality warnings %>
+        <% if has_data_quality_issues? %>
+          <div class="flex items-center gap-3 mt-1">
+            <% if data_warnings > 0 %>
+              <div class="flex items-center gap-1">
+                <%= helpers.icon "alert-triangle", size: "sm", color: "warning" %>
+                <span class="text-warning"><%= data_warnings %> data warnings</span>
+              </div>
+            <% end %>
+            <% if notices > 0 %>
+              <div class="flex items-center gap-1">
+                <%= helpers.icon "info", size: "sm" %>
+                <span><%= notices %> notices</span>
+              </div>
+            <% end %>
+          </div>
+
+          <% if data_quality_details.any? %>
+            <details class="mt-2">
+              <summary class="text-xs cursor-pointer text-secondary hover:text-primary">
+                View data quality issues
+              </summary>
+              <div class="mt-1 pl-2 border-l-2 border-surface-inset space-y-1">
+                <% data_quality_details.each do |detail| %>
+                  <p class="text-xs <%= severity_color_class(detail["severity"]) %>"><%= detail["message"] %></p>
+                <% end %>
+              </div>
+            </details>
+          <% end %>
+        <% end %>
+      </div>
+    </div>
+  </div>
+</details>

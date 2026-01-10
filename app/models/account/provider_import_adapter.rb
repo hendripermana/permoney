@@ -92,13 +92,33 @@ class Account::ProviderImportAdapter
   def find_or_create_merchant(provider_merchant_id:, name:, source:, website_url: nil, logo_url: nil)
     return nil unless provider_merchant_id.present? && name.present?
 
-    ProviderMerchant.find_or_create_by!(
-      provider_merchant_id: provider_merchant_id,
-      source: source
-    ) do |m|
-      m.name = name
-      m.website_url = website_url
-      m.logo_url = logo_url
+    merchant = ProviderMerchant.find_by(provider_merchant_id: provider_merchant_id, source: source)
+    merchant ||= ProviderMerchant.find_by(source: source, name: name)
+
+    if merchant
+      if logo_url.present? && merchant.logo_url != logo_url
+        begin
+          merchant.update!(logo_url: logo_url)
+        rescue StandardError => e
+          Rails.logger.warn(
+            "Failed to update merchant logo: merchant_id=#{merchant.id} logo_url=#{logo_url} error=#{e.message}"
+          )
+        end
+      end
+      return merchant
+    end
+
+    begin
+      ProviderMerchant.create!(
+        source: source,
+        name: name,
+        provider_merchant_id: provider_merchant_id,
+        website_url: website_url,
+        logo_url: logo_url
+      )
+    rescue ActiveRecord::RecordNotUnique
+      ProviderMerchant.find_by(provider_merchant_id: provider_merchant_id, source: source) ||
+        ProviderMerchant.find_by(source: source, name: name)
     end
   end
 

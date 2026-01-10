@@ -191,6 +191,42 @@ class Account::ProviderImportAdapterTest < ActiveSupport::TestCase
     end
   end
 
+  test "finds existing merchant by provider_merchant_id when name differs" do
+    existing_merchant = ProviderMerchant.create!(
+      provider_merchant_id: "case_merchant_1",
+      name: "JOHN DOE",
+      source: "lunchflow"
+    )
+
+    assert_no_difference "ProviderMerchant.count" do
+      merchant = @adapter.find_or_create_merchant(
+        provider_merchant_id: "case_merchant_1",
+        name: "John Doe",
+        source: "lunchflow"
+      )
+
+      assert_equal existing_merchant.id, merchant.id
+    end
+  end
+
+  test "updates logo_url when existing merchant is found" do
+    existing_merchant = ProviderMerchant.create!(
+      provider_merchant_id: "logo_update_1",
+      name: "Logo Merchant",
+      source: "plaid"
+    )
+
+    merchant = @adapter.find_or_create_merchant(
+      provider_merchant_id: "logo_update_1",
+      name: "Logo Merchant",
+      source: "plaid",
+      logo_url: "https://example.com/new-logo.png"
+    )
+
+    assert_equal existing_merchant.id, merchant.id
+    assert_equal "https://example.com/new-logo.png", merchant.reload.logo_url
+  end
+
   test "updates account balance" do
     @adapter.update_balance(
       balance: 5000.00,
@@ -220,7 +256,7 @@ class Account::ProviderImportAdapterTest < ActiveSupport::TestCase
     security = securities(:aapl)
 
     # Use a date that doesn't conflict with fixtures (fixtures use today and 1.day.ago)
-    holding_date = Date.today - 2.days
+    holding_date = Date.current - 2.days
 
     assert_difference "investment_account.holdings.count", 1 do
       holding = adapter.import_holding(

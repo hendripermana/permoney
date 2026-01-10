@@ -129,10 +129,10 @@ class Provider::Simplefin
       rescue *RETRYABLE_ERRORS => e
         if retries < max_retries
           retries += 1
-          delay = [INITIAL_RETRY_DELAY * (2**(retries - 1)), MAX_RETRY_DELAY].min
-          
+          delay = [ INITIAL_RETRY_DELAY * (2**(retries - 1)), MAX_RETRY_DELAY ].min
+
           Rails.logger.warn "SimpleFin API: #{operation_name} failed (#{e.class}: #{e.message}). Retrying in #{delay}s... (Attempt #{retries}/#{max_retries})"
-          
+
           sleep(delay) if sleep
           retry
         else

@@ -138,30 +138,30 @@ class Security::Price::ImporterTest < ActiveSupport::TestCase
 
   test "marks LOCF prices as provisional" do
     Security::Price.delete_all
-    
+
     # Provider has gap
     provider_response = provider_success_response([
       OpenStruct.new(security: @security, date: 2.days.ago.to_date, price: 150, currency: "USD"),
       # Missing 1 day ago
       OpenStruct.new(security: @security, date: Date.current, price: 160, currency: "USD")
     ])
-    
+
     @provider.stubs(:fetch_security_prices).returns(provider_response)
-    
+
     Security::Price::Importer.new(
       security: @security,
       security_provider: @provider,
       start_date: 2.days.ago.to_date,
       end_date: Date.current
     ).import_provider_prices
-    
+
     prices = Security::Price.where(security: @security).order(:date)
     assert_equal 3, prices.count
-    
+
     p1 = prices.find { |p| p.date == 2.days.ago.to_date }
-    p2 = prices.find { |p| p.date == 1.day.ago.to_date } 
+    p2 = prices.find { |p| p.date == 1.day.ago.to_date }
     p3 = prices.find { |p| p.date == Date.current }
-    
+
     assert_equal false, p1.provisional
     assert_equal true, p2.provisional # LOCF'd
     assert_equal 150, p2.price # Carried forward

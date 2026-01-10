@@ -12,12 +12,12 @@ class SimplefinAccount::ProcessorTest < ActiveSupport::TestCase
 
   test "process_account! normalizes liability balances correctly" do
     credit_card = CreditCard.create!(subtype: "visa")
-    
+
     account = Account.create!(
-      family: @family, 
-      name: "Test Credit Card", 
-      balance: 0, 
-      accountable: credit_card, 
+      family: @family,
+      name: "Test Credit Card",
+      balance: 0,
+      accountable: credit_card,
       currency: "USD"
     )
 
@@ -29,25 +29,25 @@ class SimplefinAccount::ProcessorTest < ActiveSupport::TestCase
       account_type: "credit",
       current_balance: -1500.00
     )
-    
+
     # Pre-link explicitly as the processor likely relies on existing link or finding it
     account.update!(simplefin_account: simplefin_account)
-    
+
     processor = SimplefinAccount::Processor.new(simplefin_account)
     processor.send(:process_account!)
-    
+
     account.reload
     assert_equal 1500.00, account.balance, "Credit card balance should be normalized to positive"
   end
 
   test "process_account! keeps asset balances unchanged" do
     depository = Depository.create!(subtype: "checking")
-    
+
     account = Account.create!(
-      family: @family, 
-      name: "Test Checking", 
-      balance: 0, 
-      accountable: depository, 
+      family: @family,
+      name: "Test Checking",
+      balance: 0,
+      accountable: depository,
       currency: "USD"
     )
 
@@ -59,24 +59,24 @@ class SimplefinAccount::ProcessorTest < ActiveSupport::TestCase
       account_type: "checking",
       current_balance: 2500.00
     )
-    
+
     account.update!(simplefin_account: simplefin_account)
 
     processor = SimplefinAccount::Processor.new(simplefin_account)
     processor.send(:process_account!)
-    
+
     account.reload
     assert_equal 2500.00, account.balance, "Checking account balance should remain unchanged"
   end
 
   test "process_account! handles loan liability normalization" do
     loan = Loan.create!(compliance_type: "conventional", lender_name: "Test Lender")
-    
+
     account = Account.create!(
-      family: @family, 
-      name: "Test Loan", 
-      balance: 0, 
-      accountable: loan, 
+      family: @family,
+      name: "Test Loan",
+      balance: 0,
+      accountable: loan,
       currency: "USD"
     )
 
@@ -88,12 +88,12 @@ class SimplefinAccount::ProcessorTest < ActiveSupport::TestCase
       account_type: "loan",
       current_balance: -10000.00
     )
-    
+
     account.update!(simplefin_account: simplefin_account)
-    
+
     processor = SimplefinAccount::Processor.new(simplefin_account)
     processor.send(:process_account!)
-    
+
     account.reload
     assert_equal 10000.00, account.balance, "Loan balance should be normalized to positive"
   end
@@ -102,10 +102,10 @@ class SimplefinAccount::ProcessorTest < ActiveSupport::TestCase
     credit_card = CreditCard.create!(subtype: "mastercard")
 
     account = Account.create!(
-      family: @family, 
-      name: "Test Credit Card Zero", 
-      balance: 0, 
-      accountable: credit_card, 
+      family: @family,
+      name: "Test Credit Card Zero",
+      balance: 0,
+      accountable: credit_card,
       currency: "USD"
     )
 
@@ -117,12 +117,12 @@ class SimplefinAccount::ProcessorTest < ActiveSupport::TestCase
       account_type: "credit",
       current_balance: 0.00
     )
-    
+
     account.update!(simplefin_account: simplefin_account)
-    
+
     processor = SimplefinAccount::Processor.new(simplefin_account)
     processor.send(:process_account!)
-    
+
     account.reload
     assert_equal 0.00, account.balance, "Zero balance should remain zero"
   end
@@ -131,10 +131,10 @@ class SimplefinAccount::ProcessorTest < ActiveSupport::TestCase
     credit_card = CreditCard.create!(subtype: "visa")
 
     account = Account.create!(
-      family: @family, 
-      name: "Test Credit Card Fallback", 
-      balance: 0, 
-      accountable: credit_card, 
+      family: @family,
+      name: "Test Credit Card Fallback",
+      balance: 0,
+      accountable: credit_card,
       currency: "USD"
     )
 
@@ -148,12 +148,12 @@ class SimplefinAccount::ProcessorTest < ActiveSupport::TestCase
       current_balance: nil,
       available_balance: -500.00
     )
-    
+
     account.update!(simplefin_account: simplefin_account)
-    
+
     processor = SimplefinAccount::Processor.new(simplefin_account)
     processor.send(:process_account!)
-    
+
     account.reload
     assert_equal 500.00, account.balance, "Should use available_balance when current_balance is nil"
   end
@@ -162,10 +162,10 @@ class SimplefinAccount::ProcessorTest < ActiveSupport::TestCase
     investment = Investment.create!(subtype: "brokerage")
 
     account = Account.create!(
-      family: @family, 
-      name: "Test Investment", 
-      balance: 0, 
-      accountable: investment, 
+      family: @family,
+      name: "Test Investment",
+      balance: 0,
+      accountable: investment,
       currency: "USD"
     )
 
@@ -177,18 +177,18 @@ class SimplefinAccount::ProcessorTest < ActiveSupport::TestCase
       account_type: "investment",
       current_balance: 5000.00
     )
-    
+
     account.update!(simplefin_account: simplefin_account)
-    
+
     # Mock the balance calculator
     calculator = Minitest::Mock.new
     calculator.expect(:cash_balance, 1000.00)
-    
+
     SimplefinAccount::Investments::BalanceCalculator.stub(:new, calculator) do
       processor = SimplefinAccount::Processor.new(simplefin_account)
       processor.send(:process_account!)
     end
-    
+
     account.reload
     assert_equal 5000.00, account.balance, "Investment balance should be set"
   end
@@ -204,7 +204,7 @@ class SimplefinAccount::ProcessorTest < ActiveSupport::TestCase
       account_type: "checking",
       current_balance: 100.00
     )
-    
+
     processor = SimplefinAccount::Processor.new(simplefin_account)
     # Should not raise an error and should return early
     assert_nothing_raised do
@@ -221,24 +221,24 @@ class SimplefinAccount::BalanceNormalizationTest < ActiveSupport::TestCase
       name: "Balance Norm Test",
       access_url: "https://example.com/token"
     )
-    
-    liability_types = ["CreditCard", "Loan"]
-    
+
+    liability_types = [ "CreditCard", "Loan" ]
+
     liability_types.each do |liable_type|
       accountable = if liable_type == "Loan"
-                      Loan.create!(compliance_type: "conventional", lender_name: "Test Lender")
-                    else
-                      CreditCard.create!(subtype: "visa")
-                    end
+        Loan.create!(compliance_type: "conventional", lender_name: "Test Lender")
+      else
+        CreditCard.create!(subtype: "visa")
+      end
 
       account = Account.create!(
-        family: family, 
-        name: "Test #{liable_type}", 
-        balance: 0, 
-        accountable: accountable, 
+        family: family,
+        name: "Test #{liable_type}",
+        balance: 0,
+        accountable: accountable,
         currency: "USD"
       )
-      
+
       simplefin_account = SimplefinAccount.create!(
         simplefin_item: simplefin_item,
         name: "Test #{liable_type}",
@@ -247,17 +247,17 @@ class SimplefinAccount::BalanceNormalizationTest < ActiveSupport::TestCase
         account_type: liable_type == "CreditCard" ? "credit" : "loan",
         current_balance: -2000.00
       )
-      
+
       account.update!(simplefin_account: simplefin_account)
-      
+
       processor = SimplefinAccount::Processor.new(simplefin_account)
       processor.send(:process_account!)
-      
+
       account.reload
       assert_equal 2000.00, account.balance, "#{liable_type} balance should be normalized"
     end
   end
-  
+
   test "asset types remain unchanged" do
     family = families(:dylan_family)
     simplefin_item = SimplefinItem.create!(
@@ -265,28 +265,28 @@ class SimplefinAccount::BalanceNormalizationTest < ActiveSupport::TestCase
       name: "Asset Test",
       access_url: "https://example.com/token"
     )
-    
-    asset_types = ["Depository", "Investment", "Crypto"]
-    
+
+    asset_types = [ "Depository", "Investment", "Crypto" ]
+
     asset_types.each do |asset_type|
       next if asset_type == "Crypto" && !defined?(Crypto)
-      
+
       accountable = asset_type.constantize.create!(subtype: "generic")
 
       account = Account.create!(
-        family: family, 
-        name: "Test #{asset_type}", 
-        balance: 0, 
-        accountable: accountable, 
+        family: family,
+        name: "Test #{asset_type}",
+        balance: 0,
+        accountable: accountable,
         currency: "USD"
       )
-      
+
       account_type_map = {
         "Depository" => "checking",
-        "Investment" => "investment", 
+        "Investment" => "investment",
         "Crypto" => "crypto"
       }
-      
+
       simplefin_account = SimplefinAccount.create!(
         simplefin_item: simplefin_item,
         name: "Test #{asset_type}",
@@ -295,12 +295,12 @@ class SimplefinAccount::BalanceNormalizationTest < ActiveSupport::TestCase
         account_type: account_type_map[asset_type],
         current_balance: 3000.00
       )
-      
+
       account.update!(simplefin_account: simplefin_account)
-      
+
       processor = SimplefinAccount::Processor.new(simplefin_account)
       processor.send(:process_account!)
-      
+
       account.reload
       assert_equal 3000.00, account.balance, "#{asset_type} balance should remain unchanged"
     end

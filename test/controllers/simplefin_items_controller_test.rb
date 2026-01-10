@@ -54,10 +54,10 @@ class SimplefinItemsControllerTest < ActionDispatch::IntegrationTest
     @simplefin_item.update!(status: :requires_update)
 
     # Mock the SimpleFin provider to prevent real API calls
-   # Note: The controller now enqueues a job, so we might need to assert enqueued job instead of mocking provider directly
-   # However, if we want to test the full flow including logic inside the controller before the job, mocking is tricky if job is enqueued.
-   # The controller uses SimplefinConnectionUpdateJob.perform_later.
-    
+    # Note: The controller now enqueues a job, so we might need to assert enqueued job instead of mocking provider directly
+    # However, if we want to test the full flow including logic inside the controller before the job, mocking is tricky if job is enqueued.
+    # The controller uses SimplefinConnectionUpdateJob.perform_later.
+
     assert_enqueued_with(job: SimplefinConnectionUpdateJob) do
       patch simplefin_item_url(@simplefin_item), params: {
         simplefin_item: { setup_token: @valid_token }
@@ -91,23 +91,23 @@ class SimplefinItemsControllerTest < ActionDispatch::IntegrationTest
     # The logic of transfer is now inside SimplefinConnectionUpdateJob.
     # We should rely on SimplefinConnectionUpdateJobTest for the transfer logic.
     # But to fix THIS test, we should just ensure it enqueues the job correctly.
-    
+
     # Check that it enqueues the job
     assert_enqueued_with(job: SimplefinConnectionUpdateJob) do
-        patch simplefin_item_url(@simplefin_item), params: {
-            simplefin_item: { setup_token: @valid_token }
-        }
+      patch simplefin_item_url(@simplefin_item), params: {
+          simplefin_item: { setup_token: @valid_token }
+      }
     end
     assert_redirected_to accounts_path
   end
 
   test "should handle partial account matching during token update" do
-      # Same here, rely on job enqueue
-      assert_enqueued_with(job: SimplefinConnectionUpdateJob) do
-        patch simplefin_item_url(@simplefin_item), params: {
-            simplefin_item: { setup_token: @valid_token }
-        }
-    end
+    # Same here, rely on job enqueue
+    assert_enqueued_with(job: SimplefinConnectionUpdateJob) do
+    patch simplefin_item_url(@simplefin_item), params: {
+        simplefin_item: { setup_token: @valid_token }
+    }
+  end
     assert_redirected_to accounts_path
   end
 end

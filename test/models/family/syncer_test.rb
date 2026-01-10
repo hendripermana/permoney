@@ -38,7 +38,7 @@ class Family::SyncerTest < ActiveSupport::TestCase
       actions: [ Rule::Action.new(action_type: "exclude_transaction") ]
     )
 
-    # Create a disabled rule  
+    # Create a disabled rule
     disabled_rule = @family.rules.create!(
       resource_type: "transaction",
       active: false,

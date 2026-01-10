@@ -75,11 +75,11 @@ class SimplefinItem < ApplicationRecord
   def repair_stale_linkage(simplefin_account)
     # Attempt to find an Account that matches the SimpleFin account ID via external_id
     # This repairs cases where the direct link (AccountPvovider or FK) is lost but the account maps 1:1.
-    
+
     return nil unless simplefin_account.account_id.present?
 
     account = Account.find_by(external_id: simplefin_account.account_id)
-    
+
     if account
       Rails.logger.info("Repaired stale linkage for SimplefinAccount #{simplefin_account.id} -> Account #{account.id}")
       return account
