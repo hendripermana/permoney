@@ -1,16 +1,28 @@
 class SimplefinItem < ApplicationRecord
   include Syncable, Provided
+  include SimplefinItem::Unlinking
 
   enum :status, { good: "good", requires_update: "requires_update" }, default: :good
 
   # Virtual attribute for the setup token form field
   attr_accessor :setup_token
 
-  if Rails.application.credentials.active_record_encryption.present?
+  # Helper to detect if ActiveRecord Encryption is configured for this app
+  def self.encryption_ready?
+    creds_ready = Rails.application.credentials.active_record_encryption.present?
+    env_ready = ENV["ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY"].present? &&
+                ENV["ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY"].present? &&
+                ENV["ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT"].present?
+    creds_ready || env_ready
+  end
+
+  # Encrypt sensitive credentials if ActiveRecord encryption is configured (credentials OR env vars)
+  if encryption_ready?
     encrypts :access_url, deterministic: true
   end
 
-  validates :name, :access_url, presence: true
+  validates :name, presence: true
+  validates :access_url, presence: true, on: :create
 
   before_destroy :remove_simplefin_item
 
@@ -39,14 +51,41 @@ class SimplefinItem < ApplicationRecord
     DestroyJob.perform_later(self)
   end
 
-  def import_latest_simplefin_data
-    SimplefinItem::Importer.new(self, simplefin_provider: simplefin_provider).import
+  def import_latest_simplefin_data(sync: nil)
+    SimplefinItem::Importer.new(self, simplefin_provider: simplefin_provider, sync: sync).import
   end
 
   def process_accounts
-    simplefin_accounts.joins(:account).each do |simplefin_account|
+    # Process accounts linked via BOTH legacy FK and AccountProvider
+    simplefin_accounts.includes(:account, account_provider: :account).each do |simplefin_account|
+      account = simplefin_account.current_account
+
+      if account.nil?
+        account = repair_stale_linkage(simplefin_account)
+        simplefin_account.update(account: account) if account
+      end
+
+      # Only process if there's a linked account (via either system)
+      next unless account.present?
+
       SimplefinAccount::Processor.new(simplefin_account).process
     end
+  end
+
+  def repair_stale_linkage(simplefin_account)
+    # Attempt to find an Account that matches the SimpleFin account ID via external_id
+    # This repairs cases where the direct link (AccountPvovider or FK) is lost but the account maps 1:1.
+    
+    return nil unless simplefin_account.account_id.present?
+
+    account = Account.find_by(external_id: simplefin_account.account_id)
+    
+    if account
+      Rails.logger.info("Repaired stale linkage for SimplefinAccount #{simplefin_account.id} -> Account #{account.id}")
+      return account
+    end
+
+    nil
   end
 
   def schedule_account_syncs(parent_sync: nil, window_start_date: nil, window_end_date: nil)
@@ -132,7 +171,6 @@ class SimplefinItem < ApplicationRecord
       end
     end
   end
-
   def institution_display_name
     # Try to get institution name from stored metadata
     institution_name.presence || institution_domain.presence || name
@@ -179,6 +217,7 @@ class SimplefinItem < ApplicationRecord
   end
 
   private
+
     def remove_simplefin_item
       # SimpleFin doesn't require server-side cleanup like Plaid
       # The access URL just becomes inactive

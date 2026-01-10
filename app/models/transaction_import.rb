@@ -1,5 +1,3 @@
-require "set"
-
 class TransactionImport < Import
   def import!
     transaction do
@@ -20,7 +18,7 @@ class TransactionImport < Import
         if mapped_account.nil?
           row_number = index + 1
           account_name = row.account.presence || "(blank)"
-          error_message = "Row #{row_number}: Account '#{account_name}' is not mapped to an existing account. "\
+          error_message = "Row #{row_number}: Account '#{account_name}' is not mapped to an existing account. " \
                          "Please map this account in the import configuration."
           errors.add(:base, error_message)
           raise Import::MappingError, error_message
@@ -29,6 +27,9 @@ class TransactionImport < Import
         category = mappings.categories.mappable_for(row.category)
         tags = row.tags_list.map { |tag| mappings.tags.mappable_for(tag) }.compact
 
+        # Use account's currency when no currency column was mapped in CSV, with family currency as fallback
+        effective_currency = currency_col_label.present? ? row.currency : (mapped_account.currency.presence || family.currency)
+
         # Check for duplicate transactions using the adapter's deduplication logic
         # Pass claimed_entry_ids to exclude entries we've already matched in this import
         # This ensures identical rows within the CSV are all imported as separate transactions
@@ -36,7 +37,7 @@ class TransactionImport < Import
         duplicate_entry = adapter.find_duplicate_transaction(
           date: row.date_iso,
           amount: row.signed_amount,
-          currency: row.currency,
+          currency: effective_currency,
           name: row.name,
           exclude_entry_ids: claimed_entry_ids
         )
@@ -45,7 +46,6 @@ class TransactionImport < Import
           # Update existing transaction instead of creating a new one
           duplicate_entry.transaction.category = category if category.present?
           duplicate_entry.transaction.tags = tags if tags.any?
-          duplicate_entry.name = row.name if row.name.present?
           duplicate_entry.notes = row.notes if row.notes.present?
           duplicate_entry.import = self
           updated_entries << duplicate_entry
@@ -60,7 +60,7 @@ class TransactionImport < Import
               date: row.date_iso,
               amount: row.signed_amount,
               name: row.name,
-              currency: row.currency,
+              currency: effective_currency,
               notes: row.notes,
               import: self
             )

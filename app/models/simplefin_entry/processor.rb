@@ -67,10 +67,7 @@ class SimplefinEntry::Processor
         BigDecimal("0")
       end
 
-      # SimpleFin uses banking convention (expenses negative, income positive)
-      # Maybe expects opposite convention (expenses positive, income negative)
-      # So we negate the amount to convert from SimpleFin to Maybe format
-      -parsed_amount
+      parsed_amount
     rescue ArgumentError => e
       Rails.logger.error "Failed to parse SimpleFin transaction amount: #{data[:amount].inspect} - #{e.message}"
       raise

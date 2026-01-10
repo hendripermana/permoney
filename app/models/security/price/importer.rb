@@ -40,20 +40,40 @@ class Security::Price::Importer
     end
 
     gapfilled_prices = effective_start_date.upto(end_date).map do |date|
-      db_price_value       = db_prices[date]&.price
+      db_record            = db_prices[date]
+      db_price_value       = db_record&.price
       provider_price_value = provider_prices[date]&.price
       provider_currency    = provider_prices[date]&.currency
 
-      chosen_price = if clear_cache
-        provider_price_value || db_price_value   # overwrite when possible
+      chosen_price = nil
+      item_provisional = false
+
+      if clear_cache
+        if provider_price_value
+          chosen_price = provider_price_value
+          item_provisional = false
+        else
+          chosen_price = db_price_value
+          item_provisional = db_record&.provisional
+        end
       else
-        db_price_value || provider_price_value   # fill gaps
+        if db_price_value && !db_record.provisional
+          chosen_price = db_price_value
+          item_provisional = false
+        elsif provider_price_value
+          chosen_price = provider_price_value
+          item_provisional = false
+        else
+          chosen_price = db_price_value
+          item_provisional = db_record&.provisional
+        end
       end
 
       # Gap-fill using LOCF (last observation carried forward)
       # Treat nil or zero prices as invalid and use previous price
       if chosen_price.nil? || chosen_price.to_f <= 0
         chosen_price = prev_price_value
+        item_provisional = true
       end
       prev_price_value = chosen_price
 
@@ -61,7 +81,8 @@ class Security::Price::Importer
         security_id: security.id,
         date:        date,
         price:       chosen_price,
-        currency:    provider_currency || prev_price_currency || db_price_currency || "USD"
+        currency:    provider_currency || prev_price_currency || db_price_currency || "USD",
+        provisional: item_provisional
       }
     end
 
@@ -104,7 +125,7 @@ class Security::Price::Importer
     end
 
     def all_prices_exist?
-      db_prices.count == expected_count
+      db_prices.count == expected_count && db_prices.values.none?(&:provisional)
     end
 
     def expected_count

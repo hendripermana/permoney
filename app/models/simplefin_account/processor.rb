@@ -33,11 +33,14 @@ class SimplefinAccount::Processor
       account = simplefin_account.current_account
       balance = simplefin_account.current_balance || simplefin_account.available_balance || 0
 
-      # SimpleFin returns negative balances for credit cards (liabilities)
-      # But Maybe expects positive balances for liabilities
+      # SimpleFIN returns negative balances for liabilities when money is owed
+      # Permoney expects positive balances for liabilities (credit cards, loans)
+      # Keep asset balances (depository, investment) unchanged
       if account.accountable_type == "CreditCard" || account.accountable_type == "Loan"
+        # Invert negative provider balances to positive for liabilities
         balance = balance.abs
       end
+      # For assets (Depository, Investment, Crypto, etc.), keep balance as-is
 
       # Calculate cash balance correctly for investment accounts
       cash_balance = if account.accountable_type == "Investment"

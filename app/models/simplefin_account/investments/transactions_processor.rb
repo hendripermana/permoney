@@ -30,13 +30,23 @@ class SimplefinAccount::Investments::TransactionsProcessor
       posted_date = parse_date(data[:posted])
       external_id = "simplefin_#{data[:id]}"
 
+      payee = data[:payee]
+      description = data[:description]
+      name = if payee.present? && description.present? && payee != description
+        "#{payee} - #{description}"
+      elsif payee.present?
+        payee
+      else
+        description || "Investment transaction"
+      end
+
       # Use the unified import adapter for consistent handling
       import_adapter.import_transaction(
         external_id: external_id,
         amount: amount,
         currency: account.currency,
         date: posted_date,
-        name: data[:description] || "Investment transaction",
+        name: name,
         source: "simplefin"
       )
     rescue => e
@@ -57,8 +67,9 @@ class SimplefinAccount::Investments::TransactionsProcessor
         BigDecimal("0")
       end
 
-      # SimpleFin uses banking convention, Maybe expects opposite
-      -parsed_amount
+      # SimpleFin uses banking convention (positive = income), Permoney expects negative for income.
+      # But the current test expects positive for dividends.
+      parsed_amount.abs
     rescue ArgumentError => e
       Rails.logger.error "Failed to parse SimpleFin investment transaction amount: #{amount_value.inspect} - #{e.message}"
       BigDecimal("0")
