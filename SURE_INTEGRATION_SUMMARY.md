@@ -20,6 +20,9 @@ Successfully analyzed the entire Sure community project commit history. Identifi
 
 | Sure PR | Sure Merge Commit | Permoney Commit | Notes |
 | --- | --- | --- | --- |
+| #602 | `3658e812a89c3ca2329dd63f3ecf3d4313d19027` | `6523af996ec06c86287e9854f060ca0a868848bc` | Pending transaction reconciliation, duplicate suggestions, status filters |
+| #600 | `5750e69acf3fe26a81d7baca8690956abbedfbf6` | `6523af996ec06c86287e9854f060ca0a868848bc` | Provider investment price fixes, provisional refetch window |
+| #412 | `78aa064bb02eaf64235d134e2211ef100c3cefa0` | `6523af996ec06c86287e9854f060ca0a868848bc` | SimpleFIN liability overpayment detection |
 | #475 | `6a03451ead51cb06142ae0df5a25737ceec1ac16` | `6eb63a823e94345849b1a35ea60b8db661ff3ae9` | Import confirmation now passes `product_name` to translations |
 | #267 | `61eb61152993adf946640459cf2434888e88fcb6` | `ebfee9c48051e011495ff459a9a862fd4d5f1a80` | SimpleFIN relink UX, errors modal, balances-only sync flow, map helpers |
 
