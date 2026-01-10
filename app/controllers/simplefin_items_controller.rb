@@ -1,9 +1,10 @@
 class SimplefinItemsController < ApplicationController
   include SimplefinItems::MapsHelper
-  before_action :set_simplefin_item, only: [ :show, :edit, :update, :destroy, :sync, :balances, :setup_accounts, :complete_account_setup ]
+  before_action :set_simplefin_item, only: [ :show, :edit, :update, :destroy, :sync, :balances, :setup_accounts, :complete_account_setup, :errors ]
 
   def index
-    @simplefin_items = Current.family.simplefin_items.active.ordered
+    @simplefin_items = Current.family.simplefin_items.active.ordered.includes(:syncs, :simplefin_accounts)
+    build_simplefin_maps_for(@simplefin_items)
     render layout: "settings"
   end
 
@@ -124,9 +125,7 @@ class SimplefinItemsController < ApplicationController
 
   # Starts a balances-only sync for this SimpleFin item
   def balances
-    # Create a Sync and enqueue it to run asynchronously with a runtime-only flag
-    sync = @simplefin_item.syncs.create!(status: :pending)
-    SyncJob.perform_later(sync, balances_only: true)
+    sync = @simplefin_item.syncs.create!(status: :pending, sync_stats: { "balances_only" => true })
 
     respond_to do |format|
       format.html { redirect_back_or_to accounts_path }
@@ -438,6 +437,33 @@ class SimplefinItemsController < ApplicationController
     else
       redirect_to accounts_path(cache_bust: SecureRandom.hex(6)), notice: t("simplefin_items.link_existing_account.success"), status: :see_other
     end
+  end
+
+  def errors
+    latest_sync = if @simplefin_item.syncs.loaded?
+      @simplefin_item.syncs.max_by(&:created_at)
+    else
+      @simplefin_item.syncs.ordered.first
+    end
+
+    stats = latest_sync&.sync_stats || {}
+    raw_errors = Array(stats["errors"])
+
+    @errors = raw_errors.map { |entry|
+      if entry.is_a?(Hash)
+        entry["message"] || entry[:message] || entry.to_s
+      else
+        entry.to_s
+      end
+    }.compact
+
+    if @simplefin_item.respond_to?(:sync_error) && @simplefin_item.sync_error.present?
+      @errors << @simplefin_item.sync_error
+    end
+
+    @errors = @errors.map(&:to_s).map(&:strip).reject(&:blank?).uniq
+
+    render layout: false
   end
 
 

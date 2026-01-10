@@ -29,6 +29,7 @@ class Account < ApplicationRecord
       .where(account_providers: { id: nil })
       .where(plaid_account_id: nil, simplefin_account_id: nil)
   }
+  scope :visible_manual, -> { visible.manual }
 
   # PERFORMANCE: Eager loading scopes to eliminate N+1 queries
   # Usage: Account.with_associations.visible

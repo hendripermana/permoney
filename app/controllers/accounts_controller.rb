@@ -1,14 +1,19 @@
 class AccountsController < ApplicationController
   before_action :set_account, only: %i[sync sparkline toggle_active show destroy value unlink confirm_unlink select_provider]
   include Periodable
+  include SimplefinItems::MapsHelper
 
   def index
     # PERFORMANCE: Eager load associations to prevent N+1 queries
-    @manual_accounts = family.accounts.manual.alphabetically.includes(:accountable, :account_providers)
-    @plaid_items = family.plaid_items.ordered.includes(:plaid_accounts)
-    @simplefin_items = family.simplefin_items.ordered.includes(:simplefin_accounts)
-    @lunchflow_items = family.lunchflow_items.ordered.includes(:lunchflow_accounts)
+    @manual_accounts = family.accounts.visible_manual.order(:name).includes(:accountable, :account_providers)
+    @plaid_items = family.plaid_items.ordered.includes(:plaid_accounts, :syncs)
+    @simplefin_items = family.simplefin_items.ordered.includes(:simplefin_accounts, :syncs)
+    @lunchflow_items = family.lunchflow_items.ordered.includes(:lunchflow_accounts, :syncs)
 
+    build_simplefin_maps_for(@simplefin_items)
+    build_provider_sync_stats_maps
+
+    expires_now
     render layout: "settings"
   end
 
@@ -187,6 +192,17 @@ class AccountsController < ApplicationController
   private
     def family
       Current.family
+    end
+
+    def build_provider_sync_stats_maps
+      @plaid_sync_stats_map = Sync.latest_stats_map_for(
+        syncable_type: "PlaidItem",
+        syncable_ids: @plaid_items.map(&:id)
+      )
+      @lunchflow_sync_stats_map = Sync.latest_stats_map_for(
+        syncable_type: "LunchflowItem",
+        syncable_ids: @lunchflow_items.map(&:id)
+      )
     end
 
     def set_account

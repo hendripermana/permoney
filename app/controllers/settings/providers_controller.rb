@@ -11,9 +11,7 @@ class Settings::ProvidersController < ApplicationController
       { text: "Bank Sync Providers", icon: "plug" }
     ]
 
-    # Load all provider configurations
-    Provider::Factory.ensure_adapters_loaded
-    @provider_configurations = Provider::ConfigurationRegistry.all
+    prepare_show_context
   end
 
   def update
@@ -96,9 +94,7 @@ class Settings::ProvidersController < ApplicationController
   rescue => error
     Rails.logger.error("Failed to update provider settings: #{error.message}")
     flash.now[:alert] = "Failed to update provider settings: #{error.message}"
-    # Set @provider_configurations so the view can render properly
-    Provider::Factory.ensure_adapters_loaded
-    @provider_configurations = Provider::ConfigurationRegistry.all
+    prepare_show_context
     render :show, status: :unprocessable_entity
   end
 
@@ -142,5 +138,13 @@ class Settings::ProvidersController < ApplicationController
         adapter_class = Provider::ConfigurationRegistry.get_adapter_class(provider_key)
         adapter_class&.reload_configuration
       end
+    end
+
+    def prepare_show_context
+      Provider::Factory.ensure_adapters_loaded
+      @provider_configurations = Provider::ConfigurationRegistry.all.reject do |config|
+        config.provider_key.to_s.casecmp("simplefin").zero?
+      end
+      @simplefin_items = Current.family.simplefin_items.ordered.select(:id)
     end
 end
