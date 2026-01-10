@@ -5,6 +5,12 @@
       <%= render DS::Menu.new do |menu| %>
         <% menu.with_item(
           variant: "button",
+          text: "Apply all rules",
+          href: confirm_all_rules_path,
+          icon: "zap",
+          frame: :modal) %>
+        <% menu.with_item(
+          variant: "button",
           text: "Delete all rules",
           href: destroy_all_rules_path,
           icon: "trash-2",
