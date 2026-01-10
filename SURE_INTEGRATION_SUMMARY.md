@@ -16,6 +16,15 @@ Successfully analyzed the entire Sure community project commit history. Identifi
 
 ---
 
+## ✅ Integration Log (Sure -> Permoney)
+
+| Sure PR | Sure Merge Commit | Permoney Commit | Notes |
+| --- | --- | --- | --- |
+| #475 | `6a03451ead51cb06142ae0df5a25737ceec1ac16` | `6eb63a823e94345849b1a35ea60b8db661ff3ae9` | Import confirmation now passes `product_name` to translations |
+| #267 | `61eb61152993adf946640459cf2434888e88fcb6` | `ebfee9c48051e011495ff459a9a862fd4d5f1a80` | SimpleFIN relink UX, errors modal, balances-only sync flow, map helpers |
+
+---
+
 ## 🎯 What We're Integrating
 
 ### Phase 1: Critical Stability Fixes ⚡ (HIGHEST PRIORITY)
