@@ -140,13 +140,18 @@ class LunchflowItemsController < ApplicationController
       end
 
       # Create the internal Account with proper balance initialization
+      # Use lunchflow_account.currency (already parsed) and skip initial sync
+      # because the provider sync will set the correct currency from the balance API
       account = Account.create_and_sync(
-        family: Current.family,
-        name: account_data[:name],
-        balance: 0, # Initial balance will be set during sync
-        currency: account_data[:currency] || "USD",
-        accountable_type: accountable_type,
-        accountable_attributes: {}
+        {
+          family: Current.family,
+          name: account_data[:name],
+          balance: 0, # Initial balance will be set during sync
+          currency: lunchflow_account.currency || "USD",
+          accountable_type: accountable_type,
+          accountable_attributes: {}
+        },
+        skip_initial_sync: true
       )
 
       # Link account to lunchflow_account via account_providers join table

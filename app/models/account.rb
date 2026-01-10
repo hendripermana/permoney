@@ -90,7 +90,7 @@ class Account < ApplicationRecord
   end
 
   class << self
-    def create_and_sync(attributes)
+    def create_and_sync(attributes, skip_initial_sync: false)
       attributes[:accountable_attributes] ||= {} # Ensure accountable is created, even if empty
       account = new(attributes.merge(cash_balance: attributes[:balance]))
       initial_balance = attributes.dig(:accountable_attributes, :initial_balance)&.to_d
@@ -103,7 +103,9 @@ class Account < ApplicationRecord
         raise result.error if result.error
       end
 
-      account.sync_later
+      # Skip initial sync for linked accounts - the provider sync will handle balance creation
+      # after the correct currency is known
+      account.sync_later unless skip_initial_sync
       account
     end
 
@@ -146,7 +148,8 @@ class Account < ApplicationRecord
         simplefin_account_id: simplefin_account.id
       }
 
-      create_and_sync(attributes)
+      # Skip initial sync - provider sync will handle balance creation with correct currency
+      create_and_sync(attributes, skip_initial_sync: true)
     end
 
 
