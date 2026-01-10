@@ -177,6 +177,11 @@ Rails.application.routes.draw do
     resource :transfer_match, only: %i[new create]
     resource :category, only: :update, controller: :transaction_categories
 
+    member do
+      post :merge_duplicate
+      post :dismiss_duplicate
+    end
+
     collection do
       delete :clear_filter
     end

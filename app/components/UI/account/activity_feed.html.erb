@@ -56,6 +56,42 @@
                             "data-auto-submit-form-target": "auto" %>
             </div>
           </div>
+
+          <%= render DS::Menu.new(variant: "button", no_padding: true) do |menu| %>
+            <% menu.with_button(
+              id: "activity-status-filter-button",
+              type: "button",
+              text: "Filter",
+              variant: "outline",
+              icon: "list-filter"
+            ) %>
+
+            <% menu.with_custom_content do %>
+              <div class="p-3 space-y-3 min-w-[160px]">
+                <p class="text-xs font-medium text-secondary uppercase">Status</p>
+                <div class="flex items-center gap-3">
+                  <%= check_box_tag "q[status][]",
+                                    "confirmed",
+                                    params.dig(:q, :status)&.include?("confirmed"),
+                                    id: "q_status_confirmed",
+                                    class: "checkbox checkbox--light",
+                                    form: "entries-search",
+                                    onchange: "document.getElementById('entries-search').requestSubmit()" %>
+                  <%= label_tag "q_status_confirmed", "Confirmed", class: "text-sm text-primary" %>
+                </div>
+                <div class="flex items-center gap-3">
+                  <%= check_box_tag "q[status][]",
+                                    "pending",
+                                    params.dig(:q, :status)&.include?("pending"),
+                                    id: "q_status_pending",
+                                    class: "checkbox checkbox--light",
+                                    form: "entries-search",
+                                    onchange: "document.getElementById('entries-search').requestSubmit()" %>
+                  <%= label_tag "q_status_pending", "Pending", class: "text-sm text-primary" %>
+                </div>
+              </div>
+            <% end %>
+          <% end %>
         </div>
       <% end %>
     </div>

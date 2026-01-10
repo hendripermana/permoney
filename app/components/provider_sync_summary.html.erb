@@ -69,6 +69,98 @@
           <% end %>
         </div>
 
+        <% if has_pending_reconciled? %>
+          <div class="mt-1">
+            <div class="flex items-center gap-1">
+              <%= helpers.icon "check-circle", size: "sm", color: "success" %>
+              <span class="text-success"><%= pending_reconciled %> pending reconciled</span>
+            </div>
+            <% if pending_reconciled_details.any? %>
+              <details class="mt-1">
+                <summary class="text-xs cursor-pointer text-secondary hover:text-primary">
+                  View reconciled entries
+                </summary>
+                <div class="mt-1 pl-2 border-l-2 border-surface-inset space-y-1">
+                  <% pending_reconciled_details.each do |detail| %>
+                    <p class="text-xs text-success">
+                      <%= detail["account_name"] %>: <%= detail["pending_name"] %>
+                    </p>
+                  <% end %>
+                </div>
+              </details>
+            <% end %>
+          </div>
+        <% end %>
+
+        <% if has_duplicate_suggestions_created? %>
+          <div class="mt-1">
+            <div class="flex items-center gap-1">
+              <%= helpers.icon "alert-triangle", size: "sm", color: "warning" %>
+              <span class="text-warning"><%= duplicate_suggestions_created %> duplicate suggestions</span>
+            </div>
+            <% if duplicate_suggestions_details.any? %>
+              <details class="mt-1">
+                <summary class="text-xs cursor-pointer text-secondary hover:text-primary">
+                  View duplicate suggestions
+                </summary>
+                <div class="mt-1 pl-2 border-l-2 border-surface-inset space-y-1">
+                  <% duplicate_suggestions_details.each do |detail| %>
+                    <p class="text-xs text-warning">
+                      <%= detail["account_name"] %>: <%= detail["pending_name"] %> → <%= detail["posted_name"] %>
+                    </p>
+                  <% end %>
+                </div>
+              </details>
+            <% end %>
+          </div>
+        <% end %>
+
+        <% if has_stale_pending? %>
+          <div class="mt-1">
+            <div class="flex items-center gap-1">
+              <%= helpers.icon "clock", size: "sm", color: "warning" %>
+              <span class="text-warning"><%= stale_pending_excluded %> stale pending excluded</span>
+            </div>
+            <% if stale_pending_details.any? %>
+              <details class="mt-1">
+                <summary class="text-xs cursor-pointer text-secondary hover:text-primary">
+                  View stale pending
+                </summary>
+                <div class="mt-1 pl-2 border-l-2 border-surface-inset space-y-1">
+                  <% stale_pending_details.each do |detail| %>
+                    <p class="text-xs text-warning">
+                      <%= detail["account_name"] %>: <%= detail["count"] %> excluded
+                    </p>
+                  <% end %>
+                </div>
+              </details>
+            <% end %>
+          </div>
+        <% end %>
+
+        <% if has_stale_unmatched_pending? %>
+          <div class="mt-1">
+            <div class="flex items-center gap-1">
+              <%= helpers.icon "help-circle", size: "sm" %>
+              <span class="text-secondary"><%= stale_unmatched_pending %> stale pending need review</span>
+            </div>
+            <% if stale_unmatched_details.any? %>
+              <details class="mt-1">
+                <summary class="text-xs cursor-pointer text-secondary hover:text-primary">
+                  View stale unmatched
+                </summary>
+                <div class="mt-1 pl-2 border-l-2 border-surface-inset space-y-1">
+                  <% stale_unmatched_details.each do |detail| %>
+                    <p class="text-xs text-secondary">
+                      <%= detail["account_name"] %>: <%= detail["count"] %> pending
+                    </p>
+                  <% end %>
+                </div>
+              </details>
+            <% end %>
+          </div>
+        <% end %>
+
         <%# Data quality warnings %>
         <% if has_data_quality_issues? %>
           <div class="flex items-center gap-3 mt-1">

@@ -40,11 +40,12 @@ class AccountsController < ApplicationController
   def show
     @chart_view = params[:chart_view] || "balance"
     @tab = params[:tab]
-    @q = params.fetch(:q, {}).permit(:search)
+    @q = params.fetch(:q, {}).permit(:search, status: [])
 
     # PERFORMANCE: Eager load associations for entries
     # Note: Cannot use .includes(:entryable) on polymorphic - Rails will load automatically
     entries = @account.entries
+                      .where(excluded: false)
                       .search(@q)
                       .reverse_chronological
                       .preload(:account, :transfer, entryable: [ :category, :merchant, :tags ])

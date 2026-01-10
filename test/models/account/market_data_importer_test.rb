@@ -4,7 +4,7 @@ require "ostruct"
 class Account::MarketDataImporterTest < ActiveSupport::TestCase
   include ProviderTestHelper
 
-  PROVIDER_BUFFER = 5.days
+  PROVIDER_BUFFER = Security::Price::Importer::PROVISIONAL_LOOKBACK_DAYS.days
 
   setup do
     # Ensure a clean slate for deterministic assertions
