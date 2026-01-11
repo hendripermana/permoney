@@ -1,6 +1,6 @@
 # Sure Community Integration - Executive Summary
 
-**Status:** 🚧 In Progress - 14/25 integrations complete (56%)  
+**Status:** 🚧 In Progress - 15/25 integrations complete (60%)  
 **Date:** January 6, 2026  
 **Commits Analyzed:** 60+ commits (Nov 16 - Dec 26, 2025)  
 **Commits Selected:** 25 high-value, non-conflicting improvements  
@@ -18,7 +18,7 @@ Successfully analyzed the entire Sure community project commit history. Identifi
 
 ## 📈 Progress Snapshot
 
-- **Integrated:** 14 of 25 items (56%)
+- **Integrated:** 15 of 25 items (60%)
 - **Latest:** Trends insights highlight current month from Sure commit `eb762eff1205fdad866178b201b370934429731b` → `6b9e55442a129656182ead91229a46059194f3b4`
 
 ---
@@ -40,6 +40,7 @@ Successfully analyzed the entire Sure community project commit history. Identifi
 | N/A | `7be799fac734eea2efee59b33b7c85534f27f192` | `89352f14207a745afe048e374a5f979eba08f8e1` | API categories index/show |
 | N/A | `b73ac207e0577a11b0a922cf1bcf3b7a529ac440` | `89352f14207a745afe048e374a5f979eba08f8e1` | API family sync trigger |
 | #452 | `b3af8bf1aee7cf630505bf735d86c1b6887f34d0` | `b216e66249f7788f8daa08a1255d8d3dffaa6352` | Mobile UX improvements for transactions/activity |
+| #499 | `7915fee62c31deca4bef9c2a963d0ea74a09b49e` | `b216e66249f7788f8daa08a1255d8d3dffaa6352` | Print stylesheet for reports |
 | #448 | `eb762eff1205fdad866178b201b370934429731b` | `6b9e55442a129656182ead91229a46059194f3b4` | Trends insights highlight current month |
 
 ---
@@ -63,7 +64,7 @@ Successfully analyzed the entire Sure community project commit history. Identifi
 1. ✅ **Rules Execution History** - Track rule runs with success/failure status and transaction counts
 2. ✅ **Rules Import/Export** - Backup and restore rules as CSV/NDJSON with portable mappings
 3. ✅ **API Endpoints** - `/api/v1/sync` (trigger sync), `/api/v1/categories` (list categories)
-4. ⏳ **Print Stylesheets** - Beautiful report printing for users
+4. ✅ **Print Stylesheets** - Beautiful report printing for users
 5. ✅ **Mobile UX Improvements** - Better transaction/activity page experience on mobile
 6. ⏳ **Rule Enhancements** - Pre-fill from transactions, text filters, exclude action
 7. ✅ **Account Institution Details** - Store institution name/domain for logo fetching
