@@ -1,6 +1,6 @@
 # Sure Community Integration - Executive Summary
 
-**Status:** 🚧 In Progress - 9/25 integrations complete (36%)  
+**Status:** 🚧 In Progress - 10/25 integrations complete (40%)  
 **Date:** January 6, 2026  
 **Commits Analyzed:** 60+ commits (Nov 16 - Dec 26, 2025)  
 **Commits Selected:** 25 high-value, non-conflicting improvements  
@@ -18,8 +18,8 @@ Successfully analyzed the entire Sure community project commit history. Identifi
 
 ## 📈 Progress Snapshot
 
-- **Integrated:** 9 of 25 items (36%)
-- **Latest:** Rules import/export from Sure PR #424 → `65f11581accab5b0640cfb3f6923797bffb6e40d`
+- **Integrated:** 10 of 25 items (40%)
+- **Latest:** Account institution details from Sure commit `68864b1fdbfa5cb4c32037ebf1b57f547146041f` → `e4e8eb4cbc590a816579be6362a7594ac1445488`
 
 ---
 
@@ -35,6 +35,7 @@ Successfully analyzed the entire Sure community project commit history. Identifi
 | #424 | `e5ed946959925610942f5f5fbe844dfe42b33410` | `65f11581accab5b0640cfb3f6923797bffb6e40d` | Rules import/export (rules.csv + RuleImport) |
 | #410 | `a91a4397e923992414e01dad024edea0100b46d0` | `09829b47a110629891d7edc98955945d1c9d2a8d` | SimpleFIN balance normalization + liability fix |
 | #376 | `bf90cad9a090c2dad2db9923b765e55171f32040` | `3d04421a57e6db77eb1635161c7c85bd5f817f3e` | Rule execution history tracking + recent runs visibility |
+| N/A | `68864b1fdbfa5cb4c32037ebf1b57f547146041f` | `e4e8eb4cbc590a816579be6362a7594ac1445488` | Account institution name/domain + notes |
 | #267 | `61eb61152993adf946640459cf2434888e88fcb6` | `ebfee9c48051e011495ff459a9a862fd4d5f1a80` | SimpleFIN relink UX, errors modal, balances-only sync flow, map helpers |
 
 ---
@@ -61,7 +62,7 @@ Successfully analyzed the entire Sure community project commit history. Identifi
 4. ⏳ **Print Stylesheets** - Beautiful report printing for users
 5. ⏳ **Mobile UX Improvements** - Better transaction/activity page experience on mobile
 6. ⏳ **Rule Enhancements** - Pre-fill from transactions, text filters, exclude action
-7. ⏳ **Account Institution Details** - Store institution name/domain for logo fetching
+7. ✅ **Account Institution Details** - Store institution name/domain for logo fetching
 
 **Why This Phase Second:** Builds on stable financial data foundation to add user-facing improvements.
 
