@@ -274,9 +274,9 @@ class RuleImport < Import
       loop do
         previous = cleaned.dup
 
-        cleaned = cleaned.gsub(/\\+"/, '"')
-        cleaned = cleaned.gsub(/\\+'/, "'")
-        cleaned = cleaned.gsub(/\\\\/, "\\")
+        cleaned = cleaned.gsub(/\\\\+"/, '"')
+        cleaned = cleaned.gsub(/\\\\+'/, "'")
+        cleaned = cleaned.gsub(/\\\\\\\\/, "\\")
 
         break if cleaned == previous
       end
