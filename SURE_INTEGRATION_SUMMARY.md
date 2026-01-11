@@ -1,6 +1,6 @@
 # Sure Community Integration - Executive Summary
 
-**Status:** ✅ Analysis Complete - Ready for Implementation  
+**Status:** 🚧 In Progress - 9/25 integrations complete (36%)  
 **Date:** January 6, 2026  
 **Commits Analyzed:** 60+ commits (Nov 16 - Dec 26, 2025)  
 **Commits Selected:** 25 high-value, non-conflicting improvements  
@@ -16,6 +16,13 @@ Successfully analyzed the entire Sure community project commit history. Identifi
 
 ---
 
+## 📈 Progress Snapshot
+
+- **Integrated:** 9 of 25 items (36%)
+- **Latest:** Rules import/export from Sure PR #424 → `97a4b2160fc2ef02a00a11d0b552b067d51cef8b`
+
+---
+
 ## ✅ Integration Log (Sure -> Permoney)
 
 | Sure PR | Sure Merge Commit | Permoney Commit | Notes |
@@ -23,7 +30,11 @@ Successfully analyzed the entire Sure community project commit history. Identifi
 | #602 | `3658e812a89c3ca2329dd63f3ecf3d4313d19027` | `6523af996ec06c86287e9854f060ca0a868848bc` | Pending transaction reconciliation, duplicate suggestions, status filters |
 | #600 | `5750e69acf3fe26a81d7baca8690956abbedfbf6` | `6523af996ec06c86287e9854f060ca0a868848bc` | Provider investment price fixes, provisional refetch window |
 | #412 | `78aa064bb02eaf64235d134e2211ef100c3cefa0` | `6523af996ec06c86287e9854f060ca0a868848bc` | SimpleFIN liability overpayment detection |
+| #514 | `4e87eead2c4a27f4f42772fd342b9accaced1b69` | `b216e6626872a06dd55fb1b2c4eb32b98706786e` | Transfer matching window expansion (manual vs auto) |
 | #475 | `6a03451ead51cb06142ae0df5a25737ceec1ac16` | `6eb63a823e94345849b1a35ea60b8db661ff3ae9` | Import confirmation now passes `product_name` to translations |
+| #424 | `e5ed946959925610942f5f5fbe844dfe42b33410` | `97a4b2160fc2ef02a00a11d0b552b067d51cef8b` | Rules import/export (rules.csv + RuleImport) |
+| #410 | `a91a4397e923992414e01dad024edea0100b46d0` | `09829b47a110629891d7edc98955945d1c9d2a8d` | SimpleFIN balance normalization + liability fix |
+| #376 | `bf90cad9a090c2dad2db9923b765e55171f32040` | `3d04421a57e6db77eb1635161c7c85bd5f817f3e` | Rule execution history tracking + recent runs visibility |
 | #267 | `61eb61152993adf946640459cf2434888e88fcb6` | `ebfee9c48051e011495ff459a9a862fd4d5f1a80` | SimpleFIN relink UX, errors modal, balances-only sync flow, map helpers |
 
 ---
@@ -46,34 +57,34 @@ Successfully analyzed the entire Sure community project commit history. Identifi
 
 1. ✅ **Rules Execution History** - Track rule runs with success/failure status and transaction counts
 2. ✅ **Rules Import/Export** - Backup and restore rules as CSV/NDJSON with portable mappings
-3. ✅ **API Endpoints** - `/api/v1/syncs` (trigger sync), `/api/v1/categories` (list categories)
-4. ✅ **Print Stylesheets** - Beautiful report printing for users
-5. ✅ **Mobile UX Improvements** - Better transaction/activity page experience on mobile
-6. ✅ **Rule Enhancements** - Pre-fill from transactions, text filters, exclude action
-7. ✅ **Account Institution Details** - Store institution name/domain for logo fetching
+3. ⏳ **API Endpoints** - `/api/v1/syncs` (trigger sync), `/api/v1/categories` (list categories)
+4. ⏳ **Print Stylesheets** - Beautiful report printing for users
+5. ⏳ **Mobile UX Improvements** - Better transaction/activity page experience on mobile
+6. ⏳ **Rule Enhancements** - Pre-fill from transactions, text filters, exclude action
+7. ⏳ **Account Institution Details** - Store institution name/domain for logo fetching
 
 **Why This Phase Second:** Builds on stable financial data foundation to add user-facing improvements.
 
 ### Phase 3: Infrastructure & Optional Features 🔧 (MEDIUM PRIORITY)
 **Effort:** 3-4 days | **Risk:** Low-Medium | **Impact:** Deployment and extensibility
 
-1. ✅ **Helm Chart Improvements** - CNPG backup/plugin support, rolling updates, Redis config
-2. ✅ **Local LLM Compose** - Self-hosted deployment option with Ollama
-3. ✅ **LLM Enhancements** - JSON mode auto-detection, Langfuse eval support
-4. ✅ **Merchant Display** - Show both family and provider merchants
-5. ✅ **UI Polish** - Settings, trends highlighting, merchant notes
+1. ⏳ **Helm Chart Improvements** - CNPG backup/plugin support, rolling updates, Redis config
+2. ⏳ **Local LLM Compose** - Self-hosted deployment option with Ollama
+3. ⏳ **LLM Enhancements** - JSON mode auto-detection, Langfuse eval support
+4. ⏳ **Merchant Display** - Show both family and provider merchants
+5. ⏳ **UI Polish** - Settings, trends highlighting, merchant notes
 
 **Why This Phase Third:** Enhances infrastructure and extensibility without risking core features.
 
 ### Phase 4: Finalization & Verification ✓ (COMPLETION)
 **Effort:** 2-3 days | **Risk:** Medium | **Impact:** Quality assurance
 
-1. ✅ Upgrade all gems to latest stable versions
-2. ✅ Run full test suite (`bin/rails test`)
-3. ✅ Security scan (`bin/brakeman`)
-4. ✅ Code linting (`bin/rubocop -f github -a`)
-5. ✅ Verify Permoney-specific features
-6. ✅ Create comprehensive PR with detailed commits
+1. ⏳ Upgrade all gems to latest stable versions
+2. ⏳ Run full test suite (`bin/rails test`)
+3. ⏳ Security scan (`bin/brakeman`)
+4. ⏳ Code linting (`bin/rubocop -f github -a`)
+5. ⏳ Verify Permoney-specific features
+6. ⏳ Create comprehensive PR with detailed commits
 
 **Why This Phase Last:** Ensures everything works together correctly before merging.
 
