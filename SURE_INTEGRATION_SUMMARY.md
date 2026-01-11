@@ -19,7 +19,7 @@ Successfully analyzed the entire Sure community project commit history. Identifi
 ## 📈 Progress Snapshot
 
 - **Integrated:** 25 of 25 items (100%)
-- **Latest:** UI polish + LLM merchant enrichment/notes from Sure commits `f76f541c055638b95478664209300d9daa558e3d`, `528597c21713d5a898be63a31f4e1d8661e8e7c2`, `a3e13a632bce122a5f350fa706f8d57385f32d47`, `31b75dbc0549745ffb2965ac6faabe3cccf26444` → pending Permoney commit
+- **Latest:** UI polish + LLM merchant enrichment/notes from Sure commits `f76f541c055638b95478664209300d9daa558e3d`, `528597c21713d5a898be63a31f4e1d8661e8e7c2`, `a3e13a632bce122a5f350fa706f8d57385f32d47`, `31b75dbc0549745ffb2965ac6faabe3cccf26444` → Permoney commit `916e6ff2`
 
 ---
 
@@ -46,14 +46,14 @@ Successfully analyzed the entire Sure community project commit history. Identifi
 | #437 | `4a772d8067286fd210b85f8139f7dc0615b87786` | `4cafca0d5a0023145146874315e6b49af85e05a5`, `198694d668af58ce69891754115a287c031dd0e5` | Exclude transaction rule action |
 | #527 | `10b15061b82f42aa3e905758024a8763b0348f83` | `4cafca0d5a0023145146874315e6b49af85e05a5`, `198694d668af58ce69891754115a287c031dd0e5` | Rule form text/function action rendering |
 | #448 | `eb762eff1205fdad866178b201b370934429731b` | `6b9e55442a129656182ead91229a46059194f3b4` | Trends insights highlight current month |
-| #504 | `614c8d455f2b486049da2c6e3dfea744ede867f3` | TBD | Helm chart improvements (CNPG backup/plugins, chart docs/tests) |
-| #489 | `836bf665ac44e8aa554c86c74a2aa6ed6400bbfc` | TBD | Local LLM compose example (Ollama + Open WebUI) |
-| #400 | `88952e4714bf6240eabb573979d2e8a20464050e` | TBD | LLM improvements (JSON modes, eval system, Langfuse support) |
-| #418 | `a790009290a593e279949de79bf6fd8bb1af620d` | TBD | Merchant display improvements (provider + family) |
-| #455 | `a3e13a632bce122a5f350fa706f8d57385f32d47` | TBD | LLM merchant enrichment for provider merchants |
-| N/A | `31b75dbc0549745ffb2965ac6faabe3cccf26444` | TBD | Include transaction notes in LLM merchant/category data |
-| #495 | `f76f541c055638b95478664209300d9daa558e3d` | TBD | Settings page UI improvements + recurring cleanup menu |
-| #510 | `528597c21713d5a898be63a31f4e1d8661e8e7c2` | TBD | Revert GPU artifact styling change |
+| #504 | `614c8d455f2b486049da2c6e3dfea744ede867f3` | `916e6ff2` | Helm chart improvements (CNPG backup/plugins, chart docs/tests) |
+| #489 | `836bf665ac44e8aa554c86c74a2aa6ed6400bbfc` | `916e6ff2` | Local LLM compose example (Ollama + Open WebUI) |
+| #400 | `88952e4714bf6240eabb573979d2e8a20464050e` | `916e6ff2` | LLM improvements (JSON modes, eval system, Langfuse support) |
+| #418 | `a790009290a593e279949de79bf6fd8bb1af620d` | `916e6ff2` | Merchant display improvements (provider + family) |
+| #455 | `a3e13a632bce122a5f350fa706f8d57385f32d47` | `916e6ff2` | LLM merchant enrichment for provider merchants |
+| N/A | `31b75dbc0549745ffb2965ac6faabe3cccf26444` | `916e6ff2` | Include transaction notes in LLM merchant/category data |
+| #495 | `f76f541c055638b95478664209300d9daa558e3d` | `916e6ff2` | Settings page UI improvements + recurring cleanup menu |
+| #510 | `528597c21713d5a898be63a31f4e1d8661e8e7c2` | `916e6ff2` | Revert GPU artifact styling change |
 
 ---
 
