@@ -170,6 +170,15 @@
   animation: slideInRight 0.3s ease-out forwards;
 }
 
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
 @layer components {
   .pcr-app {
     position: static !important;

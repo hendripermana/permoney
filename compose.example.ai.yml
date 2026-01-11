@@ -1,0 +1,184 @@
+# ===========================================================================
+# Example Docker Compose file with local LLM (Ollama + optional Open WebUI)
+# ===========================================================================
+#
+# Purpose:
+# --------
+#
+# This file is an example Docker Compose configuration for self hosting
+# Permoney with Ollama on your local machine or on a cloud VPS.
+#
+# The configuration below is a "standard" setup that works out of the box,
+# but if you're running this outside of a local network, it is recommended
+# to set the environment variables for extra security.
+
+version: "3.9"
+
+# Setup:
+# ------
+#
+# To run this, read the setup guide:
+# https://github.com/hendripermana/permoney/blob/main/docs/hosting/docker.md
+#
+# Troubleshooting:
+# ----------------
+#
+# If you run into problems, please open an issue on GitHub:
+# https://github.com/hendripermana/permoney/issues
+
+x-db-env: &db_env
+  POSTGRES_USER: ${POSTGRES_USER:-permoney_user}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-permoney_password}
+  POSTGRES_DB: ${POSTGRES_DB:-permoney_production}
+
+x-rails-env: &rails_env
+  <<: *db_env
+  SECRET_KEY_BASE: ${SECRET_KEY_BASE:?SECRET_KEY_BASE is required (generate via openssl rand -hex 64).}
+  RAILS_ENV: production
+  RACK_ENV: production
+  RAILS_SERVE_STATIC_FILES: "true"
+  RAILS_LOG_TO_STDOUT: "true"
+  SELF_HOSTED: "true"
+  RAILS_FORCE_SSL: "false"
+  RAILS_ASSUME_SSL: "false"
+  DB_HOST: db
+  DB_PORT: 5432
+  REDIS_URL: redis://redis:6379/1
+  DB_POOL: ${DB_POOL:-52}
+  DB_CHECKOUT_TIMEOUT: ${DB_CHECKOUT_TIMEOUT:-5}
+  SIDEKIQ_CONCURRENCY: ${SIDEKIQ_CONCURRENCY:-15}
+  SIDEKIQ_TIMEOUT: ${SIDEKIQ_TIMEOUT:-90}
+  WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
+  RAILS_MAX_THREADS: ${RAILS_MAX_THREADS:-8}
+  AI_DEBUG_MODE: ${AI_DEBUG_MODE:-true} # Useful for debugging, set to false in production
+  # Ollama using OpenAI API compatible endpoints
+  OPENAI_ACCESS_TOKEN: ${OPENAI_ACCESS_TOKEN:-ollama-local}
+  OPENAI_MODEL: ${OPENAI_MODEL:-llama3.1:8b} # Use a tool-enabled model
+  OPENAI_URI_BASE: ${OPENAI_URI_BASE:-http://ollama:11434/v1}
+
+x-app-base: &app_base
+  image: ${PERMONEY_IMAGE:-ghcr.io/hendripermana/permoney:latest}
+  restart: unless-stopped
+  volumes:
+    - app-storage:/rails/storage
+  environment:
+    <<: *rails_env
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  networks:
+    - permoney_net
+
+services:
+  # Note: You still have to download models manually using the ollama CLI or via Open WebUI
+  ollama:
+    volumes:
+      - ollama:/root/.ollama
+    container_name: ollama
+    hostname: ollama
+    restart: unless-stopped
+    image: docker.io/ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_KEEP_ALIVE=1h
+      - OLLAMA_MODELS=llama3.1:8b # Pre-load model on startup, change as needed
+    networks:
+      - permoney_net
+    # Recommended: Enable GPU support
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [ gpu ]
+
+  ollama-webui:
+    image: ghcr.io/open-webui/open-webui
+    container_name: ollama-webui
+    volumes:
+      - ollama-webui:/app/backend/data
+    depends_on:
+      - ollama
+    ports:
+      - "8080:8080"
+    environment: # https://docs.openwebui.com/getting-started/env-configuration#default_models
+      - OLLAMA_BASE_URLS=http://ollama:11434
+      - ENV=dev
+      - WEBUI_AUTH=False
+      - WEBUI_NAME=AI
+      - WEBUI_URL=http://localhost:8080
+      - WEBUI_SECRET_KEY=change-me
+      - NO_PROXY=ollama
+    restart: unless-stopped
+    networks:
+      - permoney_net
+
+  web:
+    <<: *app_base
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/up || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  worker:
+    <<: *app_base
+    command: bundle exec sidekiq
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f sidekiq || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    volumes:
+      - postgres-data:/var/lib/postgresql/18/docker
+    environment:
+      <<: *db_env
+      PGDATA: /var/lib/postgresql/18/docker
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - permoney_net
+
+  redis:
+    image: redis:8.2.2
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    command: >
+      redis-server \
+      --maxmemory 512mb \
+      --maxmemory-policy allkeys-lru \
+      --save 60 1000
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - permoney_net
+
+volumes:
+  app-storage:
+  postgres-data:
+  redis-data:
+  ollama:
+  ollama-webui:
+
+networks:
+  permoney_net:
+    driver: bridge
