@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_01_10_000003) do
+ActiveRecord::Schema[8.1].define(version: 2026_01_11_000001) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -44,8 +44,11 @@ ActiveRecord::Schema[8.1].define(version: 2026_01_10_000003) do
     t.string "external_id"
     t.uuid "family_id", null: false
     t.uuid "import_id"
+    t.string "institution_domain"
+    t.string "institution_name"
     t.jsonb "locked_attributes", default: {}
     t.string "name"
+    t.text "notes"
     t.uuid "plaid_account_id"
     t.string "provider"
     t.uuid "simplefin_account_id"
@@ -397,11 +400,15 @@ ActiveRecord::Schema[8.1].define(version: 2026_01_10_000003) do
 
   create_table "import_rows", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.string "account"
+    t.text "actions"
+    t.boolean "active"
     t.string "amount"
     t.string "category"
+    t.text "conditions"
     t.datetime "created_at", null: false
     t.string "currency"
     t.string "date"
+    t.string "effective_date"
     t.string "entity_type"
     t.string "exchange_operating_mic"
     t.uuid "import_id", null: false
@@ -409,6 +416,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_01_10_000003) do
     t.text "notes"
     t.string "price"
     t.string "qty"
+    t.string "resource_type"
     t.string "tags"
     t.string "ticker"
     t.datetime "updated_at", null: false
