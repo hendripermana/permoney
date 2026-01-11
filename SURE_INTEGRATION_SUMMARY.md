@@ -1,6 +1,6 @@
 # Sure Community Integration - Executive Summary
 
-**Status:** 🚧 In Progress - 10/25 integrations complete (40%)  
+**Status:** 🚧 In Progress - 12/25 integrations complete (48%)  
 **Date:** January 6, 2026  
 **Commits Analyzed:** 60+ commits (Nov 16 - Dec 26, 2025)  
 **Commits Selected:** 25 high-value, non-conflicting improvements  
@@ -18,8 +18,8 @@ Successfully analyzed the entire Sure community project commit history. Identifi
 
 ## 📈 Progress Snapshot
 
-- **Integrated:** 10 of 25 items (40%)
-- **Latest:** Account institution details from Sure commit `68864b1fdbfa5cb4c32037ebf1b57f547146041f` → `e4e8eb4cbc590a816579be6362a7594ac1445488`
+- **Integrated:** 12 of 25 items (48%)
+- **Latest:** API categories + sync endpoints from Sure commits `7be799fac734eea2efee59b33b7c85534f27f192`, `b73ac207e0577a11b0a922cf1bcf3b7a529ac440` → `89352f14207a745afe048e374a5f979eba08f8e1`
 
 ---
 
@@ -37,6 +37,8 @@ Successfully analyzed the entire Sure community project commit history. Identifi
 | #376 | `bf90cad9a090c2dad2db9923b765e55171f32040` | `3d04421a57e6db77eb1635161c7c85bd5f817f3e` | Rule execution history tracking + recent runs visibility |
 | N/A | `68864b1fdbfa5cb4c32037ebf1b57f547146041f` | `e4e8eb4cbc590a816579be6362a7594ac1445488` | Account institution name/domain + notes |
 | #267 | `61eb61152993adf946640459cf2434888e88fcb6` | `ebfee9c48051e011495ff459a9a862fd4d5f1a80` | SimpleFIN relink UX, errors modal, balances-only sync flow, map helpers |
+| N/A | `7be799fac734eea2efee59b33b7c85534f27f192` | `89352f14207a745afe048e374a5f979eba08f8e1` | API categories index/show |
+| N/A | `b73ac207e0577a11b0a922cf1bcf3b7a529ac440` | `89352f14207a745afe048e374a5f979eba08f8e1` | API family sync trigger |
 
 ---
 
@@ -58,7 +60,7 @@ Successfully analyzed the entire Sure community project commit history. Identifi
 
 1. ✅ **Rules Execution History** - Track rule runs with success/failure status and transaction counts
 2. ✅ **Rules Import/Export** - Backup and restore rules as CSV/NDJSON with portable mappings
-3. ⏳ **API Endpoints** - `/api/v1/syncs` (trigger sync), `/api/v1/categories` (list categories)
+3. ✅ **API Endpoints** - `/api/v1/sync` (trigger sync), `/api/v1/categories` (list categories)
 4. ⏳ **Print Stylesheets** - Beautiful report printing for users
 5. ⏳ **Mobile UX Improvements** - Better transaction/activity page experience on mobile
 6. ⏳ **Rule Enhancements** - Pre-fill from transactions, text filters, exclude action
