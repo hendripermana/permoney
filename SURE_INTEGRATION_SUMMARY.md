@@ -19,7 +19,7 @@ Successfully analyzed the entire Sure community project commit history. Identifi
 ## 📈 Progress Snapshot
 
 - **Integrated:** 9 of 25 items (36%)
-- **Latest:** Rules import/export from Sure PR #424 → `97a4b2160fc2ef02a00a11d0b552b067d51cef8b`
+- **Latest:** Rules import/export from Sure PR #424 → `65f11581accab5b0640cfb3f6923797bffb6e40d`
 
 ---
 
@@ -32,7 +32,7 @@ Successfully analyzed the entire Sure community project commit history. Identifi
 | #412 | `78aa064bb02eaf64235d134e2211ef100c3cefa0` | `6523af996ec06c86287e9854f060ca0a868848bc` | SimpleFIN liability overpayment detection |
 | #514 | `4e87eead2c4a27f4f42772fd342b9accaced1b69` | `b216e6626872a06dd55fb1b2c4eb32b98706786e` | Transfer matching window expansion (manual vs auto) |
 | #475 | `6a03451ead51cb06142ae0df5a25737ceec1ac16` | `6eb63a823e94345849b1a35ea60b8db661ff3ae9` | Import confirmation now passes `product_name` to translations |
-| #424 | `e5ed946959925610942f5f5fbe844dfe42b33410` | `97a4b2160fc2ef02a00a11d0b552b067d51cef8b` | Rules import/export (rules.csv + RuleImport) |
+| #424 | `e5ed946959925610942f5f5fbe844dfe42b33410` | `65f11581accab5b0640cfb3f6923797bffb6e40d` | Rules import/export (rules.csv + RuleImport) |
 | #410 | `a91a4397e923992414e01dad024edea0100b46d0` | `09829b47a110629891d7edc98955945d1c9d2a8d` | SimpleFIN balance normalization + liability fix |
 | #376 | `bf90cad9a090c2dad2db9923b765e55171f32040` | `3d04421a57e6db77eb1635161c7c85bd5f817f3e` | Rule execution history tracking + recent runs visibility |
 | #267 | `61eb61152993adf946640459cf2434888e88fcb6` | `ebfee9c48051e011495ff459a9a862fd4d5f1a80` | SimpleFIN relink UX, errors modal, balances-only sync flow, map helpers |
