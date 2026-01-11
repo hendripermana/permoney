@@ -177,8 +177,12 @@ class Account < ApplicationRecord
       end
   end
 
+  def institution_name
+    self[:institution_name].presence || provider&.institution_name
+  end
+
   def institution_domain
-    provider&.institution_domain
+    self[:institution_domain].presence || provider&.institution_domain
   end
 
   def destroy_later
