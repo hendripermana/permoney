@@ -1,0 +1,14 @@
+<%# locals: (import:) %>
+
+<div class="space-y-4">
+  <p class="text-sm text-secondary">Import rules from CSV. The conditions and actions columns expect JSON arrays.</p>
+
+  <%= styled_form_with model: import,
+                       url: import_configuration_path(import),
+                       scope: :import,
+                       method: :patch,
+                       class: "space-y-3" do |form| %>
+    <p class="text-sm text-secondary">We will parse the CSV and prepare the rules for review before publishing.</p>
+    <%= form.submit "Process rules", disabled: import.complete? %>
+  <% end %>
+</div>

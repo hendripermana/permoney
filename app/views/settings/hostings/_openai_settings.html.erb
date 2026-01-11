@@ -11,6 +11,7 @@
   <%= styled_form_with model: Setting.new,
                        url: settings_hosting_path,
                        method: :patch,
+                       class: "space-y-4",
                        data: {
                          controller: "auto-submit-form",
                          "auto-submit-form-trigger-event-value": "blur"
@@ -47,5 +48,22 @@
                       inputmode: "text",
                       disabled: ENV["OPENAI_MODEL"].present?,
                       data: { "auto-submit-form-target": "auto" } %>
+
+  <%= form.select :openai_json_mode,
+                  options_for_select(
+                    [
+                      [ "Auto (recommended)", "" ],
+                      [ "Strict JSON schema", "strict" ],
+                      [ "JSON object", "json_object" ],
+                      [ "None (no JSON enforcement)", "none" ]
+                    ],
+                    Setting.openai_json_mode
+                  ),
+                  { label: "JSON mode" },
+                  { disabled: ENV["LLM_JSON_MODE"].present?,
+                    data: { "auto-submit-form-target": "auto" } } %>
+  <p class="text-xs text-secondary mt-1">
+    Auto tries strict mode first and falls back to none if results are too empty. Use strict for thinking models, none for local models that struggle with JSON schema.
+  </p>
   <% end %>
 </div>

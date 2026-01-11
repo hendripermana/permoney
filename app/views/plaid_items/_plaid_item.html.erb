@@ -86,6 +86,16 @@
             <p class="text-secondary text-sm"><%= t(".no_accounts_description") %></p>
           </div>
         <% end %>
+
+        <% stats = if defined?(@plaid_sync_stats_map) && @plaid_sync_stats_map
+             @plaid_sync_stats_map[plaid_item.id] || {}
+           else
+             plaid_item.syncs.ordered.first&.sync_stats || {}
+           end %>
+        <%= render ProviderSyncSummary.new(
+          stats: stats,
+          provider_item: plaid_item
+        ) %>
       </div>
     <% end %>
   </details>

@@ -32,6 +32,30 @@
     <% end %>
 
     <%= yield form %>
+
+    <% unless hide_account_fields %>
+      <details class="group">
+        <summary class="cursor-pointer text-sm text-secondary hover:text-primary flex items-center gap-1 py-2">
+          <%= icon "chevron-right", size: "sm", class: "group-open:rotate-90 transition-transform" %>
+          Additional details
+        </summary>
+
+        <div class="space-y-2 mt-2 pl-4 border-l border-primary">
+          <%= form.text_field :institution_name,
+                              label: "Institution name",
+                              placeholder: account.provider&.institution_name || "e.g. Chase Bank" %>
+
+          <%= form.text_field :institution_domain,
+                              label: "Institution domain",
+                              placeholder: account.provider&.institution_domain || "e.g. chase.com" %>
+
+          <%= form.text_area :notes,
+                             label: "Notes",
+                             placeholder: "Add notes about this account",
+                             rows: 4 %>
+        </div>
+      </details>
+    <% end %>
   </div>
 
   <% unless hide_submit %>

@@ -1,7 +1,7 @@
 <%# locals: (account:) %>
 
 <%= turbo_frame_tag dom_id(account, "entries") do %>
-  <div class="bg-container p-5 shadow-border-xs rounded-xl">
+  <div class="bg-container px-3 py-4 lg:p-4 shadow-border-xs rounded-xl" data-controller="checkbox-toggle">
     <div class="flex items-center justify-between mb-4" data-testid="activity-menu">
       <%= tag.h2 t(".title"), class: "font-medium text-lg" %>
       <% unless @account.linked? %>
@@ -25,6 +25,16 @@
                 frame: "modal") %>
           <% end %>
         <% end %>
+      <% end %>
+      <%= button_tag type: "button",
+            id: "toggle-checkboxes-button",
+            aria: { label: "Toggle selection checkboxes" },
+            class: "lg:hidden font-medium whitespace-nowrap inline-flex items-center gap-1 rounded-lg px-3 py-2 text-sm text-primary border border-secondary hover:bg-surface-hover",
+            data: {
+              action: "click->checkbox-toggle#toggle",
+              checkbox_toggle_target: "toggleButton"
+            } do %>
+        <%= icon("list-todo") %>
       <% end %>
     </div>
 
@@ -66,8 +76,11 @@
         <div class="grid bg-container-inset rounded-xl grid-cols-12 items-center uppercase text-xs font-medium text-secondary px-5 py-3 mb-4">
           <div class="pl-0.5 col-span-8 flex items-center gap-4">
             <%= check_box_tag "selection_entry",
-                              class: "checkbox checkbox--light",
-                              data: { action: "bulk-select#togglePageSelection" } %>
+                              class: "checkbox checkbox--light hidden lg:block",
+                              data: {
+                                action: "bulk-select#togglePageSelection",
+                                checkbox_toggle_target: "selectionEntry"
+                              } %>
             <p><%= t(".date") %></p>
           </div>
           <%= tag.p t(".amount"), class: "col-span-2 justify-self-end" %>

@@ -121,6 +121,7 @@ class ReportsController < ApplicationController
 
           trends << {
             month: month_start.strftime("%b %Y"),
+            is_current_month: month_start.month == Date.current.month && month_start.year == Date.current.year,
             income: income,
             expenses: expenses,
             net: net
@@ -141,6 +142,7 @@ class ReportsController < ApplicationController
 
           trends << {
             month: "Q#{i + 1} #{q_start.year}",
+            is_current_month: false,
             income: income,
             expenses: expenses,
             net: net
@@ -152,6 +154,7 @@ class ReportsController < ApplicationController
         [
           {
             month: "Period",
+            is_current_month: false,
             income: current_period_income,
             expenses: current_period_expenses,
             net: current_period_income - current_period_expenses

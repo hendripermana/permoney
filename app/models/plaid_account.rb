@@ -1,4 +1,6 @@
 class PlaidAccount < ApplicationRecord
+  include CurrencyNormalizable
+
   belongs_to :plaid_item
 
   # Legacy association via foreign key (will be removed after migration)
@@ -16,10 +18,14 @@ class PlaidAccount < ApplicationRecord
   end
 
   def upsert_plaid_snapshot!(account_snapshot)
+    normalized_currency = parse_currency(account_snapshot.balances.iso_currency_code) ||
+      parse_currency(currency) ||
+      "USD"
+
     assign_attributes(
       current_balance: account_snapshot.balances.current,
       available_balance: account_snapshot.balances.available,
-      currency: account_snapshot.balances.iso_currency_code,
+      currency: normalized_currency,
       plaid_type: account_snapshot.type,
       plaid_subtype: account_snapshot.subtype,
       name: account_snapshot.name,
@@ -59,5 +65,9 @@ class PlaidAccount < ApplicationRecord
     def has_balance
       return if current_balance.present? || available_balance.present?
       errors.add(:base, "Plaid account must have either current or available balance")
+    end
+
+    def log_invalid_currency(currency_value)
+      Rails.logger.warn("Invalid Plaid currency '#{currency_value}', defaulting to fallback")
     end
 end

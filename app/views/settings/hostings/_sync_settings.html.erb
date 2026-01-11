@@ -1,0 +1,15 @@
+<div class="space-y-4">
+  <div class="flex items-center justify-between">
+    <div class="space-y-1">
+      <p class="text-sm">Include pending transactions</p>
+      <p class="text-secondary text-sm">Include pending transactions from providers so they can be reconciled when posted. Disable if your institution produces duplicates.</p>
+    </div>
+
+    <%= styled_form_with model: Setting.new,
+                         url: settings_hosting_path,
+                         method: :patch,
+                         data: { controller: "auto-submit-form", auto_submit_form_trigger_event_value: "change" } do |form| %>
+      <%= form.toggle :syncs_include_pending, { data: { auto_submit_form_target: "auto" } } %>
+    <% end %>
+  </div>
+</div>

@@ -73,6 +73,19 @@ class Sync < ApplicationRecord
         end
       end
     end
+
+    def latest_stats_map_for(syncable_type:, syncable_ids:)
+      ids = Array(syncable_ids).compact
+      return {} if ids.empty?
+
+      latest_syncs = Sync.where(syncable_type: syncable_type, syncable_id: ids)
+        .select("DISTINCT ON (syncable_id) syncs.*")
+        .order("syncable_id, created_at DESC")
+
+      latest_syncs.each_with_object({}) do |sync, map|
+        map[sync.syncable_id] = sync.sync_stats || {}
+      end
+    end
   end
 
   def perform

@@ -73,6 +73,16 @@
             <p class="text-secondary text-sm"><%= t(".no_accounts_description") %></p>
           </div>
         <% end %>
+
+        <% stats = if defined?(@lunchflow_sync_stats_map) && @lunchflow_sync_stats_map
+             @lunchflow_sync_stats_map[lunchflow_item.id] || {}
+           else
+             lunchflow_item.syncs.ordered.first&.sync_stats || {}
+           end %>
+        <%= render ProviderSyncSummary.new(
+          stats: stats,
+          provider_item: lunchflow_item
+        ) %>
       </div>
     <% end %>
   </details>

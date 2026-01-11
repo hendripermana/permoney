@@ -9,7 +9,12 @@ class Setting < RailsSettings::Base
   field :openai_access_token, type: :string, default: ENV["OPENAI_ACCESS_TOKEN"]
   field :openai_uri_base, type: :string, default: ENV["OPENAI_URI_BASE"]
   field :openai_model, type: :string, default: ENV["OPENAI_MODEL"]
+  field :openai_json_mode, type: :string, default: ENV["LLM_JSON_MODE"]
   field :brand_fetch_client_id, type: :string, default: ENV["BRAND_FETCH_CLIENT_ID"]
+
+  # Pending transaction sync behavior (SimpleFIN + Plaid)
+  pending_env = ENV["SIMPLEFIN_INCLUDE_PENDING"].to_s.strip.downcase
+  field :syncs_include_pending, type: :boolean, default: pending_env.blank? ? true : !%w[0 false no off].include?(pending_env)
 
   # Upstream: Single hash field for all dynamic provider credentials and other dynamic settings
   # This allows unlimited dynamic fields without declaring them upfront

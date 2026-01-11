@@ -74,6 +74,38 @@ class TransferTest < ActiveSupport::TestCase
     assert_equal "Must be within 4 days", transfer.errors.full_messages.first
   end
 
+  test "confirmed transfer allows a wider date window" do
+    outflow_entry = create_transaction(date: Date.current, account: accounts(:depository), amount: 500)
+    inflow_entry = create_transaction(date: 20.days.ago.to_date, account: accounts(:credit_card), amount: -500)
+
+    transfer = Transfer.new(
+      inflow_transaction: inflow_entry.transaction,
+      outflow_transaction: outflow_entry.transaction,
+      status: "confirmed"
+    )
+
+    assert_difference -> { Transfer.count } => 1 do
+      transfer.save!
+    end
+  end
+
+  test "confirmed transfer still enforces a 30-day window" do
+    outflow_entry = create_transaction(date: Date.current, account: accounts(:depository), amount: 500)
+    inflow_entry = create_transaction(date: 45.days.ago.to_date, account: accounts(:credit_card), amount: -500)
+
+    transfer = Transfer.new(
+      inflow_transaction: inflow_entry.transaction,
+      outflow_transaction: outflow_entry.transaction,
+      status: "confirmed"
+    )
+
+    assert_no_difference -> { Transfer.count } do
+      transfer.save
+    end
+
+    assert_equal "Must be within 30 days", transfer.errors.full_messages.first
+  end
+
   test "transfer must be from the same family" do
     family1 = families(:empty)
     family2 = families(:dylan_family)

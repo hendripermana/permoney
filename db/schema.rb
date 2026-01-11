@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2025_11_30_155300) do
+ActiveRecord::Schema[8.1].define(version: 2026_01_11_000001) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -44,8 +44,11 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_30_155300) do
     t.string "external_id"
     t.uuid "family_id", null: false
     t.uuid "import_id"
+    t.string "institution_domain"
+    t.string "institution_name"
     t.jsonb "locked_attributes", default: {}
     t.string "name"
+    t.text "notes"
     t.uuid "plaid_account_id"
     t.string "provider"
     t.uuid "simplefin_account_id"
@@ -397,11 +400,15 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_30_155300) do
 
   create_table "import_rows", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.string "account"
+    t.text "actions"
+    t.boolean "active"
     t.string "amount"
     t.string "category"
+    t.text "conditions"
     t.datetime "created_at", null: false
     t.string "currency"
     t.string "date"
+    t.string "effective_date"
     t.string "entity_type"
     t.string "exchange_operating_mic"
     t.uuid "import_id", null: false
@@ -409,6 +416,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_30_155300) do
     t.text "notes"
     t.string "price"
     t.string "qty"
+    t.string "resource_type"
     t.string "tags"
     t.string "ticker"
     t.datetime "updated_at", null: false
@@ -936,6 +944,24 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_30_155300) do
     t.index ["rule_id"], name: "index_rule_conditions_on_rule_id"
   end
 
+  create_table "rule_runs", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.text "error_message"
+    t.datetime "executed_at", null: false
+    t.string "execution_type", default: "manual", null: false
+    t.integer "pending_jobs_count", default: 0, null: false
+    t.uuid "rule_id", null: false
+    t.string "rule_name"
+    t.string "status", default: "pending", null: false
+    t.integer "transactions_modified", default: 0, null: false
+    t.integer "transactions_processed", default: 0, null: false
+    t.integer "transactions_queued", default: 0, null: false
+    t.datetime "updated_at", null: false
+    t.index ["executed_at"], name: "index_rule_runs_on_executed_at"
+    t.index ["rule_id", "executed_at"], name: "index_rule_runs_on_rule_id_and_executed_at"
+    t.index ["rule_id"], name: "index_rule_runs_on_rule_id"
+  end
+
   create_table "rules", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.boolean "active", default: false, null: false
     t.datetime "created_at", null: false
@@ -971,6 +997,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_30_155300) do
     t.string "currency", default: "USD", null: false
     t.date "date", null: false
     t.decimal "price", precision: 19, scale: 4, null: false
+    t.boolean "provisional", default: false, null: false
     t.uuid "security_id"
     t.datetime "updated_at", null: false
     t.index ["security_id", "date", "currency"], name: "index_security_prices_on_security_id_and_date_and_currency", unique: true
@@ -1195,6 +1222,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_30_155300) do
     t.uuid "category_id"
     t.datetime "created_at", null: false
     t.string "external_id"
+    t.jsonb "extra", default: {}, null: false
     t.boolean "is_sharia_compliant", default: true
     t.string "islamic_transaction_type"
     t.string "kind", default: "standard", null: false
@@ -1203,6 +1231,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_30_155300) do
     t.datetime "updated_at", null: false
     t.index ["category_id"], name: "index_transactions_on_category_id"
     t.index ["external_id"], name: "index_transactions_on_external_id"
+    t.index ["extra"], name: "index_transactions_on_extra", using: :gin
     t.index ["is_sharia_compliant"], name: "index_transactions_on_is_sharia_compliant"
     t.index ["islamic_transaction_type"], name: "index_transactions_on_islamic_transaction_type"
     t.index ["kind"], name: "index_transactions_on_kind"
@@ -1324,6 +1353,7 @@ ActiveRecord::Schema[8.1].define(version: 2025_11_30_155300) do
   add_foreign_key "rule_actions", "rules"
   add_foreign_key "rule_conditions", "rule_conditions", column: "parent_id"
   add_foreign_key "rule_conditions", "rules"
+  add_foreign_key "rule_runs", "rules"
   add_foreign_key "rules", "families"
   add_foreign_key "security_prices", "securities"
   add_foreign_key "sessions", "impersonation_sessions", column: "active_impersonator_session_id"

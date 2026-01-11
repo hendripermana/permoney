@@ -5,7 +5,7 @@
 
   <% if Current.family.transactions.any? %>
     <%# Export Options Bar %>
-    <div class="flex gap-3 mb-6 flex-wrap">
+    <div class="reports-print-hide flex gap-3 mb-6 flex-wrap">
       <a href="<%= export_transactions_reports_path(params.permit(:start_date, :end_date, :period_type)) %>"
          class="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-container border border-tertiary hover:bg-surface-hover text-sm font-medium text-primary transition-colors"
          data-turbo="false">

@@ -62,6 +62,14 @@ class Settings::HostingsController < ApplicationController
       Setting.openai_model = hosting_params[:openai_model]
     end
 
+    if hosting_params.key?(:openai_json_mode)
+      Setting.openai_json_mode = hosting_params[:openai_json_mode].presence
+    end
+
+    if hosting_params.key?(:syncs_include_pending)
+      Setting.syncs_include_pending = ActiveModel::Type::Boolean.new.cast(hosting_params[:syncs_include_pending])
+    end
+
     redirect_to settings_hosting_path, notice: t(".success")
   rescue Setting::ValidationError => error
     flash.now[:alert] = error.message
@@ -75,7 +83,7 @@ class Settings::HostingsController < ApplicationController
 
   private
     def hosting_params
-      params.require(:setting).permit(:onboarding_state, :require_email_confirmation, :brand_fetch_client_id, :twelve_data_api_key, :openai_access_token, :openai_uri_base, :openai_model)
+      params.require(:setting).permit(:onboarding_state, :require_email_confirmation, :brand_fetch_client_id, :twelve_data_api_key, :openai_access_token, :openai_uri_base, :openai_model, :openai_json_mode, :syncs_include_pending)
     end
 
     def ensure_admin
