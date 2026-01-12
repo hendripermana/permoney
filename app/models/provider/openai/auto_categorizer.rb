@@ -331,7 +331,7 @@ class Provider::Openai::AutoCategorizer
       category_lower = category.to_s.downcase
 
       variations.each do |key, synonyms|
-        all_variants = [key] + synonyms
+        all_variants = [ key ] + synonyms
         if all_variants.include?(input_lower) && all_variants.include?(category_lower)
           return true
         end
