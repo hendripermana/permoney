@@ -336,8 +336,9 @@ class SimplefinItemsController < ApplicationController
     @account = Current.family.accounts.find(params[:account_id])
     simplefin_account = SimplefinAccount.find(params[:simplefin_account_id])
 
-    # Guard: only manual accounts can be linked (no existing provider links or legacy IDs)
-    if @account.account_providers.any? || @account.plaid_account_id.present? || @account.simplefin_account_id.present?
+    # Guard: only manual accounts can be linked (no existing provider links from other providers)
+    # This allows relinking from one SimpleFin account to another.
+    if @account.account_providers.any? { |ap| ap.provider_type != "SimplefinAccount" } || @account.plaid_account_id.present?
       flash[:alert] = t("simplefin_items.link_existing_account.errors.only_manual")
       if turbo_frame_request?
         return render turbo_stream: Array(flash_notification_stream_items)
@@ -361,16 +362,17 @@ class SimplefinItemsController < ApplicationController
     Account.transaction do
       simplefin_account.lock!
 
-      # Clear legacy association if present (Account.simplefin_account_id)
-      if (legacy_account = simplefin_account.account)
-        legacy_account.update!(simplefin_account_id: nil)
-      end
-
-      # Upsert the AccountProvider mapping deterministically
+      # First, create the new AccountProvider link
+      # This ensures data integrity: if creation fails, the old link remains
       ap = AccountProvider.find_or_initialize_by(provider: simplefin_account)
       previous_account = ap.account
       ap.account_id = @account.id
       ap.save!
+
+      # Only after the new link is successfully created, clear the legacy association
+      if (legacy_account = simplefin_account.account)
+        legacy_account.update!(simplefin_account_id: nil)
+      end
 
       # If the provider was previously linked to a different account in this family,
       # and that account is now orphaned, quietly disable it so it disappears from the

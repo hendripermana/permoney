@@ -1,12 +1,13 @@
 <%# locals: (category:) %>
 <% category ||= Category.uncategorized %>
+<% safe_color = sanitize_category_color(category.color) %>
 
 <div>
   <span class="flex lg:hidden items-center gap-1 text-sm font-medium rounded-full px-1.5 py-1 border truncate focus-visible:outline-none focus-visible:ring-0 w-8 h-8 justify-center"
       style="
-        background-color: color-mix(in oklab, <%= category.color %> 10%, transparent);
-        border-color: color-mix(in oklab, <%= category.color %> 10%, transparent);
-        color: <%= category.color %>;">
+        background-color: color-mix(in oklab, <%= safe_color %> 10%, transparent);
+        border-color: color-mix(in oklab, <%= safe_color %> 10%, transparent);
+        color: <%= safe_color %>;">
     <% if category.lucide_icon.present? %>
       <%= icon category.lucide_icon, size: "sm", color: "current" %>
     <% end %>

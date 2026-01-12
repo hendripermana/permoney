@@ -8,13 +8,13 @@ class Rule::ConditionFilter::TransactionDetails < Rule::ConditionFilter
   end
 
   def apply(scope, operator, value)
-    sanitize_operator(operator)
+    sanitized_operator = sanitize_operator(operator)
 
-    if operator == "is_null"
+    if sanitized_operator == "IS NULL"
       scope.where("transactions.extra IS NULL OR transactions.extra = '{}'::jsonb")
     else
       sanitized_value = "%#{ActiveRecord::Base.sanitize_sql_like(value)}%"
-      sql_operator = operator == "like" ? "ILIKE" : "LIKE"
+      sql_operator = sanitized_operator == "ILIKE" ? "ILIKE" : "LIKE"
 
       scope.where("transactions.extra::text #{sql_operator} ?", sanitized_value)
     end

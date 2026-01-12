@@ -72,48 +72,58 @@ class Eval::Langfuse::Client
     # Generate trace ID upfront so we can return it
     trace_id = SecureRandom.uuid
 
-    post("/ingestion", {
-      batch: [
-        {
-          id: SecureRandom.uuid,
-          type: "trace-create",
-          timestamp: Time.current.iso8601,
-          body: {
-            id: trace_id,
-            name: name,
-            input: input,
-            output: output,
-            metadata: metadata,
-            sessionId: session_id,
-            userId: user_id
-          }.compact
-        }
-      ]
-    })
+    begin
+      post("/ingestion", {
+        batch: [
+          {
+            id: SecureRandom.uuid,
+            type: "trace-create",
+            timestamp: Time.current.iso8601,
+            body: {
+              id: trace_id,
+              name: name,
+              input: input,
+              output: output,
+              metadata: metadata,
+              sessionId: session_id,
+              userId: user_id
+            }.compact
+          }
+        ]
+      })
 
-    # Return the trace ID we generated
-    trace_id
+      # Return the trace ID we generated only if API call succeeds
+      trace_id
+    rescue ApiError => e
+      # Re-raise with context about trace creation failure
+      raise ApiError.new("Failed to create trace in Langfuse: #{e.message}", status: e.status, body: e.body)
+    end
   end
 
   # Score operations
   def create_score(trace_id:, name:, value:, comment: nil, data_type: "NUMERIC")
-    post("/ingestion", {
-      batch: [
-        {
-          id: SecureRandom.uuid,
-          type: "score-create",
-          timestamp: Time.current.iso8601,
-          body: {
+    begin
+      post("/ingestion", {
+        batch: [
+          {
             id: SecureRandom.uuid,
-            traceId: trace_id,
-            name: name,
-            value: value,
-            comment: comment,
-            dataType: data_type
-          }.compact
-        }
-      ]
-    })
+            type: "score-create",
+            timestamp: Time.current.iso8601,
+            body: {
+              id: SecureRandom.uuid,
+              traceId: trace_id,
+              name: name,
+              value: value,
+              comment: comment,
+              dataType: data_type
+            }.compact
+          }
+        ]
+      })
+    rescue ApiError => e
+      # Re-raise with context about score creation failure
+      raise ApiError.new("Failed to create score in Langfuse: #{e.message}", status: e.status, body: e.body)
+    end
   end
 
   def configured?

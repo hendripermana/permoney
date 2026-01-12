@@ -102,53 +102,57 @@ class Eval::Langfuse::ExperimentRunner
     end
 
     def process_categorization_batch(items)
-      transactions = items.map do |item|
-        input = item["input"]
-        txn = input["transaction"] || input
-        txn.deep_symbolize_keys.merge(id: item["id"])
-      end
+      # Group items by their category list to ensure correct context for each sub-batch
+      items_by_categories = items.group_by { |item| item.dig("input", "categories") || [] }
 
-      categories = items.first.dig("input", "categories") || []
-      categories = categories.map(&:deep_symbolize_keys)
-
-      # Determine effective JSON mode for this batch
-      # If the batch has many expected nulls, force strict mode to prevent false retries
-      effective_json_mode = json_mode_for_batch(items)
-
-      start_time = Time.current
-
-      response = llm_provider.auto_categorize(
-        transactions: transactions,
-        user_categories: categories,
-        model: model,
-        json_mode: effective_json_mode
-      )
-
-      latency_ms = ((Time.current - start_time) * 1000).to_i
-
-      if response.success?
-        items.map do |item|
-          categorization = response.data.find { |c| c.transaction_id.to_s == item["id"].to_s }
-          actual_category = normalize_null(categorization&.category_name)
-          expected_category = item.dig("expectedOutput", "category_name")
-
-          correct = actual_category == expected_category
-          score_value = correct ? 1.0 : 0.0
-
-          # Create trace and score in Langfuse
-          trace_id = create_trace_for_item(item, actual_category, latency_ms)
-          score_result(trace_id, item["id"], score_value, correct, actual_category, expected_category)
-
-          {
-            item_id: item["id"],
-            expected: expected_category,
-            actual: actual_category,
-            correct: correct,
-            latency_ms: latency_ms / items.size
-          }
+      items_by_categories.flat_map do |categories_json, batch_items|
+        transactions = batch_items.map do |item|
+          input = item["input"]
+          txn = input["transaction"] || input
+          txn.deep_symbolize_keys.merge(id: item["id"])
         end
-      else
-        handle_batch_error(items, response.error)
+
+        categories = categories_json.map(&:deep_symbolize_keys)
+
+        # Determine effective JSON mode for this batch
+        # If the batch has many expected nulls, force strict mode to prevent false retries
+        effective_json_mode = json_mode_for_batch(batch_items)
+
+        start_time = Time.current
+
+        response = llm_provider.auto_categorize(
+          transactions: transactions,
+          user_categories: categories,
+          model: model,
+          json_mode: effective_json_mode
+        )
+
+        latency_ms = ((Time.current - start_time) * 1000).to_i
+
+        if response.success?
+          batch_items.map do |item|
+            categorization = response.data.find { |c| c.transaction_id.to_s == item["id"].to_s }
+            actual_category = normalize_null(categorization&.category_name)
+            expected_category = item.dig("expectedOutput", "category_name")
+
+            correct = actual_category == expected_category
+            score_value = correct ? 1.0 : 0.0
+
+            # Create trace and score in Langfuse
+            trace_id = create_trace_for_item(item, actual_category, latency_ms)
+            score_result(trace_id, item["id"], score_value, correct, actual_category, expected_category)
+
+            {
+              item_id: item["id"],
+              expected: expected_category,
+              actual: actual_category,
+              correct: correct,
+              latency_ms: latency_ms / batch_items.size
+            }
+          end
+        else
+          handle_batch_error(batch_items, response.error)
+        end
       end
     rescue => e
       handle_batch_error(items, e)

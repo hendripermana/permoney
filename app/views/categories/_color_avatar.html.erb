@@ -1,8 +1,9 @@
 <%# locals: (category:) %>
+<% safe_color = sanitize_category_color(category.color) %>
 
 <span
       data-category-target="avatar"
       class="w-14 h-14 flex items-center justify-center rounded-full"
-      style="background-color: color-mix(in oklab, <%= category.color %> 10%, transparent); color: <%= category.color %>">
+      style="background-color: color-mix(in oklab, <%= safe_color %> 10%, transparent); color: <%= safe_color %>">
   <%= icon(category.lucide_icon, size: "2xl", color: "current") %>
 </span>

@@ -194,9 +194,13 @@ class Eval::Reporters::ComparisonReporter
 
       # Speed recommendation
       if fastest.metrics["avg_latency_ms"] && fastest.id != best_accuracy.id
-        latency_ratio = (best_accuracy.metrics["avg_latency_ms"] || 0) / (fastest.metrics["avg_latency_ms"] || 1)
-        if latency_ratio > 1.5
-          parts << "For speed, consider #{fastest.model} (#{fastest.metrics['avg_latency_ms']}ms vs #{best_accuracy.metrics['avg_latency_ms']}ms)"
+        fastest_latency = fastest.metrics["avg_latency_ms"]
+        best_latency = best_accuracy.metrics["avg_latency_ms"]
+        if fastest_latency && fastest_latency > 0
+          latency_ratio = (best_latency || 0) / fastest_latency
+          if latency_ratio > 1.5
+            parts << "For speed, consider #{fastest.model} (#{fastest.metrics['avg_latency_ms']}ms vs #{best_accuracy.metrics['avg_latency_ms']}ms)"
+          end
         end
       end
 

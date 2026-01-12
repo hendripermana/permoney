@@ -220,7 +220,7 @@ class Security::Price::Importer
       total_upsert_count = 0
       now = Time.current
 
-      rows_with_timestamps = rows.map { |row| row.merge(updated_at: now) }
+      rows_with_timestamps = rows.map { |row| row.merge(created_at: now, updated_at: now) }
 
       rows_with_timestamps.each_slice(batch_size) do |batch|
         ids = Security::Price.upsert_all(
