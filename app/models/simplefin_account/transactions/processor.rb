@@ -16,7 +16,8 @@ class SimplefinAccount::Transactions::Processor
         simplefin_account: simplefin_account
       ).process
     rescue => e
-      Rails.logger.error "Error processing SimpleFin transaction: #{e.message}"
+      tx_id = transaction_data&.dig("id") || "unknown"
+      Rails.logger.error "Error processing SimpleFin transaction (ID: #{tx_id}): #{e.message}"
     end
   end
 

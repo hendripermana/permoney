@@ -151,55 +151,7 @@
   }
 }
 
-@utility animate-scale-in {
-  animation: scaleIn 0.3s ease-out forwards;
-}
 
-/* GPU-accelerated animations for better performance */
-@utility gpu-accelerated {
-  transform: translateZ(0);
-  backface-visibility: hidden;
-  perspective: 1000px;
-}
-
-/* Content visibility optimization for large component trees */
-@utility content-auto {
-  content-visibility: auto;
-  contain-intrinsic-size: 0 500px;
-}
-
-/* Optimized scrollbar styling */
-@utility scrollbar-thin {
-  scrollbar-width: thin;
-
-  &::-webkit-scrollbar {
-    width: 6px;
-  }
-
-  &::-webkit-scrollbar-thumb {
-    background-color: rgba(156, 163, 175, 0.5);
-    border-radius: 3px;
-  }
-
-  &::-webkit-scrollbar-thumb:hover {
-    background-color: rgba(156, 163, 175, 0.7);
-  }
-}
-
-/* Performance-optimized transitions */
-@utility transition-optimized {
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-/* Reduced motion support - improves accessibility and performance */
-@media (prefers-reduced-motion: reduce) {
-
-  .animate-scale-in,
-  .gpu-accelerated {
-    animation: none;
-    transition: none;
-  }
-}
 
 /* Container-based responsive font sizing - modern approach */
 @utility fluid-text {
@@ -216,6 +168,15 @@
 @utility scale-in-right {
   @apply gpu-accelerated transition-optimized;
   animation: slideInRight 0.3s ease-out forwards;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 
 @layer components {

@@ -182,4 +182,144 @@ class Rule::ConditionTest < ActiveSupport::TestCase
     assert_equal 3, filtered.count
     assert filtered.all? { |t| t.merchant_id.nil? }
   end
+
+  test "applies transaction_details condition with like operator" do
+    scope = @rule_scope
+
+    paypal_entry = create_transaction(
+      date: Date.current,
+      account: @account,
+      amount: 75,
+      name: "PayPal"
+    )
+    paypal_entry.transaction.update!(
+      extra: {
+        "simplefin" => {
+          "payee" => "Amazon via PayPal",
+          "description" => "Purchase from Amazon",
+          "memo" => "Order #12345"
+        }
+      }
+    )
+
+    condition = Rule::Condition.new(
+      rule: @transaction_rule,
+      condition_type: "transaction_details",
+      operator: "like",
+      value: "Amazon"
+    )
+
+    scope = condition.prepare(scope)
+    filtered = condition.apply(scope)
+
+    assert_equal 1, filtered.count
+    assert_equal paypal_entry.transaction.id, filtered.first.id
+  end
+
+  test "applies transaction_details condition with equal operator case-sensitive" do
+    scope = @rule_scope
+
+    transaction_entry = create_transaction(
+      date: Date.current,
+      account: @account,
+      amount: 100,
+      name: "PayPal"
+    )
+    transaction_entry.transaction.update!(
+      extra: {
+        "simplefin" => {
+          "payee" => "Netflix"
+        }
+      }
+    )
+
+    condition = Rule::Condition.new(
+      rule: @transaction_rule,
+      condition_type: "transaction_details",
+      operator: "=",
+      value: "Netflix"
+    )
+
+    scope = condition.prepare(scope)
+    filtered = condition.apply(scope)
+    assert_equal 1, filtered.count
+
+    condition_lowercase = Rule::Condition.new(
+      rule: @transaction_rule,
+      condition_type: "transaction_details",
+      operator: "=",
+      value: "netflix"
+    )
+
+    scope = condition_lowercase.prepare(scope)
+    filtered = condition_lowercase.apply(scope)
+    assert_equal 0, filtered.count
+  end
+
+  test "applies transaction_details condition with is_null operator" do
+    scope = @rule_scope
+
+    transaction_with_details = create_transaction(
+      date: Date.current,
+      account: @account,
+      amount: 50,
+      name: "Transaction with details"
+    )
+    transaction_with_details.transaction.update!(
+      extra: { "simplefin" => { "payee" => "Test Merchant" } }
+    )
+
+    condition = Rule::Condition.new(
+      rule: @transaction_rule,
+      condition_type: "transaction_details",
+      operator: "is_null",
+      value: nil
+    )
+
+    scope = condition.prepare(scope)
+    filtered = condition.apply(scope)
+
+    assert_equal 5, filtered.count
+    assert_not filtered.map(&:id).include?(transaction_with_details.transaction.id)
+  end
+
+  test "applies transaction_notes condition" do
+    scope = @rule_scope
+
+    transaction_entry = @account.entries.first
+    transaction_entry.update!(notes: "Important: This is a business expense")
+
+    condition = Rule::Condition.new(
+      rule: @transaction_rule,
+      condition_type: "transaction_notes",
+      operator: "like",
+      value: "business expense"
+    )
+
+    scope = condition.prepare(scope)
+    filtered = condition.apply(scope)
+
+    assert_equal 1, filtered.count
+    assert_equal transaction_entry.transaction.id, filtered.first.id
+  end
+
+  test "applies transaction_notes condition with is_null operator" do
+    scope = @rule_scope
+
+    transaction_entry = @account.entries.first
+    transaction_entry.update!(notes: "Some notes")
+
+    condition = Rule::Condition.new(
+      rule: @transaction_rule,
+      condition_type: "transaction_notes",
+      operator: "is_null",
+      value: nil
+    )
+
+    scope = condition.prepare(scope)
+    filtered = condition.apply(scope)
+
+    assert_equal 4, filtered.count
+    assert_not filtered.map(&:id).include?(transaction_entry.transaction.id)
+  end
 end

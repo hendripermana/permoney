@@ -202,13 +202,49 @@ class SubscriptionPlansController < ApplicationController
     end
 
     def subscription_plan_params
-      params.require(:subscription_plan).permit(
-        :name, :description, :service_id, :merchant_id, :account_id,
+      permitted = params.require(:subscription_plan).permit(
+        :name, :description,
         :amount, :currency, :billing_cycle, :status,
         :started_at, :trial_ends_at, :next_billing_at,
         :auto_renew, :payment_method, :shared_within_family,
         :max_usage_allowed, :payment_notes
       )
+
+      if params[:subscription_plan].key?(:account_id)
+        account_id = safe_account_id(params[:subscription_plan][:account_id])
+        permitted[:account_id] = account_id if account_id.present?
+      end
+
+      if params[:subscription_plan].key?(:merchant_id)
+        merchant_id = safe_service_merchant_id(params[:subscription_plan][:merchant_id])
+        permitted[:merchant_id] = merchant_id if merchant_id.present?
+      end
+
+      if params[:subscription_plan].key?(:service_id)
+        service_id = safe_service_id(params[:subscription_plan][:service_id])
+        permitted[:service_id] = service_id if service_id.present?
+      end
+
+      permitted
+    end
+
+    def safe_account_id(account_id)
+      return if account_id.blank?
+
+      Current.family.accounts.where(id: account_id).pick(:id)
+    end
+
+    def safe_service_merchant_id(merchant_id)
+      return if merchant_id.blank?
+
+      ServiceMerchant.where(id: merchant_id).pick(:id)
+    end
+
+    def safe_service_id(service_id)
+      return if service_id.blank?
+      return unless defined?(Service) && Service.table_exists?
+
+      Service.where(id: service_id).pick(:id)
     end
 
     # Sanitize subscription data for JSON responses to prevent data exposure

@@ -142,7 +142,7 @@ class ExchangeRate::ImporterTest < ActiveSupport::TestCase
 
   private
     def get_provider_fetch_start_date(start_date)
-      # We fetch with a 5 day buffer to account for weekends and holidays
-      start_date - 5.days
+      # We fetch with a buffer to account for weekends and holidays
+      start_date - ExchangeRate::Importer::PROVIDER_LOOKBACK_DAYS.days
     end
 end

@@ -2,7 +2,7 @@ class Import::Row < ApplicationRecord
   belongs_to :import
 
   validates :amount, numericality: true, allow_blank: true
-  validates :currency, presence: true
+
 
   validate :date_valid
   validate :required_columns

@@ -4,6 +4,7 @@ class Rule < ApplicationRecord
   belongs_to :family
   has_many :conditions, dependent: :destroy
   has_many :actions, dependent: :destroy
+  has_many :rule_runs, dependent: :destroy
 
   accepts_nested_attributes_for :conditions, allow_destroy: true
   accepts_nested_attributes_for :actions, allow_destroy: true
@@ -37,6 +38,10 @@ class Rule < ApplicationRecord
 
   def affected_resource_count
     matching_resources_scope.count
+  end
+
+  def self.total_affected_resource_count(rules)
+    rules.sum(&:affected_resource_count)
   end
 
   def apply(ignore_attribute_locks: false)

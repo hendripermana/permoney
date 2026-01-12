@@ -1,6 +1,7 @@
 class ExchangeRate::Importer
   MissingExchangeRateError = Class.new(StandardError)
   MissingStartRateError = Class.new(StandardError)
+  PROVIDER_LOOKBACK_DAYS = Security::Price::Importer::PROVISIONAL_LOOKBACK_DAYS
 
   def initialize(exchange_rate_provider:, from:, to:, start_date:, end_date:, clear_cache: false)
     @exchange_rate_provider = exchange_rate_provider
@@ -107,8 +108,8 @@ class ExchangeRate::Importer
 
     def provider_rates
       @provider_rates ||= begin
-        # Always fetch with a 5 day buffer to ensure we have a starting rate (for weekends and holidays)
-        provider_fetch_start_date = effective_start_date - 5.days
+        # Always fetch with a buffer to ensure we have a starting rate (for weekends and holidays)
+        provider_fetch_start_date = effective_start_date - PROVIDER_LOOKBACK_DAYS.days
 
         provider_response = exchange_rate_provider.fetch_exchange_rates(
           from: from,

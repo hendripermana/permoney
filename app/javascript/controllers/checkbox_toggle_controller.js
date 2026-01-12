@@ -6,13 +6,20 @@ import { Controller } from "@hotwired/stimulus";
 // This controller shows/hides the section and disables/enables its inputs
 // based on the checkbox state, keeping the form semantics intact.
 export default class extends Controller {
-  static targets = ["checkbox", "section"];
+  static targets = ["checkbox", "section", "selectionEntry", "toggleButton"];
 
   connect() {
-    this.update();
+    if (!this.hasSelectionEntryTarget) {
+      this.update();
+    }
   }
 
   toggle() {
+    if (this.hasSelectionEntryTarget) {
+      this.toggleSelectionEntries();
+      return;
+    }
+
     this.update();
   }
 
@@ -31,5 +38,45 @@ export default class extends Controller {
         el.disabled = !checked;
       });
     });
+  }
+
+  toggleSelectionEntries() {
+    if (this.selectionEntryTargets.length === 0) return;
+
+    const shouldShow = this.selectionEntryTargets[0].classList.contains("hidden");
+
+    this.selectionEntryTargets.forEach((el) => {
+      if (shouldShow) {
+        el.classList.remove("hidden");
+      } else {
+        el.classList.add("hidden");
+      }
+    });
+
+    if (!shouldShow) {
+      let bulkSelectElement = null;
+      if (this.element.matches("[data-controller~='bulk-select']")) {
+        bulkSelectElement = this.element;
+      } else {
+        bulkSelectElement =
+          this.element.querySelector("[data-controller~='bulk-select']") ||
+          this.element.closest("[data-controller~='bulk-select']") ||
+          document.querySelector("[data-controller~='bulk-select']");
+      }
+
+      if (bulkSelectElement) {
+        const bulkSelectController = this.application.getControllerForElementAndIdentifier(
+          bulkSelectElement,
+          "bulk-select"
+        );
+        if (bulkSelectController) {
+          bulkSelectController.deselectAll();
+        }
+      }
+    }
+
+    if (this.hasToggleButtonTarget) {
+      this.toggleButtonTarget.classList.toggle("bg-surface", shouldShow);
+    }
   }
 }

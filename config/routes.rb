@@ -177,6 +177,11 @@ Rails.application.routes.draw do
     resource :transfer_match, only: %i[new create]
     resource :category, only: :update, controller: :transaction_categories
 
+    member do
+      post :merge_duplicate
+      post :dismiss_duplicate
+    end
+
     collection do
       delete :clear_filter
     end
@@ -217,6 +222,8 @@ Rails.application.routes.draw do
 
     collection do
       delete :destroy_all
+      get :confirm_all
+      post :apply_all
     end
   end
 
@@ -324,6 +331,7 @@ Rails.application.routes.draw do
 
       # Production API endpoints
       resources :accounts, only: [ :index ]
+      resources :categories, only: [ :index, :show ]
       resources :transactions, only: [ :index, :show, :create, :update, :destroy ]
       # PayLater endpoints (manual-only)
       namespace :debt do
@@ -335,6 +343,7 @@ Rails.application.routes.draw do
         post "loans/plan/regenerate", to: "loans#regenerate"
       end
       resource :usage, only: [ :show ], controller: "usage"
+      post :sync, to: "sync#create"
 
       resources :chats, only: [ :index, :show, :create, :update, :destroy ] do
         resources :messages, only: [ :create ] do
@@ -387,6 +396,8 @@ Rails.application.routes.draw do
 
     member do
       post :sync
+      post :balances
+      get :errors
       get :setup_accounts
       post :complete_account_setup
     end

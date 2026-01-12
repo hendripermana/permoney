@@ -5,7 +5,7 @@ require "test_helper"
 class EntryReceiptsControllerTest < ActionDispatch::IntegrationTest
   setup do
     sign_in users(:family_admin)
-    @entry = entries(:checking_one)
+    @entry = entries(:transaction)
   end
 
   test "should delete attached receipt and enqueue purge job" do

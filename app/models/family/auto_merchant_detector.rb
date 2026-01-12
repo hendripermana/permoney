@@ -11,7 +11,7 @@ class Family::AutoMerchantDetector
 
     if scope.none?
       Rails.logger.info("No transactions to auto-detect merchants for family #{family.id}")
-      return
+      return 0
     else
       Rails.logger.info("Auto-detecting merchants for #{scope.count} transactions for family #{family.id}")
     end
@@ -19,48 +19,42 @@ class Family::AutoMerchantDetector
     result = llm_provider.auto_detect_merchants(
       transactions: transactions_input,
       user_merchants: user_merchants_input,
-      family: { id: family.id }
+      family: family
     )
 
     unless result.success?
       Rails.logger.error("Failed to auto-detect merchants for family #{family.id}: #{result.error.message}")
-      return
+      return 0
     end
 
+    modified_count = 0
     scope.each do |transaction|
       auto_detection = result.data.find { |c| c.transaction_id == transaction.id }
+      next unless auto_detection&.business_name.present? && auto_detection&.business_url.present?
 
-      merchant_id = user_merchants_input.find { |m| m[:name] == auto_detection&.business_name }&.dig(:id)
+      existing_merchant = transaction.merchant
 
-      if merchant_id.nil? && auto_detection&.business_url.present? && auto_detection&.business_name.present?
-        ai_provider_merchant = ProviderMerchant.find_or_initialize_by(
-          source: "ai",
-          name: auto_detection.business_name
-        )
+      if existing_merchant.nil?
+        # Case 1: No merchant - create/find AI merchant and assign
+        merchant_id = find_matching_user_merchant(auto_detection)
+        merchant_id ||= find_or_create_ai_merchant(auto_detection)&.id
 
-        # Always update website_url and logo if we have better data
-        ai_provider_merchant.website_url ||= auto_detection.business_url
-
-        # Set or update logo_url if Brandfetch is configured
-        if Setting.brand_fetch_client_id.present? && ai_provider_merchant.logo_url.blank?
-          ai_provider_merchant.logo_url = brandfetch_logo_url(auto_detection.business_url)
+        if merchant_id.present?
+          was_modified = transaction.enrich_attribute(:merchant_id, merchant_id, source: "ai")
+          transaction.lock_attr!(:merchant_id)
+          modified_count += 1 if was_modified
         end
-
-        ai_provider_merchant.save!
+      elsif existing_merchant.is_a?(ProviderMerchant) && existing_merchant.source != "ai"
+        # Case 2: Has provider merchant (non-AI) - enhance it with AI data
+        if enhance_provider_merchant(existing_merchant, auto_detection)
+          transaction.lock_attr!(:merchant_id)
+          modified_count += 1
+        end
       end
-
-      merchant_id = merchant_id || ai_provider_merchant&.id
-
-      if merchant_id.present?
-        transaction.enrich_attribute(
-          :merchant_id,
-          merchant_id,
-          source: "ai"
-        )
-        # Lock so this rule doesn't re-run once a merchant is set
-        transaction.lock_attr!(:merchant_id)
-      end
+      # Case 3: AI merchant or FamilyMerchant - skip (already good or user-set)
     end
+
+    modified_count
   end
 
   private
@@ -71,9 +65,8 @@ class Family::AutoMerchantDetector
       Provider::Registry.get_provider(:openai)
     end
 
-    def brandfetch_logo_url(domain)
-      return nil unless Setting.brand_fetch_client_id.present?
-      "https://cdn.brandfetch.io/#{domain}/icon/fallback/lettermark/w/40/h/40?c=#{Setting.brand_fetch_client_id}"
+    def default_logo_provider_url
+      "https://cdn.brandfetch.io"
     end
 
     def user_merchants_input
@@ -91,15 +84,63 @@ class Family::AutoMerchantDetector
           id: transaction.id,
           amount: transaction.entry.amount.abs,
           classification: transaction.entry.classification,
-          description: transaction.entry.name,
+          description: [ transaction.entry.name, transaction.entry.notes ].compact.reject(&:empty?).join(" "),
           merchant: transaction.merchant&.name
         }
       end
     end
 
     def scope
-      family.transactions.where(id: transaction_ids, merchant_id: nil)
+      family.transactions.where(id: transaction_ids)
                          .enrichable(:merchant_id)
                          .includes(:merchant, :entry)
+    end
+
+    def find_matching_user_merchant(auto_detection)
+      user_merchants_input.find { |m| m[:name] == auto_detection.business_name }&.dig(:id)
+    end
+
+    def find_or_create_ai_merchant(auto_detection)
+      if auto_detection.business_url.present?
+        existing = ProviderMerchant.find_by(website_url: auto_detection.business_url)
+        return existing if existing
+      end
+
+      existing = ProviderMerchant.find_by(source: "ai", name: auto_detection.business_name)
+      return existing if existing
+
+      ProviderMerchant.create!(
+        source: "ai",
+        name: auto_detection.business_name,
+        website_url: auto_detection.business_url,
+        logo_url: build_logo_url(auto_detection.business_url)
+      )
+    rescue ActiveRecord::RecordInvalid, ActiveRecord::RecordNotUnique
+      ProviderMerchant.find_by(source: "ai", name: auto_detection.business_name)
+    end
+
+    def build_logo_url(business_url)
+      return nil unless Setting.brand_fetch_client_id.present? && business_url.present?
+
+      "#{default_logo_provider_url}/#{business_url}/icon/fallback/lettermark/w/40/h/40?c=#{Setting.brand_fetch_client_id}"
+    end
+
+    def enhance_provider_merchant(merchant, auto_detection)
+      updates = {}
+
+      if merchant.website_url.blank? && auto_detection.business_url.present?
+        updates[:website_url] = auto_detection.business_url
+        if Setting.brand_fetch_client_id.present?
+          updates[:logo_url] = "#{default_logo_provider_url}/#{auto_detection.business_url}/icon/fallback/lettermark/w/40/h/40?c=#{Setting.brand_fetch_client_id}"
+        end
+      end
+
+      return false if updates.empty?
+
+      merchant.update!(updates)
+      true
+    rescue ActiveRecord::RecordInvalid => e
+      Rails.logger.error("Failed to enhance merchant #{merchant.id}: #{e.message}")
+      false
     end
 end
