@@ -1,3 +1,50 @@
+## [0.18.0](https://github.com/hendripermana/permoney/compare/v0.17.5...v0.18.0) (2026-01-12)
+
+### Features
+
+- feat: prefill rules from category prompt (92b570e1)
+- feat: highlight current month in trends table (6b9e5544)
+- feat: add API categories and sync endpoints (89352f14)
+- feat: store account institution details (e4e8eb4c)
+- feat: add rules import/export support (97a4b216)
+- feat: reconcile pending syncs and improve market data (6523af99)
+
+### Bug Fixes
+
+- fix: align exchange rate provider lookback (8a2706d0)
+- fix: harden rule import JSON parsing (65f11581)
+
+### Documentation
+
+- docs: log rule prefill integration (1a5bbe65)
+- docs: mark print stylesheet integration (98328a4c)
+- docs: mark mobile UX and trends highlight integrations (08e73952)
+- docs: log API categories and sync integration (2e8d6b4b)
+- docs: update Sure integration progress (6f21093b)
+- docs: refresh Sure integration latest commit (8f10d34a)
+- docs: update Sure integration progress (876ee752)
+- docs: map Sure integration commits (382298b9)
+
+### Other Changes
+
+- Merge pull request #105 from hendripermana/sure-community-catchup (aaf7dfca)
+- Add local Docker build support for testing before merge (749b5ede)
+- Fix rubocop linting errors (a788f19e)
+- Fix security vulnerabilities and bugs from code review feedback (ed271959)
+- Record Sure catch-up commit mapping (6006a616)
+- Complete Sure community catch-up (916e6ff2)
+- Update Sure integration summary for rule enhancements (e1a8dda8)
+- Cover rule enhancements in tests (198694d6)
+- Add rule filters and exclude action (4cafca0d)
+- Catch up Sure community integration work (b216e662)
+- Document Sure integration commit mapping (3fdcf8f5)
+- Enhance SimpleFIN relink UI and balances sync (ebfee9c4)
+- Fix import confirmation product name interpolation (6eb63a82)
+- fix(currency): resolve linked account balance currency mismatch issue (d4f7d735)
+- fix(rules): prevent disabled rules from executing during automatic sync (f1d9655c)
+- feat(rules): implement run all rules with execution history tracking (3d04421a)
+- feat(simplefin): integrate Sure community Phase 1 - critical stability fixes (09829b47)
+
 ## [0.17.5](https://github.com/hendripermana/permoney/compare/v0.17.4...v0.17.5) (2025-12-20)
 
 ### Other Changes
