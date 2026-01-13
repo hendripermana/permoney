@@ -1,3 +1,11 @@
+## [0.18.1](https://github.com/hendripermana/permoney/compare/v0.18.0...v0.18.1) (2026-01-13)
+
+### Other Changes
+
+- Merge pull request #106 from hendripermana/fix/floating-ai-chat-layout-and-cable (c7f4161e)
+- Harden ActionCable config and docs (11c397f5)
+- Fix floating chat layout and interactions (f8a420b2)
+
 ## [0.18.0](https://github.com/hendripermana/permoney/compare/v0.17.5...v0.18.0) (2026-01-12)
 
 ### Features
