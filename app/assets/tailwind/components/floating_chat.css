@@ -3,16 +3,47 @@
 /* ================================================ */
 
 /* Base container adjustments for proper z-stacking and positioning */
+:root {
+  --bottom-nav-h: 0px;
+  --chat-bottom-offset: 1rem;
+  --chat-right-offset: 1rem;
+  --chat-panel-offset: 0.75rem;
+  --chat-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --chat-safe-right: env(safe-area-inset-right, 0px);
+  --chat-safe-top: env(safe-area-inset-top, 0px);
+}
+
+@supports (padding: constant(safe-area-inset-bottom)) {
+  :root {
+    --chat-safe-bottom: constant(safe-area-inset-bottom);
+    --chat-safe-right: constant(safe-area-inset-right);
+    --chat-safe-top: constant(safe-area-inset-top);
+  }
+}
+
 [data-controller="floating-chat"] {
-  /* Safe area insets for notched devices (iPhone X+, etc.) */
-  bottom: calc(1rem + env(safe-area-inset-bottom));
-  right: calc(1rem + env(safe-area-inset-right));
+  pointer-events: none;
+  bottom: calc(var(--bottom-nav-h, 0px) + var(--chat-safe-bottom, 0px) + var(--chat-bottom-offset, 1rem));
+  right: calc(var(--chat-safe-right, 0px) + var(--chat-right-offset, 1rem));
+}
+
+[data-floating-chat-target="trigger"],
+[data-floating-chat-target="panel"] {
+  pointer-events: auto;
+}
+
+[data-floating-chat-target="backdrop"] {
+  pointer-events: none;
+}
+
+[data-floating-chat-target="backdrop"]:not(.hidden) {
+  pointer-events: auto;
 }
 
 @media (min-width: 1024px) {
-  [data-controller="floating-chat"] {
-    bottom: calc(1.5rem + env(safe-area-inset-bottom));
-    right: calc(1.5rem + env(safe-area-inset-right));
+  :root {
+    --chat-bottom-offset: 1.5rem;
+    --chat-right-offset: 1.5rem;
   }
 }
 
@@ -100,16 +131,15 @@
 @media (max-width: 1023px) {
   [data-floating-chat-target="panel"] {
     /* Proper positioning and sizing for mobile */
-    padding-top: env(safe-area-inset-top);
-    padding-bottom: env(safe-area-inset-bottom);
-    border-radius: 24px 24px 0 0;
-    bottom: 0;
-    right: 0;
-    left: 0;
+    padding-top: var(--chat-safe-top, 0px);
+    padding-bottom: var(--chat-safe-bottom, 0px);
+    bottom: calc(var(--bottom-nav-h, 0px) + var(--chat-safe-bottom, 0px) + var(--chat-panel-offset, 0.75rem));
+    right: var(--chat-panel-offset, 0.75rem);
+    left: var(--chat-panel-offset, 0.75rem);
     top: auto;
-    width: 100%;
+    width: auto;
     height: auto;
-    max-height: 90vh;
+    max-height: calc(100vh - (var(--bottom-nav-h, 0px) + var(--chat-safe-bottom, 0px) + var(--chat-panel-offset, 0.75rem) + var(--chat-safe-top, 0px)));
     animation-duration: 300ms;
   }
 }
@@ -234,18 +264,7 @@
 /* PWA Standalone mode adjustments */
 @media (display-mode: standalone) {
   [data-controller="floating-chat"] {
-    bottom: calc(1.5rem + env(safe-area-inset-bottom));
-    right: calc(1.5rem + env(safe-area-inset-right));
     z-index: 40;
-  }
-  
-  /* Ensure floating chat doesn't interfere with bottom nav in PWA */
-  /* Assuming bottom nav is approx 4rem + safe area-inset */
-  @supports (padding: max(0px)) {
-    [data-controller="floating-chat"] {
-      bottom: max(5rem, env(safe-area-inset-bottom) + 5rem);
-      right: max(1.5rem, env(safe-area-inset-right) + 1.5rem);
-    }
   }
 }
 

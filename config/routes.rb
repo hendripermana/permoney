@@ -15,6 +15,9 @@ Rails.application.routes.draw do
   # Uses basic auth - see config/initializers/sidekiq.rb
   mount Sidekiq::Web => "/sidekiq"
 
+  # WebSocket endpoint for Action Cable
+  mount ActionCable.server => "/cable"
+
   # AI chats
   resources :chats do
     resources :messages, only: :create
