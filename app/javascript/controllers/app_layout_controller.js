@@ -2,7 +2,7 @@ import { Controller } from "@hotwired/stimulus";
 
 // Connects to data-controller="app-layout"
 export default class extends Controller {
-  static targets = ["leftSidebar", "mobileSidebar"];
+  static targets = ["leftSidebar", "mobileSidebar", "bottomNav"];
   static values = {
     userId: String,
   };
@@ -12,6 +12,28 @@ export default class extends Controller {
     "expandedTransition",
     "collapsedTransition",
   ];
+
+  connect() {
+    this.#updateBottomNavHeight();
+    this.boundHandleResize = this.#updateBottomNavHeight.bind(this);
+    window.addEventListener("resize", this.boundHandleResize);
+
+    if (this.hasBottomNavTarget && "ResizeObserver" in window) {
+      this.bottomNavObserver = new ResizeObserver(() => {
+        this.#updateBottomNavHeight();
+      });
+      this.bottomNavObserver.observe(this.bottomNavTarget);
+    }
+  }
+
+  disconnect() {
+    window.removeEventListener("resize", this.boundHandleResize);
+    if (this.bottomNavObserver) {
+      this.bottomNavObserver.disconnect();
+      this.bottomNavObserver = null;
+    }
+    this.#setBottomNavHeight(0);
+  }
 
   openMobileSidebar() {
     this.mobileSidebarTarget.classList.remove("hidden");
@@ -49,5 +71,15 @@ export default class extends Controller {
         [`user[${field}]`]: value,
       }).toString(),
     });
+  }
+
+  #updateBottomNavHeight() {
+    const height = this.hasBottomNavTarget ? this.bottomNavTarget.offsetHeight : 0;
+    this.#setBottomNavHeight(height);
+  }
+
+  #setBottomNavHeight(height) {
+    const safeHeight = Number.isFinite(height) ? height : 0;
+    document.documentElement.style.setProperty("--bottom-nav-h", `${safeHeight}px`);
   }
 }

@@ -17,9 +17,14 @@ export default class extends Controller {
     // Detect initial state
     this.updateMobileState();
 
-    // Handle escape key
-    this.boundHandleEscape = this.handleEscape.bind(this);
-    document.addEventListener("keydown", this.boundHandleEscape);
+    this.panelTarget.setAttribute("aria-hidden", "true");
+    this.panelTarget.setAttribute("aria-modal", this.isMobileValue ? "true" : "false");
+
+    // Handle escape key + focus trap
+    this.boundHandleKeydown = this.handleKeydown.bind(this);
+    document.addEventListener("keydown", this.boundHandleKeydown);
+    this.boundHandleFocusIn = this.handleFocusIn.bind(this);
+    document.addEventListener("focusin", this.boundHandleFocusIn);
 
     // Listen to Turbo navigation for proper cleanup
     this.boundHandleTurboBeforeVisit = this.handleTurboBeforeVisit.bind(this);
@@ -35,7 +40,8 @@ export default class extends Controller {
   }
 
   disconnect() {
-    document.removeEventListener("keydown", this.boundHandleEscape);
+    document.removeEventListener("keydown", this.boundHandleKeydown);
+    document.removeEventListener("focusin", this.boundHandleFocusIn);
     document.removeEventListener("turbo:before-visit", this.boundHandleTurboBeforeVisit);
     window.removeEventListener("resize", this.boundHandleResize);
     this.enableBodyScroll();
@@ -82,6 +88,8 @@ export default class extends Controller {
       console.log("[FloatingChat] Mobile state changed:", this.isMobileValue);
     }
 
+    this.panelTarget.setAttribute("aria-modal", this.isMobileValue ? "true" : "false");
+
     // If switching from desktop to mobile while open, close the panel
     if (this.isMobileValue && this.openValue) {
       this.close();
@@ -92,6 +100,10 @@ export default class extends Controller {
     if (this.debug) {
       console.log("[FloatingChat] Showing panel - Mobile:", this.isMobileValue);
     }
+
+    this.previouslyFocusedElement = document.activeElement;
+    this.panelTarget.setAttribute("aria-hidden", "false");
+    this.panelTarget.setAttribute("aria-modal", this.isMobileValue ? "true" : "false");
 
     // Show backdrop on mobile
     if (this.hasBackdropTarget && this.isMobileValue) {
@@ -134,6 +146,8 @@ export default class extends Controller {
       if (input && !this.isMobileValue) {
         // Only auto-focus on desktop to prevent keyboard popup on mobile
         input.focus();
+      } else if (this.isMobileValue) {
+        this.panelTarget.focus({ preventScroll: true });
       }
     }, 300);
   }
@@ -142,6 +156,9 @@ export default class extends Controller {
     if (this.debug) {
       console.log("[FloatingChat] Hiding panel");
     }
+
+    this.panelTarget.setAttribute("aria-hidden", "true");
+    this.panelTarget.setAttribute("aria-modal", this.isMobileValue ? "true" : "false");
 
     // Start exit animation
     this.panelTarget.classList.remove("opacity-100", "translate-y-0", "lg:scale-100");
@@ -170,12 +187,48 @@ export default class extends Controller {
     // Update trigger button state
     this.triggerTarget.setAttribute("aria-expanded", "false");
     this.triggerTarget.classList.remove("ring-4", "ring-alpha-black-200");
+
+    this.restoreFocus();
   }
 
-  handleEscape(event) {
+  handleKeydown(event) {
     if (event.key === "Escape" && this.openValue) {
       event.preventDefault();
       this.close();
+      return;
+    }
+
+    if (!this.openValue || !this.isMobileValue || event.key !== "Tab") return;
+
+    const focusable = this.focusableElements();
+    if (focusable.length === 0) {
+      event.preventDefault();
+      this.panelTarget.focus({ preventScroll: true });
+      return;
+    }
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const activeEl = document.activeElement;
+
+    if (event.shiftKey && activeEl === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && activeEl === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  handleFocusIn(event) {
+    if (!this.openValue || !this.isMobileValue) return;
+    if (this.panelTarget.contains(event.target)) return;
+
+    const focusable = this.focusableElements();
+    if (focusable.length > 0) {
+      focusable[0].focus();
+    } else {
+      this.panelTarget.focus({ preventScroll: true });
     }
   }
 
@@ -201,6 +254,26 @@ export default class extends Controller {
     if (wasKobile !== isMobileNow) {
       this.isMobileValue = isMobileNow;
     }
+  }
+
+  focusableElements() {
+    return Array.from(
+      this.panelTarget.querySelectorAll(
+        "a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex='-1'])"
+      )
+    ).filter((element) => element.getClientRects().length > 0);
+  }
+
+  restoreFocus() {
+    const fallback = this.triggerTarget;
+    const target =
+      this.previouslyFocusedElement && document.contains(this.previouslyFocusedElement)
+        ? this.previouslyFocusedElement
+        : fallback;
+    if (target && typeof target.focus === "function") {
+      target.focus({ preventScroll: true });
+    }
+    this.previouslyFocusedElement = null;
   }
 
   disableBodyScroll() {
