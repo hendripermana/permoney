@@ -1,4 +1,5 @@
 require "active_support/core_ext/integer/time"
+require "uri"
 
 Rails.application.configure do
   # Settings specified here will take precedence over those in config/application.rb.
@@ -37,6 +38,48 @@ Rails.application.configure do
     hsts: { max_age: 1.year.to_i, include_subdomains: true, preload: true },
     redirect: false  # Don't force redirects; Caddy handles this
   }
+
+  # Action Cable configuration for production WebSockets
+  app_domain = ENV["APP_DOMAIN"].to_s
+  action_cable_url = ENV["ACTION_CABLE_URL"].to_s
+
+  if action_cable_url.empty? && app_domain.present?
+    begin
+      app_uri = URI(app_domain)
+      if app_uri.host
+        scheme = app_uri.scheme == "https" ? "wss" : "ws"
+        host_with_port = app_uri.host
+        if app_uri.port && ![ 80, 443 ].include?(app_uri.port)
+          host_with_port = "#{host_with_port}:#{app_uri.port}"
+        end
+        action_cable_url = "#{scheme}://#{host_with_port}/cable"
+      end
+    rescue URI::InvalidURIError
+      Rails.logger.warn("Invalid APP_DOMAIN for Action Cable: #{app_domain.inspect}")
+    end
+  end
+
+  config.action_cable.url = action_cable_url if action_cable_url.present?
+
+  allowed_origins = ENV.fetch("ACTION_CABLE_ALLOWED_ORIGINS", "")
+    .split(",")
+    .map(&:strip)
+    .reject(&:empty?)
+
+  if allowed_origins.empty? && app_domain.present?
+    begin
+      app_uri = URI(app_domain)
+      if app_uri.host
+        origin = "#{app_uri.scheme}://#{app_uri.host}"
+        origin += ":#{app_uri.port}" if app_uri.port && ![ 80, 443 ].include?(app_uri.port)
+        allowed_origins = [ origin ]
+      end
+    rescue URI::InvalidURIError
+      Rails.logger.warn("Invalid APP_DOMAIN for Action Cable origins: #{app_domain.inspect}")
+    end
+  end
+
+  config.action_cable.allowed_request_origins = allowed_origins if allowed_origins.any?
 
   # Skip http-to-https redirect for the default health check endpoint.
   # config.ssl_options = { redirect: { exclude: ->(request) { request.path == "/up" } } }
