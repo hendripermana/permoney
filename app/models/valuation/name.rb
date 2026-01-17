@@ -24,7 +24,7 @@ class Valuation::Name
         "Original purchase price"
       when "Loan"
         "Original principal"
-      when "Investment", "Crypto", "OtherAsset"
+      when "Investment", "Crypto", "OtherAsset", "PreciousMetal"
         "Opening account value"
       else
         "Opening balance"
@@ -37,7 +37,7 @@ class Valuation::Name
         "Current market value"
       when "Loan"
         "Current loan balance"
-      when "Investment", "Crypto", "OtherAsset"
+      when "Investment", "Crypto", "OtherAsset", "PreciousMetal"
         "Current account value"
       else
         "Current balance"
@@ -46,7 +46,7 @@ class Valuation::Name
 
     def recon_name
       case accountable_type
-      when "Property", "Investment", "Vehicle", "Crypto", "OtherAsset"
+      when "Property", "Investment", "Vehicle", "Crypto", "OtherAsset", "PreciousMetal"
         "Manual value update"
       when "Loan"
         "Manual principal update"

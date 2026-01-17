@@ -1,0 +1,22 @@
+pegadaian:
+  user: family_admin
+  name: Pegadaian
+  kind: pawnshop
+  country: ID
+  website: https://pegadaian.co.id
+  notes: Primary gold provider
+
+bsi:
+  user: family_admin
+  name: BSI
+  kind: bank
+  country: ID
+  website: https://www.bankbsi.co.id
+  notes: Savings provider
+
+archived_provider:
+  user: family_admin
+  name: Old Dealer
+  kind: bullion_dealer
+  country: ID
+  archived_at: <%= 2.days.ago %>

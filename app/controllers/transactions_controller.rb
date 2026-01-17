@@ -81,7 +81,8 @@ class TransactionsController < ApplicationController
       # 3. Account has balances (avoid edge cases with new accounts)
       if entry_currency == account.currency &&
          entry_date >= 30.days.ago.to_date &&
-         account.balances.any?
+         account.balances.any? &&
+         !account.precious_metal?
 
         # CORRECT OPTIMISTIC BALANCE CALCULATION
         # Entry amount convention (from Balance::ForwardCalculator):
@@ -189,7 +190,8 @@ class TransactionsController < ApplicationController
          old_account.id == new_account.id &&
          new_currency == new_account.currency &&
          new_date >= 30.days.ago.to_date &&
-         new_account.balances.any?
+         new_account.balances.any? &&
+         !new_account.precious_metal?
 
         # Calculate DELTA between old and new amounts
         # For editing, we need to:

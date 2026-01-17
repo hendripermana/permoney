@@ -108,6 +108,9 @@ Rails.application.routes.draw do
     resource :guides, only: :show
     resource :bank_sync, only: :show, controller: "bank_sync"
     resource :providers, only: %i[show update]
+    resources :provider_directories, path: "providers-directory", except: :show do
+      patch :restore, on: :member
+    end
   end
 
   resource :subscription, only: %i[new show create] do
@@ -189,6 +192,8 @@ Rails.application.routes.draw do
       delete :clear_filter
     end
   end
+
+  resources :precious_metal_transactions, only: %i[new create]
 
   resources :recurring_transactions, only: %i[index destroy] do
     collection do
@@ -313,6 +318,7 @@ Rails.application.routes.draw do
     end
   end
   resources :cryptos, only: %i[new create edit update]
+  resources :precious_metals, only: %i[new create edit update]
   resources :other_assets, only: %i[new create edit update]
   resources :other_liabilities, only: %i[new create edit update]
 

@@ -1,0 +1,61 @@
+<%# locals: (account:, url:) %>
+
+<%= render "accounts/form", account: account, url: url, hide_account_fields: true do |form| %>
+  <section class="bg-surface border border-secondary rounded-lg p-4 space-y-3">
+    <div>
+      <h3 class="text-base font-medium text-primary">Account details</h3>
+      <p class="text-xs text-secondary">Track precious metal holdings with a manual price per gram.</p>
+    </div>
+
+    <div class="space-y-3">
+      <%= form.text_field :name,
+                          label: "Account name",
+                          placeholder: "e.g. Gold Savings",
+                          required: true %>
+
+      <%= form.fields_for :accountable do |pm_form| %>
+        <%= pm_form.select :subtype,
+                           PreciousMetal::SUBTYPES.map { |key, value| [value[:long], key] },
+                           { label: "Metal type", include_blank: false } %>
+
+        <div class="flex items-center gap-2">
+          <%= pm_form.number_field :quantity,
+                                   label: "Quantity",
+                                   placeholder: "0.000",
+                                   min: 0,
+                                   step: 0.001,
+                                   required: true %>
+          <%= pm_form.select :unit,
+                             PreciousMetal::UNITS.map { |key, value| [value[:long], key] },
+                             { label: "Unit" } %>
+        </div>
+
+        <%= pm_form.money_field :manual_price,
+                                label: "Manual price per gram",
+                                currency_method: :manual_price_currency,
+                                default_currency: account.currency || Current.family.currency,
+                                min: 0,
+                                precision: 6,
+                                step: 0.000001 %>
+        <p class="text-xs text-secondary">Leave price blank if you want to track grams only.</p>
+      <% end %>
+    </div>
+  </section>
+
+  <details class="group">
+    <summary class="cursor-pointer text-sm text-secondary hover:text-primary flex items-center gap-1 py-2">
+      <%= icon "chevron-right", size: "sm", class: "group-open:rotate-90 transition-transform" %>
+      Additional details
+    </summary>
+
+    <div class="space-y-2 mt-2 pl-4 border-l border-primary">
+      <%= render "accounts/provider_fields",
+                 form: form,
+                 account: account,
+                 show_domain: false,
+                 manual_label: "Provider or institution",
+                 manual_placeholder: "e.g. Pegadaian, BSI, Galeri24, Self-custody",
+                 return_to: params[:return_to] %>
+    </div>
+  </details>
+<% end %>

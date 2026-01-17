@@ -39,6 +39,8 @@ class UI::Account::Chart < ApplicationComponent
       end
     when "Property", "Vehicle"
       "Estimated #{account.accountable_type.humanize.downcase} value"
+    when "PreciousMetal"
+      "Estimated precious metal value"
     when "CreditCard", "OtherLiability", "PayLater"
       "Debt balance"
     when "Loan"

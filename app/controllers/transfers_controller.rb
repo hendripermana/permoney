@@ -12,13 +12,35 @@ class TransfersController < ApplicationController
   end
 
   def create
-    @transfer = Transfer::Creator.new(
-      family: Current.family,
-      source_account_id: transfer_params[:from_account_id],
-      destination_account_id: transfer_params[:to_account_id],
-      date: transfer_params[:date],
-      amount: transfer_params[:amount].to_d
-    ).create
+    if precious_metal_transfer?
+      form = Transfer::PreciousMetalForm.new(
+        family: Current.family,
+        from_account_id: transfer_params[:from_account_id],
+        to_account_id: transfer_params[:to_account_id],
+        amount: transfer_params[:amount],
+        quantity: transfer_params[:metal_quantity],
+        price_per_unit: transfer_params[:price_per_unit],
+        price_currency: transfer_params[:price_currency],
+        fee_amount: transfer_params[:fee_amount],
+        date: transfer_params[:date],
+        save_price: transfer_params[:save_price]
+      )
+
+      if form.create
+        @transfer = form.transfer
+      else
+        @transfer = Transfer.new
+        form.errors.each { |error| @transfer.errors.add(error.attribute, error.message) }
+      end
+    else
+      @transfer = Transfer::Creator.new(
+        family: Current.family,
+        source_account_id: transfer_params[:from_account_id],
+        destination_account_id: transfer_params[:to_account_id],
+        date: transfer_params[:date],
+        amount: transfer_params[:amount].to_d
+      ).create
+    end
 
     if @transfer.persisted?
       success_message = "Transfer created"
@@ -58,11 +80,21 @@ class TransfersController < ApplicationController
     end
 
     def transfer_params
-      params.require(:transfer).permit(:from_account_id, :to_account_id, :amount, :date, :name, :excluded)
+      params.require(:transfer).permit(
+        :from_account_id, :to_account_id, :amount, :date, :name, :excluded,
+        :metal_quantity, :price_per_unit, :price_currency, :fee_amount, :save_price
+      )
     end
 
     def transfer_update_params
       params.require(:transfer).permit(:notes, :status, :category_id)
+    end
+
+    def precious_metal_transfer?
+      destination_account_id = transfer_params[:to_account_id]
+      return false if destination_account_id.blank?
+
+      Current.family.accounts.find_by(id: destination_account_id)&.accountable_type == "PreciousMetal"
     end
 
     def update_transfer_status

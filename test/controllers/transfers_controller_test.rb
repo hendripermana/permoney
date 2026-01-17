@@ -25,6 +25,30 @@ class TransfersControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  test "can create transfer to precious metals" do
+    metal_account = accounts(:precious_metal)
+    starting_quantity = metal_account.precious_metal.quantity.to_d
+
+    assert_difference "Transfer.count", 1 do
+      post transfers_url, params: {
+        transfer: {
+          from_account_id: accounts(:depository).id,
+          to_account_id: metal_account.id,
+          date: Date.current,
+          amount: 151,
+          price_per_unit: 75.5,
+          price_currency: "USD"
+        }
+      }
+    end
+
+    metal_account.reload
+    assert_equal starting_quantity + 2.to_d, metal_account.precious_metal.quantity
+
+    transfer = Transfer.order(:created_at).last
+    assert_equal "buy", transfer.inflow_transaction.precious_metal_action
+  end
+
   test "soft deletes transfer" do
     assert_difference -> { Transfer.count }, -1 do
       delete transfer_url(transfers(:one))

@@ -89,4 +89,49 @@ class AccountTest < ActiveSupport::TestCase
     assert_equal "GBP", opening_anchor.entry.currency
     assert_equal 1000, opening_anchor.entry.amount
   end
+
+  test "institution name prefers provider directory when present" do
+    provider = provider_directories(:pegadaian)
+
+    account = @family.accounts.create!(
+      name: "Provider Account",
+      balance: 0,
+      cash_balance: 0,
+      currency: "USD",
+      institution_name: "Legacy Provider",
+      provider_directory: provider,
+      accountable: Depository.new
+    )
+
+    assert_equal provider.name, account.institution_name
+  end
+
+  test "institution name still shows archived provider" do
+    provider = provider_directories(:archived_provider)
+
+    account = @family.accounts.create!(
+      name: "Archived Provider Account",
+      balance: 0,
+      cash_balance: 0,
+      currency: "USD",
+      institution_name: "Legacy Provider",
+      provider_directory: provider,
+      accountable: Depository.new
+    )
+
+    assert_equal provider.name, account.institution_name
+  end
+
+  test "institution name falls back to manual name" do
+    account = @family.accounts.create!(
+      name: "Manual Provider Account",
+      balance: 0,
+      cash_balance: 0,
+      currency: "USD",
+      institution_name: "Manual Provider",
+      accountable: Depository.new
+    )
+
+    assert_equal "Manual Provider", account.institution_name
+  end
 end

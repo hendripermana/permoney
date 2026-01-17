@@ -32,6 +32,11 @@ class Valuation::NameTest < ActiveSupport::TestCase
     assert_equal "Opening account value", name.to_s
   end
 
+  test "generates opening anchor name for PreciousMetal" do
+    name = Valuation::Name.new("opening_anchor", "PreciousMetal")
+    assert_equal "Opening account value", name.to_s
+  end
+
   test "generates opening anchor name for other account types" do
     name = Valuation::Name.new("opening_anchor", "Depository")
     assert_equal "Opening balance", name.to_s
@@ -68,6 +73,11 @@ class Valuation::NameTest < ActiveSupport::TestCase
     assert_equal "Current account value", name.to_s
   end
 
+  test "generates current anchor name for PreciousMetal" do
+    name = Valuation::Name.new("current_anchor", "PreciousMetal")
+    assert_equal "Current account value", name.to_s
+  end
+
   test "generates current anchor name for other account types" do
     name = Valuation::Name.new("current_anchor", "Depository")
     assert_equal "Current balance", name.to_s
@@ -96,6 +106,11 @@ class Valuation::NameTest < ActiveSupport::TestCase
 
   test "generates recon name for OtherAsset" do
     name = Valuation::Name.new("reconciliation", "OtherAsset")
+    assert_equal "Manual value update", name.to_s
+  end
+
+  test "generates recon name for PreciousMetal" do
+    name = Valuation::Name.new("reconciliation", "PreciousMetal")
     assert_equal "Manual value update", name.to_s
   end
 

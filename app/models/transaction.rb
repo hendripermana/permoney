@@ -41,6 +41,10 @@ class Transaction < ApplicationRecord
     SQL
   }
 
+  after_commit :apply_precious_metal_quantity_delta, on: :create
+  after_commit :adjust_precious_metal_quantity_delta, on: :update
+  after_commit :revert_precious_metal_quantity_delta, on: :destroy
+
   # Overarching grouping method for all transfer-type transactions
   def transfer?
     funds_movement? || cc_payment? || loan_payment? || personal_lending? || personal_borrowing?
@@ -88,6 +92,38 @@ class Transaction < ApplicationRecord
       ActiveModel::Type::Boolean.new.cast(extra_data.dig("plaid", "pending"))
   rescue StandardError
     false
+  end
+
+  def precious_metal_details
+    return nil unless extra.is_a?(Hash)
+
+    extra["precious_metal"]
+  end
+
+  def precious_metal_transaction?
+    precious_metal_details.present?
+  end
+
+  def precious_metal_action
+    precious_metal_details&.fetch("action", nil)
+  end
+
+  def precious_metal_quantity
+    value = precious_metal_details&.dig("quantity")
+    value.present? ? value.to_d : nil
+  end
+
+  def precious_metal_unit
+    precious_metal_details&.dig("unit")
+  end
+
+  def precious_metal_cash_amount
+    value = precious_metal_details&.dig("cash_amount")
+    value.present? ? value.to_d : nil
+  end
+
+  def precious_metal_cash_currency
+    precious_metal_details&.dig("cash_currency")
   end
 
   # Potential duplicate matching methods
@@ -167,5 +203,56 @@ class Transaction < ApplicationRecord
     def potential_posted_match_data
       return nil unless extra.is_a?(Hash)
       extra["potential_posted_match"]
+    end
+
+    def precious_metal_quantity_delta
+      value = precious_metal_details&.dig("quantity_delta")
+      value.present? ? value.to_d : nil
+    end
+
+    def precious_metal_account
+      return entry.account if entry&.account&.precious_metal?
+
+      account_id = precious_metal_details&.dig("account_id")
+      return if account_id.blank?
+
+      account = Account.find_by(id: account_id)
+      account if account&.precious_metal?
+    end
+
+    def apply_precious_metal_quantity_delta
+      delta = precious_metal_quantity_delta
+      return if delta.nil?
+
+      account = precious_metal_account
+      return unless account
+
+      account.precious_metal.apply_quantity_delta!(delta)
+    end
+
+    def adjust_precious_metal_quantity_delta
+      return unless saved_change_to_extra?
+
+      before_extra, after_extra = saved_change_to_extra
+      old_delta = before_extra.is_a?(Hash) ? before_extra.dig("precious_metal", "quantity_delta") : nil
+      new_delta = after_extra.is_a?(Hash) ? after_extra.dig("precious_metal", "quantity_delta") : nil
+      return if old_delta == new_delta
+
+      account = precious_metal_account
+      return unless account
+
+      old_value = old_delta.present? ? old_delta.to_d : 0
+      new_value = new_delta.present? ? new_delta.to_d : 0
+      account.precious_metal.apply_quantity_delta!(new_value - old_value)
+    end
+
+    def revert_precious_metal_quantity_delta
+      delta = precious_metal_quantity_delta
+      return if delta.nil?
+
+      account = precious_metal_account
+      return unless account
+
+      account.precious_metal.apply_quantity_delta!(delta * -1)
     end
 end

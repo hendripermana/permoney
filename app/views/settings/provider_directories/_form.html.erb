@@ -1,0 +1,36 @@
+<%# locals: (provider:, return_to: nil) %>
+
+<%= styled_form_with model: provider, class: "space-y-4" do |f| %>
+  <% if provider.errors.any? %>
+    <%= render "shared/form_errors", model: provider %>
+  <% end %>
+
+  <%= hidden_field_tag :return_to, return_to if return_to.present? %>
+
+  <div class="space-y-2">
+    <%= f.text_field :name,
+                     label: "Provider name",
+                     placeholder: "e.g. BSI, Pegadaian, UBS",
+                     required: true,
+                     autofocus: true %>
+
+    <%= f.select :kind,
+                 ProviderDirectory::KINDS.keys.map { |kind| [kind.to_s.tr("_", " ").titleize, kind] },
+                 { label: "Provider type" } %>
+
+    <%= f.text_field :country,
+                     label: "Country (optional)",
+                     placeholder: "e.g. ID" %>
+
+    <%= f.text_field :website,
+                     label: "Website (optional)",
+                     placeholder: "https://example.com" %>
+
+    <%= f.text_area :notes,
+                    label: "Notes (optional)",
+                    rows: 3,
+                    placeholder: "Add any notes about this provider" %>
+  </div>
+
+  <%= f.submit(provider.persisted? ? "Save provider" : "Create provider") %>
+<% end %>

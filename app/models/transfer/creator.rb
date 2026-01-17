@@ -1,10 +1,12 @@
 class Transfer::Creator
-  def initialize(family:, source_account_id:, destination_account_id:, date:, amount:)
+  def initialize(family:, source_account_id:, destination_account_id:, date:, amount:, precious_metal: nil, save_price: false)
     @family = family
     @source_account = family.accounts.find(source_account_id) # early throw if not found
     @destination_account = family.accounts.find(destination_account_id) # early throw if not found
     @date = date
     @amount = amount.to_d
+    @precious_metal = precious_metal
+    @save_price = ActiveModel::Type::Boolean.new.cast(save_price)
   end
 
   def create
@@ -14,16 +16,19 @@ class Transfer::Creator
       status: "confirmed"
     )
 
-    if transfer.save
-      source_account.sync_later
-      destination_account.sync_later
+    Transfer.transaction do
+      if transfer.save
+        update_precious_metal_defaults if save_price?
+        source_account.sync_later
+        destination_account.sync_later
+      end
     end
 
     transfer
   end
 
   private
-    attr_reader :family, :source_account, :destination_account, :date, :amount
+    attr_reader :family, :source_account, :destination_account, :date, :amount, :precious_metal, :save_price
 
     def outflow_transaction
       name = outflow_name
@@ -50,7 +55,10 @@ class Transfer::Creator
           date: date,
           name: name,
         )
-      )
+      ).tap do |transaction|
+        payload = precious_metal_payload
+        transaction.extra = payload if payload.present?
+      end
     end
 
     # If destination account has different currency, its transaction should show up as converted
@@ -62,6 +70,27 @@ class Transfer::Creator
              date: date,
              fallback_rate: 1.0
            )
+    end
+
+    def precious_metal_payload
+      return nil unless destination_account.accountable_type == "PreciousMetal"
+      return nil unless precious_metal.is_a?(Hash)
+
+      payload = precious_metal.stringify_keys.slice(*precious_metal_allowed_keys)
+      payload["account_id"] ||= destination_account.id
+      payload["unit"] ||= destination_account.accountable.unit
+      payload["action"] = "buy" unless payload["action"] == "buy"
+
+      precious_metal_decimal_keys.each do |key|
+        value = payload[key]
+        next if value.blank?
+
+        payload[key] = BigDecimal(value.to_s).to_s("F")
+      rescue ArgumentError
+        payload.delete(key)
+      end
+
+      { "precious_metal" => payload }
     end
 
     # The "expense" side of a transfer is treated different in analytics based on where it goes.
@@ -76,6 +105,40 @@ class Transfer::Creator
       else
         "funds_movement"
       end
+    end
+
+    def save_price?
+      save_price
+    end
+
+    def update_precious_metal_defaults
+      return unless destination_account.accountable_type == "PreciousMetal"
+
+      price_value = precious_metal&.dig(:price_per_unit) || precious_metal&.dig("price_per_unit")
+      currency_value = precious_metal&.dig(:price_currency) || precious_metal&.dig("price_currency")
+      return if price_value.blank? || currency_value.blank?
+
+      destination_account.accountable.update!(
+        manual_price: price_value,
+        manual_price_currency: currency_value
+      )
+
+      return if destination_account.currency == currency_value
+
+      destination_account.update!(currency: currency_value)
+    end
+
+    def precious_metal_allowed_keys
+      @precious_metal_allowed_keys ||= %w[
+        action account_id quantity quantity_delta unit cash_amount cash_currency
+        price_per_unit price_currency fee_amount fee_currency
+      ].freeze
+    end
+
+    def precious_metal_decimal_keys
+      @precious_metal_decimal_keys ||= %w[
+        quantity quantity_delta cash_amount price_per_unit fee_amount
+      ].freeze
     end
 
     # Build context-aware, user-friendly names for both sides of the transfer.

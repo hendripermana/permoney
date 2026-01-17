@@ -1,0 +1,6 @@
+one:
+  subtype: gold
+  unit: g
+  quantity: 12.345
+  manual_price: 75.5
+  manual_price_currency: USD

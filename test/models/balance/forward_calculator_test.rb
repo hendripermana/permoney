@@ -436,7 +436,7 @@ class Balance::ForwardCalculatorTest < ActiveSupport::TestCase
   end
 
   test "non cash accounts treat transactions as non-cash flows" do
-    [ Property, Vehicle, OtherAsset, OtherLiability ].each do |account_type|
+    [ Property, Vehicle, OtherAsset, PreciousMetal, OtherLiability ].each do |account_type|
       opening_balance = 500000
       txn_amount = -50000
       account = create_account_with_ledger(

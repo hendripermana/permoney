@@ -15,11 +15,19 @@
               data: { turbo_frame: :modal }) %>
 
           <% unless account.crypto? %>
+            <% transaction_href = if account.precious_metal?
+              new_precious_metal_transaction_path(account_id: account.id)
+            elsif account.investment?
+              new_trade_path(account_id: account.id)
+            else
+              new_transaction_path(account_id: account.id)
+            end %>
+
             <% menu.with_item(
                 variant: "link",
                 text: t("accounts.show.activity.new_transaction"),
                 icon: "credit-card",
-                href: account.investment? ? new_trade_path(account_id: account.id) : new_transaction_path(account_id: account.id),
+                href: transaction_href,
                 data: { turbo_frame: :modal }) %>
           <% end %>
         <% end %>

@@ -9,6 +9,10 @@ module LedgerTestingHelper
     account_type = account[:type]
 
     accountable_attributes = account[:accountable_attributes] || {}
+    if account_type == PreciousMetal
+      accountable_attributes = { subtype: "gold" }.merge(accountable_attributes)
+    end
+
     accountable_instance = if account_type == Loan
       # Loans require counterparty metadata for validation in tests
       Loan.new({ counterparty_name: "Test Lender", debt_kind: "personal" }.merge(accountable_attributes))

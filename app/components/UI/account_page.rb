@@ -40,7 +40,7 @@ class UI::AccountPage < ApplicationComponent
     case account.accountable_type
     when "Investment"
       [ :activity, :holdings ]
-    when "Property", "Vehicle", "Loan", "PersonalLending"
+    when "Property", "Vehicle", "Loan", "PersonalLending", "PreciousMetal"
       [ :activity, :overview ]
     when "PayLater"
       [ :overview, :schedule, :activity ]

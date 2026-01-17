@@ -1,0 +1,6 @@
+<%= render DS::Dialog.new do |dialog| %>
+  <% dialog.with_header(title: "New precious metal account") %>
+  <% dialog.with_body do %>
+    <%= render "form", account: @account, url: precious_metals_path %>
+  <% end %>
+<% end %>

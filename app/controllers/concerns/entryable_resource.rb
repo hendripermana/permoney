@@ -40,7 +40,8 @@ module EntryableResource
     # Only do optimistic update if entry is recent and in account currency
     if entry_currency == account.currency &&
        entry_date >= 30.days.ago.to_date &&
-       account.balances.any?
+       account.balances.any? &&
+       !(@entry.transaction? && @entry.transaction.precious_metal_transaction?)
 
       # REVERSE the balance change (opposite of create)
       # Entry being deleted means we UNDO its effect on balance

@@ -1,0 +1,6 @@
+<%= render DS::Dialog.new do |dialog| %>
+  <% dialog.with_header(title: "New provider") %>
+  <% dialog.with_body do %>
+    <%= render "form", provider: @provider, return_to: params[:return_to] %>
+  <% end %>
+<% end %>

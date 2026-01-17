@@ -89,3 +89,12 @@ crypto:
   accountable_type: Crypto
   accountable: one
   status: active
+
+precious_metal:
+  family: dylan_family
+  name: Gold Holdings
+  balance: 932.0475
+  currency: USD
+  accountable_type: PreciousMetal
+  accountable: one
+  status: active
