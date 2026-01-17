@@ -14,20 +14,18 @@ export default class extends Controller {
     if (!window.sessionStorage) return;
 
     const data = {};
-    this.element
-      .querySelectorAll("input, select, textarea")
-      .forEach((element) => {
-        if (!element.name || element.disabled) return;
-        if (element.type === "file" || element.type === "password") return;
+    this.element.querySelectorAll("input, select, textarea").forEach((element) => {
+      if (!element.name || element.disabled) return;
+      if (element.type === "file" || element.type === "password") return;
 
-        if (element.type === "checkbox") {
-          data[element.name] = element.checked;
-        } else if (element.type === "radio") {
-          if (element.checked) data[element.name] = element.value;
-        } else {
-          data[element.name] = element.value;
-        }
-      });
+      if (element.type === "checkbox") {
+        data[element.name] = element.checked;
+      } else if (element.type === "radio") {
+        if (element.checked) data[element.name] = element.value;
+      } else {
+        data[element.name] = element.value;
+      }
+    });
 
     sessionStorage.setItem(this.storageKeyValue, JSON.stringify(data));
   }
@@ -48,7 +46,7 @@ export default class extends Controller {
     }
 
     Object.entries(data).forEach(([name, value]) => {
-      const escapedName = window.CSS && CSS.escape ? CSS.escape(name) : name.replace(/\"/g, "\\\"");
+      const escapedName = window.CSS && CSS.escape ? CSS.escape(name) : name.replace(/"/g, '\\"');
       const selector = `[name="${escapedName}"]`;
       const elements = this.element.querySelectorAll(selector);
       if (!elements.length) return;
