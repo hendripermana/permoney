@@ -68,4 +68,65 @@ class PreciousMetalsControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to account_path(@account)
     assert_equal "Precious metal account updated", flash[:notice]
   end
+
+  test "creates precious metal account with initial purchase transfer" do
+    source_account = accounts(:depository)
+
+    assert_difference -> { Account.count } => 1,
+      -> { PreciousMetal.count } => 1,
+      -> { Transfer.count } => 1,
+      -> { Transaction.count } => 2 do
+      post precious_metals_path, params: {
+        account: {
+          name: "Gold Vault",
+          accountable_type: "PreciousMetal",
+          accountable_attributes: {
+            subtype: "gold",
+            unit: "g"
+          }
+        },
+        initial_purchase: {
+          from_account_id: source_account.id,
+          amount: "1000",
+          price_per_unit: "50",
+          price_currency: "USD",
+          fee_amount: "10",
+          date: Date.current.to_s,
+          save_price: "1"
+        }
+      }
+    end
+
+    created_account = Account.order(:created_at).last
+    transfer = Transfer.order(:created_at).last
+
+    assert_equal source_account, transfer.from_account
+    assert_equal created_account, transfer.to_account
+    assert_in_delta 20, created_account.precious_metal.quantity.to_d, 0.001
+  end
+
+  test "initial purchase failure rolls back account creation" do
+    source_account = accounts(:depository)
+
+    assert_no_difference [ "Account.count", "PreciousMetal.count", "Transfer.count" ] do
+      post precious_metals_path, params: {
+        account: {
+          name: "Gold Vault",
+          accountable_type: "PreciousMetal",
+          accountable_attributes: {
+            subtype: "gold",
+            unit: "g"
+          }
+        },
+        initial_purchase: {
+          from_account_id: source_account.id,
+          amount: "1000",
+          date: Date.current.to_s
+        }
+      }
+    end
+
+    assert_response :unprocessable_entity
+    assert_match(/Price per unit/i, @response.body)
+  end
 end

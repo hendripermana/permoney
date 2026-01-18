@@ -23,12 +23,12 @@
                                    label: "Quantity",
                                    placeholder: "0.000",
                                    min: 0,
-                                   step: 0.001,
-                                   required: true %>
+                                   step: 0.001 %>
           <%= pm_form.select :unit,
                              PreciousMetal::UNITS.map { |key, value| [value[:long], key] },
                              { label: "Unit" } %>
         </div>
+        <p class="text-xs text-secondary">Leave quantity at 0 if you'll record an initial purchase below.</p>
 
         <%= pm_form.money_field :manual_price,
                                 label: "Manual price per gram",
@@ -42,6 +42,81 @@
     </div>
   </section>
 
+  <% if account.new_record? %>
+    <details class="group">
+      <summary class="cursor-pointer text-sm text-secondary hover:text-primary flex items-center gap-1 py-2">
+        <%= icon "chevron-right", size: "sm", class: "group-open:rotate-90 transition-transform" %>
+        Record initial purchase (recommended)
+      </summary>
+
+      <div class="space-y-3 mt-2 pl-4 border-l border-primary">
+        <p class="text-xs text-secondary">
+          Optional: fund this gold account from a cash/bank account and set the opening grams.
+        </p>
+
+        <% if @initial_purchase_form&.errors&.any? %>
+          <%= render "shared/form_errors", model: @initial_purchase_form %>
+        <% end %>
+
+        <%= fields_for :initial_purchase, @initial_purchase_form,
+                       scope: :initial_purchase,
+                       builder: StyledFormBuilder do |ip_form| %>
+          <%= ip_form.collection_select :from_account_id,
+                                        @funding_accounts,
+                                        :id,
+                                        :name,
+                                        { label: "Source account", include_blank: "Select a cash/bank account" } %>
+
+          <%= ip_form.number_field :amount,
+                                   label: "Amount (money)",
+                                   min: 0,
+                                   placeholder: "0.00",
+                                   step: 0.00000001 %>
+
+          <div class="flex items-center gap-2">
+            <%= ip_form.number_field :quantity,
+                                     label: "Grams",
+                                     placeholder: "0.000",
+                                     min: 0,
+                                     step: 0.001 %>
+            <span class="text-xs text-secondary pt-6">g</span>
+          </div>
+
+          <%= ip_form.money_field :price_per_unit,
+                                  label: "Price per gram",
+                                  currency_method: :price_currency,
+                                  default_currency: account.currency || Current.family.currency,
+                                  min: 0,
+                                  precision: 6,
+                                  step: 0.000001 %>
+
+          <%= ip_form.number_field :fee_amount,
+                                   label: "Fee (money, optional)",
+                                   min: 0,
+                                   placeholder: "0.00",
+                                   step: 0.00000001 %>
+
+          <%= ip_form.date_field :date,
+                                 label: "Date",
+                                 required: true,
+                                 max: Date.current %>
+
+          <div class="flex items-center gap-2">
+            <%= render DS::Toggle.new(
+              id: "initial_purchase_save_price",
+              name: "initial_purchase[save_price]",
+              checked: ActiveModel::Type::Boolean.new.cast(@initial_purchase_form&.save_price)
+            ) %>
+            <%= label_tag "initial_purchase_save_price", "Save price as default", class: "text-sm text-primary" %>
+          </div>
+
+          <p class="text-xs text-secondary">Enter either amount or grams. We'll calculate the other using the price per gram.</p>
+          <p class="text-xs text-secondary">Amount uses the source account currency; price per gram can use any currency.</p>
+        <% end %>
+      </div>
+    </details>
+  <% end %>
+
   <details class="group">
     <summary class="cursor-pointer text-sm text-secondary hover:text-primary flex items-center gap-1 py-2">
       <%= icon "chevron-right", size: "sm", class: "group-open:rotate-90 transition-transform" %>
@@ -49,6 +124,32 @@
     </summary>
 
     <div class="space-y-2 mt-2 pl-4 border-l border-primary">
+      <%= form.fields_for :accountable do |pm_form| %>
+        <%= pm_form.text_field :account_number,
+                               label: "Account number (optional)",
+                               placeholder: "e.g. 0000 0000 0000" %>
+
+        <%= pm_form.select :account_status,
+                           PreciousMetal::ACCOUNT_STATUSES.map { |status| [status.titleize, status] },
+                           { label: "Account status", include_blank: true } %>
+
+        <%= pm_form.select :scheme_type,
+                           PreciousMetal::SCHEME_TYPES.map { |scheme| [scheme.titleize, scheme] },
+                           { label: "Scheme type", include_blank: true } %>
+
+        <%= pm_form.text_field :akad,
+                               label: "Akad (optional)",
+                               placeholder: "e.g. Wadiah" %>
+
+        <% if @funding_accounts.present? %>
+          <%= pm_form.collection_select :preferred_funding_account_id,
+                                        @funding_accounts,
+                                        :id,
+                                        :name,
+                                        { label: "Preferred funding account (optional)", include_blank: true } %>
+        <% end %>
+      <% end %>
+
       <%= render "accounts/provider_fields",
                  form: form,
                  account: account,

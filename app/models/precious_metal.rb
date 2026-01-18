@@ -5,17 +5,28 @@ class PreciousMetal < ApplicationRecord
     "gold" => { short: "Gold", long: "Gold" }
   }.freeze
 
+  ACCOUNT_STATUSES = %w[active closed].freeze
+  SCHEME_TYPES = %w[conventional sharia].freeze
+
   UNITS = {
     "g" => { short: "g", long: "Grams" }
   }.freeze
 
+  attribute :account_status, :string, default: "active"
   attribute :unit, :string, default: "g"
 
+  belongs_to :preferred_funding_account, class_name: "Account", optional: true
+
   before_validation :normalize_currency
+
+  normalizes :account_number, with: ->(value) { value.to_s.strip.presence }
+  normalizes :akad, with: ->(value) { value.to_s.strip.presence }
 
   validates :subtype, presence: true, inclusion: { in: SUBTYPES.keys }
   validates :unit, presence: true, inclusion: { in: UNITS.keys }
   validates :quantity, numericality: { greater_than_or_equal_to: 0 }
+  validates :account_status, inclusion: { in: ACCOUNT_STATUSES }, allow_blank: true
+  validates :scheme_type, inclusion: { in: SCHEME_TYPES }, allow_blank: true
   validates :manual_price, numericality: { greater_than_or_equal_to: 0 }, allow_nil: true
   validates :manual_price_currency, presence: true, if: -> { manual_price.present? }
   validate :manual_price_currency_valid, if: -> { manual_price_currency.present? }
