@@ -1,7 +1,7 @@
 class PreciousMetalsController < ApplicationController
   include AccountableResource
 
-  before_action :prepare_form_state, only: :edit
+  before_action :prepare_form_state, only: [ :new, :edit ]
 
   permitted_accountable_attributes :id, :subtype, :unit, :quantity, :manual_price, :manual_price_currency,
                                    :account_number, :account_status, :scheme_type, :akad, :preferred_funding_account_id
@@ -100,8 +100,10 @@ class PreciousMetalsController < ApplicationController
 
     def prepare_form_state
       @funding_accounts = funding_accounts
-      return unless @account&.new_record?
+      initialize_initial_purchase_form if @account&.new_record?
+    end
 
+    def initialize_initial_purchase_form
       @initial_purchase_form ||= build_initial_purchase_form
       @initial_purchase_form.price_per_unit ||= @account.accountable.manual_price
       @initial_purchase_form.price_currency ||= @account.accountable.manual_price_currency ||

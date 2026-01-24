@@ -27,6 +27,9 @@ class PreciousMetal < ApplicationRecord
   validates :quantity, numericality: { greater_than_or_equal_to: 0 }
   validates :account_status, inclusion: { in: ACCOUNT_STATUSES }, allow_blank: true
   validates :scheme_type, inclusion: { in: SCHEME_TYPES }, allow_blank: true
+  validates :account_number, length: { maximum: 50 }, allow_blank: true
+  validates :akad, length: { maximum: 100 }, allow_blank: true
+  validates :preferred_funding_account_id, presence: true, if: -> { preferred_funding_account_id.present? }
   validates :manual_price, numericality: { greater_than_or_equal_to: 0 }, allow_nil: true
   validates :manual_price_currency, presence: true, if: -> { manual_price.present? }
   validate :manual_price_currency_valid, if: -> { manual_price_currency.present? }
