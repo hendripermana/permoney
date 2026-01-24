@@ -81,6 +81,6 @@ pin "motion-dom" # @12.23.23
 pin "motion-utils" # @12.23.6
 pin "react/jsx-runtime", to: "react--jsx-runtime.js" # @19.1.1
 pin "scheduler" # @0.26.0
-pin "lodash" # @4.17.21
+pin "lodash" # @4.17.23
 pin "motion" # @12.23.24
 pin "framer-motion/dom", to: "framer-motion--dom.js" # @12.23.24
