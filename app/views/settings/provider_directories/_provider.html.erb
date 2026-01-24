@@ -1,0 +1,59 @@
+<%# locals: (provider:, archived: false) %>
+
+<tr class="border-b border-subdued last:border-0 hover:bg-surface-hover">
+  <td class="py-3 px-4 text-sm text-primary">
+    <div class="flex flex-col gap-1">
+      <p class="font-medium truncate"><%= provider.name %></p>
+      <div class="text-xs text-secondary flex flex-wrap gap-2">
+        <span><%= provider.kind_label %></span>
+        <% if provider.country.present? %>
+          <span>&middot;</span>
+          <span><%= provider.country %></span>
+        <% end %>
+        <% if provider.website_url.present? %>
+          <span>&middot;</span>
+          <%= tag.a provider.website_url,
+                    href: provider.website_url,
+                    class: "text-link hover:underline",
+                    target: "_blank",
+                    rel: "noopener noreferrer" %>
+        <% end %>
+      </div>
+    </div>
+  </td>
+  <td class="py-3 px-4 text-sm text-right align-middle">
+    <%= render DS::Menu.new do |menu| %>
+      <% menu.with_item(
+        variant: "link",
+        text: "Edit",
+        href: edit_settings_provider_directory_path(provider, return_to: request.fullpath),
+        icon: "pencil",
+        data: { turbo_frame: "modal" }
+      ) %>
+
+      <% if archived %>
+        <% menu.with_item(
+          variant: "button",
+          text: "Restore",
+          href: restore_settings_provider_directory_path(provider),
+          icon: "rotate-ccw",
+          method: :patch
+        ) %>
+      <% else %>
+        <% menu.with_item(
+          variant: "button",
+          text: "Archive",
+          href: settings_provider_directory_path(provider),
+          icon: "archive",
+          method: :delete,
+          confirm: CustomConfirm.new(
+            title: "Archive provider?",
+            body: "Archiving hides this provider from new selections. Existing accounts will keep it.",
+            btn_text: "Archive provider",
+            destructive: true
+          )
+        ) %>
+      <% end %>
+    <% end %>
+  </td>
+</tr>

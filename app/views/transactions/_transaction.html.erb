@@ -128,6 +128,16 @@
                     </div>
                   <% end %>
                 </div>
+
+                <% if transaction.precious_metal_transaction? && transaction.precious_metal_quantity.present? %>
+                  <div class="text-secondary text-xs font-normal">
+                    <span>
+                      <%= transaction.precious_metal_action&.humanize %> •
+                      <%= number_with_precision(transaction.precious_metal_quantity, precision: 3, strip_insignificant_zeros: false) %>
+                      <%= transaction.precious_metal_unit %>
+                    </span>
+                  </div>
+                <% end %>
               </div>
             </div>
           <% end %>
@@ -139,9 +149,15 @@
       </div>
 
       <div class="shrink-0 col-span-4 lg:col-span-2 ml-auto text-right">
-        <%= content_tag :p,
-            transaction.transfer? && view_ctx == "global" ? "+/- #{format_money(entry.amount_money.abs)}" : format_money(-entry.amount_money),
-            class: ["text-green-600": entry.amount.negative?] %>
+        <% amount_label = if transaction.precious_metal_transaction? &&
+                            transaction.precious_metal_cash_amount.blank? &&
+                            transaction.precious_metal_quantity.present?
+          "#{number_with_precision(transaction.precious_metal_quantity, precision: 3, strip_insignificant_zeros: false)} #{transaction.precious_metal_unit}"
+        else
+          transaction.transfer? && view_ctx == "global" ? "+/- #{format_money(entry.amount_money.abs)}" : format_money(-entry.amount_money)
+        end %>
+
+        <%= content_tag :p, amount_label, class: ["text-green-600": entry.amount.negative?] %>
       </div>
     </div>
   <% end %>

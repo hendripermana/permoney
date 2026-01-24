@@ -11,6 +11,7 @@ export default class extends Controller {
 
   connect() {
     if (this.element.open) return;
+    this.returnFocusElement = document.activeElement;
     if (this.autoOpenValue) {
       this.element.showModal();
     }
@@ -44,6 +45,14 @@ export default class extends Controller {
 
   close() {
     this.element.close();
+
+    if (
+      this.returnFocusElement &&
+      typeof this.returnFocusElement.focus === "function" &&
+      document.contains(this.returnFocusElement)
+    ) {
+      this.returnFocusElement.focus();
+    }
 
     if (this.reloadOnCloseValue) {
       Turbo.visit(window.location.href);

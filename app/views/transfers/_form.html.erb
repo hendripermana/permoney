@@ -1,4 +1,26 @@
-<%= styled_form_with model: transfer, class: "space-y-4", data: { turbo_frame: "_top", controller: "transfer-form" } do |f| %>
+<% accounts = Current.family.accounts.manual.includes(:accountable).alphabetically %>
+<% accounts_data = accounts.each_with_object({}) do |account, data| %>
+  <% entry = { accountableType: account.accountable_type, currency: account.currency } %>
+  <% if account.accountable_type == "PreciousMetal" %>
+    <% metal = account.accountable %>
+    <% entry.merge!(
+      preciousMetal: true,
+      unit: metal.unit,
+      manualPrice: metal.manual_price&.to_s,
+      manualPriceCurrency: metal.manual_price_currency.presence || account.currency
+    ) %>
+  <% end %>
+  <% data[account.id] = entry %>
+<% end %>
+<% save_price_checked = ActiveModel::Type::Boolean.new.cast(params.dig(:transfer, :save_price)) %>
+
+<%= styled_form_with model: transfer,
+                     class: "space-y-4",
+                     data: {
+                       turbo_frame: "_top",
+                       controller: "transfer-form",
+                       "transfer-form-accounts-value": json_escape(accounts_data.to_json)
+                     } do |f| %>
   <% if transfer.errors.present? %>
     <div class="text-destructive flex items-center gap-2">
       <%= icon "circle-alert", size: "sm" %>
@@ -11,10 +33,107 @@
   </section>
 
   <section class="space-y-2">
-    <%= f.collection_select :from_account_id, Current.family.accounts.manual.alphabetically, :id, :name, { prompt: t(".select_account"), label: t(".from") }, required: true, data: { controller: "transfer-form", action: "transfer-form#updateToAccountOptions" } %>
-    <%= f.collection_select :to_account_id, Current.family.accounts.manual.alphabetically, :id, :name, { prompt: t(".select_account"), label: t(".to") }, required: true %>
-    <%= f.number_field :amount, label: t(".amount"), required: true, min: 0, placeholder: "100", step: 0.00000001 %>
+    <%= f.collection_select :from_account_id,
+                            accounts,
+                            :id,
+                            :name,
+                            { prompt: t(".select_account"), label: t(".from") },
+                            required: true,
+                            data: {
+                              "transfer-form-target": "fromAccount",
+                              action: "change->transfer-form#updateToAccountOptions"
+                            } %>
+    <%= f.collection_select :to_account_id,
+                            accounts,
+                            :id,
+                            :name,
+                            { prompt: t(".select_account"), label: t(".to") },
+                            required: true,
+                            data: {
+                              "transfer-form-target": "toAccount",
+                              action: "change->transfer-form#updateToAccountOptions"
+                            } %>
+    <%= f.number_field :amount,
+                       label: t(".amount"),
+                       required: true,
+                       min: 0,
+                       placeholder: "100",
+                       step: 0.00000001,
+                       value: params.dig(:transfer, :amount),
+                       data: {
+                         "transfer-form-target": "amount",
+                         action: "input->transfer-form#syncDerivedFields"
+                       } %>
     <%= f.date_field :date, value: transfer.inflow_transaction&.entry&.date || Date.current, label: t(".date"), required: true, max: Date.current %>
+  </section>
+
+  <section class="space-y-3" data-transfer-form-target="preciousMetalFields" hidden>
+    <div class="space-y-2">
+      <div class="flex items-end gap-2">
+        <div class="grow">
+          <%= f.number_field :metal_quantity,
+                             label: "Grams",
+                             placeholder: "0.000",
+                             min: 0,
+                             step: 0.001,
+                             value: params.dig(:transfer, :metal_quantity),
+                             data: {
+                               "transfer-form-target": "quantity",
+                               action: "input->transfer-form#syncDerivedFields"
+                             } %>
+        </div>
+        <span class="text-xs text-secondary pb-2" data-transfer-form-target="unitLabel">g</span>
+      </div>
+
+      <% if transfer.errors[:quantity].present? %>
+        <p class="text-xs text-destructive"><%= transfer.errors[:quantity].to_sentence %></p>
+      <% end %>
+    </div>
+
+    <div class="space-y-2">
+      <div class="flex items-end gap-2">
+        <div class="grow">
+          <%= f.number_field :price_per_unit,
+                             label: "Price per gram",
+                             placeholder: "0.00",
+                             min: 0,
+                             step: 0.000001,
+                             value: params.dig(:transfer, :price_per_unit),
+                             data: {
+                               "transfer-form-target": "price",
+                               action: "input->transfer-form#syncDerivedFields"
+                             } %>
+        </div>
+        <span class="text-xs text-secondary pb-2" data-transfer-form-target="priceCurrencyLabel"><%= Current.family.currency %></span>
+      </div>
+
+      <%= f.hidden_field :price_currency,
+                         value: params.dig(:transfer, :price_currency) || Current.family.currency,
+                         data: { "transfer-form-target": "priceCurrency" } %>
+
+      <% if transfer.errors[:price_per_unit].present? %>
+        <p class="text-xs text-destructive"><%= transfer.errors[:price_per_unit].to_sentence %></p>
+      <% end %>
+    </div>
+
+    <%= f.number_field :fee_amount,
+                       label: "Fee (money)",
+                       min: 0,
+                       placeholder: "0.00",
+                       step: 0.00000001,
+                       value: params.dig(:transfer, :fee_amount),
+                       data: { "transfer-form-target": "fee" } %>
+
+    <div class="flex items-center gap-2">
+      <%= render DS::Toggle.new(
+        id: "transfer_save_price",
+        name: "transfer[save_price]",
+        checked: save_price_checked
+      ) %>
+      <%= label_tag "transfer_save_price", "Save price as default", class: "text-sm text-primary" %>
+    </div>
+
+    <p class="text-xs text-secondary">Enter either amount or grams. We'll calculate the other using the price per gram.</p>
   </section>
 
   <% if params[:account_id].present? %>

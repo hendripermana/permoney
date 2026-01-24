@@ -1,0 +1,36 @@
+<%# locals: (form:, account:, show_domain: true, show_notes: true, manual_label: "Institution name", manual_placeholder: nil, provider_label: "Provider", return_to: nil) %>
+<% return_to ||= request.fullpath %>
+
+<div class="space-y-2">
+  <div class="form-field combobox">
+    <%= form.combobox :provider_id,
+                      settings_provider_directories_path,
+                      label: provider_label,
+                      placeholder: "Search providers" %>
+  </div>
+
+  <div class="flex items-center justify-between text-xs text-secondary">
+    <span>Choose a saved provider or enter one manually.</span>
+    <%= link_to "Add new provider",
+                new_settings_provider_directory_path(return_to: return_to),
+                data: { action: "click->form-state#stash", turbo_frame: "modal" },
+                class: "text-link hover:underline" %>
+  </div>
+
+  <%= form.text_field :institution_name,
+                      label: manual_label,
+                      placeholder: manual_placeholder || "e.g. Chase Bank" %>
+
+  <% if show_domain %>
+    <%= form.text_field :institution_domain,
+                        label: "Institution domain",
+                        placeholder: account.provider&.institution_domain || "e.g. chase.com" %>
+  <% end %>
+
+  <% if show_notes %>
+    <%= form.text_area :notes,
+                       label: "Notes",
+                       placeholder: "Add notes about this account",
+                       rows: 4 %>
+  <% end %>
+</div>

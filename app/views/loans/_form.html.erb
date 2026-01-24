@@ -37,6 +37,15 @@
                                  label_tooltip: t("loans.form.current_balance.tooltip", default: "Outstanding principal right now. Use this when you start tracking a loan that already existed."),
                                  data: { "enhanced-loan-form-target": "currentBalance" } %>
           <% end %>
+
+          <%= render "accounts/provider_fields",
+                     form: form,
+                     account: account,
+                     show_domain: false,
+                     show_notes: false,
+                     manual_label: "Provider or institution",
+                     manual_placeholder: "e.g. Bank Mandiri, BCA",
+                     return_to: params[:return_to] %>
         </div>
       </section>
 

@@ -1,0 +1,81 @@
+<header class="flex items-center justify-between">
+  <h1 class="text-primary text-xl font-medium">Providers</h1>
+
+  <%= render DS::Link.new(
+    text: "New provider",
+    variant: "primary",
+    href: new_settings_provider_directory_path(return_to: request.fullpath),
+    frame: :modal
+  ) %>
+</header>
+
+<div class="bg-container rounded-xl shadow-border-xs p-4 space-y-6">
+  <section class="space-y-3">
+    <div class="flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-secondary uppercase">
+      <p>Active providers</p>
+      <span class="text-subdued">&middot;</span>
+      <p><%= @active_providers.count %></p>
+    </div>
+
+    <% if @active_providers.any? %>
+      <div class="rounded-xl bg-container-inset space-y-1 p-1">
+        <div class="bg-container rounded-lg shadow-border-xs overflow-x-auto">
+          <table class="w-full">
+            <thead>
+              <tr class="text-xs uppercase font-medium text-secondary border-b border-divider">
+                <th scope="col" class="text-left py-3 px-4">Provider</th>
+                <th scope="col" class="text-right py-3 px-4">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <%= render partial: "settings/provider_directories/provider", collection: @active_providers, as: :provider %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    <% else %>
+      <div class="flex justify-center items-center py-12">
+        <div class="text-center flex flex-col items-center max-w-[320px]">
+          <p class="text-primary mb-1 font-medium text-sm">No providers yet</p>
+          <p class="text-secondary text-xs mb-4">Add providers you use for accounts like gold, loans, or banks.</p>
+
+          <%= render DS::Link.new(
+            text: "New provider",
+            icon: "plus",
+            href: new_settings_provider_directory_path(return_to: request.fullpath),
+            frame: :modal
+          ) %>
+        </div>
+      </div>
+    <% end %>
+  </section>
+
+  <% if @archived_providers.any? %>
+    <section class="space-y-3">
+      <div class="flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-secondary uppercase">
+        <p>Archived providers</p>
+        <span class="text-subdued">&middot;</span>
+        <p><%= @archived_providers.count %></p>
+      </div>
+
+      <div class="rounded-xl bg-container-inset space-y-1 p-1">
+        <div class="bg-container rounded-lg shadow-border-xs overflow-x-auto">
+          <table class="w-full">
+            <thead>
+              <tr class="text-xs uppercase font-medium text-secondary border-b border-divider">
+                <th scope="col" class="text-left py-3 px-4">Provider</th>
+                <th scope="col" class="text-right py-3 px-4">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <%= render partial: "settings/provider_directories/provider",
+                         collection: @archived_providers,
+                         as: :provider,
+                         locals: { archived: true } %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  <% end %>
+</div>

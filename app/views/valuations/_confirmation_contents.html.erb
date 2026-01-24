@@ -37,6 +37,8 @@
         crypto balance
       <% elsif account.other_asset? %>
         asset value
+      <% elsif account.precious_metal? %>
+        precious metals value
       <% elsif account.other_liability? %>
         liability balance
       <% else %>

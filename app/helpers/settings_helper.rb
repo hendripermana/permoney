@@ -2,6 +2,7 @@ module SettingsHelper
   SETTINGS_ORDER = [
     # General section
     { name: "Accounts", path: :accounts_path },
+    { name: "Providers", path: :settings_provider_directories_path },
     { name: "Bank Sync", path: :settings_bank_sync_path },
     { name: "Preferences", path: :settings_preferences_path },
     { name: "Profile Info", path: :settings_profile_path },
@@ -18,7 +19,7 @@ module SettingsHelper
     { name: "LLM Usage", path: :settings_llm_usage_path, condition: :admin_user? },
     { name: "API Key", path: :settings_api_key_path, condition: :admin_user? },
     { name: "Self-Hosting", path: :settings_hosting_path, condition: :self_hosted_and_admin? },
-    { name: "Providers", path: :settings_providers_path, condition: :admin_user? },
+    { name: "Bank Sync Providers", path: :settings_providers_path, condition: :admin_user? },
     { name: "Imports", path: :imports_path, condition: :admin_user? },
     # More section
     { name: "Guides", path: :settings_guides_path },

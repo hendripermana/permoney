@@ -5,6 +5,7 @@ class Account < ApplicationRecord
 
   belongs_to :family
   belongs_to :import, optional: true
+  belongs_to :provider_directory, class_name: "ProviderDirectory", foreign_key: :provider_id, optional: true
 
   has_many :import_mappings, as: :mappable, dependent: :destroy, class_name: "Import::Mapping"
   has_many :entries, dependent: :destroy
@@ -178,7 +179,8 @@ class Account < ApplicationRecord
   end
 
   def institution_name
-    self[:institution_name].presence || provider&.institution_name
+    # Provider directory name takes precedence over legacy institution_name.
+    provider_directory&.name || self[:institution_name].presence || provider&.institution_name
   end
 
   def institution_domain
@@ -258,7 +260,7 @@ class Account < ApplicationRecord
     case accountable_type
     when "Depository", "CreditCard"
       :cash
-    when "Property", "Vehicle", "OtherAsset", "Loan", "OtherLiability", "PersonalLending"
+    when "Property", "Vehicle", "OtherAsset", "PreciousMetal", "Loan", "OtherLiability", "PersonalLending"
       :non_cash
     when "Investment", "Crypto"
       :investment

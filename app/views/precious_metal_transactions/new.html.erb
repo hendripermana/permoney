@@ -1,0 +1,55 @@
+<%= render DS::Dialog.new do |dialog| %>
+  <% dialog.with_header(title: "New gold transaction") %>
+  <% dialog.with_body do %>
+    <%= styled_form_with model: @form, url: precious_metal_transactions_path(account_id: @account.id), class: "space-y-4" do |f| %>
+      <% if @form.errors.any? %>
+        <%= render "shared/form_errors", model: @form %>
+      <% end %>
+
+      <section class="space-y-2">
+        <%= f.select :transaction_type,
+                     PreciousMetal::TransactionForm::TRANSACTION_TYPES.map { |t| [t.humanize, t] },
+                     { label: "Type" } %>
+
+        <div class="flex items-center gap-2">
+          <%= f.number_field :quantity,
+                             label: "Quantity (grams)",
+                             placeholder: "0.000",
+                             min: 0,
+                             step: 0.001 %>
+          <%= tag.p @account.precious_metal.unit, class: "text-sm text-secondary pt-6" %>
+        </div>
+        <p class="text-xs text-secondary">Adjustments use the new total quantity.</p>
+
+        <%= f.select :fee_mode,
+                     PreciousMetal::TransactionForm::FEE_MODES.map { |mode| [mode.humanize, mode] },
+                     { label: "Fee paid with" } %>
+
+        <%= f.money_field :cash_amount,
+                          label: "Cash amount (optional)",
+                          currency_method: :cash_currency,
+                          default_currency: @account.currency,
+                          hide_currency: true,
+                          min: 0 %>
+
+        <%= f.date_field :date,
+                         label: "Date",
+                         required: true,
+                         min: Entry.min_supported_date,
+                         max: Date.current,
+                         value: (@form.date || Date.current) %>
+      </section>
+
+      <section>
+        <%= f.text_area :notes,
+                        label: "Notes",
+                        placeholder: "Add details about this transaction",
+                        rows: 4 %>
+      </section>
+
+      <section>
+        <%= f.submit "Add transaction" %>
+      </section>
+    <% end %>
+  <% end %>
+<% end %>

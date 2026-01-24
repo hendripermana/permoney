@@ -1,0 +1,38 @@
+<%# locals: (account:) %>
+
+<% pm = account.precious_metal %>
+
+<div class="grid grid-cols-2 gap-2 lg:grid-cols-4">
+  <%= summary_card title: "Balance (#{pm.unit})" do %>
+    <%= number_with_precision(pm.quantity, precision: 3, strip_insignificant_zeros: false) %> <%= pm.unit %>
+  <% end %>
+
+  <%= summary_card title: "Manual price per gram" do %>
+    <%= pm.manual_price_money ? format_money(pm.manual_price_money) : "—" %>
+  <% end %>
+
+  <%= summary_card title: "Estimated value" do %>
+    <% estimated_value = pm.value_in %>
+    <%= estimated_value ? format_money(estimated_value) : "—" %>
+  <% end %>
+
+  <%= summary_card title: "Price source" do %>
+    Manual
+  <% end %>
+
+  <% provider_name = account.institution_name %>
+  <% if provider_name.present? %>
+    <%= summary_card title: "Provider" do %>
+      <%= provider_name %>
+    <% end %>
+  <% end %>
+</div>
+
+<div class="flex justify-center py-8">
+  <%= render DS::Link.new(
+    text: "Edit account details",
+    href: edit_precious_metal_path(account),
+    variant: "ghost",
+    frame: :modal
+  ) %>
+</div>

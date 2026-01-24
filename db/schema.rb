@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_01_11_000001) do
+ActiveRecord::Schema[8.1].define(version: 2026_01_17_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -51,6 +51,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_01_11_000001) do
     t.text "notes"
     t.uuid "plaid_account_id"
     t.string "provider"
+    t.uuid "provider_id"
     t.uuid "simplefin_account_id"
     t.string "status", default: "active"
     t.string "subtype"
@@ -66,6 +67,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_01_11_000001) do
     t.index ["import_id"], name: "index_accounts_on_import_id"
     t.index ["plaid_account_id"], name: "index_accounts_on_plaid_account_id"
     t.index ["provider"], name: "index_accounts_on_provider"
+    t.index ["provider_id"], name: "index_accounts_on_provider_id"
     t.index ["simplefin_account_id"], name: "index_accounts_on_simplefin_account_id"
     t.index ["status"], name: "index_accounts_on_status"
   end
@@ -879,6 +881,17 @@ ActiveRecord::Schema[8.1].define(version: 2026_01_11_000001) do
     t.index ["plaid_id"], name: "index_plaid_items_on_plaid_id", unique: true
   end
 
+  create_table "precious_metals", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.jsonb "locked_attributes", default: {}
+    t.decimal "manual_price", precision: 19, scale: 8
+    t.string "manual_price_currency", limit: 3
+    t.decimal "quantity", precision: 19, scale: 3, default: "0.0", null: false
+    t.string "subtype"
+    t.string "unit", default: "g", null: false
+    t.datetime "updated_at", null: false
+  end
+
   create_table "properties", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.string "area_unit"
     t.integer "area_value"
@@ -887,6 +900,20 @@ ActiveRecord::Schema[8.1].define(version: 2026_01_11_000001) do
     t.string "subtype"
     t.datetime "updated_at", null: false
     t.integer "year_built"
+  end
+
+  create_table "provider_directories", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.datetime "archived_at"
+    t.string "country"
+    t.datetime "created_at", null: false
+    t.string "kind", default: "other", null: false
+    t.string "name", null: false
+    t.text "notes"
+    t.datetime "updated_at", null: false
+    t.uuid "user_id", null: false
+    t.string "website"
+    t.index "lower((name)::text), user_id", name: "index_provider_directories_on_user_id_and_lower_name", unique: true
+    t.index ["user_id"], name: "index_provider_directories_on_user_id"
   end
 
   create_table "recurring_transactions", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -1307,6 +1334,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_01_11_000001) do
   add_foreign_key "accounts", "families"
   add_foreign_key "accounts", "imports"
   add_foreign_key "accounts", "plaid_accounts"
+  add_foreign_key "accounts", "provider_directories", column: "provider_id"
   add_foreign_key "accounts", "simplefin_accounts"
   add_foreign_key "active_storage_attachments", "active_storage_blobs", column: "blob_id"
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
@@ -1346,6 +1374,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_01_11_000001) do
   add_foreign_key "pay_later_installments", "transfers", on_delete: :nullify
   add_foreign_key "plaid_accounts", "plaid_items"
   add_foreign_key "plaid_items", "families"
+  add_foreign_key "provider_directories", "users"
   add_foreign_key "recurring_transactions", "families"
   add_foreign_key "recurring_transactions", "merchants"
   add_foreign_key "rejected_transfers", "transactions", column: "inflow_transaction_id"

@@ -163,4 +163,63 @@ class Transfer::CreatorTest < ActiveSupport::TestCase
       )
     end
   end
+
+  test "filters precious metal payload to allowed keys" do
+    precious_account = accounts(:precious_metal)
+    creator = Transfer::Creator.new(
+      family: @family,
+      source_account_id: @source_account.id,
+      destination_account_id: precious_account.id,
+      date: @date,
+      amount: @amount,
+      precious_metal: {
+        "quantity" => "1.234",
+        "quantity_delta" => "1.234",
+        "price_per_unit" => "75.5",
+        "price_currency" => "USD",
+        "cash_amount" => "93.55",
+        "cash_currency" => "USD",
+        "unexpected" => "nope"
+      }
+    )
+
+    transfer = creator.create
+    payload = transfer.inflow_transaction.extra["precious_metal"]
+
+    assert payload.present?
+    refute payload.key?("unexpected")
+    assert_equal "buy", payload["action"]
+    assert_equal "1.234", payload["quantity"]
+    assert_equal "1.234", payload["quantity_delta"]
+    assert_equal "75.5", payload["price_per_unit"]
+  end
+
+  test "rolls back transfer when precious metal defaults fail" do
+    precious_account = accounts(:precious_metal)
+    PreciousMetal.any_instance.stubs(:update!).raises(
+      ActiveRecord::RecordInvalid.new(precious_account.accountable)
+    )
+    starting_quantity = precious_account.precious_metal.quantity
+
+    assert_no_difference [ "Transfer.count", "Transaction.count", "Entry.count" ] do
+      assert_raises(ActiveRecord::RecordInvalid) do
+        Transfer::Creator.new(
+          family: @family,
+          source_account_id: @source_account.id,
+          destination_account_id: precious_account.id,
+          date: @date,
+          amount: @amount,
+          precious_metal: {
+            "quantity" => "1.000",
+            "quantity_delta" => "1.000",
+            "price_per_unit" => "75.5",
+            "price_currency" => "USD"
+          },
+          save_price: true
+        ).create
+      end
+    end
+
+    assert_equal starting_quantity, precious_account.reload.precious_metal.quantity
+  end
 end

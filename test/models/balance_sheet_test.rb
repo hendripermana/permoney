@@ -10,9 +10,10 @@ class BalanceSheetTest < ActiveSupport::TestCase
 
     create_account(balance: 1000, accountable: Depository.new)
     create_account(balance: 5000, accountable: OtherAsset.new)
+    create_account(balance: 2000, accountable: PreciousMetal.new(subtype: "gold", quantity: 1))
     create_account(balance: 10000, accountable: CreditCard.new) # ignored
 
-    assert_equal 1000 + 5000, BalanceSheet.new(@family).assets.total
+    assert_equal 1000 + 5000 + 2000, BalanceSheet.new(@family).assets.total
   end
 
   test "calculates total liabilities" do
@@ -51,14 +52,16 @@ class BalanceSheetTest < ActiveSupport::TestCase
     create_account(balance: 2000, accountable: Depository.new)
     create_account(balance: 3000, accountable: Investment.new)
     create_account(balance: 5000, accountable: OtherAsset.new)
+    create_account(balance: 4000, accountable: PreciousMetal.new(subtype: "gold", quantity: 1))
     create_account(balance: 10000, accountable: CreditCard.new) # ignored
 
     asset_groups = BalanceSheet.new(@family).assets.account_groups
 
-    assert_equal 3, asset_groups.size
+    assert_equal 4, asset_groups.size
     assert_equal 1000 + 2000, asset_groups.find { |ag| ag.name == I18n.t("accounts.types.depository") }.total
     assert_equal 3000, asset_groups.find { |ag| ag.name == I18n.t("accounts.types.investment") }.total
     assert_equal 5000, asset_groups.find { |ag| ag.name == I18n.t("accounts.types.other_asset") }.total
+    assert_equal 4000, asset_groups.find { |ag| ag.name == "Precious Metals" }.total
   end
 
   test "calculates liability group totals" do

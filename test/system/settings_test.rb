@@ -6,6 +6,7 @@ class SettingsTest < ApplicationSystemTestCase
 
     @settings_links = [
       [ "Accounts", accounts_path ],
+      [ "Providers", settings_provider_directories_path ],
       [ "Bank Sync", settings_bank_sync_path ],
       [ "Preferences", settings_preferences_path ],
       [ "Profile Info", settings_profile_path ],

@@ -53,9 +53,11 @@ class Account::CurrentBalanceManagerTest < ActiveSupport::TestCase
   end
 
   test "all manual non cash accounts append reconciliations for current balance updates" do
-    [ Property, Vehicle, OtherAsset, Loan, OtherLiability ].each do |account_type|
+    [ Property, Vehicle, OtherAsset, PreciousMetal, Loan, OtherLiability ].each do |account_type|
       accountable = if account_type == Loan
         Loan.new(counterparty_name: "Test Lender", debt_kind: "personal")
+      elsif account_type == PreciousMetal
+        PreciousMetal.new(subtype: "gold")
       else
         account_type.new
       end
