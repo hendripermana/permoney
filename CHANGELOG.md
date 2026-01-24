@@ -1,3 +1,13 @@
+## [0.18.2](https://github.com/hendripermana/permoney/compare/v0.18.1...v0.18.2) (2026-01-24)
+
+### Other Changes
+
+- Merge pull request #107 from hendripermana/feat/gold-fx-valuation (2a529b80)
+- Fix form state controller lint (c39853f5)
+- Add complete precious metal and provider directory system implementation (8816d8b6)
+- Harden gold valuation edge cases and tests\n\n- Add comprehensive tests for FX conversions with multiple currencies\n- Test nil-safe behavior when FX rates are missing\n- Test validation for invalid currency codes\n- Verify no FX call when currencies match (optimization)\n- Handle ConversionError and UnknownCurrencyError gracefully\n- Edge case: blank manual_price returns nil estimated value\n- Edge case: missing target currency defaults to family currency\n- All edge cases tested and verified (6b67eefc)
+- Add FX-backed gold valuation using shared Money exchange (396b1cd1)
+
 ## [0.18.1](https://github.com/hendripermana/permoney/compare/v0.18.0...v0.18.1) (2026-01-13)
 
 ### Other Changes
