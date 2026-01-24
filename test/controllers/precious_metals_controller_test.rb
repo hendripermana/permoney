@@ -128,5 +128,36 @@ class PreciousMetalsControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :unprocessable_entity
     assert_match(/Price per unit/i, @response.body)
+    
+    # Verify error message is set in instance variable
+    assert_not_nil assigns(:error_message)
+    assert_includes assigns(:error_message), "Price per unit"
+  end
+  
+  test "initial purchase failure sets error message in instance variable" do
+    source_account = accounts(:depository)
+
+    assert_no_difference [ "Account.count", "PreciousMetal.count", "Transfer.count" ] do
+      post precious_metals_path, params: {
+        account: {
+          name: "Gold Vault",
+          accountable_type: "PreciousMetal",
+          accountable_attributes: {
+            subtype: "gold",
+            unit: "g"
+          }
+        },
+        initial_purchase: {
+          from_account_id: source_account.id,
+          amount: "1000",
+          date: Date.current.to_s
+          # Missing required price_per_unit
+        }
+      }
+    end
+
+    assert_response :unprocessable_entity
+    assert_not_nil assigns(:error_message)
+    assert_match(/Price per unit/i, assigns(:error_message))
   end
 end

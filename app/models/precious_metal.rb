@@ -12,7 +12,6 @@ class PreciousMetal < ApplicationRecord
     "g" => { short: "g", long: "Grams" }
   }.freeze
 
-  attribute :account_status, :string, default: "active"
   attribute :unit, :string, default: "g"
 
   belongs_to :preferred_funding_account, class_name: "Account", optional: true
