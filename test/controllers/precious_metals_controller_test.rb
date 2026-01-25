@@ -128,12 +128,12 @@ class PreciousMetalsControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :unprocessable_entity
     assert_match(/Price per unit/i, @response.body)
-    
+
     # Verify error message is set in instance variable
     assert_not_nil assigns(:error_message)
     assert_includes assigns(:error_message), "Price per unit"
   end
-  
+
   test "initial purchase failure sets error message in instance variable" do
     source_account = accounts(:depository)
 
