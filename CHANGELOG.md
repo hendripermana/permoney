@@ -1,3 +1,23 @@
+## [0.18.3](https://github.com/hendripermana/permoney/compare/v0.18.2...v0.18.3) (2026-01-25)
+
+### Bug Fixes
+
+- fix: resolve syntax error in precious metals controller test (9cb23d31)
+- fix: address code review issues for precious metals (24621f5d)
+
+### Refactoring
+
+- refactor: consolidate form initialization and add missing validations (40f2abc4)
+
+### Other Changes
+
+- Merge pull request #108 from hendripermana/feat/gold-fx-valuation (a1563da5)
+- style: auto-correct linting issues with rubocop (314698a8)
+- test: add comprehensive error message verification for precious metals controller (32837fc9)
+- test: add error message verification for precious metals controller (a029bba0)
+- fix(security): upgrade lodash from 4.17.21 to 4.17.23 to resolve prototype pollution vulnerability (b903e4fb)
+- Fix provider form and gold initial purchase flow (e881a756)
+
 ## [0.18.2](https://github.com/hendripermana/permoney/compare/v0.18.1...v0.18.2) (2026-01-24)
 
 ### Other Changes
