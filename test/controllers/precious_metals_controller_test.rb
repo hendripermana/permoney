@@ -64,7 +64,23 @@ class PreciousMetalsControllerTest < ActionDispatch::IntegrationTest
     assert_equal "Updated Gold", @account.name
     assert_equal 20, @account.precious_metal.quantity
     assert_equal 90, @account.precious_metal.manual_price
-    assert_equal 1800, @account.balance
+  test "update failure sets error message in instance variable" do
+    patch precious_metal_path(@account), params: {
+      account: {
+        name: "",
+        accountable_attributes: {
+          id: @account.accountable_id,
+          quantity: -5, # Invalid quantity
+          manual_price: 90,
+          manual_price_currency: "USD"
+        }
+      }
+    }
+
+    assert_response :unprocessable_entity
+    assert_not_nil assigns(:error_message)
+    assert_match(/can't be blank|is less than/i, assigns(:error_message))
+  end    assert_equal 1800, @account.balance
     assert_redirected_to account_path(@account)
     assert_equal "Precious metal account updated", flash[:notice]
   end
@@ -159,5 +175,22 @@ class PreciousMetalsControllerTest < ActionDispatch::IntegrationTest
     assert_response :unprocessable_entity
     assert_not_nil assigns(:error_message)
     assert_match(/Price per unit/i, assigns(:error_message))
+  end
+
+  test "create failure with validation error sets error message in instance variable" do
+    post precious_metals_path, params: {
+      account: {
+        name: "", # Invalid empty name
+        accountable_type: "PreciousMetal",
+        accountable_attributes: {
+          subtype: "gold",
+          unit: "g"
+        }
+      }
+    }
+
+    assert_response :unprocessable_entity
+    assert_not_nil assigns(:error_message)
+    assert_match(/can't be blank/i, assigns(:error_message))
   end
 end
