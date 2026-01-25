@@ -14,9 +14,9 @@
         <div class="flex items-center gap-2">
           <%= f.number_field :quantity,
                              label: "Quantity (grams)",
-                             placeholder: "0.000",
+                             placeholder: "0.0000",
                              min: 0,
-                             step: 0.001 %>
+                             step: 0.0001 %>
           <%= tag.p @account.precious_metal.unit, class: "text-sm text-secondary pt-6" %>
         </div>
         <p class="text-xs text-secondary">Adjustments use the new total quantity.</p>

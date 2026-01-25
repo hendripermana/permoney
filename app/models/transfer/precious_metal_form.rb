@@ -107,7 +107,7 @@ class Transfer::PreciousMetalForm
     def computed_quantity
       return nil if amount_value.blank? || price_per_unit_value.blank?
 
-      (amount_in_price_currency / price_per_unit_value).round(3)
+      (amount_in_price_currency / price_per_unit_value).round(4)
     end
 
     def computed_amount_source
@@ -216,7 +216,7 @@ class Transfer::PreciousMetalForm
     def quantity_precision
       return if quantity_value.blank?
 
-      errors.add(:quantity, "must have at most 3 decimal places") if quantity_value != quantity_value.round(3)
+      errors.add(:quantity, "must have at most 4 decimal places") if quantity_value != quantity_value.round(4)
     end
 
     def amount_quantity_consistency
@@ -224,7 +224,7 @@ class Transfer::PreciousMetalForm
 
       derived_quantity = computed_quantity
       return if derived_quantity.nil?
-      return if (derived_quantity - quantity_value).abs <= 0.001
+      return if (derived_quantity - quantity_value).abs <= 0.0001
 
       errors.add(:base, "Amount and grams do not match the price per gram")
     end

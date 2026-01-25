@@ -73,9 +73,9 @@
         <div class="grow">
           <%= f.number_field :metal_quantity,
                              label: "Grams",
-                             placeholder: "0.000",
+                             placeholder: "0.0000",
                              min: 0,
-                             step: 0.001,
+                             step: 0.0001,
                              value: params.dig(:transfer, :metal_quantity),
                              data: {
                                "transfer-form-target": "quantity",

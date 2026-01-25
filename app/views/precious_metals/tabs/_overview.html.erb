@@ -4,7 +4,7 @@
 
 <div class="grid grid-cols-2 gap-2 lg:grid-cols-4">
   <%= summary_card title: "Balance (#{pm.unit})" do %>
-    <%= number_with_precision(pm.quantity, precision: 3, strip_insignificant_zeros: false) %> <%= pm.unit %>
+    <%= number_with_precision(pm.quantity, precision: 4, strip_insignificant_zeros: true) %> <%= pm.unit %>
   <% end %>
 
   <%= summary_card title: "Manual price per gram" do %>

@@ -46,7 +46,7 @@ export default class extends Controller {
     const quantity = this.parseNumber(this.quantityTarget.value);
 
     if (amount && !quantity) {
-      this.quantityTarget.value = this.round(amount / price, 3);
+      this.quantityTarget.value = this.round(amount / price, 4);
     } else if (quantity && !amount) {
       this.amountTarget.value = this.round(quantity * price, 4);
     }

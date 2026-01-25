@@ -24,6 +24,7 @@ class PreciousMetal < ApplicationRecord
   validates :subtype, presence: true, inclusion: { in: SUBTYPES.keys }
   validates :unit, presence: true, inclusion: { in: UNITS.keys }
   validates :quantity, numericality: { greater_than_or_equal_to: 0 }
+  validate :quantity_precision
   validates :account_status, inclusion: { in: ACCOUNT_STATUSES }, allow_blank: true
   validates :scheme_type, inclusion: { in: SCHEME_TYPES }, allow_blank: true
   validates :account_number, length: { maximum: 50 }, allow_blank: true
@@ -105,6 +106,12 @@ class PreciousMetal < ApplicationRecord
       Money::Currency.new(manual_price_currency)
     rescue Money::Currency::UnknownCurrencyError
       errors.add(:manual_price_currency, "is not a valid currency")
+    end
+
+    def quantity_precision
+      return if quantity.blank?
+
+      errors.add(:quantity, "must have at most 4 decimal places") if quantity.to_d != quantity.to_d.round(4)
     end
 
     def should_sync_account_balance?

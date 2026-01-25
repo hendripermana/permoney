@@ -13,7 +13,7 @@
     <span>Choose a saved provider or enter one manually.</span>
     <%= link_to "Add new provider",
                 new_settings_provider_directory_path(return_to: return_to),
-                data: { action: "click->form-state#stash", turbo_frame: "modal" },
+                data: { action: "click->form-state#stash", turbo_frame: "modal", turbo: true },
                 class: "text-link hover:underline" %>
   </div>
 

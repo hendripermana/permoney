@@ -14,14 +14,14 @@ class PreciousMetalsTest < ApplicationSystemTestCase
     click_link "Precious Metal"
 
     fill_in "Account name*", with: "Gold Stash"
-    fill_in "Quantity", with: "12.345"
+    fill_in "Quantity", with: "12.3456"
     fill_in "Manual price per gram", with: "75.5"
 
     click_button "Create Account"
 
     assert_text "Gold Stash"
     click_on "Overview"
-    assert_text "12.345 g"
+    assert_text "12.3456 g"
     assert_text "Manual"
 
     within "[data-testid='activity-menu']" do
@@ -30,13 +30,13 @@ class PreciousMetalsTest < ApplicationSystemTestCase
     end
 
     select "Buy", from: "Type"
-    fill_in "Quantity (grams)", with: "1.000"
+    fill_in "Quantity (grams)", with: "1.2345"
     fill_in "Cash amount (optional)", with: "100"
     fill_in "Date", with: Date.current
     click_button "Add transaction"
 
     assert_text "Buy Gold"
-    assert_text "1.000 g"
+    assert_text "1.2345 g"
   end
 
   test "adding a provider keeps form values" do

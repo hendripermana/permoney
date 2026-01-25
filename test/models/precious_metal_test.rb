@@ -60,6 +60,13 @@ class PreciousMetalTest < ActiveSupport::TestCase
     assert_nil @precious_metal.value_in
   end
 
+  test "supports 4-decimal quantity precision in valuation" do
+    @precious_metal.update!(quantity: "0.2274", manual_price: 100, manual_price_currency: "USD")
+
+    assert_equal BigDecimal("0.2274"), @precious_metal.quantity
+    assert_equal BigDecimal("22.74"), @precious_metal.estimated_value_amount
+  end
+
   test "validates manual price currency" do
     @precious_metal.manual_price_currency = "ZZZ"
     @precious_metal.valid?
