@@ -1,3 +1,10 @@
+## [0.18.5](https://github.com/hendripermana/permoney/compare/v0.18.4...v0.18.5) (2026-01-25)
+
+### Other Changes
+
+- Merge pull request #110 from hendripermana/feat/perf-optimizations-jan2026 (1c751387)
+- Performance optimizations: N+1 fixes, cache improvements, composite index, safe testing (34a91be4)
+
 ## [0.18.4](https://github.com/hendripermana/permoney/compare/v0.18.3...v0.18.4) (2026-01-25)
 
 ### Other Changes
