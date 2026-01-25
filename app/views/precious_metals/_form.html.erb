@@ -21,9 +21,9 @@
         <div class="flex items-center gap-2">
           <%= pm_form.number_field :quantity,
                                    label: "Quantity",
-                                   placeholder: "0.000",
+                                   placeholder: "0.0000",
                                    min: 0,
-                                   step: 0.001 %>
+                                   step: 0.0001 %>
           <%= pm_form.select :unit,
                              PreciousMetal::UNITS.map { |key, value| [value[:long], key] },
                              { label: "Unit" } %>
@@ -76,9 +76,9 @@
           <div class="flex items-center gap-2">
             <%= ip_form.number_field :quantity,
                                      label: "Grams",
-                                     placeholder: "0.000",
+                                     placeholder: "0.0000",
                                      min: 0,
-                                     step: 0.001 %>
+                                     step: 0.0001 %>
             <span class="text-xs text-secondary pt-6">g</span>
           </div>
 

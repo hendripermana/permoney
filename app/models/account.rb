@@ -92,7 +92,7 @@ class Account < ApplicationRecord
   end
 
   class << self
-    def create_and_sync(attributes, skip_initial_sync: false)
+    def create_and_sync(attributes, skip_initial_sync: false, skip_opening_balance: false)
       attributes[:accountable_attributes] ||= {} # Ensure accountable is created, even if empty
       account = new(attributes.merge(cash_balance: attributes[:balance]))
       initial_balance = attributes.dig(:accountable_attributes, :initial_balance)&.to_d
@@ -100,9 +100,11 @@ class Account < ApplicationRecord
       transaction do
         account.save!
 
-        manager = Account::OpeningBalanceManager.new(account)
-        result = manager.set_opening_balance(balance: initial_balance || account.balance)
-        raise result.error if result.error
+        unless skip_opening_balance
+          manager = Account::OpeningBalanceManager.new(account)
+          result = manager.set_opening_balance(balance: initial_balance || account.balance)
+          raise result.error if result.error
+        end
       end
 
       # Skip initial sync for linked accounts - the provider sync will handle balance creation

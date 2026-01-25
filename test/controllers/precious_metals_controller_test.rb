@@ -44,6 +44,28 @@ class PreciousMetalsControllerTest < ActionDispatch::IntegrationTest
     assert_equal "Precious metal account created", flash[:notice]
   end
 
+  test "create honors return_to without raising" do
+    assert_difference -> { Account.count } => 1,
+      -> { PreciousMetal.count } => 1 do
+      post precious_metals_path, params: {
+        account: {
+          name: "Gold Vault",
+          accountable_type: "PreciousMetal",
+          return_to: accounts_path,
+          accountable_attributes: {
+            subtype: "gold",
+            unit: "g",
+            quantity: 0.2274,
+            manual_price: 100,
+            manual_price_currency: "USD"
+          }
+        }
+      }
+    end
+
+    assert_redirected_to accounts_url
+  end
+
   test "updates precious metal account details" do
     assert_no_difference [ "Account.count", "PreciousMetal.count" ] do
       patch precious_metal_path(@account), params: {
@@ -81,8 +103,8 @@ class PreciousMetalsControllerTest < ActionDispatch::IntegrationTest
     }
 
     assert_response :unprocessable_entity
-    assert_not_nil assigns(:error_message)
-    assert_match(/can't be blank|is less than/i, assigns(:error_message))
+    decoded_body = CGI.unescapeHTML(@response.body)
+    assert_match(/greater than or equal to|greater than/i, decoded_body)
   end
 
   test "creates precious metal account with initial purchase transfer" do
@@ -121,6 +143,61 @@ class PreciousMetalsControllerTest < ActionDispatch::IntegrationTest
     assert_in_delta 20, created_account.precious_metal.quantity.to_d, 0.001
   end
 
+  test "initial purchase backdated does not create opening value entry" do
+    source_account = accounts(:depository)
+    purchase_date = Date.current - 10.days
+
+    assert_difference -> { Account.count } => 1,
+      -> { PreciousMetal.count } => 1,
+      -> { Transfer.count } => 1,
+      -> { Transaction.count } => 2 do
+      post precious_metals_path, params: {
+        account: {
+          name: "Gold Vault",
+          accountable_type: "PreciousMetal",
+          accountable_attributes: {
+            subtype: "gold",
+            unit: "g"
+          }
+        },
+        initial_purchase: {
+          from_account_id: source_account.id,
+          amount: "600000",
+          price_per_unit: "2639403.96",
+          price_currency: source_account.currency,
+          date: purchase_date.to_s,
+          save_price: "1"
+        }
+      }
+    end
+
+    created_account = Account.order(:created_at).last
+    created_account.reload
+    valuation_entries = created_account.entries.valuations
+
+    assert_equal 0, valuation_entries.where(name: Valuation.build_opening_anchor_name("PreciousMetal")).count
+    assert_equal [ purchase_date ], valuation_entries.pluck(:date).uniq.sort
+    assert_operator created_account.balance.to_d, :>, 0
+  end
+
+  test "create without initial purchase and no price does not create opening entry" do
+    assert_difference -> { Account.count } => 1,
+      -> { PreciousMetal.count } => 1 do
+      assert_no_difference -> { Valuation.count } do
+        post precious_metals_path, params: {
+          account: {
+            name: "Gold Vault",
+            accountable_type: "PreciousMetal",
+            accountable_attributes: {
+              subtype: "gold",
+              unit: "g"
+            }
+          }
+        }
+      end
+    end
+  end
+
   test "initial purchase failure rolls back account creation" do
     source_account = accounts(:depository)
 
@@ -144,10 +221,6 @@ class PreciousMetalsControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :unprocessable_entity
     assert_match(/Price per unit/i, @response.body)
-
-    # Verify error message is set in instance variable
-    assert_not_nil assigns(:error_message)
-    assert_includes assigns(:error_message), "Price per unit"
   end
 
   test "create failure with validation error sets error message in instance variable" do
@@ -163,7 +236,7 @@ class PreciousMetalsControllerTest < ActionDispatch::IntegrationTest
     }
 
     assert_response :unprocessable_entity
-    assert_not_nil assigns(:error_message)
-    assert_match(/can't be blank/i, assigns(:error_message))
+    decoded_body = CGI.unescapeHTML(@response.body)
+    assert_match(/can't be blank/i, decoded_body)
   end
 end

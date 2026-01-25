@@ -14,22 +14,25 @@ class PreciousMetalsController < ApplicationController
 
   def create
     normalized_params = normalized_account_params
+    return_to = normalized_params.delete(:return_to)
     @account = Current.family.accounts.new(normalized_params)
 
     if @account.valid?
       if initial_purchase_present?
-        create_with_initial_purchase(normalized_params)
+        create_with_initial_purchase(normalized_params, return_to:)
       else
-        @account = Current.family.accounts.create_and_sync(normalized_params.except(:return_to))
+        skip_opening_balance = normalized_params[:balance].to_d.zero?
+        @account = Current.family.accounts.create_and_sync(normalized_params, skip_opening_balance: skip_opening_balance)
         @account.lock_saved_attributes!
 
         redirect_to(
-          safe_return_path(normalized_params[:return_to]) || @account,
+          safe_return_path(return_to) || @account,
           allow_other_host: false,
           notice: "Precious metal account created"
         )
       end
     else
+      @error_message = @account.errors.full_messages.join(", ")
       assign_defaults
       prepare_form_state
       render :new, status: :unprocessable_entity
@@ -150,7 +153,7 @@ class PreciousMetalsController < ApplicationController
       )
     end
 
-    def create_with_initial_purchase(normalized_params)
+    def create_with_initial_purchase(normalized_params, return_to: nil)
       transfer_form = nil
       created = false
 
@@ -161,7 +164,8 @@ class PreciousMetalsController < ApplicationController
 
         @account = Current.family.accounts.create_and_sync(
           normalized_params.except(:return_to),
-          skip_initial_sync: true
+          skip_initial_sync: true,
+          skip_opening_balance: true
         )
         @account.lock_saved_attributes!
 
@@ -176,7 +180,7 @@ class PreciousMetalsController < ApplicationController
 
       if created
         redirect_to(
-          safe_return_path(normalized_params[:return_to]) || @account,
+          safe_return_path(return_to) || @account,
           allow_other_host: false,
           notice: "Precious metal account created"
         )

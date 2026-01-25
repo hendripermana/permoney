@@ -14,6 +14,7 @@ class PreciousMetal::TransactionForm
   validate :account_is_precious_metal
   validate :quantity_presence
   validate :quantity_non_negative
+  validate :quantity_precision
   validate :cash_amount_non_negative
   validate :cash_amount_required_for_cash_fee
   validate :quantity_never_negative
@@ -107,7 +108,7 @@ class PreciousMetal::TransactionForm
     end
 
     def entry_name
-      formatted_quantity = quantity_value.present? ? format("%.3f", quantity_value) : "0.000"
+      formatted_quantity = quantity_value.present? ? format("%.4f", quantity_value) : "0.0000"
       unit = account.accountable.unit
 
       case transaction_type
@@ -160,6 +161,13 @@ class PreciousMetal::TransactionForm
       return if cash_amount_value.present?
 
       errors.add(:cash_amount, "is required for cash fees")
+    end
+
+    def quantity_precision
+      return if quantity_value.nil?
+      return if quantity_value == quantity_value.round(4)
+
+      errors.add(:quantity, "must have at most 4 decimal places")
     end
 
     def quantity_never_negative

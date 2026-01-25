@@ -133,7 +133,7 @@
                   <div class="text-secondary text-xs font-normal">
                     <span>
                       <%= transaction.precious_metal_action&.humanize %> •
-                      <%= number_with_precision(transaction.precious_metal_quantity, precision: 3, strip_insignificant_zeros: false) %>
+                      <%= number_with_precision(transaction.precious_metal_quantity, precision: 4, strip_insignificant_zeros: true) %>
                       <%= transaction.precious_metal_unit %>
                     </span>
                   </div>
@@ -152,7 +152,7 @@
         <% amount_label = if transaction.precious_metal_transaction? &&
                             transaction.precious_metal_cash_amount.blank? &&
                             transaction.precious_metal_quantity.present?
-          "#{number_with_precision(transaction.precious_metal_quantity, precision: 3, strip_insignificant_zeros: false)} #{transaction.precious_metal_unit}"
+          "#{number_with_precision(transaction.precious_metal_quantity, precision: 4, strip_insignificant_zeros: true)} #{transaction.precious_metal_unit}"
         else
           transaction.transfer? && view_ctx == "global" ? "+/- #{format_money(entry.amount_money.abs)}" : format_money(-entry.amount_money)
         end %>
