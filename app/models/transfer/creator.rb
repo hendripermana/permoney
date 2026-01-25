@@ -118,6 +118,7 @@ class Transfer::Creator
       currency_value = precious_metal&.dig(:price_currency) || precious_metal&.dig("price_currency")
       return if price_value.blank? || currency_value.blank?
 
+      destination_account.accountable.balance_sync_date = date if date.present?
       destination_account.accountable.update!(
         manual_price: price_value,
         manual_price_currency: currency_value

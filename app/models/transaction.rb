@@ -227,7 +227,7 @@ class Transaction < ApplicationRecord
       account = precious_metal_account
       return unless account
 
-      account.precious_metal.apply_quantity_delta!(delta)
+      account.precious_metal.apply_quantity_delta!(delta, effective_date: entry&.date)
     end
 
     def adjust_precious_metal_quantity_delta
@@ -243,7 +243,7 @@ class Transaction < ApplicationRecord
 
       old_value = old_delta.present? ? old_delta.to_d : 0
       new_value = new_delta.present? ? new_delta.to_d : 0
-      account.precious_metal.apply_quantity_delta!(new_value - old_value)
+      account.precious_metal.apply_quantity_delta!(new_value - old_value, effective_date: entry&.date)
     end
 
     def revert_precious_metal_quantity_delta
@@ -253,6 +253,6 @@ class Transaction < ApplicationRecord
       account = precious_metal_account
       return unless account
 
-      account.precious_metal.apply_quantity_delta!(delta * -1)
+      account.precious_metal.apply_quantity_delta!(delta * -1, effective_date: entry&.date)
     end
 end

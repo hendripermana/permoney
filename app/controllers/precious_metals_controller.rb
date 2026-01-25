@@ -21,7 +21,8 @@ class PreciousMetalsController < ApplicationController
       if initial_purchase_present?
         create_with_initial_purchase(normalized_params, return_to:)
       else
-        @account = Current.family.accounts.create_and_sync(normalized_params)
+        skip_opening_balance = normalized_params[:balance].to_d.zero?
+        @account = Current.family.accounts.create_and_sync(normalized_params, skip_opening_balance: skip_opening_balance)
         @account.lock_saved_attributes!
 
         redirect_to(
@@ -163,7 +164,8 @@ class PreciousMetalsController < ApplicationController
 
         @account = Current.family.accounts.create_and_sync(
           normalized_params.except(:return_to),
-          skip_initial_sync: true
+          skip_initial_sync: true,
+          skip_opening_balance: true
         )
         @account.lock_saved_attributes!
 

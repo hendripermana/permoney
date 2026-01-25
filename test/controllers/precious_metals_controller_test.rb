@@ -143,6 +143,61 @@ class PreciousMetalsControllerTest < ActionDispatch::IntegrationTest
     assert_in_delta 20, created_account.precious_metal.quantity.to_d, 0.001
   end
 
+  test "initial purchase backdated does not create opening value entry" do
+    source_account = accounts(:depository)
+    purchase_date = Date.current - 10.days
+
+    assert_difference -> { Account.count } => 1,
+      -> { PreciousMetal.count } => 1,
+      -> { Transfer.count } => 1,
+      -> { Transaction.count } => 2 do
+      post precious_metals_path, params: {
+        account: {
+          name: "Gold Vault",
+          accountable_type: "PreciousMetal",
+          accountable_attributes: {
+            subtype: "gold",
+            unit: "g"
+          }
+        },
+        initial_purchase: {
+          from_account_id: source_account.id,
+          amount: "600000",
+          price_per_unit: "2639403.96",
+          price_currency: source_account.currency,
+          date: purchase_date.to_s,
+          save_price: "1"
+        }
+      }
+    end
+
+    created_account = Account.order(:created_at).last
+    created_account.reload
+    valuation_entries = created_account.entries.valuations
+
+    assert_equal 0, valuation_entries.where(name: Valuation.build_opening_anchor_name("PreciousMetal")).count
+    assert_equal [ purchase_date ], valuation_entries.pluck(:date).uniq.sort
+    assert_operator created_account.balance.to_d, :>, 0
+  end
+
+  test "create without initial purchase and no price does not create opening entry" do
+    assert_difference -> { Account.count } => 1,
+      -> { PreciousMetal.count } => 1 do
+      assert_no_difference -> { Valuation.count } do
+        post precious_metals_path, params: {
+          account: {
+            name: "Gold Vault",
+            accountable_type: "PreciousMetal",
+            accountable_attributes: {
+              subtype: "gold",
+              unit: "g"
+            }
+          }
+        }
+      end
+    end
+  end
+
   test "initial purchase failure rolls back account creation" do
     source_account = accounts(:depository)
 

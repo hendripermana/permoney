@@ -16,6 +16,8 @@ class PreciousMetal < ApplicationRecord
 
   belongs_to :preferred_funding_account, class_name: "Account", optional: true
 
+  attr_accessor :balance_sync_date
+
   before_validation :normalize_currency
 
   normalizes :account_number, with: ->(value) { value.to_s.strip.presence }
@@ -93,7 +95,8 @@ class PreciousMetal < ApplicationRecord
     value_in
   end
 
-  def apply_quantity_delta!(delta)
+  def apply_quantity_delta!(delta, effective_date: nil)
+    self.balance_sync_date = effective_date if effective_date.present?
     update!(quantity: quantity.to_d + delta.to_d)
   end
 
@@ -121,11 +124,20 @@ class PreciousMetal < ApplicationRecord
     def sync_account_balance
       return unless account&.persisted?
 
-      value = estimated_value_amount || 0
+      value = estimated_value_amount
+      if value.nil?
+        account.update!(balance: 0)
+        account.sync_later
+        return
+      end
+
+      reconciliation_date = balance_sync_date || Date.current
       reconciliation_manager = Account::ReconciliationManager.new(account)
-      existing_valuation = account.entries.valuations.find_by(date: Date.current)
-      reconciliation_manager.reconcile_balance(balance: value, date: Date.current, existing_valuation_entry: existing_valuation)
+      existing_valuation = account.entries.valuations.find_by(date: reconciliation_date)
+      reconciliation_manager.reconcile_balance(balance: value, date: reconciliation_date, existing_valuation_entry: existing_valuation)
       account.update!(balance: value)
       account.sync_later
+    ensure
+      self.balance_sync_date = nil
     end
 end
