@@ -1,3 +1,11 @@
+## [0.18.4](https://github.com/hendripermana/permoney/compare/v0.18.3...v0.18.4) (2026-01-25)
+
+### Other Changes
+
+- Merge pull request #109 from hendripermana/feat/gold-fx-valuation (5f9a3de3)
+- Fix precious metal ledger entries (ef307d5d)
+- Fix precious metals create and 4-decimal precision (2332cef9)
+
 ## [0.18.3](https://github.com/hendripermana/permoney/compare/v0.18.2...v0.18.3) (2026-01-25)
 
 ### Bug Fixes
