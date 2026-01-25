@@ -107,4 +107,4 @@ scripts/*
 .taskmasterconfig
 .windsurfrules
 .cursor/rules/dev_workflow.mdc
-.cursor/rules/taskmaster.mdc
+.cursor/rules/taskmaster.mdc.trae/

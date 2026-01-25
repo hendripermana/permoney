@@ -71,12 +71,19 @@ class Budget < ApplicationRecord
     categories_to_remove = existing_budget_category_ids - current_category_ids
 
     # Create missing categories
-    categories_to_add.each do |category_id|
-      budget_categories.create!(
-        category_id: category_id,
-        budgeted_spending: 0,
-        currency: family.currency
-      )
+    if categories_to_add.any?
+      now = Time.current
+      new_records = categories_to_add.map do |category_id|
+        {
+          budget_id: id,
+          category_id: category_id,
+          budgeted_spending: 0,
+          currency: family.currency,
+          created_at: now,
+          updated_at: now
+        }
+      end
+      BudgetCategory.insert_all(new_records)
     end
 
     # Remove old categories

@@ -52,23 +52,33 @@ class Account::ActivityFeedData
       @transfers_by_date ||= begin
         return {} if transaction_ids.empty?
 
+        # Optimization: Build a lookup map for O(1) access instead of nested loops
+        # A transaction can be either inflow or outflow of a transfer
         transfers = Transfer
           .where(inflow_transaction_id: transaction_ids)
           .or(Transfer.where(outflow_transaction_id: transaction_ids))
+          .includes(:inflow_transaction, :outflow_transaction)
           .to_a
 
-        # Group transfers by the date of their transaction entries
+        transfer_map = {}
+        transfers.each do |t|
+          transfer_map[t.inflow_transaction_id] = t
+          transfer_map[t.outflow_transaction_id] = t
+        end
+
         result = Hash.new { |h, k| h[k] = [] }
 
         entries.each do |entry|
           next unless entry.transaction? && transaction_ids.include?(entry.entryable_id)
 
-          transfers.each do |transfer|
-            if transfer.inflow_transaction_id == entry.entryable_id ||
-               transfer.outflow_transaction_id == entry.entryable_id
-              result[entry.date] << transfer
-            end
+          # Use preloaded association if available, otherwise use lookup map
+          transfer = if entry.association(:transfer).loaded?
+            entry.transfer
+          else
+            transfer_map[entry.entryable_id]
           end
+
+          result[entry.date] << transfer if transfer
         end
 
         # Remove duplicates

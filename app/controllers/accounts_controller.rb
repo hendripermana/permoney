@@ -208,6 +208,14 @@ class AccountsController < ApplicationController
 
     def set_account
       @account = family.accounts.includes(:account_providers).find(params[:id])
+
+      # PERFORMANCE: Preload address for Property accounts to prevent N+1
+      if @account.accountable_type == "Property"
+        ActiveRecord::Associations::Preloader.new(
+          records: [ @account.accountable ],
+          associations: :address
+        ).call
+      end
     end
 
     def load_loan_adjustment_prompt
