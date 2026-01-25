@@ -1,5 +1,6 @@
 class Balance::BaseCalculator
   attr_reader :account, :window_start_date, :window_end_date
+  attr_accessor :cache_min_date, :cache_max_date
 
   def initialize(account, window_start_date: nil, window_end_date: nil)
     @account = account
@@ -13,7 +14,7 @@ class Balance::BaseCalculator
 
   private
     def sync_cache
-      @sync_cache ||= Balance::SyncCache.new(account)
+      @sync_cache ||= Balance::SyncCache.new(account, min_date: cache_min_date, max_date: cache_max_date)
     end
 
     def holdings_value_for_date(date)

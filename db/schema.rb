@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_01_25_090000) do
+ActiveRecord::Schema[8.1].define(version: 2026_01_25_141807) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -167,6 +167,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_01_25_090000) do
     t.decimal "start_cash_balance", precision: 19, scale: 4, default: "0.0", null: false
     t.decimal "start_non_cash_balance", precision: 19, scale: 4, default: "0.0", null: false
     t.datetime "updated_at", null: false
+    t.index ["account_id", "currency", "date"], name: "index_balances_on_account_currency_date_desc", order: { date: :desc }
     t.index ["account_id", "date", "currency"], name: "index_account_balances_on_account_id_date_currency_unique", unique: true
     t.index ["account_id", "date"], name: "index_balances_on_account_id_and_date", order: { date: :desc }
     t.index ["account_id"], name: "index_balances_on_account_id"
@@ -294,6 +295,80 @@ ActiveRecord::Schema[8.1].define(version: 2026_01_25_090000) do
     t.index ["entryable_type"], name: "index_entries_on_entryable_type"
     t.index ["import_id"], name: "index_entries_on_import_id"
     t.index ["plaid_id"], name: "index_entries_on_plaid_id"
+  end
+
+  create_table "eval_datasets", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.boolean "active", default: true
+    t.datetime "created_at", null: false
+    t.string "description"
+    t.string "eval_type", null: false
+    t.jsonb "metadata", default: {}
+    t.string "name", null: false
+    t.integer "sample_count", default: 0
+    t.datetime "updated_at", null: false
+    t.string "version", default: "1.0", null: false
+    t.index ["eval_type", "active"], name: "index_eval_datasets_on_eval_type_and_active"
+    t.index ["name"], name: "index_eval_datasets_on_name", unique: true
+  end
+
+  create_table "eval_results", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.jsonb "actual_output", null: false
+    t.boolean "alternative_match", default: false
+    t.integer "completion_tokens"
+    t.boolean "correct", null: false
+    t.decimal "cost", precision: 10, scale: 6
+    t.datetime "created_at", null: false
+    t.uuid "eval_run_id", null: false
+    t.uuid "eval_sample_id", null: false
+    t.boolean "exact_match", default: false
+    t.float "fuzzy_score"
+    t.boolean "hierarchical_match", default: false
+    t.integer "latency_ms"
+    t.jsonb "metadata", default: {}
+    t.boolean "null_expected", default: false
+    t.boolean "null_returned", default: false
+    t.integer "prompt_tokens"
+    t.datetime "updated_at", null: false
+    t.index ["eval_run_id", "correct"], name: "index_eval_results_on_eval_run_id_and_correct"
+    t.index ["eval_run_id"], name: "index_eval_results_on_eval_run_id"
+    t.index ["eval_sample_id"], name: "index_eval_results_on_eval_sample_id"
+  end
+
+  create_table "eval_runs", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.datetime "completed_at"
+    t.datetime "created_at", null: false
+    t.text "error_message"
+    t.uuid "eval_dataset_id", null: false
+    t.jsonb "metrics", default: {}
+    t.string "model", null: false
+    t.string "name"
+    t.string "provider", null: false
+    t.jsonb "provider_config", default: {}
+    t.datetime "started_at"
+    t.string "status", default: "pending", null: false
+    t.integer "total_completion_tokens", default: 0
+    t.decimal "total_cost", precision: 10, scale: 6, default: "0.0"
+    t.integer "total_prompt_tokens", default: 0
+    t.datetime "updated_at", null: false
+    t.index ["eval_dataset_id", "model"], name: "index_eval_runs_on_eval_dataset_id_and_model"
+    t.index ["eval_dataset_id"], name: "index_eval_runs_on_eval_dataset_id"
+    t.index ["provider", "model"], name: "index_eval_runs_on_provider_and_model"
+    t.index ["status"], name: "index_eval_runs_on_status"
+  end
+
+  create_table "eval_samples", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.jsonb "context_data", default: {}
+    t.datetime "created_at", null: false
+    t.string "difficulty", default: "medium"
+    t.uuid "eval_dataset_id", null: false
+    t.jsonb "expected_output", null: false
+    t.jsonb "input_data", null: false
+    t.jsonb "metadata", default: {}
+    t.string "tags", default: [], array: true
+    t.datetime "updated_at", null: false
+    t.index ["eval_dataset_id", "difficulty"], name: "index_eval_samples_on_eval_dataset_id_and_difficulty"
+    t.index ["eval_dataset_id"], name: "index_eval_samples_on_eval_dataset_id"
+    t.index ["tags"], name: "index_eval_samples_on_tags", using: :gin
   end
 
   create_table "exchange_rate_histories", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -1352,6 +1427,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_01_25_090000) do
   add_foreign_key "chats", "users"
   add_foreign_key "entries", "accounts"
   add_foreign_key "entries", "imports"
+  add_foreign_key "eval_results", "eval_runs"
+  add_foreign_key "eval_results", "eval_samples"
+  add_foreign_key "eval_runs", "eval_datasets"
+  add_foreign_key "eval_samples", "eval_datasets"
   add_foreign_key "family_exports", "families"
   add_foreign_key "holdings", "account_providers"
   add_foreign_key "holdings", "accounts"

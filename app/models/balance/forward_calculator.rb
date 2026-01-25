@@ -7,6 +7,10 @@ class Balance::ForwardCalculator < Balance::BaseCalculator
       start_date = determine_start_date
       end_date = determine_end_date
 
+      # Optimize cache loading by setting window
+      self.cache_min_date = start_date
+      self.cache_max_date = end_date
+
       # Get starting balance from previous calculation (if exists)
       starting_balance_record = account.balances
         .where(currency: account.currency)

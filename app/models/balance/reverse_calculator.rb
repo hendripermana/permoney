@@ -1,6 +1,10 @@
 class Balance::ReverseCalculator < Balance::BaseCalculator
   def calculate
     Rails.logger.tagged("Balance::ReverseCalculator") do
+      # Optimize cache
+      self.cache_min_date = account.opening_anchor_date
+      self.cache_max_date = account.current_anchor_date
+
       # Since it's a reverse sync, we're starting with the "end of day" balance components and
       # calculating backwards to derive the "start of day" balance components.
       end_cash_balance = derive_cash_balance_on_date_from_total(

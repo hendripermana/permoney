@@ -52,6 +52,7 @@ class Account < ApplicationRecord
       SELECT balance, date
       FROM balances
       WHERE balances.account_id = accounts.id
+      AND balances.currency = accounts.currency
       ORDER BY date DESC
       LIMIT 1
     ) latest_balance ON true")
