@@ -1,6 +1,11 @@
 <%# locals: (provider:, return_to: nil) %>
 
-<%= styled_form_with model: provider, class: "space-y-4" do |f| %>
+<% form_url = provider.persisted? ? settings_provider_directory_path(provider) : settings_provider_directories_path %>
+
+<%= styled_form_with model: provider,
+                     url: form_url,
+                     scope: :provider_directory,
+                     class: "space-y-4" do |f| %>
   <% if provider.errors.any? %>
     <%= render "shared/form_errors", model: provider %>
   <% end %>

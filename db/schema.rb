@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_01_17_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_01_18_090000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -882,11 +882,16 @@ ActiveRecord::Schema[8.1].define(version: 2026_01_17_120000) do
   end
 
   create_table "precious_metals", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.string "account_number"
+    t.string "account_status", default: "active"
+    t.string "akad"
     t.datetime "created_at", null: false
     t.jsonb "locked_attributes", default: {}
     t.decimal "manual_price", precision: 19, scale: 8
     t.string "manual_price_currency", limit: 3
+    t.uuid "preferred_funding_account_id"
     t.decimal "quantity", precision: 19, scale: 3, default: "0.0", null: false
+    t.string "scheme_type"
     t.string "subtype"
     t.string "unit", default: "g", null: false
     t.datetime "updated_at", null: false
@@ -1374,6 +1379,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_01_17_120000) do
   add_foreign_key "pay_later_installments", "transfers", on_delete: :nullify
   add_foreign_key "plaid_accounts", "plaid_items"
   add_foreign_key "plaid_items", "families"
+  add_foreign_key "precious_metals", "accounts", column: "preferred_funding_account_id", on_delete: :nullify
   add_foreign_key "provider_directories", "users"
   add_foreign_key "recurring_transactions", "families"
   add_foreign_key "recurring_transactions", "merchants"

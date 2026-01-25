@@ -12,6 +12,13 @@ class Settings::ProviderDirectoriesControllerTest < ActionDispatch::IntegrationT
     assert_select "h1", text: "Providers"
   end
 
+  test "renders new provider form inside a turbo frame" do
+    get new_settings_provider_directory_url, headers: { "Turbo-Frame" => "modal" }
+
+    assert_response :success
+    assert_select "form[action='#{settings_provider_directories_path}']"
+  end
+
   test "creates provider" do
     assert_difference "ProviderDirectory.count", 1 do
       post settings_provider_directories_url, params: {
@@ -26,6 +33,17 @@ class Settings::ProviderDirectoriesControllerTest < ActionDispatch::IntegrationT
     end
 
     assert_redirected_to settings_provider_directories_url
+  end
+
+  test "turbo stream create honors return_to" do
+    post settings_provider_directories_url(format: :turbo_stream), params: {
+      provider_directory: { name: "Turbo Provider" },
+      return_to: accounts_path
+    }
+
+    assert_response :success
+    assert_includes @response.body, "turbo-stream"
+    assert_includes @response.body, accounts_path
   end
 
   test "updates provider" do
