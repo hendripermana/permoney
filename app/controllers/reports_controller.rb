@@ -218,7 +218,7 @@ class ReportsController < ApplicationController
         target_hash[parent][:count] += 1
 
         item_data = {
-          date: entry.created_at.to_date,
+          date: entry.date,
           amount: amount_abs,
           description: transaction.try(:description) || category.name
         }
