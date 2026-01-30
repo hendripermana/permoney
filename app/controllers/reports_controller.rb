@@ -203,7 +203,7 @@ class ReportsController < ApplicationController
 
         # Determine Parent Category
         parent = category.parent || category
-        
+
         # Initialize Parent Entry
         target_hash[parent] ||= {
           total_amount: 0,
@@ -211,7 +211,7 @@ class ReportsController < ApplicationController
           subcategories: {},
           direct_items: [] # Items directly assigned to the parent category
         }
-        
+
         # Update Parent Totals
         amount_abs = entry.amount.abs
         target_hash[parent][:total_amount] += amount_abs
