@@ -4,6 +4,7 @@ class ProviderDirectory < ApplicationRecord
     pawnshop: "pawnshop",
     bullion_dealer: "bullion_dealer",
     broker: "broker",
+    cooperative: "cooperative",
     other: "other"
   }.freeze
 

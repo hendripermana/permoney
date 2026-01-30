@@ -188,7 +188,7 @@ class ReportsController < ApplicationController
     def build_transactions_data
       transactions = transactions_for_date_range(@start_date, @end_date)
 
-      # Group by type and category
+      # Group by classification (income/expense)
       income_data = {}
       expense_data = {}
 
@@ -198,22 +198,60 @@ class ReportsController < ApplicationController
         next unless category  # Skip if no category
 
         # Match Entry#classification logic: negative amount = income, positive = expense
-        type = entry.amount.negative? ? "income" : "expense"
-        target_hash = type == "income" ? income_data : expense_data
+        type = entry.amount.negative? ? :income : :expense
+        target_hash = type == :income ? income_data : expense_data
 
-        # Use category object as key so view can access .name, .color
-        target_hash[category] ||= []
-        target_hash[category] << {
+        # Determine Parent Category
+        parent = category.parent || category
+        
+        # Initialize Parent Entry
+        target_hash[parent] ||= {
+          total_amount: 0,
+          count: 0,
+          subcategories: {},
+          direct_items: [] # Items directly assigned to the parent category
+        }
+        
+        # Update Parent Totals
+        amount_abs = entry.amount.abs
+        target_hash[parent][:total_amount] += amount_abs
+        target_hash[parent][:count] += 1
+
+        item_data = {
           date: entry.created_at.to_date,
-          amount: entry.amount.abs,
+          amount: amount_abs,
           description: transaction.try(:description) || category.name
         }
+
+        # Place the item in the correct bucket (Subcategory or Direct)
+        if category.parent.present?
+          # It's a subcategory
+          target_hash[parent][:subcategories][category] ||= {
+            total_amount: 0,
+            count: 0,
+            items: []
+          }
+          target_hash[parent][:subcategories][category][:total_amount] += amount_abs
+          target_hash[parent][:subcategories][category][:count] += 1
+          target_hash[parent][:subcategories][category][:items] << item_data
+        else
+          # It's the parent category itself
+          target_hash[parent][:direct_items] << item_data
+        end
       end
 
+      # Sort by total amount descending
       {
-        income: income_data,
-        expense: expense_data
+        income: sort_category_data(income_data),
+        expense: sort_category_data(expense_data)
       }
+    end
+
+    def sort_category_data(data)
+      data.sort_by { |_, info| -info[:total_amount] }.to_h.transform_values do |info|
+        info[:subcategories] = info[:subcategories].sort_by { |_, sub_info| -sub_info[:total_amount] }.to_h
+        info
+      end
     end
 
     def build_budget_performance
@@ -298,39 +336,49 @@ class ReportsController < ApplicationController
       require "csv"
 
       CSV.generate do |csv|
-        csv << [ "Category", "Amount", "Type", "Transaction Count" ]
+        csv << [ "Category", "Subcategory", "Amount", "Type", "Transaction Count" ]
 
         # Process both income and expense data
         all_rows = []
 
-        transactions_data[:income].each do |category, items|
-          total_amount = items.sum { |item| item[:amount] }
+        # Helper lambda to process nested data
+        process_category = ->(category, info, type_label) {
+          # Parent row (aggregated)
           all_rows << {
             category_name: sanitize_csv_field(category.name),
-            amount: total_amount,
-            type: "Income",
-            count: items.length
+            subcategory_name: nil,
+            amount: info[:total_amount],
+            type: type_label,
+            count: info[:count]
           }
-        end
 
-        transactions_data[:expense].each do |category, items|
-          total_amount = items.sum { |item| item[:amount] }
-          all_rows << {
-            category_name: sanitize_csv_field(category.name),
-            amount: total_amount,
-            type: "Expense",
-            count: items.length
-          }
-        end
+          # Subcategories
+          info[:subcategories].each do |sub_cat, sub_info|
+            all_rows << {
+              category_name: sanitize_csv_field(category.name),
+              subcategory_name: sanitize_csv_field(sub_cat.name),
+              amount: sub_info[:total_amount],
+              type: type_label,
+              count: sub_info[:count]
+            }
+          end
+        }
 
-        # Calculate total for percentage
-        total_sum = all_rows.sum { |row| row[:amount] }
+        transactions_data[:income].each { |c, i| process_category.call(c, i, "Income") }
+        transactions_data[:expense].each { |c, i| process_category.call(c, i, "Expense") }
+
+        # Calculate total for percentage (using only unique rows - parents only for total, or leaf nodes?)
+        # Let's use parent totals to avoid double counting if we included subcats in a flat total.
+        # But wait, parent total INCLUDES subcats. So summing all rows would double count.
+        # Let's sum only rows where subcategory_name is nil (parents).
+        total_sum = all_rows.select { |r| r[:subcategory_name].nil? }.sum { |row| row[:amount] }
 
         # Write rows
         all_rows.each do |row|
           percentage = total_sum > 0 ? ((row[:amount].to_f / total_sum) * 100).round(1) : 0
           csv << [
             row[:category_name],
+            row[:subcategory_name] || "(Total)",
             row[:amount],
             row[:type],
             "#{percentage}%",

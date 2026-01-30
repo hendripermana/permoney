@@ -12,7 +12,8 @@ class Investment < ApplicationRecord
     "mutual_fund" => { short: "Mutual Fund", long: "Mutual Fund" },
     "ira" => { short: "IRA", long: "Traditional IRA" },
     "roth_ira" => { short: "Roth IRA", long: "Roth IRA" },
-    "angel" => { short: "Angel", long: "Angel" }
+    "angel" => { short: "Angel", long: "Angel" },
+    "cooperative_share" => { short: "Co-op Share", long: "Cooperative Share" }
   }.freeze
 
   class << self

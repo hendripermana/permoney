@@ -63,6 +63,6 @@ class MessagesController < ApplicationController
     end
 
     def floating_request?
-      params[:floating].present? || turbo_frame_request?
+      params[:floating].present? || request.headers["Turbo-Frame"] == "floating_chat_content"
     end
 end

@@ -1,7 +1,10 @@
+<% mobile_chat_path = new_chat? ? new_chat_path : chat_path(chat) %>
+
 <div
   data-controller="floating-chat"
   data-floating-chat-open-value="false"
   data-floating-chat-is-mobile-value="false"
+  data-floating-chat-mobile-path-value="<%= mobile_chat_path %>"
   class="fixed z-40 lg:z-50">
 
   <%# Chat Trigger Button - Desktop & Mobile (except PWA mode) %>

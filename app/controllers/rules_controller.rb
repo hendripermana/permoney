@@ -128,6 +128,42 @@ class RulesController < ApplicationController
     redirect_back_or_to rules_path, notice: "Rules are being applied"
   end
 
+  def clear_ai_cache
+    family_transactions = Current.family.transactions.select(:id)
+
+    ai_category_transactions = DataEnrichment.where(
+      enrichable_type: "Transaction",
+      attribute_name: "category_id",
+      source: "ai",
+      enrichable_id: family_transactions
+    ).select(:enrichable_id)
+
+    ai_merchant_transactions = DataEnrichment.where(
+      enrichable_type: "Transaction",
+      attribute_name: "merchant_id",
+      source: "ai",
+      enrichable_id: family_transactions
+    ).select(:enrichable_id)
+
+    count = 0
+
+    ActiveRecord::Base.transaction do
+      timestamp = Time.current
+
+      count += Transaction
+        .where(id: ai_category_transactions)
+        .where("transactions.locked_attributes ? 'category_id'")
+        .update_all(locked_attributes: Arel.sql("locked_attributes - 'category_id'"), updated_at: timestamp)
+
+      count += Transaction
+        .where(id: ai_merchant_transactions)
+        .where("transactions.locked_attributes ? 'merchant_id'")
+        .update_all(locked_attributes: Arel.sql("locked_attributes - 'merchant_id'"), updated_at: timestamp)
+    end
+
+    redirect_back_or_to rules_path, notice: "AI cache cleared. #{count} attributes unlocked for re-evaluation."
+  end
+
   private
     def set_rule
       @rule = Current.family.rules.find(params[:id])
