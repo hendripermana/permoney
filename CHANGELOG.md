@@ -1,3 +1,12 @@
+## [0.18.6](https://github.com/hendripermana/permoney/compare/v0.18.5...v0.18.6) (2026-01-30)
+
+### Other Changes
+
+- Merge pull request #111 from hendripermana/feature/community-updates-jan2026 (fdbcbf6f)
+- Use entry date in reports breakdown (ec9a729f)
+- Fix lint whitespace and update Brakeman (e8808b25)
+- Implement community updates (AI cache, mobile chat, UX) (84569be7)
+
 ## [0.18.5](https://github.com/hendripermana/permoney/compare/v0.18.4...v0.18.5) (2026-01-25)
 
 ### Other Changes
