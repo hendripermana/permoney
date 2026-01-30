@@ -29,7 +29,7 @@
             <%= t("reports.transactions.income_title") %>
           </h3>
           <span class="ml-auto text-xs text-tertiary">
-            <%= pluralize(transactions[:income].sum { |_, items| items.length }, "transaction") %>
+            <%= pluralize(transactions[:income].sum { |_, info| info[:count] }, "transaction") %>
           </span>
         </div>
 
@@ -37,7 +37,7 @@
           <table class="w-full text-sm">
             <thead>
               <tr class="border-b border-tertiary">
-                <th class="text-left py-2 pr-4 font-medium text-secondary">
+                <th class="text-left py-2 pr-4 font-medium text-secondary w-1/2">
                   <%= t("reports.transactions.category") %>
                 </th>
                 <th class="text-right py-2 px-4 font-medium text-secondary">
@@ -52,30 +52,63 @@
               </tr>
             </thead>
             <tbody>
-              <% transactions[:income].each do |category, items| %>
-                <tr class="border-b border-tertiary/50 hover:bg-surface-hover transition-colors">
+              <% transactions[:income].each do |category, info| %>
+                <%# Parent Category Row %>
+                <tr class="border-b border-tertiary/50 hover:bg-surface-hover transition-colors font-medium">
                   <td class="py-3 pr-4">
                     <div class="flex items-center gap-2">
                       <span class="w-2 h-2 rounded-full bg-success"></span>
-                      <span class="text-primary font-medium">
+                      <span class="text-primary">
                         <%= category.name %>
                       </span>
                     </div>
                   </td>
                   <td class="text-right py-3 px-4">
-                    <span class="font-semibold text-success">
-                      +<%= Money.new(items.sum { |item| item[:amount] }, Current.family.currency).format %>
+                    <span class="text-success">
+                      +<%= Money.new(info[:total_amount], Current.family.currency).format %>
                     </span>
                   </td>
                   <td class="text-right py-3 px-4 text-tertiary">
-                    <%= items.length %>
+                    <%= info[:count] %>
                   </td>
                   <td class="text-right py-3 pl-4 text-secondary">
-                    <% total_amount = items.sum { |item| item[:amount] } %>
-                    <% avg = items.length > 0 ? total_amount / items.length : 0 %>
+                    <% avg = info[:count] > 0 ? info[:total_amount] / info[:count] : 0 %>
                     <%= Money.new(avg, Current.family.currency).format %>
                   </td>
                 </tr>
+
+                <%# Subcategories %>
+                <% info[:subcategories].each do |subcategory, sub_info| %>
+                  <tr class="border-b border-tertiary/30 hover:bg-surface-hover transition-colors text-sm">
+                    <td class="py-2 pr-4 pl-6"> <%# Indented %>
+                      <div class="flex items-center gap-2">
+                        <span class="w-1.5 h-1.5 rounded-full bg-success opacity-60"></span>
+                        <span class="text-secondary">
+                          <%= subcategory.name %>
+                        </span>
+                      </div>
+                    </td>
+                    <td class="text-right py-2 px-4">
+                      <span class="text-success opacity-90">
+                        +<%= Money.new(sub_info[:total_amount], Current.family.currency).format %>
+                      </span>
+                    </td>
+                    <td class="text-right py-2 px-4 text-tertiary text-xs">
+                      <%= sub_info[:count] %>
+                    </td>
+                    <td class="text-right py-2 pl-4 text-tertiary text-xs">
+                       <% sub_avg = sub_info[:count] > 0 ? sub_info[:total_amount] / sub_info[:count] : 0 %>
+                       <%= Money.new(sub_avg, Current.family.currency).format %>
+                    </td>
+                  </tr>
+                <% end %>
+
+                <%# Direct Items (Pseudo-subcategory "Other" if needed, or just listed if we want detail. 
+                    For now, following the pattern: Parent total includes direct items. 
+                    If we want to show direct items explicitly as a sub-row, we can. 
+                    Let's stick to showing just subcategories for breakdown, assuming direct items 
+                    are part of the parent's generic bucket) %>
+                
               <% end %>
             </tbody>
           </table>
@@ -85,7 +118,7 @@
           <div class="text-right">
             <p class="text-xs text-tertiary mb-1"><%= t("reports.transactions.total_income") %></p>
             <p class="text-lg font-semibold text-success">
-              +<%= Money.new(transactions[:income].sum { |_, items| items.sum { |item| item[:amount] } }, Current.family.currency).format %>
+              +<%= Money.new(transactions[:income].sum { |_, info| info[:total_amount] }, Current.family.currency).format %>
             </p>
           </div>
         </div>
@@ -101,7 +134,7 @@
             <%= t("reports.transactions.expense_title") %>
           </h3>
           <span class="ml-auto text-xs text-tertiary">
-            <%= pluralize(transactions[:expense].sum { |_, items| items.length }, "transaction") %>
+            <%= pluralize(transactions[:expense].sum { |_, info| info[:count] }, "transaction") %>
           </span>
         </div>
 
@@ -109,7 +142,7 @@
           <table class="w-full text-sm">
             <thead>
               <tr class="border-b border-tertiary">
-                <th class="text-left py-2 pr-4 font-medium text-secondary">
+                <th class="text-left py-2 pr-4 font-medium text-secondary w-1/2">
                   <%= t("reports.transactions.category") %>
                 </th>
                 <th class="text-right py-2 px-4 font-medium text-secondary">
@@ -124,30 +157,57 @@
               </tr>
             </thead>
             <tbody>
-              <% transactions[:expense].each do |category, items| %>
-                <tr class="border-b border-tertiary/50 hover:bg-surface-hover transition-colors">
+              <% transactions[:expense].each do |category, info| %>
+                <%# Parent Category Row %>
+                <tr class="border-b border-tertiary/50 hover:bg-surface-hover transition-colors font-medium">
                   <td class="py-3 pr-4">
                     <div class="flex items-center gap-2">
                       <span class="w-2 h-2 rounded-full bg-danger"></span>
-                      <span class="text-primary font-medium">
+                      <span class="text-primary">
                         <%= category.name %>
                       </span>
                     </div>
                   </td>
                   <td class="text-right py-3 px-4">
-                    <span class="font-semibold text-danger">
-                      -<%= Money.new(items.sum { |item| item[:amount] }.abs, Current.family.currency).format %>
+                    <span class="text-danger">
+                      -<%= Money.new(info[:total_amount], Current.family.currency).format %>
                     </span>
                   </td>
                   <td class="text-right py-3 px-4 text-tertiary">
-                    <%= items.length %>
+                    <%= info[:count] %>
                   </td>
                   <td class="text-right py-3 pl-4 text-secondary">
-                    <% total_amount = items.sum { |item| item[:amount] } %>
-                    <% avg = items.length > 0 ? (total_amount.abs / items.length) : 0 %>
+                    <% avg = info[:count] > 0 ? info[:total_amount] / info[:count] : 0 %>
                     <%= Money.new(avg, Current.family.currency).format %>
                   </td>
                 </tr>
+
+                <%# Subcategories %>
+                <% info[:subcategories].each do |subcategory, sub_info| %>
+                  <tr class="border-b border-tertiary/30 hover:bg-surface-hover transition-colors text-sm">
+                    <td class="py-2 pr-4 pl-6"> <%# Indented %>
+                      <div class="flex items-center gap-2">
+                        <span class="w-1.5 h-1.5 rounded-full bg-danger opacity-60"></span>
+                        <span class="text-secondary">
+                          <%= subcategory.name %>
+                        </span>
+                      </div>
+                    </td>
+                    <td class="text-right py-2 px-4">
+                      <span class="text-danger opacity-90">
+                        -<%= Money.new(sub_info[:total_amount], Current.family.currency).format %>
+                      </span>
+                    </td>
+                    <td class="text-right py-2 px-4 text-tertiary text-xs">
+                      <%= sub_info[:count] %>
+                    </td>
+                    <td class="text-right py-2 pl-4 text-tertiary text-xs">
+                       <% sub_avg = sub_info[:count] > 0 ? sub_info[:total_amount] / sub_info[:count] : 0 %>
+                       <%= Money.new(sub_avg, Current.family.currency).format %>
+                    </td>
+                  </tr>
+                <% end %>
+
               <% end %>
             </tbody>
           </table>
@@ -157,7 +217,7 @@
           <div class="text-right">
             <p class="text-xs text-tertiary mb-1"><%= t("reports.transactions.total_expenses") %></p>
             <p class="text-lg font-semibold text-danger">
-              -<%= Money.new(transactions[:expense].sum { |_, items| items.sum { |item| item[:amount] } }.abs, Current.family.currency).format %>
+              -<%= Money.new(transactions[:expense].sum { |_, info| info[:total_amount] }, Current.family.currency).format %>
             </p>
           </div>
         </div>

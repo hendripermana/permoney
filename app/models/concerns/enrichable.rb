@@ -20,6 +20,8 @@ module Enrichable
       json_condition = attrs.each_with_object({}) { |attr, hash| hash[attr] = true }
       where.not(Arel.sql("#{table_name}.locked_attributes ?| array[:keys]"), keys: attrs)
     }
+
+    has_many :enrichments, class_name: "DataEnrichment", as: :enrichable, dependent: :destroy
   end
 
   # Convenience method for a single attribute

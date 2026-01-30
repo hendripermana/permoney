@@ -6,7 +6,8 @@ class Depository < ApplicationRecord
     "savings" => { short: "Savings", long: "Savings" },
     "hsa" => { short: "HSA", long: "Health Savings Account" },
     "cd" => { short: "CD", long: "Certificate of Deposit" },
-    "money_market" => { short: "MM", long: "Money Market" }
+    "money_market" => { short: "MM", long: "Money Market" },
+    "cooperative" => { short: "Co-op", long: "Cooperative Savings" }
   }.freeze
 
   class << self

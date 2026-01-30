@@ -72,3 +72,12 @@ balance_audit:
   class: "BalanceAuditJob"
   queue: "low_priority"
   description: "Samples accounts and queues windowed resync (last 7 days) to auto-heal backdated edits"
+
+# Sync all accounts for all families periodically
+# Ensures linked accounts stay fresh even if users don't visit
+sync_all_accounts:
+  cron: "0 */6 * * *" # every 6 hours
+  class: "SyncAllAccountsJob"
+  queue: "scheduled"
+  description: "Triggers sync for all linked accounts across all families"
+

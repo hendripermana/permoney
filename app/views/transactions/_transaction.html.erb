@@ -102,6 +102,13 @@
                     <% if transaction.transfer.present? %>
                       <%= render "transactions/transfer_match", transaction: transaction %>
                     <% end %>
+
+                    <%# Protection Indicator - shows if transaction has locked attributes %>
+                    <% if transaction.respond_to?(:locked_attributes) && transaction.locked_attributes.present? %>
+                      <span class="inline-flex items-center text-xs font-medium text-secondary" title="Protected - some fields are locked">
+                        <%= icon "lock", size: "sm", color: "current" %>
+                      </span>
+                    <% end %>
                   </div>
                 </div>
 

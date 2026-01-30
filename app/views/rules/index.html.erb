@@ -11,6 +11,13 @@
           frame: :modal) %>
         <% menu.with_item(
           variant: "button",
+          text: "Reset AI Cache",
+          href: clear_ai_cache_rules_path,
+          icon: "refresh-ccw",
+          method: :post,
+          confirm: CustomConfirm.for_action("reset AI cache", "This will unlock all AI-categorized transactions so they can be re-evaluated.")) %>
+        <% menu.with_item(
+          variant: "button",
           text: "Delete all rules",
           href: destroy_all_rules_path,
           icon: "trash-2",

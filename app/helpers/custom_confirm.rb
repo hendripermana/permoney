@@ -11,6 +11,15 @@ class CustomConfirm
         btn_text: "Delete #{resource_name.titleize}"
       )
     end
+
+    def for_action(action_text, body_text, destructive: false)
+      new(
+        title: action_text.titleize,
+        body: body_text,
+        btn_text: action_text.titleize,
+        destructive: destructive
+      )
+    end
   end
 
   def initialize(title: default_title, body: default_body, btn_text: default_btn_text, destructive: false, high_severity: false)

@@ -16,11 +16,14 @@ class EntrySearch
     def apply_search_filter(scope, search)
       return scope if search.blank?
 
-      query = scope
-      query = query.where("entries.name ILIKE :search",
-        search: "%#{ActiveRecord::Base.sanitize_sql_like(search)}%"
+      sanitized_search = "%#{ActiveRecord::Base.sanitize_sql_like(search)}%"
+
+      # Notes are stored in the entries table (entries.notes)
+      # Entry scope queries directly; Transaction scope already joins entries via family.transactions.
+      scope.where(
+        "entries.name ILIKE :search OR entries.notes ILIKE :search",
+        search: sanitized_search
       )
-      query
     end
 
     def apply_date_filters(scope, start_date, end_date)

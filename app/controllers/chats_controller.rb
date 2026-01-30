@@ -6,7 +6,7 @@ class ChatsController < ApplicationController
   def index
     @chats = Current.user.chats.order(created_at: :desc)
 
-    if params[:floating]
+    if floating_request?
       render "chats/floating_index", layout: false and return
     end
   end
@@ -15,7 +15,7 @@ class ChatsController < ApplicationController
     set_last_viewed_chat(@chat)
     @message ||= UserMessage.new(chat: @chat)
 
-    if params[:floating]
+    if floating_request?
       render "chats/floating_show", layout: false
     end
   end
@@ -23,7 +23,7 @@ class ChatsController < ApplicationController
   def new
     @chat = Current.user.chats.new(title: "New chat #{Time.current.strftime("%Y-%m-%d %H:%M")}")
 
-    if params[:floating]
+    if floating_request?
       render "chats/floating_new", layout: false
     end
   end
@@ -41,7 +41,7 @@ class ChatsController < ApplicationController
       if @chat&.persisted?
         @chat.add_error(e.message)
       else
-        if turbo_frame_request?
+        if floating_request?
           flash.now[:alert] = "Failed to start chat: #{e.message}"
           render "chats/floating_new", layout: false, status: :unprocessable_entity
           return
@@ -52,7 +52,7 @@ class ChatsController < ApplicationController
       end
     end
 
-    if turbo_frame_request?
+    if floating_request?
       @message = UserMessage.new(chat: @chat)
       render "chats/floating_show", layout: false
     else
@@ -88,7 +88,7 @@ class ChatsController < ApplicationController
     end
 
     @message ||= UserMessage.new(chat: @chat)
-    if turbo_frame_request?
+    if floating_request?
       render "chats/floating_show", layout: false
     else
       redirect_to chat_redirect_path
@@ -113,7 +113,7 @@ class ChatsController < ApplicationController
     end
 
     def floating_request?
-      params[:floating].present?
+      params[:floating].present? || request.headers["Turbo-Frame"] == "floating_chat_content"
     end
 
     def chat_redirect_path

@@ -5,6 +5,7 @@ export default class extends Controller {
   static values = {
     open: Boolean,
     isMobile: Boolean,
+    mobilePath: String,
   };
 
   connect() {
@@ -49,11 +50,21 @@ export default class extends Controller {
 
   toggle(event) {
     event?.preventDefault();
+    if (this.isMobileValue && this.mobilePathValue) {
+      window.location.assign(this.mobilePathValue);
+      return;
+    }
+
     this.openValue = !this.openValue;
   }
 
   open(event) {
     event?.preventDefault();
+    if (this.isMobileValue && this.mobilePathValue) {
+      window.location.assign(this.mobilePathValue);
+      return;
+    }
+
     this.openValue = true;
   }
 
