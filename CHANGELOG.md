@@ -1,3 +1,11 @@
+## [0.18.8](https://github.com/hendripermana/permoney/compare/v0.18.7...v0.18.8) (2026-02-08)
+
+### Other Changes
+
+- Merge pull request #113 from hendripermana/feature/ui-ux-overhaul (f616370e)
+- Harden asset load paths (d87b43c3)
+- Fix Tailwind asset precompile (111b58c4)
+
 ## [0.18.7](https://github.com/hendripermana/permoney/compare/v0.18.6...v0.18.7) (2026-02-08)
 
 ### Other Changes
