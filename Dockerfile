@@ -76,13 +76,11 @@ RUN bundle exec bootsnap precompile --gemfile -j 4
 
 # Precompile assets with optimizations and error handling
 RUN if [ -f "bin/rails" ]; then \
-        SECRET_KEY_BASE=${SECRET_KEY_BASE:-dummy} \
+        SECRET_KEY_BASE_DUMMY=1 \
         RAILS_ENV=production \
         RAILS_LOG_LEVEL=error \
         RAILS_SERVE_STATIC_FILES=true \
-        ./bin/rails assets:precompile && \
-        echo "Assets precompiled successfully" || \
-        (echo "Asset precompilation failed, continuing..." && exit 0); \
+        ./bin/rails assets:precompile; \
     else \
         echo "Rails binary not found, skipping asset precompilation"; \
     fi

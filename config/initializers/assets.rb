@@ -4,4 +4,8 @@
 Rails.application.config.assets.version = "1.0"
 
 # Add additional assets to the asset load path.
-# Rails.application.config.assets.paths << Emoji.images_path
+# Tailwind outputs compiled CSS to app/assets/builds; Propshaft should serve it.
+Rails.application.config.assets.paths << Rails.root.join("app/assets/builds")
+
+# Exclude Tailwind source files from Propshaft to avoid digesting inputs.
+Rails.application.config.assets.excluded_paths << Rails.root.join("app/assets/tailwind")

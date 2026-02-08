@@ -142,6 +142,10 @@
   transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+@utility shadow-card {
+  box-shadow: var(--shadow-md);
+}
+
 @utility section-card {
   @apply bg-container rounded-xl shadow-card p-6 transition-optimized hover:shadow-lg hover:scale-[1.005];
 }
