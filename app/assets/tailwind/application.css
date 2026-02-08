@@ -135,7 +135,19 @@
 
 /* Performance-optimized transitions */
 @utility transition-optimized {
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@utility transition-smooth {
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@utility section-card {
+  @apply bg-container rounded-xl shadow-card p-6 transition-optimized hover:shadow-lg hover:scale-[1.005];
+}
+
+@utility section-grid {
+  @apply grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6;
 }
 
 /* Reduced motion support - improves accessibility and performance */

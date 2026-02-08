@@ -155,7 +155,7 @@
 <div class="reports-page w-full space-y-6 pb-24 reports-print-sheet">
   <% if Current.family.transactions.any? %>
     <%# Summary Dashboard %>
-    <section>
+    <section class="section-card">
       <%= render partial: "reports/summary_dashboard", locals: {
         metrics: @summary_metrics,
         period_type: @period_type
@@ -164,7 +164,7 @@
 
 
     <%# Trends & Insights %>
-    <section class="bg-container py-4 px-6 rounded-xl shadow-border-xs">
+    <section class="section-card">
       <%= render partial: "reports/trends_insights", locals: {
         trends_data: @trends_data,
         spending_patterns: @spending_patterns
@@ -172,14 +172,14 @@
     </section>
 
     <%# Budget Performance %>
-    <section class="bg-container py-4 px-6 rounded-xl shadow-border-xs">
+    <section class="section-card">
       <%= render partial: "reports/budget_performance", locals: {
         budget_performance: @budget_performance
       } %>
     </section>
 
     <%# Transactions Breakdown %>
-    <section class="bg-container py-4 px-6 rounded-xl shadow-border-xs" data-section-key="transactions_breakdown">
+    <section class="section-card" data-section-key="transactions_breakdown">
       <%= render partial: "reports/transactions_breakdown", locals: {
         transactions: @transactions,
         period_type: @period_type,
@@ -189,7 +189,7 @@
     </section>
   <% else %>
     <%# Empty State %>
-    <section>
+    <section class="section-card">
       <%= render partial: "reports/empty_state" %>
     </section>
   <% end %>

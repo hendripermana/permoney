@@ -3,7 +3,7 @@
 <%# Real-time data with live updates via Turbo %>
 
 <%= turbo_frame_tag "dashboard_kpi_cards",
-  class: "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4 lg:gap-6 mb-8 items-stretch",
+  class: "section-grid mb-8 items-stretch",
   data: { turbo_action: "advance" } do %>
 
   <%# Net Worth Card %>

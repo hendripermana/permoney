@@ -13,17 +13,21 @@ module ApplicationHelper
     form_with(**options, &block)
   end
 
+  def skeleton_loader(classes = "")
+    tag.div class: "bg-gray-200 dark:bg-gray-700 animate-pulse rounded #{classes}"
+  end
+
   def icon(key, size: "md", color: "default", custom: false, as_button: false, **opts)
     extra_classes = opts.delete(:class)
     sizes = { xs: "w-3 h-3", sm: "w-4 h-4", md: "w-5 h-5", lg: "w-6 h-6", xl: "w-7 h-7", "2xl": "w-8 h-8" }
     colors = { default: "fg-gray", white: "fg-inverse", success: "text-success", warning: "text-warning", destructive: "text-destructive", current: "text-current" }
 
     icon_classes = class_names(
-      "shrink-0",
-      sizes[size.to_sym],
-      colors[color.to_sym],
-      extra_classes
-    )
+    "shrink-0 transition-all duration-300",
+    sizes[size.to_sym],
+    colors[color.to_sym],
+    extra_classes
+  )
 
     if custom
       inline_svg_tag("#{key}.svg", class: icon_classes, **opts)

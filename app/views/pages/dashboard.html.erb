@@ -39,7 +39,7 @@
       kpi_savings_rate: @kpi_savings_rate %>
 
     <% if @cashflow_sankey_data[:links].present? %>
-      <section class="bg-container py-4 rounded-xl shadow-border-xs mb-6">
+      <section class="section-card mb-6">
         <%= render partial: "pages/dashboard/cashflow_sankey", locals: {
           sankey_data: @cashflow_sankey_data,
           period: @period
@@ -48,7 +48,7 @@
     <% end %>
 
     <% if @outflows_data[:categories].present? %>
-      <section class="bg-container py-4 rounded-xl shadow-border-xs mb-6">
+      <section class="section-card mb-6">
         <%= render partial: "pages/dashboard/outflows_donut", locals: {
           outflows_data: @outflows_data,
           period: @period
@@ -56,18 +56,18 @@
       </section>
     <% end %>
 
-    <section class="bg-container py-4 rounded-xl shadow-border-xs">
+    <section class="section-card">
       <%= render partial: "pages/dashboard/net_worth_chart", locals: {
         balance_sheet: @balance_sheet,
         period: @period
       } %>
     </section>
 
-    <section>
+    <section class="mt-6">
       <%= render "pages/dashboard/balance_sheet", balance_sheet: @balance_sheet %>
     </section>
   <% else %>
-    <section>
+    <section class="section-card">
       <%= render "pages/dashboard/no_accounts_graph_placeholder" %>
     </section>
   <% end %>
