@@ -34,7 +34,7 @@ module Permoney
         return git_version if git_version.present?
 
         # Priority 3: Fallback to hardcoded version for offline/disconnected environments
-        "0.18.6"
+        "0.18.7"
       end
 
       def read_version_from_git_tag

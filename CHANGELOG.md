@@ -1,3 +1,13 @@
+## [0.18.7](https://github.com/hendripermana/permoney/compare/v0.18.6...v0.18.7) (2026-02-08)
+
+### Other Changes
+
+- Merge pull request #112 from hendripermana/feature/ui-ux-overhaul (05606961)
+- chore: remediate false positive secret detection in template (834d6239)
+- chore: update brakeman to 8.0.2 to fix CI failure (b33eb006)
+- chore: fix linting and formatting issues (1fc70264)
+- feat(ui): complete UI/UX overhaul with modern design system (0ff95609)
+
 ## [0.18.6](https://github.com/hendripermana/permoney/compare/v0.18.5...v0.18.6) (2026-01-30)
 
 ### Other Changes
