@@ -28,11 +28,11 @@
     </div>
   <% end %>
 
-  <section>
+  <section class="section-card">
     <%= render "shared/transaction_type_tabs", active_tab: "transfer" %>
   </section>
 
-  <section class="space-y-2">
+  <section class="section-card space-y-4">
     <%= f.collection_select :from_account_id,
                             accounts,
                             :id,
@@ -67,7 +67,7 @@
     <%= f.date_field :date, value: transfer.inflow_transaction&.entry&.date || Date.current, label: t(".date"), required: true, max: Date.current %>
   </section>
 
-  <section class="space-y-3" data-transfer-form-target="preciousMetalFields" hidden>
+  <section class="section-card space-y-4" data-transfer-form-target="preciousMetalFields" hidden>
     <div class="space-y-2">
       <div class="flex items-end gap-2">
         <div class="grow">
@@ -169,7 +169,7 @@
     <% end %>
   <% end %>
 
-  <section>
+  <section class="flex justify-end pt-2">
     <%= f.submit t(".submit") %>
   </section>
 <% end %>

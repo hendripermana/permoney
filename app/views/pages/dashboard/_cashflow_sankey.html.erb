@@ -22,15 +22,13 @@
           data-cashflow-fullscreen-enhanced-currency-symbol-value="<%= sankey_data[:currency_symbol] %>"
           data-cashflow-fullscreen-enhanced-period-value="<%= period.key %>"
           data-cashflow-fullscreen-enhanced-period-options-value="<%= Period.as_options.to_json %>"
-          class="relative z-40 flex items-center justify-center w-10 h-10 rounded-lg border border-secondary bg-container hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors duration-200 group focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800"
+          class="relative z-40 flex items-center justify-center w-10 h-10 rounded-lg border border-secondary bg-container hover:bg-gray-50 dark:hover:bg-gray-800 transition-all duration-300 group focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800"
           title="Toggle fullscreen view"
           type="button"
           aria-label="Toggle fullscreen view"
           aria-pressed="false"
           tabindex="0">
-          <svg class="w-5 h-5 text-gray-600 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-white transition-colors duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
-          </svg>
+          <%= icon("maximize-2", class: "w-5 h-5 text-gray-600 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-white transition-colors duration-300") %>
         </button>
       <% end %>
     </div>

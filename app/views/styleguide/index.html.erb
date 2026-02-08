@@ -1,0 +1,164 @@
+<% content_for :page_header do %>
+  <div class="space-y-1 mb-6">
+    <h1 class="text-3xl font-medium text-primary">Permoney Style Guide</h1>
+    <p class="text-secondary">Design tokens, components, and usage guidelines.</p>
+  </div>
+<% end %>
+
+<div class="space-y-12 pb-24">
+  <!-- Colors -->
+  <section class="section-card">
+    <h2 class="text-xl font-medium text-primary mb-4">Colors</h2>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div class="space-y-2">
+        <div class="h-20 rounded-lg bg-surface border border-secondary"></div>
+        <p class="text-sm font-mono text-secondary">bg-surface</p>
+      </div>
+      <div class="space-y-2">
+        <div class="h-20 rounded-lg bg-container border border-secondary"></div>
+        <p class="text-sm font-mono text-secondary">bg-container</p>
+      </div>
+      <div class="space-y-2">
+        <div class="h-20 rounded-lg bg-primary"></div>
+        <p class="text-sm font-mono text-secondary">text-primary</p>
+      </div>
+      <div class="space-y-2">
+        <div class="h-20 rounded-lg bg-secondary"></div>
+        <p class="text-sm font-mono text-secondary">text-secondary</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Typography -->
+  <section class="section-card">
+    <h2 class="text-xl font-medium text-primary mb-4">Typography</h2>
+    <div class="space-y-4">
+      <h1 class="text-4xl font-bold text-primary">Heading 1 (text-4xl)</h1>
+      <h2 class="text-3xl font-semibold text-primary">Heading 2 (text-3xl)</h2>
+      <h3 class="text-2xl font-medium text-primary">Heading 3 (text-2xl)</h3>
+      <p class="text-base text-primary">Body text (text-base). Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>
+      <p class="text-sm text-secondary">Small text (text-sm). Used for secondary information.</p>
+    </div>
+  </section>
+
+  <!-- Sections & Cards -->
+  <section class="section-card">
+    <h2 class="text-xl font-medium text-primary mb-4">Sections & Cards</h2>
+    <p class="mb-4 text-primary">Use <code>.section-card</code> for main content blocks. It includes padding, background, and hover effects.</p>
+    
+    <div class="section-grid">
+      <div class="section-card">
+        <h3 class="font-medium text-primary mb-2">Card 1</h3>
+        <p class="text-secondary">Content for card 1.</p>
+      </div>
+      <div class="section-card">
+        <h3 class="font-medium text-primary mb-2">Card 2</h3>
+        <p class="text-secondary">Content for card 2.</p>
+      </div>
+      <div class="section-card">
+        <h3 class="font-medium text-primary mb-2">Card 3</h3>
+        <p class="text-secondary">Content for card 3.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Icons & Animations -->
+  <section class="section-card">
+    <h2 class="text-xl font-medium text-primary mb-4">Icons & Animations</h2>
+    <div class="flex gap-4 items-center">
+      <%= icon("activity", size: "lg", class: "text-blue-500") %>
+      <%= icon("settings", size: "lg", class: "text-gray-500 hover:rotate-90") %>
+      <%= icon("heart", size: "lg", class: "text-red-500 hover:scale-110") %>
+    </div>
+    <p class="mt-4 text-sm text-secondary">All icons have <code>transition-all duration-300</code> by default.</p>
+  </section>
+
+  <!-- Loading States -->
+  <section class="section-card">
+    <h2 class="text-xl font-medium text-primary mb-4">Loading States</h2>
+    <div class="space-y-4 max-w-sm">
+      <div class="flex items-center gap-4">
+        <%= skeleton_loader("w-12 h-12 rounded-full") %>
+        <div class="space-y-2 flex-1">
+          <%= skeleton_loader("h-4 w-3/4") %>
+          <%= skeleton_loader("h-4 w-1/2") %>
+        </div>
+      </div>
+      <%= skeleton_loader("h-32 w-full rounded-xl") %>
+    </div>
+  </section>
+  
+  <!-- Before / After Transformation Demo -->
+  <section class="space-y-6">
+    <div class="space-y-1">
+      <h2 class="text-xl font-medium text-primary">UI Transformation Demo</h2>
+      <p class="text-secondary">Direct comparison between legacy design patterns and the new design system.</p>
+    </div>
+    
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+      <!-- Legacy Version -->
+      <div class="space-y-4">
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-red-500">Before (Legacy)</h3>
+        <div class="bg-white border border-gray-200 rounded p-4 space-y-4 shadow-sm" style="background-color: #fff; border-radius: 0.375rem; border: 1px solid #e5e7eb;">
+          <h2 class="text-lg font-bold text-gray-900">Account Settings</h2>
+          <p class="text-gray-600 text-sm">Manage your account details and preferences.</p>
+          
+          <div class="space-y-2">
+            <label class="block text-sm font-medium text-gray-700">Username</label>
+            <input type="text" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" placeholder="jdoe">
+          </div>
+          
+          <div class="flex justify-end pt-2">
+            <button class="bg-indigo-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-indigo-700">
+              Save Changes
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Modern Version -->
+      <div class="space-y-4">
+        <h3 class="text-sm font-semibold uppercase tracking-wider text-green-500">After (New Design System)</h3>
+        <div class="section-card space-y-4">
+          <div>
+            <h2 class="text-lg font-medium text-primary">Account Settings</h2>
+            <p class="text-secondary text-sm mt-1">Manage your account details and preferences.</p>
+          </div>
+          
+          <div class="form-field">
+            <label class="form-field__label">Username</label>
+            <input type="text" class="form-field__input" placeholder="jdoe">
+          </div>
+          
+          <div class="flex justify-end pt-2">
+            <%= render DS::Button.new(
+              text: "Save Changes",
+              variant: "primary",
+              icon: "save",
+              size: "md"
+            ) %>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Form Elements -->
+  <section class="section-card">
+    <h2 class="text-xl font-medium text-primary mb-4">Form Elements</h2>
+    <div class="space-y-4 max-w-md">
+      <div class="form-field">
+        <label class="form-field__label">Email Address</label>
+        <input type="email" class="form-field__input" placeholder="you@example.com">
+      </div>
+      
+      <div class="form-field">
+        <label class="form-field__label">Category</label>
+        <select class="form-field__input">
+          <option>Option 1</option>
+          <option>Option 2</option>
+        </select>
+      </div>
+    </div>
+  </section>
+</div>

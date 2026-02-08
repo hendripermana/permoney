@@ -3,7 +3,7 @@
     <%= render "shared/form_errors", model: @service %>
   <% end %>
 
-  <section class="space-y-2">
+  <section class="section-card space-y-2">
     <%= f.text_field :name, label: "Service Name", placeholder: "e.g., Netflix, Spotify", required: true %>
 
     <%= f.select :subscription_category,
@@ -17,17 +17,19 @@
         { required: true } %>
   </section>
 
-  <%= render DS::Disclosure.new(title: "Optional Details") do %>
-    <div class="space-y-2">
-      <%= f.number_field :avg_monthly_cost, label: "Average Monthly Cost", min: 0, step: 0.01, placeholder: "0.00" %>
+  <section class="section-card space-y-2">
+    <%= render DS::Disclosure.new(title: "Optional Details") do %>
+      <div class="space-y-2 pt-2">
+        <%= f.number_field :avg_monthly_cost, label: "Average Monthly Cost", min: 0, step: 0.01, placeholder: "0.00" %>
 
-      <%= f.text_field :website_url, label: "Website URL", placeholder: "https://example.com" %>
+        <%= f.text_field :website_url, label: "Website URL", placeholder: "https://example.com" %>
 
-      <%= f.text_area :description, label: "Description", placeholder: "Brief description of the service...", rows: 2 %>
-    </div>
-  <% end %>
+        <%= f.text_area :description, label: "Description", placeholder: "Brief description of the service...", rows: 2 %>
+      </div>
+    <% end %>
+  </section>
 
-  <section class="flex items-center justify-end gap-4">
+  <section class="flex items-center justify-end gap-4 pt-2">
     <%= render DS::Link.new(
       text: "Cancel",
       variant: "ghost",

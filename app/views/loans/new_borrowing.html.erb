@@ -15,7 +15,7 @@
     
     <%= f.hidden_field :loan_account_id, value: @account.id %>
     
-    <div class="bg-container p-4 rounded-lg mb-4">
+    <div class="section-card mb-4">
       <h3 class="font-medium text-primary mb-2">Loan Details</h3>
       <div class="space-y-2 text-sm">
         <div class="flex justify-between">
@@ -47,7 +47,7 @@
       </div>
     </div>
 
-    <section class="space-y-4">
+    <section class="section-card space-y-4">
       <%= f.money_field :amount,
                         label: "Additional Amount to Borrow",
                         default_currency: @account.currency,
@@ -76,7 +76,7 @@
                      rows: 3 %>
     </section>
 
-    <div class="bg-muted p-4 rounded-lg">
+    <div class="bg-surface-inset p-4 rounded-lg">
       <div class="flex items-start gap-2">
         <%= icon "info", size: "sm", class: "text-secondary mt-0.5" %>
         <div class="text-sm text-secondary">
@@ -93,14 +93,14 @@
       </div>
     </div>
 
-    <section class="flex gap-3">
-      <%= f.submit "Record Borrowing", class: "btn btn-primary" %>
+    <section class="flex gap-3 justify-end pt-2">
       <%= render DS::Link.new(
         text: "Cancel",
         variant: "ghost",
         href: account_path(@account),
         data: { turbo_frame: "_top" }
       ) %>
+      <%= f.submit "Record Borrowing", class: "btn btn-primary" %>
     </section>
   <% end %>
   <% end %>

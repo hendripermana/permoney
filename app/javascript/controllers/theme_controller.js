@@ -1,83 +1,32 @@
-import { Controller } from "@hotwired/stimulus";
+import { Controller } from "@hotwired/stimulus"
 
 export default class extends Controller {
-  static values = { userPreference: String };
+  static targets = ["icon"]
 
   connect() {
-    this.startSystemThemeListener();
+    this.updateTheme(this.currentTheme)
   }
-
-  disconnect() {
-    this.stopSystemThemeListener();
-  }
-
-  // Called automatically by Stimulus when the userPreferenceValue changes (e.g., after form submit/page reload)
-  userPreferenceValueChanged() {
-    this.applyTheme();
-  }
-
-  // Called when a theme radio button is clicked
-  updateTheme(event) {
-    const selectedTheme = event.currentTarget.value;
-    if (selectedTheme === "system") {
-      this.setTheme(this.systemPrefersDark());
-    } else if (selectedTheme === "dark") {
-      this.setTheme(true);
-    } else {
-      this.setTheme(false);
-    }
-  }
-
-  // Applies theme based on the userPreferenceValue (from server)
-  applyTheme() {
-    if (this.userPreferenceValue === "system") {
-      this.setTheme(this.systemPrefersDark());
-    } else if (this.userPreferenceValue === "dark") {
-      this.setTheme(true);
-    } else {
-      this.setTheme(false);
-    }
-  }
-
-  // Sets or removes the data-theme attribute
-  setTheme(isDark) {
-    if (isDark) {
-      localStorage.theme = "dark";
-      document.documentElement.setAttribute("data-theme", "dark");
-    } else {
-      localStorage.theme = "light";
-      document.documentElement.setAttribute("data-theme", "light");
-    }
-  }
-
-  systemPrefersDark() {
-    return window.matchMedia("(prefers-color-scheme: dark)").matches;
-  }
-
-  handleSystemThemeChange = (event) => {
-    // Only apply system theme changes if the user preference is currently 'system'
-    if (this.userPreferenceValue === "system") {
-      this.setTheme(event.matches);
-    }
-  };
 
   toggle() {
-    const currentTheme = document.documentElement.getAttribute("data-theme");
-    if (currentTheme === "dark") {
-      this.setTheme(false);
-    } else {
-      this.setTheme(true);
-    }
+    const newTheme = this.currentTheme === "dark" ? "light" : "dark"
+    this.updateTheme(newTheme)
   }
 
-  startSystemThemeListener() {
-    this.darkMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    this.darkMediaQuery.addEventListener("change", this.handleSystemThemeChange);
+  updateTheme(theme) {
+    document.documentElement.setAttribute("data-theme", theme)
+    localStorage.setItem("theme", theme)
+    
+    // Update icons if targets exist
+    if (this.hasIconTarget) {
+      // Logic to switch icon if needed, but we might just use CSS
+    }
+    
+    // Dispatch event for other components
+    window.dispatchEvent(new CustomEvent("theme:change", { detail: { theme } }))
   }
 
-  stopSystemThemeListener() {
-    if (this.darkMediaQuery) {
-      this.darkMediaQuery.removeEventListener("change", this.handleSystemThemeChange);
-    }
+  get currentTheme() {
+    return localStorage.getItem("theme") || 
+           (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
   }
 }

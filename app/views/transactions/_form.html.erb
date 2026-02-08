@@ -5,14 +5,14 @@
     <%= render "shared/form_errors", model: entry %>
   <% end %>
 
-  <section>
+  <section class="section-card">
     <%= render "shared/transaction_type_tabs", active_tab: params[:nature] == "inflow" ? "income" : "expense", account_id: params[:account_id] %>
 
     <%= f.hidden_field :nature, value: params[:nature] || "outflow" %>
     <%= f.hidden_field :entryable_type, value: "Transaction" %>
   </section>
 
-  <section class="space-y-2">
+  <section class="section-card space-y-4">
     <%= f.text_field :name, label: t(".description"), placeholder: t(".description_placeholder"), required: true %>
 
     <% if @entry.account_id %>
@@ -39,34 +39,38 @@
     <%= hidden_field_tag :subscription_plan_id, params[:subscription_plan_id] %>
   <% end %>
 
-  <%= render DS::Disclosure.new(title: t(".details")) do %>
-    <%= f.fields_for :entryable do |ef| %>
-      <%= ef.select :tag_ids,
-                    Current.family.tags.alphabetically.pluck(:name, :id),
-                    {
-                      include_blank: t(".none"),
-                      multiple: true,
-                      label:    t(".tags_label")
-                    },
-                    { "data-controller": "multi-select" } %>
+  <section class="section-card space-y-4">
+    <%= render DS::Disclosure.new(title: t(".details")) do %>
+      <div class="space-y-4 pt-4">
+        <%= f.fields_for :entryable do |ef| %>
+          <%= ef.select :tag_ids,
+                        Current.family.tags.alphabetically.pluck(:name, :id),
+                        {
+                          include_blank: t(".none"),
+                          multiple: true,
+                          label:    t(".tags_label")
+                        },
+                        { "data-controller": "multi-select" } %>
+        <% end %>
+        <%= f.text_area :notes,
+                        label: t(".note_label"),
+                        placeholder: t(".note_placeholder"),
+                        rows: 5,
+                        "data-auto-submit-form-target": "auto" %>
+
+        <%# Receipt attachment - stored in R2 for zero-egress cost %>
+        <div class="space-y-1">
+          <label class="form-field__label"><%= t(".receipt_label", default: "Receipt / Document") %></label>
+          <%= f.file_field :receipt,
+                          accept: "image/jpeg,image/png,image/webp,application/pdf",
+                          class: "block w-full text-sm text-secondary file:rounded-md file:border-0 file:bg-container file:text-sm file:font-semibold file:text-primary hover:file:bg-surface-inset cursor-pointer" %>
+          <p class="text-xs text-tertiary"><%= t(".receipt_hint", default: "JPEG, PNG, WebP, or PDF (max 10MB)") %></p>
+        </div>
+      </div>
     <% end %>
-    <%= f.text_area :notes,
-                    label: t(".note_label"),
-                    placeholder: t(".note_placeholder"),
-                    rows: 5,
-                    "data-auto-submit-form-target": "auto" %>
+  </section>
 
-    <%# Receipt attachment - stored in R2 for zero-egress cost %>
-    <div class="space-y-1">
-      <label class="form-field__label"><%= t(".receipt_label", default: "Receipt / Document") %></label>
-      <%= f.file_field :receipt,
-                       accept: "image/jpeg,image/png,image/webp,application/pdf",
-                       class: "block w-full text-sm text-secondary file:rounded-md file:border-0 file:bg-container file:text-sm file:font-semibold file:text-primary hover:file:bg-surface-inset cursor-pointer" %>
-      <p class="text-xs text-tertiary"><%= t(".receipt_hint", default: "JPEG, PNG, WebP, or PDF (max 10MB)") %></p>
-    </div>
-  <% end %>
-
-  <section>
+  <section class="flex justify-end pt-2">
     <%= f.submit t(".submit") %>
   </section>
 <% end %>

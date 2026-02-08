@@ -8,7 +8,7 @@
     <%= render "shared/form_errors", model: @subscription_plan %>
   <% end %>
 
-  <section class="space-y-2">
+  <section class="section-card space-y-2">
     <%= f.text_field :name, label: "Subscription Name", placeholder: "e.g., Netflix Premium", required: true %>
 
     <div class="flex items-center gap-2">
@@ -40,7 +40,7 @@
         { required: true, class: "form-field__input" } %>
   </section>
 
-  <section class="space-y-2">
+  <section class="section-card space-y-2">
     <%= f.money_field :amount, label: "Amount", required: true, default_currency: Current.family.currency %>
 
     <%= f.select :billing_cycle, billing_cycle_options, { label: "Billing Cycle" }, { required: true } %>
@@ -50,7 +50,7 @@
     <%= f.select :status, status_options, { label: "Status" }, { required: true } %>
   </section>
 
-  <section class="space-y-2">
+  <section class="section-card space-y-2">
     <%= f.date_field :started_at, label: "Start Date", required: true %>
 
     <%= f.date_field :next_billing_at, label: "Next Billing Date", required: true %>
@@ -58,27 +58,29 @@
     <%= f.date_field :trial_ends_at, label: "Trial Ends (optional)" %>
   </section>
 
-  <%= render DS::Disclosure.new(title: "Additional Options") do %>
-    <div class="space-y-2">
-      <%= f.text_area :description, label: "Description", placeholder: "Add notes about this subscription...", rows: 2 %>
+  <section class="section-card space-y-2">
+    <%= render DS::Disclosure.new(title: "Additional Options") do %>
+      <div class="space-y-2 pt-2">
+        <%= f.text_area :description, label: "Description", placeholder: "Add notes about this subscription...", rows: 2 %>
 
-      <div class="flex items-center gap-4">
-        <%= f.toggle :auto_renew %>
-        <label for="subscription_plan_auto_renew" class="text-sm text-primary">Auto-renew subscription</label>
+        <div class="flex items-center gap-4">
+          <%= f.toggle :auto_renew %>
+          <label for="subscription_plan_auto_renew" class="text-sm text-primary">Auto-renew subscription</label>
+        </div>
+
+        <div class="flex items-center gap-4">
+          <%= f.toggle :shared_within_family %>
+          <label for="subscription_plan_shared_within_family" class="text-sm text-primary">Shared with family members</label>
+        </div>
+
+        <%= f.number_field :max_usage_allowed, label: "Max Usage Allowed (optional)", min: 0, placeholder: "Leave blank for unlimited" %>
+
+        <%= f.text_area :payment_notes, label: "Payment Notes (optional)", placeholder: "Add any payment-related notes...", rows: 2 %>
       </div>
+    <% end %>
+  </section>
 
-      <div class="flex items-center gap-4">
-        <%= f.toggle :shared_within_family %>
-        <label for="subscription_plan_shared_within_family" class="text-sm text-primary">Shared with family members</label>
-      </div>
-
-      <%= f.number_field :max_usage_allowed, label: "Max Usage Allowed (optional)", min: 0, placeholder: "Leave blank for unlimited" %>
-
-      <%= f.text_area :payment_notes, label: "Payment Notes (optional)", placeholder: "Add any payment-related notes...", rows: 2 %>
-    </div>
-  <% end %>
-
-  <section class="flex items-center justify-end gap-4">
+  <section class="flex items-center justify-end gap-4 pt-2">
     <%= render DS::Link.new(
       text: "Cancel",
       variant: "ghost",

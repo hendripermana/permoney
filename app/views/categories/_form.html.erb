@@ -2,7 +2,7 @@
 
 <div data-controller="category" data-category-preset-colors-value="<%= Category::COLORS %>">
   <%= styled_form_with model: category, class: "space-y-4" do |f| %>
-    <section class="space-y-4">
+    <section class="section-card space-y-4">
       <div class="w-fit mx-auto relative">
         <%= render partial: "color_avatar", locals: { category: category } %>
 
@@ -71,7 +71,7 @@
       </div>
     </section>
 
-    <section>
+    <section class="flex justify-end pt-2">
       <%= hidden_field_tag :transaction_id, params[:transaction_id] %>
       <%= f.submit %>
     </section>
