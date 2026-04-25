@@ -9,7 +9,17 @@ const config = defineConfig({
   staged: {
     "*": "vp check --fix",
   },
-  lint: { options: { typeAware: true, typeCheck: true } },
+  lint: {
+    options: { typeAware: true, typeCheck: true },
+    // =========================================================
+    // TAMBAHKAN BAGIAN INI
+    ignorePatterns: [
+      "dist/**",
+      "src/routeTree.gen.ts", // <-- Ini dia penjaga perdamaiannya
+    ],
+    // =========================================================
+  },
+
   fmt: {
     endOfLine: "lf",
     semi: false,
@@ -22,7 +32,12 @@ const config = defineConfig({
       functions: ["cn", "cva"],
     },
     sortPackageJson: false,
-    ignorePatterns: ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"],
+    ignorePatterns: [
+      "package-lock.json",
+      "pnpm-lock.yaml",
+      "yarn.lock",
+      "src/routeTree.gen.ts",
+    ],
   },
   resolve: {
     tsconfigPaths: true, // Ini adalah fitur bawaan Vite+ yang baru

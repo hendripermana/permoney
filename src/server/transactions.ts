@@ -1,10 +1,21 @@
 import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
-import { prisma } from "./db"
+// `import type` adalah TYPE-ONLY — di-erase compile time, tidak masuk runtime bundle.
+// TanStack Start's import-protection plugin (analysis.js:44) MEN-SKIP semua
+// `import type` dari analisis, jadi import ini TIDAK trigger warning meskipun
+// nominally berasal dari runtime-server-only package.
+import type { Prisma } from "@prisma/client"
+// Runtime import dari `.server.ts` — splitter akan strip handler bodies yang
+// memakai `prisma` di client bundle, lalu Rolldown tree-shakes import ini
+// karena unused. Plus `db.server.ts` di-replace empty stub oleh plugin via
+// pattern `**/*.server.*`. import-protection plugin tetap warn di sini karena
+// dia analisis source level — itu EXPECTED dan SAFE. Lihat AGENTS.md §6.F.
+import { prisma } from "./db.server"
 
-// Tipe Prisma transaction client diturunkan langsung dari prisma.$transaction signature
-// Menghindari import langsung dari @prisma/client yang tidak tersedia di setup LibSQL ini
-type PrismaTxClient = Parameters<Parameters<typeof prisma.$transaction>[0]>[0]
+// Canonical Prisma type untuk callback `$transaction`. Lebih bersih dari
+// `Parameters<Parameters<typeof prisma.$transaction>[0]>[0]` dan stable
+// across Prisma upgrades.
+type PrismaTxClient = Prisma.TransactionClient
 
 /**
  * BACKEND FUNCTION: Fetch reference data for the Transaction Form Dropdowns

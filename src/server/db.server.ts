@@ -2,15 +2,25 @@ import { PrismaClient } from "@prisma/client"
 import { PrismaLibSql } from "@prisma/adapter-libsql"
 
 // =============================================================================
-// MAANG ARCHITECTURE NOTE — SIDE-EFFECT FREE SERVER MODULE
+// MAANG ARCHITECTURE NOTE — HARD SERVER-ONLY MODULE (.server.ts boundary)
 // =============================================================================
-// Modul ini WAJIB side-effect free agar Vite/Rolldown bebas mengeliminasinya
-// dari client bundle setelah TanStack Start's `createServerFn` splitter
-// menghapus seluruh referensi `prisma` dari handler bodies. Jika modul ini
-// punya top-level side effect (seperti `new PrismaClient()` langsung, atau
-// `throw` di modul scope), ESM spec memaksa bundler untuk mempertahankan
-// evaluasi modul — sehingga @prisma/client ikut ter-bundle ke browser dan
-// trap meledak di client. Solusinya: lazy factory + Proxy.
+// File ini berakhiran `.server.ts` — sebuah HARD COMPILE-TIME FENCE yang
+// dikenali TanStack Start's Vite plugin. Source code modul ini dijamin
+// TIDAK PERNAH masuk ke client bundle, karena plugin replace dengan empty
+// module sebelum Vite optimizeDeps berjalan. Tanpa fence ini, pre-bundling
+// optimizeDeps akan mengikuti `import { PrismaClient } from "@prisma/client"`
+// dan mencoba bundle browser-version Prisma yang pakai CJS `require()` —
+// Rolldown menolak dan crash di runtime client dengan error:
+//   "Calling `require` for '.prisma/client/index-browser' in an environment
+//    that doesn't expose the `require` function".
+//
+// Defense-in-depth tetap dipertahankan:
+//   1. Lazy factory pattern — `new PrismaClient()` baru fire saat property diakses
+//   2. Proxy + globalForPrisma — HMR-safe singleton di dev
+//   3. `typeof window !== "undefined"` runtime trap — kalau ada cara
+//      mistery yang menerobos fence, error message langsung kelihatan
+//   4. `/* @__PURE__ */` annotation — bantuan tambahan untuk tree-shaking
+//      pada code path yang reachable dari server bundle saja
 // =============================================================================
 
 // SINGLETON STORAGE — HMR-safe via globalThis di dev

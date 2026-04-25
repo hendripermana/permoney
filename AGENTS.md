@@ -272,11 +272,11 @@ Transactions are the heart of Permoney. To maintain a bulletproof ledger and hig
 
 ## 6. THE SERVER/CLIENT BOUNDARY (TanStack Start)
 
-Permoney uses **TanStack Start**, NOT Next.js / Remix / React Server Components. Violating the server/client boundary crashes the app at runtime via the security trap in `src/server/db.ts` with message `🚨 SECURITY BREACH`. The following rules are non-negotiable because the cost of getting them wrong is shipping the Prisma client + `DATABASE_URL` into the user's browser.
+Permoney uses **TanStack Start**, NOT Next.js / Remix / React Server Components. Violating the server/client boundary crashes the app at runtime via the security trap in `src/server/db.server.ts` with message `🚨 SECURITY BREACH`, OR fails the build with `Calling 'require' for '.prisma/client/index-browser' in an environment that doesn't expose the 'require' function`. The following rules are non-negotiable because the cost of getting them wrong is shipping the Prisma client + `DATABASE_URL` into the user's browser.
 
 ### A. Directives — Hard Bans
 
-- **BANNED: `"use server"`** at the top of any file. This is a React Server Components / Next.js directive. TanStack Start does NOT understand it; worse, its presence **disables** the `createServerFn` splitter on that file, causing `import { prisma } from "./db"` to ship to the browser. Source: `node_modules/@tanstack/start-client-core/skills/start-core/server-functions/SKILL.md` explicitly forbids it.
+- **BANNED: `"use server"`** at the top of any file. This is a React Server Components / Next.js directive. TanStack Start does NOT understand it; worse, its presence **disables** the `createServerFn` splitter on that file, causing `import { prisma } from "./db.server"` to ship to the browser. Source: `node_modules/@tanstack/start-client-core/skills/start-core/server-functions/SKILL.md` explicitly forbids it.
 - **BANNED: `getServerSideProps`, `getStaticProps`, RSC `async` components.** These are Next.js patterns.
 - **TOLERATED (no-op): `"use client"`.** Harmless shadcn boilerplate — TanStack Start ignores it. Do not add new ones, but do not churn existing files to remove them either.
 
@@ -291,13 +291,18 @@ Permoney uses **TanStack Start**, NOT Next.js / Remix / React Server Components.
   type TransactionRecord = Awaited<ReturnType<typeof getTransactionsFn>>[number]
   ```
 
-- **File organization (recommended but not enforced):** `*.server.ts` for server-only helpers, `*.functions.ts` for `createServerFn` wrappers. Currently `src/server/*.ts` hosts both — acceptable as long as every server-side value is reached only through `createServerFn` handler bodies.
+- **File organization — MANDATORY for any file that imports `@prisma/client`, secrets, Node built-ins, or filesystem APIs:** Use the `*.server.ts` suffix. This is a HARD COMPILE-TIME FENCE — TanStack Start's Vite plugin replaces the file with an empty module in the client graph **before** Vite's `optimizeDeps` runs, preventing pre-bundling of server-only deps into the browser. The Proxy + `/* @__PURE__ */` pattern alone is insufficient because `optimizeDeps` follows static imports eagerly, before tree-shaking. Layered defense:
+  - `*.server.ts` — hard fence (mandatory for db, secrets, Node-only code)
+  - `*.functions.ts` — `createServerFn` wrappers (recommended, not required)
+  - Proxy + `/* @__PURE__ */` — defense-in-depth inside `*.server.ts`
+  - `typeof window !== "undefined"` runtime trap — last-line defense
+- **Imports of `*.server.ts` files MUST use the explicit `.server` suffix in the import path** — Vite does not auto-resolve `./db` to `./db.server.ts`. Always write `import { prisma } from "./db.server"`.
 
-### C. The `db.ts` Invariant — Side-Effect-Free Server Modules
+### C. The `db.server.ts` Invariant — Hard Fence + Side-Effect-Free
 
-The splitter replaces `.handler(body)` with an RPC stub on the client. The `import { prisma } from "./db"` line itself remains. Per ESM spec, a module with **top-level side effects** cannot be tree-shaken — it will execute in the browser.
+The splitter replaces `.handler(body)` with an RPC stub on the client. The `import { prisma } from "./db.server"` line itself remains in the source AST. The `*.server.ts` suffix tells the Vite plugin to **replace the imported module with an empty stub** in the client graph, neutralizing the import edge before `optimizeDeps` can follow it into `@prisma/client`'s browser bundle (which uses `require()` and crashes Rolldown).
 
-**Therefore `src/server/db.ts` and any module reachable from it MUST be side-effect free at top level:**
+Defense-in-depth: even with the hard fence, `src/server/db.server.ts` and any module reachable from it MUST be side-effect free at top level:
 
 - **BANNED:** `new PrismaClient(...)`, `new PrismaLibSql(...)`, `throw new Error(...)`, `globalThis.x = ...` at module scope.
 - **REQUIRED:** All construction goes inside a factory function. Exports use a `Proxy` for lazy access, annotated with `/* @__PURE__ */` so Rolldown can eliminate the module entirely when no client code references it.
@@ -306,7 +311,7 @@ The splitter replaces `.handler(body)` with an RPC stub on the client. The `impo
 Canonical implementation — do not regress from this pattern:
 
 ```ts
-// src/server/db.ts — SIDE-EFFECT FREE
+// src/server/db.server.ts — HARD FENCE + SIDE-EFFECT FREE
 import { PrismaClient } from "@prisma/client"
 import { PrismaLibSql } from "@prisma/adapter-libsql"
 
@@ -316,7 +321,7 @@ const globalForPrisma = globalThis as unknown as {
 
 function createPrismaClient(): PrismaClient {
   if (typeof window !== "undefined") {
-    throw new Error("🚨 SECURITY BREACH: db.ts leaked to client bundle.")
+    throw new Error("🚨 SECURITY BREACH: db.server.ts leaked to client bundle.")
   }
   const adapter = new PrismaLibSql({ url: process.env.DATABASE_URL! })
   const client = new PrismaClient({ adapter })
@@ -338,6 +343,14 @@ export const prisma: PrismaClient = /* @__PURE__ */ new Proxy(
 )
 ```
 
+Consumed in server-function wrappers like:
+
+```ts
+// src/server/transactions.ts — createServerFn wrappers
+import { createServerFn } from "@tanstack/react-start"
+import { prisma } from "./db.server" // <-- explicit .server suffix
+```
+
 ### D. Why This Architecture — Historical Bugs to Never Repeat
 
 Past AI-introduced regressions that triggered the security trap (documented so future agents do not repeat them):
@@ -346,11 +359,67 @@ Past AI-introduced regressions that triggered the security trap (documented so f
 2. **Eager Prisma construction at module scope.** `export const prisma = new PrismaClient(...)` is a top-level side effect → Vite refuses to tree-shake → module evaluates on the client → `@prisma/client` (~MB of Node-only code) + trap fires.
 3. **Database calls in route `loader`.** Loaders are isomorphic; `await prisma.x()` in a loader hits the client during SPA navigation.
 4. **Importing Prisma model types into UI.** Couples the client to `@prisma/client`. Use `Awaited<ReturnType<typeof serverFn>>` instead.
+5. **Naming the db module `db.ts` instead of `db.server.ts`.** Without the `.server.ts` suffix, Vite's `optimizeDeps` follows the static import edge `import { prisma } from "./db"` BEFORE TanStack Start's splitter runs. Pre-bundling sees `@prisma/client`, resolves its `"browser"` package.json field to `index-browser.js` (CJS with `require()`), and Rolldown crashes the dev server with `Calling 'require' for '.prisma/client/index-browser'`. The Proxy + `@__PURE__` pattern is insufficient on its own; the suffix is required. Fixed by renaming `src/server/db.ts` → `src/server/db.server.ts` and updating all importers from `"./db"` to `"./db.server"`.
 
-### E. Review Checklist Before Touching Server Code
+### F. The `import-protection` Warning — Expected Behavior, Not a Bug
+
+When dev server logs:
+
+```
+[vite+] (client) warning: [import-protection] Import denied in client environment
+  Denied by file pattern: **/*.server.*
+  Importer: src/server/transactions.ts:3:24
+  Import: "./db.server"
+```
+
+**This warning is EXPECTED and the app is SAFE.** Do not refactor or panic.
+
+**Mechanism (verified by reading `node_modules/@tanstack/start-plugin-core/dist/esm/import-protection/{defaults,analysis}.js`):**
+
+1. The `import-protection` plugin performs **source-level static analysis** in client environment. It denies any runtime import of files matching `**/*.server.*`.
+2. `analysis.js:44` explicitly skips `import type` (`if (node.importKind !== "type")`), so type-only imports are exempt — that's why our `import type { Prisma } from "@prisma/client"` does not warn.
+3. The plugin warns at SOURCE level. It does NOT know about other plugins running later in the pipeline.
+4. **TanStack Start's `createServerFn` splitter** strips the `.handler(body)` content from client bundles, removing every reference to `prisma`.
+5. **Rolldown tree-shaking** then drops the now-unused top-level `import { prisma } from "./db.server"`.
+6. **The `**/_.server._`rule** still replaces`db.server.ts` with an empty module in the client graph.
+7. Final client bundle: zero Prisma, zero `db.server` content. Verified by inspecting `dist/_build/assets/*.js` — no `PrismaClient`, no `index-browser.js`, no `require()`.
+
+**The plugin warns defensively** because it cannot statically prove the splitter+tree-shake will eliminate the import. That's fine — defense-in-depth is the point of the rule. The warning is informational, not a build error.
+
+**When to ACT on this warning (vs. ignore):**
+
+- **IGNORE** if: warning fires only on `*.functions.ts`-style files (i.e. files containing `createServerFn(...).handler(...)` wrappers). These are RPC stub generators; the splitter handles them.
+- **ACT** if: warning fires on a route file, component file, hook file, or any file NOT containing `createServerFn` wrappers. That means real server code is leaking.
+
+**To silence the warning at the cost of refactor (optional, for very mature server modules):**
+
+Split into the canonical TanStack Start file pair:
+
+```
+src/server/
+├── transactions.functions.ts    # createServerFn wrappers (no direct prisma import)
+└── transactions.server.ts       # server-only helpers using prisma
+```
+
+Then `transactions.functions.ts` calls helpers from `.server.ts` indirectly via the splitter:
+
+```ts
+// transactions.functions.ts — wrappers only
+import { createServerFn } from "@tanstack/react-start"
+import { findAllTransactions } from "./transactions.server"
+
+export const getTransactionsFn = createServerFn().handler(async () => {
+  return findAllTransactions()
+})
+```
+
+The plugin still flags `import { findAllTransactions } from "./transactions.server"` per `**/*.server.*`. So even the canonical split does NOT fully silence the warning — it just moves it. **The warning is a permanent informational signal, not something to chase.**
+
+### G. Review Checklist Before Touching Server Code
 
 - [ ] No `"use server"` / `"use client"` added to server files.
 - [ ] All `prisma.x` access is inside `createServerFn(...).handler(...)` bodies, never at module scope, never in loaders.
-- [ ] `src/server/db.ts` remains a lazy Proxy with `/* @__PURE__ */` annotation and zero module-level side effects.
+- [ ] Any new module that imports `@prisma/client`, reads secrets, or uses Node-only APIs is named `*.server.ts` AND consumers import it with the explicit `.server` suffix in the path.
+- [ ] `src/server/db.server.ts` remains a lazy Proxy with `/* @__PURE__ */` annotation and zero module-level side effects.
 - [ ] Client-side types derive from `Awaited<ReturnType<typeof fn>>`, not from `@prisma/client`.
-- [ ] `vp check` and `vp test` pass; `/transactions` loads without the `🚨 SECURITY BREACH` error.
+- [ ] `vp check` and `vp test` pass; `/transactions` loads without `🚨 SECURITY BREACH` or `Calling 'require' for '.prisma/client/index-browser'` errors.
