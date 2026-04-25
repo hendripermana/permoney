@@ -1,0 +1,204 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Family {
+  id         String     @id @default(cuid())
+  name       String
+
+  // Fitur Enterprise: Setting default keluarga
+  currency   String     @default("IDR")
+  timezone   String     @default("Asia/Jakarta")
+
+  users      User[]
+  accounts   Account[]
+  merchants  Merchant[]
+  categories Category[]
+  smartRules SmartRule[]
+}
+
+model User {
+  id           String        @id @default(cuid())
+  email        String        @unique
+  name         String
+  password     String
+
+  // Fitur Enterprise: Preferensi tampilan user
+  theme        String        @default("system")
+
+  familyId     String
+  family       Family        @relation(fields: [familyId], references: [id])
+  transactions Transaction[]
+}
+
+model Account {
+  id               String        @id @default(cuid())
+  name             String
+
+  // Tipe makin pro: "DEPOSITORY" (Bank/Dompet), "CREDIT" (Kartu Kredit), "LOAN" (Hutang), "RECEIVABLE" (Piutang/Uang dipinjam orang), "INVESTMENT" (Saham)
+  type             String
+  balance          Float
+  currency         String        @default("IDR") // Bisa USD, JPY, dll
+
+  // Fitur Enterprise: Visual & Status
+  color            String?       // Hex color misal "#3b82f6"
+  status           String        @default("active") // "active" atau "closed"
+
+  familyId         String
+  family           Family        @relation(fields: [familyId], references: [id])
+
+  transactionsFrom Transaction[] @relation("FromAccount")
+  transactionsTo   Transaction[] @relation("ToAccount")
+}
+
+model Merchant {
+  id           String        @id @default(cuid())
+  name         String
+
+  // Fitur Enterprise: Logo/Website
+  color        String?
+  logoUrl      String?
+
+  familyId     String
+  family       Family        @relation(fields: [familyId], references: [id])
+  transactions Transaction[]
+  splitEntries SplitEntry[]
+  smartRules   SmartRule[]
+}
+
+model Category {
+  id           String        @id @default(cuid())
+  name         String
+  type         String        // "expense" atau "income"
+
+  // Fitur Enterprise: Visual Category
+  color        String        @default("#6172F3")
+  icon         String        @default("shapes") // Referensi nama icon dari Tabler/Lucide
+
+  isSystem     Boolean       @default(false)
+  familyId     String?
+  family       Family?       @relation(fields: [familyId], references: [id])
+
+  parentId     String?
+  parent       Category?     @relation("SubCategories", fields: [parentId], references: [id])
+  children     Category[]    @relation("SubCategories")
+  transactions Transaction[]
+  splitEntries SplitEntry[]
+  smartRules   SmartRule[]
+}
+
+model Transaction {
+  id          String   @id @default(cuid())
+  amount      Float    // Wajib bernilai Negatif (-) untuk uang keluar, Positif (+) untuk uang masuk
+  type        String   // "expense", "income", "transfer"
+  kind        String   @default("standard")
+  currency    String   @default("IDR")
+
+  // Transaction Lifecycle Status: PENDING (gantung), CLEARED (selesai), RECONCILED (dicocokkan)
+  status              String    @default("CLEARED")
+
+  // Multi-Currency Transfer Support (Implied Rate Architecture)
+  // User menginput nominal yang benar-benar masuk ke akun tujuan, bukan hanya tebakan kurs API
+  destinationAmount   Float?
+  destinationCurrency String?
+
+  date        DateTime @default(now())
+
+  description String
+  notes       String?
+  excluded    Boolean  @default(false)
+
+  // Running Balance Snapshot: Saldo akun setelah transaksi ini dicatat (untuk grafik historis instan)
+  accountBalanceAfter Float?
+
+  // Proof of Purchase: URL struk/foto kwitansi (S3/Cloudflare R2)
+  attachmentUrl       String?
+
+  // Soft Delete (GAAP Compliance): Transaksi tidak pernah benar-benar dihapus
+  // NULL = aktif, ada timestamp = soft-deleted (audit trail tetap ada)
+  deletedAt           DateTime?
+
+  merchantId  String?
+  merchant    Merchant? @relation(fields: [merchantId], references: [id])
+
+  accountId   String
+  account     Account   @relation("FromAccount", fields: [accountId], references: [id])
+
+  toAccountId String?
+  toAccount   Account?  @relation("ToAccount", fields: [toAccountId], references: [id])
+
+  categoryId  String?
+  category    Category? @relation(fields: [categoryId], references: [id])
+
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+
+  // Relasi ke Transfer (Hanya terisi jika type == "transfer")
+  transferOut Transfer? @relation("OutflowTransaction")
+  transferIn  Transfer? @relation("InflowTransaction")
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now()) @updatedAt
+
+  // Split Transaction Engine: 1 transaksi = banyak line item kategori
+  isSplit      Boolean      @default(false)
+  splitEntries SplitEntry[]
+}
+
+model Transfer {
+  id                   String      @id @default(cuid())
+
+  // Transaksi Uang Keluar (Sumber)
+  outflowTransactionId String      @unique
+  outflowTransaction   Transaction @relation("OutflowTransaction", fields: [outflowTransactionId], references: [id], onDelete: Cascade)
+
+  // Transaksi Uang Masuk (Tujuan)
+  inflowTransactionId  String      @unique
+  inflowTransaction    Transaction @relation("InflowTransaction", fields: [inflowTransactionId], references: [id], onDelete: Cascade)
+
+  createdAt            DateTime    @default(now())
+}
+
+// Split Transaction Engine: Line Items untuk satu struk multi-kategori
+model SplitEntry {
+  id          String   @id @default(cuid())
+  description String
+  amount      Float    // Selalu positif (absolute value)
+
+  // Relasi ke Transaksi Induk
+  transactionId String
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  // Optional: Kategori & Merchant per baris
+  categoryId  String?
+  category    Category? @relation(fields: [categoryId], references: [id])
+
+  merchantId  String?
+  merchant    Merchant? @relation(fields: [merchantId], references: [id])
+
+  createdAt   DateTime  @default(now())
+}
+
+// ==========================================
+// The Smart Rules Engine
+// ==========================================
+model SmartRule {
+  id           String   @id @default(cuid())
+  keyword      String   // Stores comma-separated strings (e.g. "fore, coffeeshop, kenangan")
+
+  // The 'THEN' assignments: if matches, assign these
+  merchantId   String?
+  merchant     Merchant? @relation(fields: [merchantId], references: [id])
+  categoryId   String?
+  category     Category? @relation(fields: [categoryId], references: [id])
+
+  familyId     String
+  family       Family    @relation(fields: [familyId], references: [id])
+
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @default(now()) @updatedAt
+}

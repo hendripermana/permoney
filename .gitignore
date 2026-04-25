@@ -1,0 +1,43 @@
+node_modules
+.DS_Store
+dist
+dist-ssr
+*.local
+count.txt
+.env
+.nitro
+.tanstack
+.wrangler
+.output
+.vinxi
+__unconfig*
+todos.json
+
+/src/generated/prisma
+
+# Prisma local SQLite dev database (regenerate via: vp dlx prisma migrate reset && vp run prisma db seed)
+prisma/dev.db
+prisma/dev.db-journal
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Vite+ hooks scratch dir (auto-generated)
+.vite-hooks/_/
+
+# AI Agent Workspaces
+.agents
+.claude
+.cursor
+.junie
+.factory
+.kilocode
+.kiro
+.trae
+.windsurf
+.qodo
+.agent
+.codex
+
+# AI Generated Plans
+docs/superpowers/
