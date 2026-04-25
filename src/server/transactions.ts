@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
+import { assertSplitParity } from "@/lib/split-parity"
 // `import type` adalah TYPE-ONLY — di-erase compile time, tidak masuk runtime bundle.
 // TanStack Start's import-protection plugin (analysis.js:44) MEN-SKIP semua
 // `import type` dari analisis, jadi import ini TIDAK trigger warning meskipun
@@ -91,16 +92,10 @@ export const createTransactionFn = createServerFn({ method: "POST" })
     // If any process inside this block fails, all changes are rolled back automatically.
     const result = await prisma.$transaction(async (tx: PrismaTxClient) => {
       // === SPLIT PARITY GUARD (GAAP Compliance) ===
-      // Backend MUST validate that SplitEntries sum === parent.amount
+      // Backend MUST validate that SplitEntries sum === parent.amount.
       // UI validation is a convenience; THIS is the authoritative check.
-      if (data.isSplit && data.splitEntries?.length) {
-        const splitSum = data.splitEntries.reduce((acc, e) => acc + e.amount, 0)
-        if (Math.abs(splitSum - data.amount) > 0.01) {
-          throw new Error(
-            `SPLIT_PARITY_VIOLATION: SplitEntries sum (${splitSum.toFixed(2)}) must equal parent amount (${data.amount.toFixed(2)}). Δ = ${Math.abs(splitSum - data.amount).toFixed(2)}`
-          )
-        }
-      }
+      // Throws inside `$transaction` → automatic rollback if violated.
+      assertSplitParity(data)
 
       // A. HANDLE TRANSFER (DOUBLE-ENTRY)
       if (data.type === "transfer") {
@@ -418,6 +413,12 @@ export const updateTransactionFn = createServerFn({ method: "POST" })
     // The Magic: Kita jalankan penghapusan murni dan pembuatan murni secara berurutan
     // dalam satu ACID Transaction. Zero Balance Mismatch Guaranteed!
     return await prisma.$transaction(async (tx: PrismaTxClient) => {
+      // === SPLIT PARITY GUARD (GAAP Compliance) ===
+      // Same authoritative invariant as createTransactionFn — UPDATE flow can
+      // independently violate parity if a client tampers with split entries
+      // without updating the parent amount (or vice versa). Re-validate here.
+      assertSplitParity(data)
+
       // --- FASE 1: REVERSAL (HAPUS LAMA) ---
       // Kita "pinjam" logika delete untuk mengembalikan saldo ke 0
       const oldTx = await tx.transaction.findUnique({
