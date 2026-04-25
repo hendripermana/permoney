@@ -1,0 +1,44 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: Asia/Jakarta
+    open-pull-requests-limit: 10
+    # Group all non-major updates into one PR per week to reduce noise;
+    # majors and security patches still come as individual PRs.
+    groups:
+      tanstack:
+        patterns:
+          - "@tanstack/*"
+      prisma:
+        patterns:
+          - "@prisma/*"
+          - prisma
+      radix:
+        patterns:
+          - "@radix-ui/*"
+          - radix-ui
+      types:
+        patterns:
+          - "@types/*"
+      dev-tooling:
+        patterns:
+          - vite-plus
+          - vite
+          - vitest
+          - "@vitejs/*"
+          - "@rsbuild/*"
+          - "@testing-library/*"
+    labels:
+      - dependencies
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    labels:
+      - ci

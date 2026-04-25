@@ -1,21 +1,110 @@
-# TanStack Start + shadcn/ui
+# Permoney
 
-This is a template for a new TanStack Start project with React, TypeScript, and shadcn/ui.
+> Personal finance ledger for individuals and families. Multi-account, multi-currency, split transactions, smart rules, ACID-safe balance reconciliation.
 
-## Adding components
+[![CI](https://github.com/hendripermana/permoney/actions/workflows/ci.yml/badge.svg)](https://github.com/hendripermana/permoney/actions/workflows/ci.yml)
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![TanStack Start](https://img.shields.io/badge/TanStack%20Start-1.169-FF4154)
+![Prisma](https://img.shields.io/badge/Prisma-7.8-2D3748)
 
-To add components to your app, run the following command:
+---
+
+## Stack
+
+| Layer           | Choice                           | Why                                                                          |
+| --------------- | -------------------------------- | ---------------------------------------------------------------------------- |
+| Build           | **Vite+** (`vp` CLI)             | Unified Rolldown + Oxlint + Oxfmt + Vitest + tsdown                          |
+| Framework       | **TanStack Start**               | Isomorphic, file-based routing, server functions, no `"use server"` ceremony |
+| UI              | **shadcn/ui** + Tailwind v4      | Owned components, design tokens via CSS vars                                 |
+| Reactive ledger | **TanStack DB** + `useLiveQuery` | Optimistic mutations with automatic rollback                                 |
+| Data            | **TanStack Query**               | Server-state cache + RPC bridge for `createServerFn`                         |
+| ORM             | **Prisma 7** + LibSQL adapter    | Type-safe schema, native SQLite, future Turso edge replicas                  |
+| Forms           | **TanStack Form** + Zod          | Schema-validated forms with field-level errors                               |
+| Testing         | **Vitest** (via `vp test`)       | Same engine as build, no config drift                                        |
+
+## Quick Start
 
 ```bash
-vp add shadcn@latest add button
+# 1. Install deps (auto-runs `prisma generate` via postinstall hook)
+vp install
+
+# 2. Copy env template and fill values
+cp .env.example .env
+
+# 3. Apply database migrations to local SQLite
+pnpm db:migrate
+
+# 4. Start dev server (default port 3006)
+vp dev
 ```
 
-This will place the ui components in the `components` directory.
+Visit <http://localhost:3006>.
 
-## Using components
+## Development
 
-To use the components in your app, import them as follows:
+```bash
+vp check          # format + lint + type-check (single-pass, ~3s)
+vp test           # run Vitest suite once
+vp test watch     # TDD watch mode
+vp build          # production bundle
+vp preview        # serve production build locally
 
-```tsx
-import { Button } from "@/components/ui/button"
+pnpm db:migrate   # create + apply new migration in dev
+pnpm db:studio    # browse data with Prisma Studio
 ```
+
+**Pre-commit hooks** run automatically (`vp staged` for changed files + `intent stale` to detect skill drift).
+
+## Project Structure
+
+```
+src/
+├── routes/              # File-based routes (TanStack Router)
+│   ├── __root.tsx       # Root layout + QueryClientProvider
+│   └── transactions.tsx # Main ledger UI (uses TanStack DB)
+├── components/          # Feature components
+│   └── ui/              # shadcn primitives (owned, edit freely)
+├── lib/
+│   ├── collections.ts   # TanStack DB collections (client-side reactive ledger)
+│   └── transaction-filters.ts  # Pure filter/search reducers
+├── server/              # Server-only modules (.server.ts hard fence)
+│   ├── db.server.ts     # Prisma client singleton (lazy Proxy)
+│   ├── transactions.ts  # createServerFn RPC handlers for transactions
+│   └── smart-rules.ts   # createServerFn RPC handlers for rules
+└── router.tsx           # TanStack Router config
+
+prisma/
+├── schema.prisma        # Single source of truth for DB schema
+└── migrations/          # Generated migration history
+
+docs/
+└── adr/                 # Architecture Decision Records
+```
+
+## Architecture
+
+### Server / Client Boundary
+
+All Prisma + Node-only modules use the **`.server.ts` hard fence** convention enforced by TanStack Start's `import-protection` plugin. See [`AGENTS.md` §6](./AGENTS.md) for the full contract.
+
+### Reactive Ledger
+
+- Server functions (`createServerFn`) are the only way to mutate persistent data.
+- TanStack DB `transactionCollection` mirrors server state on the client.
+- `useLiveQuery` subscribes to the collection; UI updates optimistically with automatic rollback if the server function fails.
+- Routes that consume collections **must** call `collection.preload()` in their loader and set `ssr: false`.
+
+### Money Type — Float → BigInt Migration In Flight
+
+All monetary fields (`amount`, `balance`) are currently `Float` (legacy). Migrating to integer minor units (BigInt cents/sen) per ISO 4217 — see [`docs/adr/0001-money-type-migration.md`](./docs/adr/0001-money-type-migration.md).
+
+## Contributing
+
+- Branch from `main`, open PR, wait for CI green.
+- Run `vp check && vp test` locally before pushing.
+- Follow conventions in [`AGENTS.md`](./AGENTS.md) — they apply to humans and AI agents alike.
+- Security issues: see [`SECURITY.md`](./SECURITY.md), do **not** open public issues.
+
+## License
+
+[MIT](./LICENSE) © Hendri Permana

@@ -7,11 +7,18 @@
     "build": "vp build",
     "preview": "vp preview",
     "test": "vp test run",
-    "lint": "eslint",
-    "format": "vp fmt \"**/*.{ts,tsx,js,jsx}\"",
-    "typecheck": "tsc --noEmit",
+    "test:watch": "vp test watch",
+    "test:related": "vp test related",
+    "lint": "vp lint",
+    "format": "vp fmt",
+    "check": "vp check",
+    "typecheck": "vp check --type-aware",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:studio": "prisma studio",
     "prepare": "vp config",
-    "prisma": "prisma generate"
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

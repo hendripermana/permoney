@@ -14,7 +14,10 @@ import {
 import { format } from "date-fns"
 import { useLiveQuery } from "@tanstack/react-db"
 import { useQuery } from "@tanstack/react-query"
-import { createFileRoute } from "@tanstack/react-router"
+import {
+  createFileRoute,
+  type ErrorComponentProps,
+} from "@tanstack/react-router"
 import { getCoreRowModel, useReactTable } from "@tanstack/react-table"
 import type { RowSelectionState } from "@tanstack/react-table"
 import { useVirtualizer } from "@tanstack/react-virtual"
@@ -82,7 +85,52 @@ export const Route = createFileRoute("/transactions")({
   staticData: { title: "Transactions" },
   // URL search params divalidasi otomatis oleh Zod via TanStack Router
   validateSearch: zodValidator(transactionSearchSchema),
+  // Fallback UI saat loader (`transactionCollection.preload()`) masih running.
+  // Tanpa ini, navigation ke /transactions menampilkan layar kosong selama
+  // sync awal (slow network bisa beberapa detik).
+  pendingComponent: TransactionsPendingComponent,
+  // Per-route error UI: lebih kontekstual dari root errorComponent karena bisa
+  // menyebut "Gagal memuat transaksi" ketimbang error generik.
+  errorComponent: TransactionsErrorComponent,
 })
+
+function TransactionsPendingComponent() {
+  return (
+    <div className="flex min-h-[60vh] flex-col items-center justify-center gap-3 p-6 text-center">
+      <div className="size-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+      <p className="text-sm text-muted-foreground">Memuat transaksi…</p>
+    </div>
+  )
+}
+
+function TransactionsErrorComponent({ error, reset }: ErrorComponentProps) {
+  React.useEffect(() => {
+    // eslint-disable-next-line no-console
+    console.error("[/transactions errorComponent]", error)
+  }, [error])
+
+  const message = error instanceof Error ? error.message : String(error)
+
+  return (
+    <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 p-6 text-center">
+      <h2 className="text-xl font-semibold">Gagal memuat transaksi</h2>
+      <p className="max-w-prose text-sm text-muted-foreground">
+        Terjadi error saat sinkronisasi ledger. Cek koneksi atau coba reset
+        halaman ini.
+      </p>
+      <pre className="max-w-prose rounded-md bg-muted p-3 text-left text-xs whitespace-pre-wrap">
+        {message}
+      </pre>
+      <button
+        type="button"
+        onClick={reset}
+        className="inline-flex h-9 items-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+      >
+        Coba lagi
+      </button>
+    </div>
+  )
+}
 
 function TransactionsPage() {
   const filters = Route.useSearch()

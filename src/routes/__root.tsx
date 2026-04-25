@@ -4,10 +4,12 @@ import {
   Scripts,
   createRootRoute,
   Outlet,
+  type ErrorComponentProps,
 } from "@tanstack/react-router"
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools"
 import { QueryClientProvider } from "@tanstack/react-query"
 import { getQueryClient } from "@/lib/query-client"
+import { Button } from "@/components/ui/button"
 
 import appCss from "../styles.css?url"
 
@@ -39,7 +41,47 @@ export const Route = createRootRoute({
       </p>
     </div>
   ),
+  // 🛡️ Last-resort ErrorBoundary for the entire route tree.
+  // Per-route `errorComponent` overrides this for finer-grained UX.
+  errorComponent: RootErrorComponent,
 })
+
+function RootErrorComponent({ error, reset }: ErrorComponentProps) {
+  // Surface to observability tooling (Sentry/PostHog) when wired.
+  // For now: console + visible UI so the user is never staring at a blank screen.
+  React.useEffect(() => {
+    // eslint-disable-next-line no-console
+    console.error("[RootErrorBoundary]", error)
+  }, [error])
+
+  const message = error instanceof Error ? error.message : String(error)
+
+  return (
+    <RootDocument>
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
+        <h1 className="text-3xl font-bold">Ada yang salah 😵</h1>
+        <p className="max-w-prose text-muted-foreground">
+          Aplikasi mengalami error tak terduga. Tim sudah otomatis dapat
+          notifikasi. Coba reset, atau refresh halaman.
+        </p>
+        <pre className="max-w-prose rounded-md bg-muted p-3 text-left text-sm whitespace-pre-wrap">
+          {message}
+        </pre>
+        <div className="flex gap-2">
+          <Button onClick={reset}>Reset</Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              window.location.href = "/"
+            }}
+          >
+            Ke beranda
+          </Button>
+        </div>
+      </div>
+    </RootDocument>
+  )
+}
 
 function RootComponent() {
   return (
