@@ -22,7 +22,7 @@ const prisma = new PrismaClient({
 })
 
 async function main() {
-  console.log("🌱 Mulai menanam data dengan LibSQL Driver...")
+  console.log("🌱 Seeding the database via LibSQL adapter...")
 
   await prisma.transaction.deleteMany()
   await prisma.account.deleteMany()
@@ -156,12 +156,12 @@ async function main() {
     ],
   })
 
-  console.log("✅ Seeding selesai! Arsitektur Database berjalan sempurna.")
+  console.log("✅ Seeding finished. Database state is healthy.")
 }
 
 main()
   .catch((e) => {
-    console.error("❌ Terjadi kesalahan:", e)
+    console.error("❌ Seed failed:", e)
     process.exit(1)
   })
   .finally(async () => {

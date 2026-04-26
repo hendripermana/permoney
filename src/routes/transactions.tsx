@@ -91,12 +91,12 @@ export const Route = createFileRoute("/transactions")({
   staticData: { title: "Transactions" },
   // URL search params divalidasi otomatis oleh Zod via TanStack Router
   validateSearch: zodValidator(transactionSearchSchema),
-  // Fallback UI saat loader (`transactionCollection.preload()`) masih running.
-  // Tanpa ini, navigation ke /transactions menampilkan layar kosong selama
-  // sync awal (slow network bisa beberapa detik).
+  // Fallback UI while the loader (`transactionCollection.preload()`) runs.
+  // Without it, navigating to /transactions shows a blank canvas during the
+  // initial collection sync, which on a slow network can be several seconds.
   pendingComponent: TransactionsPendingComponent,
-  // Per-route error UI: lebih kontekstual dari root errorComponent karena bisa
-  // menyebut "Gagal memuat transaksi" ketimbang error generik.
+  // Per-route error UI: more contextual than the root errorComponent because
+  // it can say "Failed to load transactions" instead of a generic message.
   errorComponent: TransactionsErrorComponent,
 })
 
@@ -104,7 +104,7 @@ function TransactionsPendingComponent() {
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center gap-3 p-6 text-center">
       <div className="size-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-      <p className="text-sm text-muted-foreground">Memuat transaksi…</p>
+      <p className="text-sm text-muted-foreground">Loading transactions…</p>
     </div>
   )
 }
@@ -119,10 +119,10 @@ function TransactionsErrorComponent({ error, reset }: ErrorComponentProps) {
 
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 p-6 text-center">
-      <h2 className="text-xl font-semibold">Gagal memuat transaksi</h2>
+      <h2 className="text-xl font-semibold">Failed to load transactions</h2>
       <p className="max-w-prose text-sm text-muted-foreground">
-        Terjadi error saat sinkronisasi ledger. Cek koneksi atau coba reset
-        halaman ini.
+        Something went wrong while syncing the ledger. Check your connection or
+        reset this page.
       </p>
       <pre className="max-w-prose rounded-md bg-muted p-3 text-left text-xs whitespace-pre-wrap">
         {message}
@@ -132,7 +132,7 @@ function TransactionsErrorComponent({ error, reset }: ErrorComponentProps) {
         onClick={reset}
         className="inline-flex h-9 items-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90"
       >
-        Coba lagi
+        Retry
       </button>
     </div>
   )
