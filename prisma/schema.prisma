@@ -56,6 +56,10 @@ model Account {
 
   transactionsFrom Transaction[] @relation("FromAccount")
   transactionsTo   Transaction[] @relation("ToAccount")
+
+  // Tenant-scoped fetch (every Account read is filtered by familyId once
+  // ADR-0004 lands; cheap to add now). See ADR-0003.
+  @@index([familyId])
 }
 
 model Merchant {
@@ -71,6 +75,9 @@ model Merchant {
   transactions Transaction[]
   splitEntries SplitEntry[]
   smartRules   SmartRule[]
+
+  // Tenant scoping (see ADR-0003).
+  @@index([familyId])
 }
 
 model Category {
@@ -92,6 +99,10 @@ model Category {
   transactions Transaction[]
   splitEntries SplitEntry[]
   smartRules   SmartRule[]
+
+  // Tenant scoping (see ADR-0003). `familyId` is nullable for system
+  // categories; the index still helps the common per-family scan.
+  @@index([familyId])
 }
 
 model Transaction {
@@ -154,6 +165,20 @@ model Transaction {
   // Split Transaction Engine: 1 transaksi = banyak line item kategori
   isSplit      Boolean      @default(false)
   splitEntries SplitEntry[]
+
+  // Strategic indexes (see ADR-0003). Prisma's SQLite/libSQL provider does
+  // NOT auto-index foreign-key columns, so these are not redundant.
+  // Main list query (`getTransactionsFn`): filter on deletedAt IS NULL,
+  // order by date DESC. Covering index avoids a full scan on every page.
+  @@index([deletedAt, date(sort: Desc)])
+  // Per-account history (account-detail drill-down planned post-ADR-0004).
+  @@index([accountId, date(sort: Desc)])
+  // Current dev "borrow user" pattern. Will be redundant once ADR-0004
+  // adds `familyId` directly on Transaction; remove at that time.
+  @@index([userId])
+  // Aggregations.
+  @@index([categoryId])
+  @@index([merchantId])
 }
 
 model Transfer {
@@ -190,6 +215,10 @@ model SplitEntry {
   merchant    Merchant? @relation(fields: [merchantId], references: [id])
 
   createdAt   DateTime  @default(now())
+
+  // Hot read path: hydrating split children for a transaction list.
+  // See ADR-0003.
+  @@index([transactionId])
 }
 
 // ==========================================
@@ -210,4 +239,7 @@ model SmartRule {
 
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @default(now()) @updatedAt
+
+  // Tenant-scoped rule evaluation (see ADR-0003).
+  @@index([familyId])
 }

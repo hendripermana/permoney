@@ -28,3 +28,4 @@ When proposing a new decision:
 
 - [`0001-money-type-migration.md`](./0001-money-type-migration.md) — Migrate monetary fields from `Float` to `BigInt` minor units. **Status: Accepted**.
 - [`0002-lint-enforcement-no-use-effect.md`](./0002-lint-enforcement-no-use-effect.md) — Enforce the `no-use-effect` convention via `oxlint` `no-restricted-imports` (named-import style) + a pre-commit grep guard with sentinel-comment escape valve (namespace style). **Status: Accepted**.
+- [`0003-production-database.md`](./0003-production-database.md) — Production database = Turso (managed libSQL edge replicas) over the originally-audited Postgres pivot. Adds 10 strategic indexes, `DATABASE_AUTH_TOKEN` boot-time validation in `db.server.ts`, and explicit "revisit triggers" that would force a Postgres migration. **Status: Accepted**.
