@@ -1,52 +1,43 @@
 /**
- * Split Parity Guard — GAAP Compliance Helper
+ * Split Parity Guard — GAAP Compliance Helper (BigInt edition)
  * =============================================================================
  *
  * Backend-side authoritative invariant for split transactions:
  *
  *   sum(splitEntry.amount) === parent.amount
  *
- * The UI form already validates this for UX, but UI validation can be bypassed
- * (request crafted by hand, browser bug, race condition, optimistic mutation
- * drift). The server function MUST re-validate before writing the row, or the
- * ledger silently accumulates inconsistent split parents.
+ * Now operates on `bigint` minor units (post-ADR-0001 migration). With BigInt
+ * arithmetic this check is **exact** — no epsilon needed. Float's
+ * non-associativity (`(a+b)+c !== a+(b+c)`) was the only reason the old
+ * implementation tolerated a 0.01 epsilon; that tolerance silently absorbed
+ * real bugs in addition to Float noise. Exact equality is now the rule.
  *
  * Extracted as a pure function so:
  *   1. The same logic is shared between `createTransactionFn` and
  *      `updateTransactionFn` (single source of truth, no drift).
  *   2. It can be unit-tested without spinning up Prisma + a database.
- *   3. Future migration to integer-cents money type (see ADR-0001) only
- *      touches this one function instead of every handler.
  *
- * NOTE on the epsilon (`0.01`):
- * Floats are not associative — repeated additions accumulate rounding error.
- * `0.01` is one cent, the smallest unit we currently care about for IDR/USD
- * scale=2 currencies. Once the BigInt-cents migration lands, this helper will
- * accept BigInt and use exact equality.
+ * @see docs/adr/0001-money-type-migration.md
  */
 
+import { absMoney, sumMoney, type Money } from "@/lib/money"
+
 export interface ParitySplitEntry {
-  amount: number
+  amount: Money | bigint
 }
 
 export interface ParitySplitInput {
-  amount: number
+  amount: Money | bigint
   isSplit: boolean
   splitEntries?: Array<ParitySplitEntry> | null
 }
 
-/**
- * Tolerance in absolute monetary units. Differences below this are considered
- * floating-point noise and accepted. See ADR-0001 for the migration plan.
- */
-export const SPLIT_PARITY_EPSILON = 0.01
-
 export interface ParityCheckResult {
   ok: boolean
-  /** Sum of provided split entries (NaN-safe; non-finite inputs surface here). */
-  splitSum: number
-  /** Absolute delta between splitSum and parent amount. */
-  delta: number
+  /** Sum of provided split entries in minor units. */
+  splitSum: bigint
+  /** Absolute delta between splitSum and parent magnitude (in minor units). */
+  delta: bigint
 }
 
 /**
@@ -57,27 +48,21 @@ export interface ParityCheckResult {
  * - `isSplit === false`: returns `ok: true` regardless of entries.
  * - Empty / missing `splitEntries`: returns `ok: true` (split flag with no
  *   entries is treated upstream — this guard only checks the sum invariant).
- * - Non-finite amounts (NaN, Infinity): returns `ok: false` with delta=NaN.
- *   Callers should reject these inputs at the schema layer; this guard is a
- *   second line of defense, not the primary validator.
+ *
+ * NOTE: parent `amount` is compared against `|sum|` because the parent's
+ * sign carries the transaction direction (negative for expense, positive
+ * for income) while split children are always stored as magnitudes.
  */
 export function checkSplitParity(input: ParitySplitInput): ParityCheckResult {
   if (!input.isSplit || !input.splitEntries?.length) {
-    return { ok: true, splitSum: 0, delta: 0 }
+    return { ok: true, splitSum: 0n, delta: 0n }
   }
 
-  const splitSum = input.splitEntries.reduce(
-    (acc, entry) => acc + entry.amount,
-    0
-  )
-
-  // Guard against NaN/Infinity sneaking past the schema.
-  if (!Number.isFinite(splitSum) || !Number.isFinite(input.amount)) {
-    return { ok: false, splitSum, delta: Number.NaN }
-  }
-
-  const delta = Math.abs(splitSum - input.amount)
-  return { ok: delta <= SPLIT_PARITY_EPSILON, splitSum, delta }
+  const splitSum = sumMoney(input.splitEntries.map((e) => e.amount))
+  const parentMagnitude = absMoney(input.amount)
+  const diff = splitSum - parentMagnitude
+  const delta = diff < 0n ? -diff : diff
+  return { ok: delta === 0n, splitSum, delta }
 }
 
 /**
@@ -93,8 +78,8 @@ export function assertSplitParity(input: ParitySplitInput): void {
   if (result.ok) return
 
   throw new Error(
-    `SPLIT_PARITY_VIOLATION: SplitEntries sum (${result.splitSum.toFixed(2)}) ` +
-      `must equal parent amount (${input.amount.toFixed(2)}). ` +
-      `Δ = ${result.delta.toFixed(2)} (epsilon = ${SPLIT_PARITY_EPSILON.toFixed(2)})`
+    `SPLIT_PARITY_VIOLATION: SplitEntries sum (${result.splitSum.toString()}) ` +
+      `must equal parent amount magnitude (${absMoney(input.amount).toString()}). ` +
+      `Δ = ${result.delta.toString()} minor units (exact match required).`
   )
 }

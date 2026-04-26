@@ -55,7 +55,11 @@ export type TransactionFilters = z.infer<typeof transactionSearchSchema>
 export interface FilterableTransaction {
   id: string
   type: string
-  amount: number
+  // ADR-0001: amount is now a Money (bigint minor units) rather than Float.
+  // Filter functions never need the value, only the field's existence/sign,
+  // so widening to `number | bigint` here keeps both bigint records (live
+  // collection) and any legacy number-typed mocks compatible.
+  amount: number | bigint
   date: Date | string
   description: string
   accountId: string
