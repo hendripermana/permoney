@@ -219,7 +219,17 @@ export function TransactionFilterPanel({
         {/* Search dalam panel */}
         <div className="relative">
           <IconSearch className="absolute top-2.5 left-2.5 h-4 w-4 text-muted-foreground" />
+          {/*
+           * Accessibility: the visible label here is the dynamic placeholder, but
+           * a placeholder is not a label — screen readers and Chrome's a11y audit
+           * still demand a stable id/name pair plus an aria-label. The id is
+           * scoped to the active category so each panel section gets its own
+           * autofill history bucket in the browser.
+           */}
           <Input
+            id={`filter-panel-search-${activeCategory}`}
+            name={`filter-panel-search-${activeCategory}`}
+            aria-label={`Filter ${activeCategory}`}
             type="search"
             placeholder={`Filter ${activeCategory}...`}
             className="pl-8"
@@ -383,11 +393,17 @@ export function TransactionFilterPanel({
         return (
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">
+              <Label
+                htmlFor="filter-amount-min"
+                className="text-xs text-muted-foreground"
+              >
                 Minimum Amount
               </Label>
               <Input
+                id="filter-amount-min"
+                name="filter-amount-min"
                 type="number"
+                inputMode="decimal"
                 placeholder="0"
                 value={draft.amountMin ?? ""}
                 onChange={(e) =>
@@ -401,11 +417,17 @@ export function TransactionFilterPanel({
               />
             </div>
             <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">
+              <Label
+                htmlFor="filter-amount-max"
+                className="text-xs text-muted-foreground"
+              >
                 Maximum Amount
               </Label>
               <Input
+                id="filter-amount-max"
+                name="filter-amount-max"
                 type="number"
+                inputMode="decimal"
                 placeholder="No limit"
                 value={draft.amountMax ?? ""}
                 onChange={(e) =>

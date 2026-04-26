@@ -162,11 +162,29 @@ function TransactionsPage() {
   const safeTransactions = (transactions ?? []) as Array<TransactionData>
 
   // === 3. DEBOUNCED SEARCH ===
-  // Input langsung update lokal (instant feedback), tapi URL di-update setelah 300ms
+  // Input langsung update lokal (instant feedback), tapi URL di-update setelah 300ms.
+  //
+  // CLEANUP-ON-UNMOUNT: Without the useEffect cleanup below, a pending
+  // setTimeout would still fire after the user navigates away from
+  // /transactions. The closure captures `navigate`, calls it on the
+  // unmounted route, and React 19 logs:
+  //   "Can't perform a React state update on a component that hasn't
+  //    mounted yet."
+  // Clearing the handle on unmount is a 3-line fix that eliminates the
+  // warning entirely without changing the typing-debounce UX.
   const [localSearch, setLocalSearch] = React.useState(filters.q)
   const searchTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
     null
   )
+
+  React.useEffect(() => {
+    return () => {
+      if (searchTimerRef.current) {
+        clearTimeout(searchTimerRef.current)
+        searchTimerRef.current = null
+      }
+    }
+  }, [])
 
   const handleSearchChange = (value: string) => {
     setLocalSearch(value)

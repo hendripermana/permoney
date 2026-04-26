@@ -41,3 +41,6 @@ prisma/dev.db-journal
 
 # AI Generated Plans
 docs/superpowers/
+
+# Captain's private operator runbook (Bahasa Indonesia)
+CAPTAIN_NOTES.md

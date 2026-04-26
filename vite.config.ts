@@ -48,7 +48,24 @@ const config = defineConfig({
   },
 
   // =========================================================
-  plugins: [tanstackStart(), nitro(), viteReact(), tailwindcss(), devtools()],
+  // NOTE on `devtools({ injectSource: { enabled: false } })`:
+  //   The TanStack devtools-vite plugin annotates every JSX node with a
+  //   `data-tsd-source="/path/to/file.tsx:LINE:COL"` attribute so its
+  //   in-page inspector can jump-to-source. In our setup that attribute
+  //   leaks into the SSR-cached payload but drifts on every client edit
+  //   (because Vite HMR picks up the new line numbers immediately while
+  //   the SSR module remains cached for the active request). Result:
+  //   React 19's hydration reconciler reports a mismatch on EVERY edited
+  //   route until the dev server is restarted. We never use the in-page
+  //   inspector, so disabling injection is a free win — devtools UI and
+  //   enhanced logs continue to work.
+  plugins: [
+    tanstackStart(),
+    nitro(),
+    viteReact(),
+    tailwindcss(),
+    devtools({ injectSource: { enabled: false } }),
+  ],
 })
 
 export default config

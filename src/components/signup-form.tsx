@@ -30,7 +30,9 @@ export function SignUpForm({
                   <FieldLabel htmlFor="fullname">Full Name</FieldLabel>
                   <Input
                     id="fullname"
+                    name="fullname"
                     type="text"
+                    autoComplete="name"
                     placeholder="John Doe"
                     required
                   />
@@ -39,7 +41,9 @@ export function SignUpForm({
                   <FieldLabel htmlFor="username">Username</FieldLabel>
                   <Input
                     id="username"
+                    name="username"
                     type="text"
+                    autoComplete="username"
                     placeholder="johndoe"
                     required
                   />
@@ -49,14 +53,22 @@ export function SignUpForm({
                 <FieldLabel htmlFor="email">Email</FieldLabel>
                 <Input
                   id="email"
+                  name="email"
                   type="email"
+                  autoComplete="email"
                   placeholder="name@example.com"
                   required
                 />
               </Field>
               <Field>
                 <FieldLabel htmlFor="password">Password</FieldLabel>
-                <Input id="password" type="password" required />
+                <Input
+                  id="password"
+                  name="password"
+                  type="password"
+                  autoComplete="new-password"
+                  required
+                />
               </Field>
               <Field className="mt-4">
                 <Button
