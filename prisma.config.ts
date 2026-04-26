@@ -7,6 +7,14 @@ export default defineConfig({
   schema: "prisma/schema.prisma",
   migrations: {
     path: "prisma/migrations",
+    // Prisma 7 moved the seed declaration out of package.json#prisma.seed
+    // and into the typed config block here. We invoke `tsx` from the local
+    // node_modules/.bin via `vp exec`, NOT `vp dlx`: Prisma spawns this
+    // command via execa, and at the time of spawn vp's child-process
+    // resolution misroutes the `dlx` subcommand. `vp exec` runs whatever
+    // is already installed in node_modules, which is what we want anyway
+    // since `tsx` is pulled in as a transitive of @tanstack/* packages.
+    seed: "vp exec tsx prisma/seed.ts",
   },
   datasource: {
     url: process.env["DATABASE_URL"],

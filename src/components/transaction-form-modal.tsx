@@ -21,6 +21,8 @@ import { format } from "date-fns"
 import { getCurrencySymbol } from "@/lib/currency"
 import { cn } from "@/lib/utils"
 import { getTransactionFormData } from "@/server/transactions"
+import { toDisplayNumber, toMinorUnits, type Money } from "@/lib/money"
+import { CURRENCIES, type CurrencyCode } from "@/lib/data/currencies"
 
 type TransactionFormData = Awaited<ReturnType<typeof getTransactionFormData>>
 type FormAccount = TransactionFormData["accounts"][number]
@@ -81,16 +83,54 @@ const transactionSchema = z.object({
 
 type TransactionFormValues = z.infer<typeof transactionSchema>
 
+// =============================================================================
+// EDIT-MODE INPUT SHAPE (post-ADR-0001)
+//
+// Pages that open this modal in EDIT mode (e.g. /transactions) carry records
+// straight from the TanStack DB collection, where every monetary field is a
+// `Money` (bigint minor units). The form, however, binds to <input type=number>
+// and stores decimal-major values in its state. We accept BOTH shapes here:
+//
+//   - `bigint`/`Money`  \u2014 from a live collection record. We convert to a
+//     display number internally via `toDisplayNumber(money, currency)`.
+//   - `number`          \u2014 legacy callers OR transient form state.
+//
+// Currency for the conversion comes from the source `Account.currency` of the
+// edited transaction. If the source account has been deleted or the record
+// is somehow missing the join, we fall back to "IDR" (the family default).
+// =============================================================================
+type EditAmount = number | bigint | Money
+
 interface TransactionFormModalProps {
   editData?:
-    | (TransactionFormValues & {
+    | (Omit<TransactionFormValues, "amount" | "destinationAmount"> & {
         id: string
+        amount: EditAmount
+        destinationAmount?: EditAmount
+        currency?: string
         isSplit?: boolean
-        splitEntries?: Array<SplitEntryValue>
+        splitEntries?: Array<
+          Omit<SplitEntryValue, "amount"> & { amount: EditAmount }
+        >
       })
     | null
   customTrigger?: React.ReactNode
   onClose?: () => void
+}
+
+/**
+ * Coerce an EditAmount (which may be Money/bigint OR a JS number) to the
+ * decimal-major number the HTML input expects. Currency drives the scale
+ * for the bigint case.
+ */
+function editAmountToInputNumber(amount: EditAmount, currency: string): number {
+  if (typeof amount === "bigint") {
+    const code = currency as CurrencyCode
+    if (CURRENCIES[code]) return toDisplayNumber(amount as Money, code)
+    // Unknown currency: assume scale 100 (the modal majority case)
+    return Number(amount) / 100
+  }
+  return amount
 }
 
 export function TransactionFormModal({
@@ -111,26 +151,38 @@ export function TransactionFormModal({
   // === SPLIT TRANSACTION ENGINE STATE ===
   // isSplit: toggle untuk mengaktifkan mode split
   const [isSplit, setIsSplit] = React.useState(editData?.isSplit ?? false)
-  // splitEntries: array baris line item yang bisa ditambah/hapus secara dinamis
+  // splitEntries: array baris line item yang bisa ditambah/hapus secara dinamis.
+  // Initialize from editData by converting any bigint amounts to display numbers
+  // (the form input is `<input type="number">`). The edit currency is taken
+  // from editData.currency, falling back to "IDR".
+  const editCurrency = editData?.currency ?? "IDR"
   const [splitEntries, setSplitEntries] = React.useState<
     Array<SplitEntryValue>
   >(
-    editData?.splitEntries ?? [
-      {
-        id: crypto.randomUUID(),
-        description: "",
-        amount: 0,
-        categoryId: "",
-        merchantId: "",
-      },
-      {
-        id: crypto.randomUUID(),
-        description: "",
-        amount: 0,
-        categoryId: "",
-        merchantId: "",
-      },
-    ]
+    editData?.splitEntries
+      ? editData.splitEntries.map((e) => ({
+          id: e.id,
+          description: e.description,
+          amount: editAmountToInputNumber(e.amount, editCurrency),
+          categoryId: e.categoryId,
+          merchantId: e.merchantId,
+        }))
+      : [
+          {
+            id: crypto.randomUUID(),
+            description: "",
+            amount: 0,
+            categoryId: "",
+            merchantId: "",
+          },
+          {
+            id: crypto.randomUUID(),
+            description: "",
+            amount: 0,
+            categoryId: "",
+            merchantId: "",
+          },
+        ]
   )
 
   useHotkeys([
@@ -159,7 +211,13 @@ export function TransactionFormModal({
   const defaultFormValues: TransactionFormValues = isEditMode
     ? {
         type: editData.type,
-        amount: Math.abs(editData.amount),
+        // Convert Money (bigint) → decimal-major for the HTML input. abs()
+        // on the resulting number is a fallback for the unlikely number-input
+        // path; bigint amounts from the collection are already pre-abs'd by
+        // the route's onEdit handler.
+        amount: Math.abs(
+          editAmountToInputNumber(editData.amount, editCurrency)
+        ),
         description: editData.description,
         accountId: editData.accountId,
         categoryId: editData.categoryId ?? "",
@@ -220,10 +278,39 @@ export function TransactionFormModal({
       }
 
       try {
+        // === MONEY CONVERSION (post-ADR-0001) ===
+        // The form binds to <input type="number"> so `value.amount` is a
+        // decimal-major JS number (e.g. 15000 means Rp 15,000). Before the
+        // optimistic insert/update, convert to `Money` (bigint minor units)
+        // using the source account's currency. This is the ONLY conversion
+        // boundary on the client; everything downstream sees Money.
+        const sourceCurrency =
+          formData?.accounts.find((a) => a.id === value.accountId)?.currency ??
+          "IDR"
+        const destCurrency =
+          value.type === "transfer" && value.toAccountId
+            ? (formData?.accounts.find((a) => a.id === value.toAccountId)
+                ?.currency ?? null)
+            : null
+
+        const toMoney = (n: number, code: string): Money => {
+          const c = code as CurrencyCode
+          if (CURRENCIES[c]) return toMinorUnits(n.toString(), c)
+          // Fallback: treat as IDR-style ×100 currency to avoid runtime crash
+          // for an unknown code; the server's Zod will reject if it's bogus.
+          return BigInt(Math.round(n * 100)) as Money
+        }
+
+        const amountMoney: Money = toMoney(value.amount, sourceCurrency)
+        const destAmountMoney: Money | null =
+          value.destinationAmount != null && destCurrency
+            ? toMoney(value.destinationAmount, destCurrency)
+            : null
+
         const payload = {
           type: value.type,
           kind: value.type === "transfer" ? "funds_movement" : "standard",
-          amount: value.amount,
+          amount: amountMoney,
           description: value.description,
           accountId: value.accountId,
           categoryId: isSplit ? null : value.categoryId || null,
@@ -238,17 +325,15 @@ export function TransactionFormModal({
                   // Include client-side id agar React punya key stabil di optimistic state
                   id: e.id,
                   description: e.description,
-                  amount: e.amount,
+                  amount: toMoney(e.amount, sourceCurrency),
                   categoryId: e.categoryId || null,
                   merchantId: e.merchantId || null,
                 }))
               : [],
-          currency:
-            formData?.accounts.find((a) => a.id === value.accountId)
-              ?.currency ?? "IDR",
+          currency: sourceCurrency,
           excluded: false,
           status: value.status ?? "CLEARED",
-          destinationAmount: value.destinationAmount ?? null,
+          destinationAmount: destAmountMoney,
           destinationCurrency: (() => {
             // Compute destinationCurrency from toAccountId's account currency
             if (value.type === "transfer" && value.toAccountId) {
