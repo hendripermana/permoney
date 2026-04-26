@@ -47,8 +47,21 @@ export const Route = createRootRoute({
 })
 
 function RootErrorComponent({ error, reset }: ErrorComponentProps) {
-  // Surface to observability tooling (Sentry/PostHog) when wired.
-  // For now: console + visible UI so the user is never staring at a blank screen.
+  // ─── Justified `useEffect` (no-use-effect skill exemption) ──────
+  // Logs the error to the console (and, when wired, Sentry/PostHog)
+  // each time the boundary catches a NEW error. The dep `[error]` is
+  // load-bearing — we explicitly want the log to fire on identity
+  // change, not just once on mount, so:
+  //   - Rule 1 (derive) doesn't apply — logging is a side effect, not
+  //     derived state.
+  //   - Rule 3 (event handler) doesn't apply — error boundaries are
+  //     not user events; there's no handler to put the log into.
+  //   - Rule 4 (`useMountEffect`) doesn't apply — the dep changes;
+  //     mount-only logging would miss subsequent errors after Reset.
+  //   - Inline `console.error` during render would violate render
+  //     purity AND double-log under StrictMode.
+  // This is genuinely outside the skill's five rules. Keep as-is.
+  // ────────────────────────────────────────────────────────────────
   React.useEffect(() => {
     // eslint-disable-next-line no-console
     console.error("[RootErrorBoundary]", error)

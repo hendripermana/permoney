@@ -52,6 +52,7 @@ import {
   applySearch,
   transactionSearchSchema,
 } from "@/lib/transaction-filters"
+import { useMountEffect } from "@/hooks/use-mount-effect"
 
 // ═══════════════════════════════════════════════════════════════
 // TYPE DERIVATION: End-to-End Type Safety dari Server Function
@@ -110,6 +111,12 @@ function TransactionsPendingComponent() {
 }
 
 function TransactionsErrorComponent({ error, reset }: ErrorComponentProps) {
+  // ─── Justified `useEffect` (no-use-effect skill exemption) ──────
+  // Same pattern as `RootErrorComponent` in `__root.tsx` — see that
+  // file for the full rationale. tl;dr: logging-on-error-change with
+  // a non-stable dep is genuinely outside the skill's five rules,
+  // and inline-logging during render would violate React purity.
+  // ────────────────────────────────────────────────────────────────
   React.useEffect(() => {
     // eslint-disable-next-line no-console
     console.error("[/transactions errorComponent]", error)
@@ -177,14 +184,18 @@ function TransactionsPage() {
     null
   )
 
-  React.useEffect(() => {
+  // `useMountEffect` (no-use-effect Rule 4): we only need a cleanup
+  // function that runs once when the route unmounts. The empty-deps
+  // semantic is the contract — surfaced explicitly via the helper name
+  // so reviewers don't have to pattern-match `useEffect(..., [])`.
+  useMountEffect(() => {
     return () => {
       if (searchTimerRef.current) {
         clearTimeout(searchTimerRef.current)
         searchTimerRef.current = null
       }
     }
-  }, [])
+  })
 
   const handleSearchChange = (value: string) => {
     setLocalSearch(value)

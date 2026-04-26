@@ -139,13 +139,21 @@ const chartConfig = {
 
 export function ChartAreaInteractive() {
   const isMobile = useIsMobile()
-  const [timeRange, setTimeRange] = React.useState("90d")
 
-  React.useEffect(() => {
-    if (isMobile) {
-      setTimeRange("7d")
-    }
-  }, [isMobile])
+  // ─── DERIVED-STATE PATTERN (no-use-effect Rule 1) ───────────────
+  // Old shape:
+  //   useState("90d") + useEffect(setTimeRange("7d"), [isMobile])
+  //
+  // That mirrored `isMobile` into local state with an extra render
+  // and — worse — clobbered the user's pick every time they
+  // shrunk the viewport into mobile. Now we keep ONE state slot
+  // (`userTimeRange`) holding only the user's explicit choice,
+  // and derive the effective `timeRange` from it on every render.
+  // The default falls back to viewport size, but a user pick wins.
+  // ────────────────────────────────────────────────────────────────
+  const [userTimeRange, setUserTimeRange] = React.useState<string | null>(null)
+  const timeRange = userTimeRange ?? (isMobile ? "7d" : "90d")
+  const setTimeRange = setUserTimeRange
 
   const filteredData = chartData.filter((item) => {
     const date = new Date(item.date)

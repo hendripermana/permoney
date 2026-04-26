@@ -198,6 +198,19 @@ function CalendarDayButton({
   const defaultClassNames = getDefaultClassNames()
 
   const ref = React.useRef<HTMLButtonElement>(null)
+  // ─── Justified `useEffect` (no-use-effect skill exemption) ──────
+  // This effect imperatively calls `.focus()` on a DOM node when
+  // `modifiers.focused` flips to true. The dep IS expected to change
+  // over the component's lifetime (react-day-picker rotates focus as
+  // the user arrows around the grid), which means:
+  //   - Rule 1 (derive) doesn't apply — focus is an imperative DOM op
+  //   - Rule 4 (`useMountEffect`) doesn't apply — needs to fire on
+  //     prop change, not just on mount
+  //   - Rule 5 (`key`) would force-remount the entire button, which
+  //     destroys keyboard focus continuity (defeats the purpose)
+  // This is the canonical "sync DOM imperative to declarative prop"
+  // case the React docs explicitly endorse. Keep as-is.
+  // ────────────────────────────────────────────────────────────────
   React.useEffect(() => {
     if (modifiers.focused) ref.current?.focus()
   }, [modifiers.focused])

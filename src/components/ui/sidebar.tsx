@@ -5,6 +5,7 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { Slot } from "radix-ui"
 
 import { useIsMobile } from "@/hooks/use-mobile"
+import { useMountEffect } from "@/hooks/use-mount-effect"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -92,21 +93,39 @@ function SidebarProvider({
     return isMobile ? setOpenMobile((open) => !open) : setOpen((open) => !open)
   }, [isMobile, setOpen, setOpenMobile])
 
-  // Adds a keyboard shortcut to toggle the sidebar.
-  React.useEffect(() => {
+  // ─── Keyboard shortcut: Cmd/Ctrl+B toggles sidebar ──────────────
+  // The naive shape was:
+  //   useEffect(addListener; return removeListener, [toggleSidebar])
+  // which re-binds the global listener on EVERY toggleSidebar identity
+  // change (and toggleSidebar depends on `open`, so that's every state
+  // flip). We rewrite using the no-use-effect convention's idiom for
+  // "subscribe once, always call latest callback":
+  //   1. Mirror toggleSidebar into a ref on every render (cheap, no
+  //      effect needed — refs may be mutated during render per React
+  //      docs).
+  //   2. Bind the listener exactly once via `useMountEffect`.
+  //   3. The listener calls `toggleSidebarRef.current()`, which always
+  //      sees the freshest value without dependency choreography.
+  // This eliminates churn on the global keydown listener AND fits
+  // squarely under Rule 4 of the no-use-effect skill.
+  // ────────────────────────────────────────────────────────────────
+  const toggleSidebarRef = React.useRef(toggleSidebar)
+  toggleSidebarRef.current = toggleSidebar
+
+  useMountEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (
         event.key === SIDEBAR_KEYBOARD_SHORTCUT &&
         (event.metaKey || event.ctrlKey)
       ) {
         event.preventDefault()
-        toggleSidebar()
+        toggleSidebarRef.current()
       }
     }
 
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [toggleSidebar])
+  })
 
   // We add a state so that we can do data-state="expanded" or "collapsed".
   // This makes it easier to style the sidebar with Tailwind classes.
