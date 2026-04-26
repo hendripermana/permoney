@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
+import { absMoney, encodeMoney, negateMoney, type Money } from "@/lib/money"
 import { assertSplitParity } from "@/lib/split-parity"
 // `import type` adalah TYPE-ONLY — di-erase compile time, tidak masuk runtime bundle.
 // TanStack Start's import-protection plugin (analysis.js:44) MEN-SKIP semua
@@ -37,10 +38,105 @@ export const getTransactionFormData = createServerFn({ method: "GET" }).handler(
   }
 )
 
+// =============================================================================
+// MONEY INPUT SCHEMA (post-ADR-0001)
+//
+// Accepts three shapes for monetary fields:
+//   1. `bigint` — native BigInt (used in server-internal calls + tests)
+//   2. `string` of digits (with optional leading `-`) — the WIRE format that
+//      clients send after Step 4d (BigInts can't be JSON-stringified, so
+//      they cross the wire as strings).
+//   3. `number` integer — transitional support for legacy form payloads;
+//      MUST be already in minor units (sen, cents, satoshi). Non-integer
+//      numbers are rejected so callers can't accidentally send display
+//      values like `100.50`.
+//
+// All three coerce to `bigint` for downstream business logic.
+// =============================================================================
+const moneyInputSchema = z
+  .union([
+    z.bigint(),
+    z
+      .string()
+      .regex(
+        /^-?\d+$/,
+        "money wire value must be a string of digits (e.g. '100050')"
+      ),
+    z
+      .number()
+      .int("legacy number money input must be an integer in minor units"),
+  ])
+  .transform((v) => (typeof v === "bigint" ? v : BigInt(v)))
+
+const positiveMoneyInputSchema = moneyInputSchema.refine((b) => b > 0n, {
+  message: "amount must be positive",
+})
+
+// =============================================================================
+// WIRE SERIALIZATION HELPER
+//
+// Server-fn return values cross JSON. `JSON.stringify(10n)` throws, so every
+// monetary bigint field is encoded as a digit-string at the boundary. The
+// client revives them in the TanStack DB collection's `select` callback (see
+// src/lib/collections.ts). This is the Stripe/Wise pattern — zero precision
+// loss anywhere it matters.
+//
+// We keep `splitEntries` as a parallel array transformation so its `amount`
+// field is also wire-encoded.
+// =============================================================================
+// CRITICAL: each conditional is wrapped in `[T]` to prevent TypeScript's
+// distributive conditional behavior. Without the tuple wrapping, a field
+// typed `Merchant | null` would distribute over the union and incorrectly
+// match the `null` branch of `T extends bigint | null`, mapping the entire
+// field to `string | Merchant` \u2014 a subtle bug that broke `merchant.name`
+// access throughout the UI before this fix.
+type SerializeMoney<T> = [T] extends [bigint]
+  ? string
+  : [T] extends [bigint | null]
+    ? string | null
+    : [T] extends [bigint | null | undefined]
+      ? string | null | undefined
+      : [T] extends [Array<infer U>]
+        ? Array<{ [K in keyof U]: SerializeMoney<U[K]> }>
+        : T
+
+type Serialized<T> = { [K in keyof T]: SerializeMoney<T[K]> }
+
+/**
+ * Encode all bigint-money fields of a transaction-like object to digit-strings
+ * so the result survives JSON serialization across the server-fn boundary.
+ *
+ * The generic mapped return type preserves every other field's type exactly,
+ * which keeps `Awaited<ReturnType<typeof getTransactionsFn>>` useful for the
+ * client without requiring duplicated DTO declarations.
+ */
+function serializeTransaction<
+  T extends {
+    amount: bigint
+    destinationAmount?: bigint | null
+    accountBalanceAfter?: bigint | null
+    splitEntries?: Array<{ amount: bigint }>
+  },
+>(tx: T): Serialized<T> {
+  const out: Record<string, unknown> = { ...tx }
+  out.amount = encodeMoney(tx.amount)
+  out.destinationAmount =
+    tx.destinationAmount == null ? null : encodeMoney(tx.destinationAmount)
+  out.accountBalanceAfter =
+    tx.accountBalanceAfter == null ? null : encodeMoney(tx.accountBalanceAfter)
+  if (tx.splitEntries) {
+    out.splitEntries = tx.splitEntries.map((e) => ({
+      ...e,
+      amount: encodeMoney(e.amount),
+    }))
+  }
+  return out as Serialized<T>
+}
+
 // Schema untuk setiap baris line item dalam split transaction
 const splitEntrySchema = z.object({
   description: z.string().min(1),
-  amount: z.number().positive(),
+  amount: positiveMoneyInputSchema,
   categoryId: z.string().nullable().optional(),
   merchantId: z.string().nullable().optional(),
 })
@@ -51,7 +147,7 @@ const splitEntrySchema = z.object({
 const transactionInputSchema = z.object({
   id: z.string().min(1).optional(), // ID pre-generated di client untuk sinkronisasi optimistic
   type: z.enum(["expense", "income", "transfer"]),
-  amount: z.number().positive(),
+  amount: positiveMoneyInputSchema,
   description: z.string().min(1),
   accountId: z.string().min(1),
   categoryId: z.string().nullable().optional(),
@@ -68,7 +164,7 @@ const transactionInputSchema = z.object({
     .enum(["PENDING", "CLEARED", "RECONCILED"])
     .optional()
     .default("CLEARED"),
-  destinationAmount: z.number().positive().nullable().optional(),
+  destinationAmount: positiveMoneyInputSchema.nullable().optional(),
   destinationCurrency: z.string().nullable().optional(),
   attachmentUrl: z.string().nullable().optional(),
 })
@@ -136,7 +232,7 @@ export const createTransactionFn = createServerFn({ method: "POST" })
             type: "transfer",
             kind,
             currency: data.currency,
-            amount: -Math.abs(data.amount),
+            amount: negateMoney(absMoney(data.amount)),
             description: data.description,
             date: data.date,
             notes: data.notes || null,
@@ -158,7 +254,7 @@ export const createTransactionFn = createServerFn({ method: "POST" })
             type: "transfer",
             kind,
             currency: inCurrency,
-            amount: Math.abs(inAmount),
+            amount: absMoney(inAmount),
             description: data.description,
             date: data.date,
             notes: data.notes || null,
@@ -182,18 +278,20 @@ export const createTransactionFn = createServerFn({ method: "POST" })
           },
         })
 
-        return {
+        return serializeTransaction({
           ...outflowTx,
-          amount: Math.abs(outflowTx.amount),
-        }
+          amount: absMoney(outflowTx.amount),
+        })
       }
 
       // B. HANDLE STANDARD EXPENSE / INCOME
-      const amountSign =
-        data.type === "expense" ? -Math.abs(data.amount) : Math.abs(data.amount)
+      const amountSign: Money =
+        data.type === "expense"
+          ? negateMoney(absMoney(data.amount))
+          : absMoney(data.amount)
 
       // Running Balance Snapshot: baca saldo setelah update atomik
-      let accountBalanceAfter: number | null = null
+      let accountBalanceAfter: bigint | null = null
       if (data.type === "expense") {
         const updated = await tx.account.update({
           where: { id: data.accountId },
@@ -241,7 +339,7 @@ export const createTransactionFn = createServerFn({ method: "POST" })
               data: {
                 transactionId: newTransaction.id,
                 description: entry.description,
-                amount: Math.abs(entry.amount),
+                amount: absMoney(entry.amount),
                 categoryId: entry.categoryId || null,
                 merchantId: entry.merchantId || null,
               },
@@ -250,10 +348,10 @@ export const createTransactionFn = createServerFn({ method: "POST" })
         )
       }
 
-      return {
+      return serializeTransaction({
         ...newTransaction,
-        amount: Math.abs(newTransaction.amount),
-      }
+        amount: absMoney(newTransaction.amount),
+      })
     })
 
     return result
@@ -303,11 +401,17 @@ export const getTransactionsFn = createServerFn({ method: "GET" }).handler(
       },
     })
 
-    // The MAP logic: Ubah array yang didapat dari DB
-    return transactions.map((tx) => ({
-      ...tx,
-      amount: Math.abs(tx.amount), // Convert back to absolute numbers
-    }))
+    // The MAP logic: Ubah array yang didapat dari DB.
+    // Amounts are stored signed (negative for expense) but the UI consumes
+    // them as positive magnitudes; sign is communicated via `type`.
+    // Wire-encode bigint → string at this boundary; client revives via
+    // TanStack DB collection `select` callback (see src/lib/collections.ts).
+    return transactions.map((tx) =>
+      serializeTransaction({
+        ...tx,
+        amount: absMoney(tx.amount),
+      })
+    )
   }
 )
 
@@ -344,7 +448,7 @@ export const deleteTransactionFn = createServerFn({ method: "POST" })
         await tx.account.update({
           where: { id: oldTx.accountId },
           data: {
-            balance: { increment: Math.abs(oldTx.amount) },
+            balance: { increment: absMoney(oldTx.amount) },
           },
         })
 
@@ -354,7 +458,7 @@ export const deleteTransactionFn = createServerFn({ method: "POST" })
             where: { id: inflowTx.accountId },
             data: {
               balance: {
-                decrement: Math.abs(inflowTx.amount),
+                decrement: absMoney(inflowTx.amount),
               },
             },
           })
@@ -371,7 +475,7 @@ export const deleteTransactionFn = createServerFn({ method: "POST" })
             where: { id: oldTx.accountId },
             data: {
               balance: {
-                increment: Math.abs(oldTx.amount),
+                increment: absMoney(oldTx.amount),
               },
             }, // Uang kembali
           })
@@ -380,7 +484,7 @@ export const deleteTransactionFn = createServerFn({ method: "POST" })
             where: { id: oldTx.accountId },
             data: {
               balance: {
-                decrement: Math.abs(oldTx.amount),
+                decrement: absMoney(oldTx.amount),
               },
             }, // Uang ditarik
           })
@@ -437,7 +541,7 @@ export const updateTransactionFn = createServerFn({ method: "POST" })
         await tx.account.update({
           where: { id: oldTx.accountId },
           data: {
-            balance: { increment: Math.abs(oldTx.amount) },
+            balance: { increment: absMoney(oldTx.amount) },
           },
         })
         if (inflowTx) {
@@ -445,7 +549,7 @@ export const updateTransactionFn = createServerFn({ method: "POST" })
             where: { id: inflowTx.accountId },
             data: {
               balance: {
-                decrement: Math.abs(inflowTx.amount),
+                decrement: absMoney(inflowTx.amount),
               },
             },
           })
@@ -460,7 +564,7 @@ export const updateTransactionFn = createServerFn({ method: "POST" })
             where: { id: oldTx.accountId },
             data: {
               balance: {
-                increment: Math.abs(oldTx.amount),
+                increment: absMoney(oldTx.amount),
               },
             },
           })
@@ -469,7 +573,7 @@ export const updateTransactionFn = createServerFn({ method: "POST" })
             where: { id: oldTx.accountId },
             data: {
               balance: {
-                decrement: Math.abs(oldTx.amount),
+                decrement: absMoney(oldTx.amount),
               },
             },
           })
@@ -512,7 +616,7 @@ export const updateTransactionFn = createServerFn({ method: "POST" })
             type: "transfer",
             kind,
             currency: data.currency,
-            amount: -Math.abs(data.amount),
+            amount: negateMoney(absMoney(data.amount)),
             description: data.description,
             date: data.date,
             notes: data.notes || null,
@@ -534,7 +638,7 @@ export const updateTransactionFn = createServerFn({ method: "POST" })
             type: "transfer",
             kind,
             currency: inCurrency,
-            amount: Math.abs(inAmount),
+            amount: absMoney(inAmount),
             description: data.description,
             date: data.date,
             notes: data.notes || null,
@@ -557,16 +661,19 @@ export const updateTransactionFn = createServerFn({ method: "POST" })
             inflowTransactionId: inflowTx.id,
           },
         })
-        return { ...outflowTx, amount: Math.abs(outflowTx.amount) }
+        return serializeTransaction({
+          ...outflowTx,
+          amount: absMoney(outflowTx.amount),
+        })
       } else {
         // Re-create Standard Expense/Income (dengan atau tanpa split)
-        const amountSign =
+        const amountSign: Money =
           data.type === "expense"
-            ? -Math.abs(data.amount)
-            : Math.abs(data.amount)
+            ? negateMoney(absMoney(data.amount))
+            : absMoney(data.amount)
 
         // Running Balance Snapshot: baca saldo setelah update atomik
-        let accountBalanceAfter: number | null = null
+        let accountBalanceAfter: bigint | null = null
         if (data.type === "expense") {
           const updated = await tx.account.update({
             where: { id: data.accountId },
@@ -614,7 +721,7 @@ export const updateTransactionFn = createServerFn({ method: "POST" })
                 data: {
                   transactionId: newTx.id,
                   description: entry.description,
-                  amount: Math.abs(entry.amount),
+                  amount: absMoney(entry.amount),
                   categoryId: entry.categoryId || null,
                   merchantId: entry.merchantId || null,
                 },
@@ -623,7 +730,10 @@ export const updateTransactionFn = createServerFn({ method: "POST" })
           )
         }
 
-        return { ...newTx, amount: Math.abs(newTx.amount) }
+        return serializeTransaction({
+          ...newTx,
+          amount: absMoney(newTx.amount),
+        })
       }
     })
   })
@@ -644,10 +754,10 @@ export const bulkDeleteTransactionsFn = createServerFn({ method: "POST" })
         include: { transferOut: true },
       })
 
-      const accountDeltas: Record<string, number> = {}
+      const accountDeltas: Record<string, bigint> = {}
 
-      const addDelta = (id: string, amount: number) => {
-        if (!accountDeltas[id]) accountDeltas[id] = 0
+      const addDelta = (id: string, amount: bigint) => {
+        if (!accountDeltas[id]) accountDeltas[id] = 0n
         accountDeltas[id] += amount
       }
 
@@ -658,9 +768,9 @@ export const bulkDeleteTransactionsFn = createServerFn({ method: "POST" })
               id: oldTx.transferOut.inflowTransactionId,
             },
           })
-          addDelta(oldTx.accountId, Math.abs(oldTx.amount))
+          addDelta(oldTx.accountId, absMoney(oldTx.amount))
           if (inflowTx) {
-            addDelta(inflowTx.accountId, -Math.abs(inflowTx.amount))
+            addDelta(inflowTx.accountId, negateMoney(absMoney(inflowTx.amount)))
             // Soft delete: inflow transaction (TIDAK PERNAH hard delete — audit trail)
             await tx.transaction.update({
               where: { id: inflowTx.id },
@@ -669,9 +779,9 @@ export const bulkDeleteTransactionsFn = createServerFn({ method: "POST" })
           }
         } else if (oldTx.type !== "transfer") {
           if (oldTx.type === "expense") {
-            addDelta(oldTx.accountId, Math.abs(oldTx.amount))
+            addDelta(oldTx.accountId, absMoney(oldTx.amount))
           } else if (oldTx.type === "income") {
-            addDelta(oldTx.accountId, -Math.abs(oldTx.amount))
+            addDelta(oldTx.accountId, negateMoney(absMoney(oldTx.amount)))
           }
         }
       }
@@ -724,20 +834,23 @@ export const bulkUpdateTransactionsFn = createServerFn({ method: "POST" })
           },
         })
 
-        const accountDeltas: Record<string, number> = {}
-        const addDelta = (id: string, amount: number) => {
-          if (!accountDeltas[id]) accountDeltas[id] = 0
+        const accountDeltas: Record<string, bigint> = {}
+        const addDelta = (id: string, amount: bigint) => {
+          if (!accountDeltas[id]) accountDeltas[id] = 0n
           accountDeltas[id] += amount
         }
 
         for (const t of txsToMove) {
           // Expense: Reverse old (+), Charge new (-)
           // Income: Reverse old (-), Charge new (+)
-          const refundSign = t.type === "expense" ? 1 : -1
-          const chargeSign = t.type === "expense" ? -1 : 1
+          const magnitude = absMoney(t.amount)
+          const refundSigned: bigint =
+            t.type === "expense" ? magnitude : negateMoney(magnitude)
+          const chargeSigned: bigint =
+            t.type === "expense" ? negateMoney(magnitude) : magnitude
 
-          addDelta(t.accountId, Math.abs(t.amount) * refundSign)
-          addDelta(data.accountId, Math.abs(t.amount) * chargeSign)
+          addDelta(t.accountId, refundSigned)
+          addDelta(data.accountId, chargeSigned)
         }
 
         await Promise.all(
@@ -805,7 +918,7 @@ const bulkTransactionInputSchema = z.object({
     z.object({
       id: z.string().min(1),
       type: z.enum(["expense", "income"]), // CSV defaults to pure income/expense
-      amount: z.number().positive(),
+      amount: positiveMoneyInputSchema,
       description: z.string().min(1),
       accountId: z.string().min(1),
       categoryId: z.string().nullable().optional(),
@@ -837,7 +950,9 @@ export const bulkCreateTransactionsFn = createServerFn({ method: "POST" })
           userId: user.id,
           type: t.type,
           amount:
-            t.type === "expense" ? -Math.abs(t.amount) : Math.abs(t.amount),
+            t.type === "expense"
+              ? negateMoney(absMoney(t.amount))
+              : absMoney(t.amount),
           description: t.description,
           accountId: t.accountId,
           categoryId: t.categoryId,
@@ -850,11 +965,13 @@ export const bulkCreateTransactionsFn = createServerFn({ method: "POST" })
       })
 
       // 2. Adjust account balances
-      const accountDeltas: Record<string, number> = {}
+      const accountDeltas: Record<string, bigint> = {}
       for (const t of data.transactions) {
-        if (!accountDeltas[t.accountId]) accountDeltas[t.accountId] = 0
+        if (!accountDeltas[t.accountId]) accountDeltas[t.accountId] = 0n
         accountDeltas[t.accountId] +=
-          t.type === "expense" ? -Math.abs(t.amount) : Math.abs(t.amount)
+          t.type === "expense"
+            ? negateMoney(absMoney(t.amount))
+            : absMoney(t.amount)
       }
 
       await Promise.all(

@@ -2,8 +2,9 @@
 
 |                   |                |
 | ----------------- | -------------- |
-| **Status**        | Proposed       |
+| **Status**        | Accepted       |
 | **Date**          | 2026-04-25     |
+| **Accepted**      | 2026-04-26     |
 | **Deciders**      | Hendri Permana |
 | **Supersedes**    | —              |
 | **Superseded by** | —              |
