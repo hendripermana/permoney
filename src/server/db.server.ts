@@ -1,5 +1,5 @@
 import { PrismaClient } from "@prisma/client"
-import { PrismaLibSql } from "@prisma/adapter-libsql"
+import { PrismaPg } from "@prisma/adapter-pg"
 
 // =============================================================================
 // MAANG ARCHITECTURE NOTE — HARD SERVER-ONLY MODULE (.server.ts boundary)
@@ -29,53 +29,48 @@ const globalForPrisma = globalThis as unknown as {
 }
 
 // =============================================================================
-// CONFIG RESOLVER — URL-scheme-aware config for `@prisma/adapter-libsql`.
+// DATABASE_URL VALIDATOR — fail-fast at boot, not at first query.
 // =============================================================================
-// `@libsql/client` accepts the same config shape for both local (`file:`) and
-// remote (`libsql:`/`https:`/`wss:`) URLs, but remote URLs additionally
-// require an `authToken`. Rather than let a misconfigured prod env discover
-// this on its first query (with an opaque 401), we validate at boot and
-// emit a precise, actionable error.
+// `@prisma/adapter-pg` accepts a Postgres connection string in the standard
+// libpq URI form: `postgres://user:pass@host:port/db?sslmode=require`.
+// (`postgresql://` is also accepted as an alias.)
 //
-// Schemes:
-//   • `file:` (and `:memory:` for tests) → local embedded SQLite. No token.
-//   • `libsql://`, `https://`, `wss://`  → Turso remote replica. Token required.
-//
-// Remote schemes per Turso docs: `libsql://` is the canonical form;
-// `https://` and `wss://` are supported aliases (auto-upgraded by the
-// libSQL client to its native protocol). Anything else falls through to
-// libSQL's default handling (Turso may extend the scheme list later).
+// We refuse anything else early — typical mistakes worth surfacing:
+//   • An empty/missing DATABASE_URL (deploys with the env var unset).
+//   • A leftover SQLite URL from the pre-ADR-0003 setup (`file:./...`).
+//   • A leftover libSQL URL (`libsql://...`) from a previous Turso path.
+// In each case we throw a precise message that names the actual offender,
+// the expected scheme, and a copy-pasteable fix snippet.
 //
 // See ADR-0003 (docs/adr/0003-production-database.md) for the full
-// production-database decision and revisit triggers.
+// production-database decision.
 // =============================================================================
-const REMOTE_LIBSQL_SCHEMES = ["libsql://", "https://", "wss://"] as const
+const POSTGRES_SCHEMES = ["postgres://", "postgresql://"] as const
 
-interface LibSqlConfig {
-  url: string
-  authToken?: string
-}
-
-function resolveLibSqlConfig(url: string): LibSqlConfig {
-  const isRemote = REMOTE_LIBSQL_SCHEMES.some((scheme) =>
-    url.startsWith(scheme)
-  )
-  if (!isRemote) {
-    // Local SQLite (dev or tests). Pass through; no token expected.
-    return { url }
-  }
-
-  // Remote Turso. Token is mandatory — fail fast.
-  const authToken = process.env.DATABASE_AUTH_TOKEN
-  if (!authToken || authToken.trim() === "") {
+function validatePostgresUrl(url: string | undefined): string {
+  if (!url || url.trim() === "") {
     throw new Error(
-      `🚨 DATABASE_AUTH_TOKEN is required when DATABASE_URL uses a remote ` +
-        `libSQL scheme (got "${url.split("://")[0]}://"). Set the token in ` +
-        `your environment (Turso: \`turso db tokens create <db-name>\`). ` +
-        `For local development, set DATABASE_URL to a "file:" URL instead.`
+      `🚨 DATABASE_URL is not set. Expected a Postgres URL like ` +
+        `"postgres://user:pass@host:5432/db". For local dev: ` +
+        `"postgres://permoney:permoney@localhost:5433/permoney" ` +
+        `(start the local DB with \`vp run db:up\`).`
     )
   }
-  return { url, authToken }
+  const isPostgres = POSTGRES_SCHEMES.some((s) => url.startsWith(s))
+  if (!isPostgres) {
+    // Extract just the scheme (everything before the first `:`). We split
+    // on `:` rather than `://` because legacy SQLite URLs use `file:` (no
+    // double slash) — we want the message to read "got 'file:'", not the
+    // entire URL with a spurious "://" appended.
+    const scheme = url.includes(":") ? `${url.split(":")[0]}:` : "<no-scheme>"
+    throw new Error(
+      `🚨 DATABASE_URL must use a "postgres://" or "postgresql://" scheme ` +
+        `(got "${scheme}"). Permoney migrated to Postgres in ADR-0003; ` +
+        `legacy "file:" / "libsql:" URLs are no longer supported. ` +
+        `For local dev: "postgres://permoney:permoney@localhost:5433/permoney".`
+    )
+  }
+  return url
 }
 
 // 1. LAZY FACTORY — dipanggil PERTAMA KALI saat properti prisma diakses.
@@ -89,17 +84,20 @@ function createPrismaClient(): PrismaClient {
     )
   }
 
-  // 2. SSR SAFE DATABASE URL
-  const dbUrl = process.env.DATABASE_URL || "file:./prisma/dev.db"
+  // 2. DATABASE URL — validated at boot. Same URL is consumed by:
+  //    (a) Prisma CLI (migrations, generate) via `prisma.config.ts`
+  //    (b) Runtime adapter `@prisma/adapter-pg` here
+  //    There is no fallback default — an unset DATABASE_URL is a deploy
+  //    misconfiguration that should surface immediately, not be papered
+  //    over with a hardcoded localhost.
+  const dbUrl = validatePostgresUrl(process.env.DATABASE_URL)
 
   // 3. PRISMA V7 DRIVER ADAPTER — koneksi diserahkan ke adapter level kode.
-  //    Resolve adapter config from URL scheme (see ADR-0003):
-  //      • `file:` → local embedded SQLite (dev). No auth token expected.
-  //      • `libsql:` / `https:` / `wss:` → Turso remote replica (prod).
-  //        DATABASE_AUTH_TOKEN is REQUIRED; we fail fast here with an
-  //        actionable error message rather than letting the first query
-  //        hit a 401 from Turso at runtime.
-  const adapter = new PrismaLibSql(resolveLibSqlConfig(dbUrl))
+  //    `PrismaPg` accepts the same `pg.Pool` config as `pg` itself; we
+  //    pass the raw connection string and let it parse host/port/auth.
+  //    For prod, set `?sslmode=require` (or `?sslmode=verify-full` with a
+  //    CA bundle) on the URL — managed Postgres providers all require TLS.
+  const adapter = new PrismaPg({ connectionString: dbUrl })
 
   // 4. PRISMA V7 INITIALIZATION
   const client = new PrismaClient({

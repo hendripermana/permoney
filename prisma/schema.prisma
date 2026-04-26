@@ -3,7 +3,13 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  // Postgres in dev (via docker-compose, see ADR-0003) and prod (managed
+  // Postgres: Neon / Supabase / RDS). The runtime adapter is
+  // `@prisma/adapter-pg` selected in `src/server/db.server.ts`. The
+  // `url` is intentionally NOT declared here — Prisma 7 reads it from
+  // `prisma.config.ts` (`datasource.url`) for migrations and from
+  // `process.env.DATABASE_URL` at runtime via the adapter.
+  provider = "postgresql"
 }
 
 model Family {

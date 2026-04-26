@@ -1,19 +1,19 @@
 import "dotenv/config"
-import { PrismaLibSql } from "@prisma/adapter-libsql"
+import { PrismaPg } from "@prisma/adapter-pg"
 import { PrismaClient } from "@prisma/client"
 
 // ENTERPRISE BEST PRACTICE: FAIL-FAST
 const dbUrl = process.env.DATABASE_URL
 if (!dbUrl) {
-  throw new Error(
-    "❌ CRITICAL ERROR: DATABASE_URL tidak ditemukan di file .env!"
-  )
+  throw new Error("❌ CRITICAL ERROR: DATABASE_URL not set. See .env.example.")
 }
 
-// KODE BERSIH & MUTAKHIR:
-// Langsung masukkan URL database ke dalam adapter. Tidak perlu createClient lagi!
-const adapter = new PrismaLibSql({
-  url: dbUrl,
+// Postgres adapter — see ADR-0003 (docs/adr/0003-production-database.md).
+// The seed connects directly (not through `src/server/db.server.ts`) because
+// scripts run outside the TanStack Start runtime; we keep the adapter
+// construction local and minimal.
+const adapter = new PrismaPg({
+  connectionString: dbUrl,
 })
 
 const prisma = new PrismaClient({
@@ -22,7 +22,7 @@ const prisma = new PrismaClient({
 })
 
 async function main() {
-  console.log("🌱 Seeding the database via LibSQL adapter...")
+  console.log("🌱 Seeding the database via the Postgres adapter...")
 
   await prisma.transaction.deleteMany()
   await prisma.account.deleteMany()

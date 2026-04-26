@@ -1,0 +1,53 @@
+# =============================================================================
+# Permoney — Local development infrastructure
+# =============================================================================
+# This file provisions the services that must exist on your laptop while you
+# run `vp dev`. Today that's just Postgres; we keep the file separate from
+# any production manifests so this never accidentally lands in a deploy.
+#
+# Why Postgres for local dev:
+#   See ADR-0003 (docs/adr/0003-production-database.md). tl;dr: dev/prod
+#   parity. The same Prisma migrations, the same SQL dialect, the same
+#   index plans — what passes locally is what passes in prod.
+#
+# Bring up:    vp run db:up         (or: docker compose up -d)
+# Tear down:   vp run db:down       (or: docker compose down)
+# Wipe:        vp run db:nuke       (or: docker compose down -v)  ⚠ destroys data
+# =============================================================================
+
+services:
+  postgres:
+    # Pinned to a major; minor/patch updates handled by Dependabot via the
+    # GitHub Actions workflow once we add Postgres there. Postgres 16 is
+    # the current LTS-equivalent and matches what Neon/Supabase serve.
+    image: postgres:16-alpine
+    # `permoney_pg` is namespaced enough not to collide with a developer's
+    # other Postgres containers; the Compose project name (folder name)
+    # is also prepended so collisions are very unlikely.
+    container_name: permoney_pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: permoney
+      POSTGRES_PASSWORD: permoney
+      POSTGRES_DB: permoney
+    ports:
+      # 5433, NOT 5432: the canonical port often hosts a system Postgres
+      # on dev machines. Picking 5433 lets us coexist without conflict.
+      # Reflect this in DATABASE_URL (.env.example).
+      - "5433:5432"
+    volumes:
+      - permoney_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      # `pg_isready` is the canonical liveness check; we use it so any
+      # tooling that respects compose health (e.g. CI, scripts) waits
+      # until the server actually accepts connections, not just until
+      # the container starts.
+      test: ["CMD-SHELL", "pg_isready -U permoney -d permoney"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  # Named volume — survives `docker compose down`, removed by `down -v`.
+  permoney_pg_data:
