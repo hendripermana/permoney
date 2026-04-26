@@ -7,7 +7,18 @@ import { nitro } from "nitro/vite"
 
 const config = defineConfig({
   staged: {
-    "*": "vp check --fix",
+    // Pre-commit dispatcher. Vite+ `staged` values run as a single argv
+    // array (no shell), so chaining via `&&` is not possible — flags land
+    // on the first command. `scripts/staged-check.mjs` is a 30-line Node
+    // script that spawns the two real steps in order:
+    //   1. `vp check --fix` — fmt + lint + typecheck (auto-fix where safe).
+    //   2. `node scripts/check-no-use-effect.mjs` — enforce ADR-0002:
+    //      ban `React.useEffect(...)` without the `no-use-effect skill
+    //      exemption` sentinel comment block. `vp lint`'s built-in
+    //      `no-restricted-imports` rule already blocks the named-import
+    //      style; this guard covers the namespace style (`React.useEffect`)
+    //      which the lint rule cannot detect.
+    "*": "node scripts/staged-check.mjs",
   },
   lint: {
     options: { typeAware: true, typeCheck: true },

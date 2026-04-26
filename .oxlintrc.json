@@ -1,0 +1,16 @@
+{
+  "rules": {
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "react",
+            "importNames": ["useEffect", "useLayoutEffect"],
+            "message": "Direct `useEffect`/`useLayoutEffect` is banned. Use `useMountEffect` from `@/hooks/use-mount-effect` for one-time external sync, or refactor per .agents/skills/no-use-effect/SKILL.md (derived state, event handlers, data-fetching libs, key prop). If genuinely outside the five rules, write `React.useEffect(...)` with a `// no-use-effect skill exemption` comment block above the call site — the pre-commit guard at `scripts/check-no-use-effect.mjs` will accept it."
+          }
+        ]
+      }
+    ]
+  }
+}

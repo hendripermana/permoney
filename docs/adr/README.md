@@ -26,4 +26,5 @@ When proposing a new decision:
 
 ## Index
 
-- [`0001-money-type-migration.md`](./0001-money-type-migration.md) — Migrate monetary fields from `Float` to `BigInt` minor units. **Status: Proposed**.
+- [`0001-money-type-migration.md`](./0001-money-type-migration.md) — Migrate monetary fields from `Float` to `BigInt` minor units. **Status: Accepted**.
+- [`0002-lint-enforcement-no-use-effect.md`](./0002-lint-enforcement-no-use-effect.md) — Enforce the `no-use-effect` convention via `oxlint` `no-restricted-imports` (named-import style) + a pre-commit grep guard with sentinel-comment escape valve (namespace style). **Status: Accepted**.
