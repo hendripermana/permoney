@@ -49,21 +49,23 @@ async function main() {
       {
         name: "BCA Utama",
         type: "DEPOSITORY",
-        balance: 15000000,
+        // Rp 15,000,000 stored as sen (×100). See ADR-0001.
+        balance: 1_500_000_000n,
         familyId: family.id,
         color: "#0066AE",
       },
       {
         name: "Dompet Cash",
         type: "DEPOSITORY",
-        balance: 500000,
+        // Rp 500,000 → 50,000,000 sen
+        balance: 50_000_000n,
         familyId: family.id,
         color: "#22C55E",
       },
       {
         name: "Piutang Teman",
         type: "RECEIVABLE",
-        balance: 0,
+        balance: 0n,
         familyId: family.id,
         color: "#F59E0B",
       },
