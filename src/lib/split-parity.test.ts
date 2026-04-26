@@ -2,28 +2,27 @@ import { describe, expect, it } from "vite-plus/test"
 import {
   assertSplitParity,
   checkSplitParity,
-  SPLIT_PARITY_EPSILON,
   type ParitySplitInput,
 } from "./split-parity"
 
 // =============================================================================
-// checkSplitParity (non-throwing)
+// checkSplitParity (non-throwing) — bigint edition (post-ADR-0001)
 // =============================================================================
 
 describe("checkSplitParity", () => {
   describe("when isSplit is false", () => {
     it("passes regardless of entries (split flag off → guard skipped)", () => {
       const result = checkSplitParity({
-        amount: 100_000,
+        amount: 100_000n,
         isSplit: false,
-        splitEntries: [{ amount: 1 }, { amount: 2 }],
+        splitEntries: [{ amount: 1n }, { amount: 2n }],
       })
       expect(result.ok).toBe(true)
-      expect(result.delta).toBe(0)
+      expect(result.delta).toBe(0n)
     })
 
     it("passes when no splitEntries provided", () => {
-      const result = checkSplitParity({ amount: 50_000, isSplit: false })
+      const result = checkSplitParity({ amount: 50_000n, isSplit: false })
       expect(result.ok).toBe(true)
     })
   })
@@ -31,7 +30,7 @@ describe("checkSplitParity", () => {
   describe("when isSplit is true but entries are absent", () => {
     it("passes for empty array (upstream concern, not parity's)", () => {
       const result = checkSplitParity({
-        amount: 100_000,
+        amount: 100_000n,
         isSplit: true,
         splitEntries: [],
       })
@@ -40,7 +39,7 @@ describe("checkSplitParity", () => {
 
     it("passes for null splitEntries", () => {
       const result = checkSplitParity({
-        amount: 100_000,
+        amount: 100_000n,
         isSplit: true,
         splitEntries: null,
       })
@@ -48,7 +47,7 @@ describe("checkSplitParity", () => {
     })
 
     it("passes for undefined splitEntries", () => {
-      const result = checkSplitParity({ amount: 100_000, isSplit: true })
+      const result = checkSplitParity({ amount: 100_000n, isSplit: true })
       expect(result.ok).toBe(true)
     })
   })
@@ -56,31 +55,42 @@ describe("checkSplitParity", () => {
   describe("happy path — sum exactly matches parent", () => {
     it("two entries summing to parent", () => {
       const result = checkSplitParity({
-        amount: 100_000,
+        amount: 100_000n,
         isSplit: true,
-        splitEntries: [{ amount: 60_000 }, { amount: 40_000 }],
+        splitEntries: [{ amount: 60_000n }, { amount: 40_000n }],
       })
       expect(result.ok).toBe(true)
-      expect(result.splitSum).toBe(100_000)
-      expect(result.delta).toBe(0)
+      expect(result.splitSum).toBe(100_000n)
+      expect(result.delta).toBe(0n)
     })
 
     it("many small entries summing to parent", () => {
-      const entries = Array.from({ length: 20 }, () => ({ amount: 5_000 }))
+      const entries = Array.from({ length: 20 }, () => ({ amount: 5_000n }))
       const result = checkSplitParity({
-        amount: 100_000,
+        amount: 100_000n,
         isSplit: true,
         splitEntries: entries,
       })
       expect(result.ok).toBe(true)
-      expect(result.splitSum).toBe(100_000)
+      expect(result.splitSum).toBe(100_000n)
     })
 
     it("single entry equal to parent (degenerate split)", () => {
       const result = checkSplitParity({
-        amount: 50_000,
+        amount: 50_000n,
         isSplit: true,
-        splitEntries: [{ amount: 50_000 }],
+        splitEntries: [{ amount: 50_000n }],
+      })
+      expect(result.ok).toBe(true)
+    })
+
+    it("parent is negative (expense), children stored as magnitudes", () => {
+      // Real flow: an expense parent is stored as -100_000n, but split
+      // children are positive. Parity uses |parent|.
+      const result = checkSplitParity({
+        amount: -100_000n,
+        isSplit: true,
+        splitEntries: [{ amount: 60_000n }, { amount: 40_000n }],
       })
       expect(result.ok).toBe(true)
     })
@@ -89,97 +99,68 @@ describe("checkSplitParity", () => {
   describe("violation cases", () => {
     it("fails when sum is greater than parent (over-budget)", () => {
       const result = checkSplitParity({
-        amount: 100_000,
+        amount: 100_000n,
         isSplit: true,
-        splitEntries: [{ amount: 60_000 }, { amount: 50_000 }],
+        splitEntries: [{ amount: 60_000n }, { amount: 50_000n }],
       })
       expect(result.ok).toBe(false)
-      expect(result.splitSum).toBe(110_000)
-      expect(result.delta).toBe(10_000)
+      expect(result.splitSum).toBe(110_000n)
+      expect(result.delta).toBe(10_000n)
     })
 
     it("fails when sum is less than parent (under-budget)", () => {
       const result = checkSplitParity({
-        amount: 100_000,
+        amount: 100_000n,
         isSplit: true,
-        splitEntries: [{ amount: 30_000 }, { amount: 50_000 }],
+        splitEntries: [{ amount: 30_000n }, { amount: 50_000n }],
       })
       expect(result.ok).toBe(false)
-      expect(result.splitSum).toBe(80_000)
-      expect(result.delta).toBe(20_000)
+      expect(result.splitSum).toBe(80_000n)
+      expect(result.delta).toBe(20_000n)
     })
 
-    it("fails when delta exactly exceeds epsilon (boundary)", () => {
-      // amount=10, sum=10.02 → delta=0.02 > 0.01 epsilon
+    it("fails on a 1-minor-unit difference (exact equality required)", () => {
+      // Pre-bigint, the old epsilon=0.01 hack would have masked this. With
+      // BigInt arithmetic we catch single-minor-unit drift.
       const result = checkSplitParity({
-        amount: 10,
+        amount: 100_000n,
         isSplit: true,
-        splitEntries: [{ amount: 5 }, { amount: 5.02 }],
+        splitEntries: [{ amount: 50_000n }, { amount: 50_001n }],
       })
       expect(result.ok).toBe(false)
-      // Use closeTo for the comparison itself — Float arithmetic again.
-      expect(result.delta).toBeCloseTo(0.02, 5)
+      expect(result.delta).toBe(1n)
     })
   })
 
-  describe("epsilon tolerance (Float-noise absorption)", () => {
-    it("accepts the classic 0.1 + 0.2 ≠ 0.3 case", () => {
-      // 0.1 + 0.2 = 0.30000000000000004 in IEEE 754
+  describe("exact arithmetic (associativity holds)", () => {
+    it("sum of partition is exactly parent — the property Float CANNOT satisfy", () => {
+      // 100_000 split 5 ways. If this were Float, repeated addition could drift.
+      // BigInt: must hold exactly.
       const result = checkSplitParity({
-        amount: 0.3,
+        amount: 100_000n,
         isSplit: true,
-        splitEntries: [{ amount: 0.1 }, { amount: 0.2 }],
+        splitEntries: [
+          { amount: 19_999n },
+          { amount: 20_001n },
+          { amount: 20_000n },
+          { amount: 19_998n },
+          { amount: 20_002n },
+        ],
       })
       expect(result.ok).toBe(true)
-      expect(result.delta).toBeLessThan(SPLIT_PARITY_EPSILON)
+      expect(result.splitSum).toBe(100_000n)
     })
 
-    it("accepts delta exactly at epsilon boundary (inclusive)", () => {
-      // amount=100, sum=100.01 → delta=0.01 === epsilon → OK
+    it("very large amounts remain exact (BigInt has no overflow at ledger scale)", () => {
+      // 9 trillion sen × 100_000 entries × 1 sen each — silly scenario but
+      // demonstrates BigInt's range.
+      const big = 9_000_000_000_000n
       const result = checkSplitParity({
-        amount: 100,
+        amount: big,
         isSplit: true,
-        splitEntries: [{ amount: 50 }, { amount: 50.01 }],
+        splitEntries: [{ amount: big - 1n }, { amount: 1n }],
       })
       expect(result.ok).toBe(true)
-    })
-
-    it("rejects delta of 1 cent above epsilon", () => {
-      const result = checkSplitParity({
-        amount: 100,
-        isSplit: true,
-        splitEntries: [{ amount: 50 }, { amount: 50.02 }],
-      })
-      expect(result.ok).toBe(false)
-    })
-  })
-
-  describe("hostile inputs (defense in depth)", () => {
-    it("fails when parent amount is NaN", () => {
-      const result = checkSplitParity({
-        amount: Number.NaN,
-        isSplit: true,
-        splitEntries: [{ amount: 50 }],
-      })
-      expect(result.ok).toBe(false)
-    })
-
-    it("fails when an entry amount is NaN", () => {
-      const result = checkSplitParity({
-        amount: 100,
-        isSplit: true,
-        splitEntries: [{ amount: 50 }, { amount: Number.NaN }],
-      })
-      expect(result.ok).toBe(false)
-    })
-
-    it("fails when an entry amount is Infinity", () => {
-      const result = checkSplitParity({
-        amount: 100,
-        isSplit: true,
-        splitEntries: [{ amount: Number.POSITIVE_INFINITY }],
-      })
-      expect(result.ok).toBe(false)
     })
   })
 })
@@ -192,9 +173,9 @@ describe("assertSplitParity", () => {
   it("does not throw on valid input", () => {
     expect(() =>
       assertSplitParity({
-        amount: 100,
+        amount: 100n,
         isSplit: true,
-        splitEntries: [{ amount: 60 }, { amount: 40 }],
+        splitEntries: [{ amount: 60n }, { amount: 40n }],
       })
     ).not.toThrow()
   })
@@ -202,9 +183,9 @@ describe("assertSplitParity", () => {
   it("does not throw when isSplit is false", () => {
     expect(() =>
       assertSplitParity({
-        amount: 100,
+        amount: 100n,
         isSplit: false,
-        splitEntries: [{ amount: 999 }],
+        splitEntries: [{ amount: 999n }],
       })
     ).not.toThrow()
   })
@@ -212,18 +193,18 @@ describe("assertSplitParity", () => {
   it("throws Error with SPLIT_PARITY_VIOLATION prefix on mismatch", () => {
     expect(() =>
       assertSplitParity({
-        amount: 100_000,
+        amount: 100_000n,
         isSplit: true,
-        splitEntries: [{ amount: 60_000 }, { amount: 50_000 }],
+        splitEntries: [{ amount: 60_000n }, { amount: 50_000n }],
       })
     ).toThrow(/^SPLIT_PARITY_VIOLATION:/)
   })
 
   it("error message includes both sums and delta for debuggability", () => {
     const input: ParitySplitInput = {
-      amount: 100,
+      amount: 100n,
       isSplit: true,
-      splitEntries: [{ amount: 80 }],
+      splitEntries: [{ amount: 80n }],
     }
 
     let caught: unknown
@@ -235,19 +216,9 @@ describe("assertSplitParity", () => {
 
     expect(caught).toBeInstanceOf(Error)
     const msg = (caught as Error).message
-    expect(msg).toContain("100.00")
-    expect(msg).toContain("80.00")
-    expect(msg).toContain("Δ = 20.00")
-    expect(msg).toContain("epsilon")
-  })
-
-  it("throws on NaN inputs (does not silently accept)", () => {
-    expect(() =>
-      assertSplitParity({
-        amount: 100,
-        isSplit: true,
-        splitEntries: [{ amount: Number.NaN }],
-      })
-    ).toThrow(/SPLIT_PARITY_VIOLATION/)
+    expect(msg).toContain("100")
+    expect(msg).toContain("80")
+    expect(msg).toContain("Δ = 20")
+    expect(msg).toContain("exact match")
   })
 })

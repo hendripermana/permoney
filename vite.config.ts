@@ -16,6 +16,10 @@ const config = defineConfig({
     ignorePatterns: [
       "dist/**",
       "src/routeTree.gen.ts", // <-- Ini dia penjaga perdamaiannya
+      // One-shot data-conversion script (.mjs, no TS types) — lint type
+      // inference produces false positives on Object.entries destructures.
+      // Script is idempotent and not part of the runtime bundle.
+      "scripts/**",
     ],
     // =========================================================
   },

@@ -41,7 +41,10 @@ model Account {
 
   // Tipe makin pro: "DEPOSITORY" (Bank/Dompet), "CREDIT" (Kartu Kredit), "LOAN" (Hutang), "RECEIVABLE" (Piutang/Uang dipinjam orang), "INVESTMENT" (Saham)
   type             String
-  balance          Float
+  // Stored in MINOR UNITS (sen for IDR, cents for USD, satoshi for BTC).
+  // Per-currency scale is driven by `CURRENCIES[code].minorUnitConversion`
+  // in src/lib/data/currencies.ts. See docs/adr/0001-money-type-migration.md.
+  balance          BigInt
   currency         String        @default("IDR") // Bisa USD, JPY, dll
 
   // Fitur Enterprise: Visual & Status
@@ -93,7 +96,9 @@ model Category {
 
 model Transaction {
   id          String   @id @default(cuid())
-  amount      Float    // Wajib bernilai Negatif (-) untuk uang keluar, Positif (+) untuk uang masuk
+  // Stored in MINOR UNITS of `currency`. Negative for outflow, positive for inflow.
+  // See src/lib/money.ts for arithmetic helpers; never use raw `+ -` on this field.
+  amount      BigInt
   type        String   // "expense", "income", "transfer"
   kind        String   @default("standard")
   currency    String   @default("IDR")
@@ -102,8 +107,9 @@ model Transaction {
   status              String    @default("CLEARED")
 
   // Multi-Currency Transfer Support (Implied Rate Architecture)
-  // User menginput nominal yang benar-benar masuk ke akun tujuan, bukan hanya tebakan kurs API
-  destinationAmount   Float?
+  // User menginput nominal yang benar-benar masuk ke akun tujuan, bukan hanya tebakan kurs API.
+  // Stored in MINOR UNITS of `destinationCurrency`.
+  destinationAmount   BigInt?
   destinationCurrency String?
 
   date        DateTime @default(now())
@@ -112,8 +118,9 @@ model Transaction {
   notes       String?
   excluded    Boolean  @default(false)
 
-  // Running Balance Snapshot: Saldo akun setelah transaksi ini dicatat (untuk grafik historis instan)
-  accountBalanceAfter Float?
+  // Running Balance Snapshot: Saldo akun setelah transaksi ini dicatat (untuk grafik historis instan).
+  // Stored in MINOR UNITS of `currency`.
+  accountBalanceAfter BigInt?
 
   // Proof of Purchase: URL struk/foto kwitansi (S3/Cloudflare R2)
   attachmentUrl       String?
@@ -167,7 +174,9 @@ model Transfer {
 model SplitEntry {
   id          String   @id @default(cuid())
   description String
-  amount      Float    // Selalu positif (absolute value)
+  // Stored in MINOR UNITS, same currency as the parent transaction.
+  // Always positive (absolute value); sign is carried by the parent's `type`.
+  amount      BigInt
 
   // Relasi ke Transaksi Induk
   transactionId String
