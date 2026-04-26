@@ -36,14 +36,17 @@ import { TransactionFormModal } from "@/components/transaction-form-modal"
 import { TransactionFilterPanel } from "@/components/transaction-filter-panel"
 import { TransactionBulkFAB } from "@/components/transaction-bulk-fab"
 import { Checkbox } from "@/components/ui/checkbox"
-import { transactionCollection } from "@/lib/collections"
+import {
+  transactionCollection,
+  type TransactionRecord,
+} from "@/lib/collections"
 import {
   bulkDeleteTransactionsFn,
   bulkUpdateTransactionsFn,
   getTransactionFormData,
-  type getTransactionsFn,
 } from "@/server/transactions"
 import { formatCurrency } from "@/lib/currency"
+import { ZERO_MONEY, type Money } from "@/lib/money"
 import {
   applyFilters,
   applySearch,
@@ -54,7 +57,10 @@ import {
 // TYPE DERIVATION: End-to-End Type Safety dari Server Function
 // Tidak perlu mendefinisikan tipe manual — extract langsung dari return type.
 // ═══════════════════════════════════════════════════════════════
-type TransactionData = Awaited<ReturnType<typeof getTransactionsFn>>[number]
+// TransactionData mirrors the BIGINT-revived shape from the TanStack DB
+// collection. Server-side wire format (digit-strings) is hidden inside
+// `src/lib/collections.ts`; consumers here always see Money/bigint.
+type TransactionData = TransactionRecord
 
 // Tipe untuk flat virtual rows array (date header + transaction)
 type VirtualRow =
@@ -295,16 +301,22 @@ function TransactionsPage() {
       (t) => t.type === "expense"
     )
 
-    const totalIncome = incomeTransactions.reduce((sum, t) => sum + t.amount, 0)
-    const totalExpenses = expenseTransactions.reduce(
-      (sum, t) => sum + t.amount,
-      0
+    // BIGINT REDUCTION: amounts are Money (bigint minor units). Use 0n as
+    // identity element; never `0` (number) which would force coercion and
+    // throw "Cannot mix BigInt and other types" at runtime.
+    const totalIncome: Money = incomeTransactions.reduce(
+      (sum: Money, t) => (sum + t.amount) as Money,
+      ZERO_MONEY
+    )
+    const totalExpenses: Money = expenseTransactions.reduce(
+      (sum: Money, t) => (sum + t.amount) as Money,
+      ZERO_MONEY
     )
 
     return {
       totalIncome,
       totalExpenses,
-      netCashFlow: totalIncome - totalExpenses,
+      netCashFlow: (totalIncome - totalExpenses) as Money,
       transactionCount: filteredTransactions.length,
       incomeCount: incomeTransactions.length,
       expenseCount: expenseTransactions.length,
@@ -905,6 +917,9 @@ function TransactionRow({
               onEdit({
                 id: trx.id,
                 type: trx.type as "expense" | "income" | "transfer",
+                // Money (bigint minor units) → display number for the form.
+                // The form modal converts back to Money at submission via
+                // toMinorUnits + the source account's currency.
                 amount: trx.amount,
                 description: trx.description,
                 accountId: trx.accountId,
@@ -918,15 +933,13 @@ function TransactionRow({
                   "CLEARED",
                 isSplit: trx.isSplit,
                 splitEntries:
-                  trx.splitEntries?.map(
-                    (e: TransactionData["splitEntries"][number]) => ({
-                      id: e.id,
-                      description: e.description,
-                      amount: e.amount,
-                      categoryId: e.categoryId ?? undefined,
-                      merchantId: e.merchantId ?? undefined,
-                    })
-                  ) ?? [],
+                  trx.splitEntries?.map((e) => ({
+                    id: e.id,
+                    description: e.description,
+                    amount: e.amount,
+                    categoryId: e.categoryId ?? undefined,
+                    merchantId: e.merchantId ?? undefined,
+                  })) ?? [],
               })
             }
             className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-zinc-200 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
@@ -949,75 +962,70 @@ function TransactionRow({
            automatically re-measures when these rows appear/disappear. ── */}
       {hasSplits &&
         isExpanded &&
-        trx.splitEntries.map(
-          (entry: TransactionData["splitEntries"][number], index: number) => {
-            const isLast = index === trx.splitEntries.length - 1
-            return (
-              <div
-                key={entry.id}
-                className={cn(
-                  "flex w-full items-center border-l-2 border-l-amber-400 bg-muted/5 py-2 pl-13 dark:border-l-amber-600 dark:bg-muted/5",
-                  !isLast &&
-                    "border-b border-b-zinc-50 dark:border-b-zinc-900/50"
-                )}
-              >
-                {/* Split description */}
-                <div className="min-w-0 flex-1 px-4">
-                  <span className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <span
-                      className="shrink-0 text-zinc-300 dark:text-zinc-700"
-                      aria-hidden
-                    >
-                      ↳
-                    </span>
-                    <span className="truncate">{entry.description}</span>
+        (trx.splitEntries ?? []).map((entry, index: number) => {
+          const isLast = index === (trx.splitEntries?.length ?? 0) - 1
+          return (
+            <div
+              key={entry.id}
+              className={cn(
+                "flex w-full items-center border-l-2 border-l-amber-400 bg-muted/5 py-2 pl-13 dark:border-l-amber-600 dark:bg-muted/5",
+                !isLast && "border-b border-b-zinc-50 dark:border-b-zinc-900/50"
+              )}
+            >
+              {/* Split description */}
+              <div className="min-w-0 flex-1 px-4">
+                <span className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <span
+                    className="shrink-0 text-zinc-300 dark:text-zinc-700"
+                    aria-hidden
+                  >
+                    ↳
                   </span>
-                </div>
+                  <span className="truncate">{entry.description}</span>
+                </span>
+              </div>
 
-                {/* Split merchant */}
-                <div className="hidden w-44 shrink-0 px-4 md:block">
-                  {entry.merchant ? (
-                    <span className="text-sm text-foreground">
-                      {entry.merchant.name}
-                    </span>
-                  ) : (
-                    <span className="text-sm text-muted-foreground italic">
-                      —
-                    </span>
-                  )}
-                </div>
-
-                {/* Split category */}
-                <div className="hidden w-44 shrink-0 px-4 lg:block">
-                  <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                    <span
-                      className="size-2 shrink-0 rounded-full"
-                      style={{
-                        backgroundColor: entry.category?.color ?? "#999",
-                      }}
-                    />
-                    {entry.category?.name ?? "Uncategorized"}
+              {/* Split merchant */}
+              <div className="hidden w-44 shrink-0 px-4 md:block">
+                {entry.merchant ? (
+                  <span className="text-sm text-foreground">
+                    {entry.merchant.name}
                   </span>
-                </div>
-
-                {/* Split account (always blank — inherits from parent) */}
-                <div className="hidden w-52 shrink-0 px-4 xl:block">
+                ) : (
                   <span className="text-sm text-muted-foreground italic">
                     —
                   </span>
-                </div>
-
-                {/* Split amount */}
-                <div className="w-36 shrink-0 px-4 text-right font-medium text-muted-foreground">
-                  {formatCurrency(entry.amount, trx.currency)}
-                </div>
-
-                {/* Empty actions cell */}
-                <div className="w-20 shrink-0" />
+                )}
               </div>
-            )
-          }
-        )}
+
+              {/* Split category */}
+              <div className="hidden w-44 shrink-0 px-4 lg:block">
+                <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                  <span
+                    className="size-2 shrink-0 rounded-full"
+                    style={{
+                      backgroundColor: entry.category?.color ?? "#999",
+                    }}
+                  />
+                  {entry.category?.name ?? "Uncategorized"}
+                </span>
+              </div>
+
+              {/* Split account (always blank — inherits from parent) */}
+              <div className="hidden w-52 shrink-0 px-4 xl:block">
+                <span className="text-sm text-muted-foreground italic">—</span>
+              </div>
+
+              {/* Split amount */}
+              <div className="w-36 shrink-0 px-4 text-right font-medium text-muted-foreground">
+                {formatCurrency(entry.amount, trx.currency)}
+              </div>
+
+              {/* Empty actions cell */}
+              <div className="w-20 shrink-0" />
+            </div>
+          )
+        })}
     </div>
   )
 }
