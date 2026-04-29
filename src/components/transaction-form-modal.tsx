@@ -36,6 +36,7 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { FieldError } from "@/components/ui/field"
 import {
   Dialog,
   DialogContent,
@@ -245,34 +246,43 @@ export function TransactionFormModal({
         attachmentUrl: "",
       }
 
+  // Form-level error state for cross-field rules that can't live on a single
+  // field (split-parity, missing-split-row description, post-submit server
+  // failures). Field-level errors stay local to their <FieldError> sibling;
+  // this banner is reserved for issues that span >1 field or a row collection.
+  const [formError, setFormError] = React.useState<string | null>(null)
+
   const form = useForm({
     defaultValues: defaultFormValues,
     onSubmit: async ({ value }) => {
-      if (value.type === "transfer" && !value.toAccountId) {
-        alert("Transfer requires a Destination Account!")
-        return
-      }
-      // Validasi kategori: hanya required jika bukan transfer DAN bukan split mode
-      if (value.type !== "transfer" && !isSplit && !value.categoryId) {
-        alert("Expense/Income requires a Category!")
-        return
-      }
-      // Validasi split: total baris harus sama dengan parent amount
+      // Field-level validators (wired below on each <form.Field>) already
+      // catch the per-field required rules and surface them inline via
+      // <FieldError>. Submission is gated on TanStack Form's validation
+      // pass, so by the time we reach this handler the per-field rules are
+      // already green. What remains here are the *cross-field* rules.
+      setFormError(null)
+
+      // Cross-field rule: split mode total must equal the parent amount,
+      // and every split row must have a description. The submit button is
+      // already disabled when split is unbalanced (see action bar), so this
+      // is a defense-in-depth check; we still set formError so the banner
+      // shows the *reason* the submission was rejected if a race lands here.
       if (isSplit && value.type !== "transfer") {
-        // Auto-fill description jika hidden dan kosong (sr-only di split mode)
         if (!value.description) {
+          // Split mode hides the parent description; auto-label it so the
+          // ledger row is still self-describing.
           form.setFieldValue("description", "Split Transaction")
           value.description = "Split Transaction"
         }
         const splitTotal = splitEntries.reduce((sum, e) => sum + e.amount, 0)
         if (Math.abs(splitTotal - value.amount) > 0.01) {
-          alert(
+          setFormError(
             `Split total (${splitTotal.toLocaleString()}) must equal the transaction amount (${value.amount.toLocaleString()}).`
           )
           return
         }
         if (splitEntries.some((e) => !e.description)) {
-          alert("All split rows must have a description.")
+          setFormError("Every split row needs a description.")
           return
         }
       }
@@ -425,8 +435,10 @@ export function TransactionFormModal({
         if (!isEditMode) form.reset()
       } catch (error: unknown) {
         console.error("Failed to save transaction:", error)
-        alert(
-          "An error occurred while saving the transaction. Please try again."
+        setFormError(
+          error instanceof Error
+            ? `Could not save transaction: ${error.message}`
+            : "Could not save transaction. Please try again."
         )
       }
     },
@@ -525,6 +537,12 @@ export function TransactionFormModal({
         </Tabs>
 
         <form
+          // `noValidate` suppresses any native HTML5 validation popup that
+          // could appear if a future contributor adds a `required` attr to an
+          // <Input>. We surface ALL validation through TanStack Form +
+          // <FieldError> so the visual language is consistent (no jarring
+          // browser-default tooltip).
+          noValidate
           onSubmit={(e) => {
             e.preventDefault()
             e.stopPropagation()
@@ -532,6 +550,22 @@ export function TransactionFormModal({
           }}
           className="mt-4 space-y-4"
         >
+          {/* Form-level error banner — surfaces cross-field issues that can't
+              attach to a single <FieldError> (split parity, missing split-row
+              description, post-submit server failures). Hidden when null. */}
+          {formError && (
+            <div
+              role="alert"
+              aria-live="polite"
+              className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive dark:bg-destructive/20"
+            >
+              <span aria-hidden="true" className="mt-0.5">
+                ⚠
+              </span>
+              <span className="flex-1">{formError}</span>
+            </div>
+          )}
+
           {/* Main Description */}
           <form.Field
             name="description"
@@ -556,6 +590,16 @@ export function TransactionFormModal({
                   value={field.state.value}
                   onBlur={field.handleBlur}
                   onChange={(e) => field.handleChange(e.target.value)}
+                  aria-invalid={field.state.meta.errors.length > 0}
+                  aria-describedby={
+                    field.state.meta.errors.length > 0
+                      ? `${field.name}-error`
+                      : undefined
+                  }
+                />
+                <FieldError
+                  id={`${field.name}-error`}
+                  errors={field.state.meta.errors}
                 />
               </div>
             )}
@@ -608,26 +652,51 @@ export function TransactionFormModal({
                       onChange={(e) =>
                         field.handleChange(Number(e.target.value))
                       }
+                      aria-invalid={field.state.meta.errors.length > 0}
+                      aria-describedby={
+                        field.state.meta.errors.length > 0
+                          ? `${field.name}-error`
+                          : undefined
+                      }
                     />
                   </div>
+                  <FieldError
+                    id={`${field.name}-error`}
+                    errors={field.state.meta.errors}
+                  />
                 </div>
               )}
             />
 
-            {/* 1b. Account */}
+            {/* 1b. Account — required for expense/income. Validator inherits
+                from the form-level schema (`transactionSchema.shape.accountId`)
+                so the message stays single-source-of-truth. TanStack Form
+                runs onChange validators on submit too, so an unselected
+                account is caught client-side BEFORE it ever reaches the
+                server's Zod parse (which previously crashed with an opaque
+                `too_small` error and rolled back the optimistic insert). */}
             {activeTab !== "transfer" && (
               <form.Field
                 name="accountId"
+                validators={{
+                  onChange: transactionSchema.shape.accountId,
+                }}
                 children={(field) => (
                   <div className="space-y-2">
                     <Label htmlFor={field.name}>Account *</Label>
                     <select
                       id={field.name}
                       name={field.name}
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-1 aria-[invalid=true]:ring-destructive/30"
                       value={field.state.value}
                       onChange={(e) => field.handleChange(e.target.value)}
                       disabled={isLoading}
+                      aria-invalid={field.state.meta.errors.length > 0}
+                      aria-describedby={
+                        field.state.meta.errors.length > 0
+                          ? `${field.name}-error`
+                          : undefined
+                      }
                     >
                       <option value="" disabled>
                         {isLoading ? "Loading..." : "Select Account"}
@@ -638,17 +707,32 @@ export function TransactionFormModal({
                         </option>
                       ))}
                     </select>
+                    <FieldError
+                      id={`${field.name}-error`}
+                      errors={field.state.meta.errors}
+                    />
                   </div>
                 )}
               />
             )}
           </div>
 
-          {/* Baris Khusus Transfer: From & To Account */}
+          {/* Baris Khusus Transfer: From & To Account.
+              Both selects are required — we share the SAME `accountId` schema
+              fragment for the source so the error wording stays uniform with
+              the expense/income flow. The destination uses an inline
+              `z.string().min(1, ...)` because the schema's `toAccountId` is
+              optional at the type level (transfers are the only mode that
+              needs it). The field is also conditionally rendered, so the
+              validator only mounts when activeTab === "transfer" — no
+              spurious "required" errors leak into expense/income mode. */}
           {activeTab === "transfer" && (
             <div className="grid grid-cols-2 gap-4">
               <form.Field
                 name="accountId"
+                validators={{
+                  onChange: transactionSchema.shape.accountId,
+                }}
                 children={(field) => (
                   <div className="space-y-2">
                     <Label htmlFor="transfer-source-accountId">
@@ -657,10 +741,16 @@ export function TransactionFormModal({
                     <select
                       id="transfer-source-accountId"
                       name={field.name}
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-1 aria-[invalid=true]:ring-destructive/30"
                       value={field.state.value}
                       onChange={(e) => field.handleChange(e.target.value)}
                       disabled={isLoading}
+                      aria-invalid={field.state.meta.errors.length > 0}
+                      aria-describedby={
+                        field.state.meta.errors.length > 0
+                          ? `transfer-source-accountId-error`
+                          : undefined
+                      }
                     >
                       <option value="" disabled>
                         {isLoading ? "Loading..." : "Select Source"}
@@ -671,12 +761,21 @@ export function TransactionFormModal({
                         </option>
                       ))}
                     </select>
+                    <FieldError
+                      id="transfer-source-accountId-error"
+                      errors={field.state.meta.errors}
+                    />
                   </div>
                 )}
               />
 
               <form.Field
                 name="toAccountId"
+                validators={{
+                  onChange: z
+                    .string()
+                    .min(1, "Destination account is required"),
+                }}
                 children={(field) => (
                   <div className="space-y-2">
                     <Label htmlFor={field.name}>To Account *</Label>
@@ -686,10 +785,16 @@ export function TransactionFormModal({
                         <select
                           id={field.name}
                           name={field.name}
-                          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-1 aria-[invalid=true]:ring-destructive/30"
                           value={field.state.value}
                           onChange={(e) => field.handleChange(e.target.value)}
                           disabled={isLoading}
+                          aria-invalid={field.state.meta.errors.length > 0}
+                          aria-describedby={
+                            field.state.meta.errors.length > 0
+                              ? `${field.name}-error`
+                              : undefined
+                          }
                         >
                           <option value="" disabled>
                             {isLoading ? "Loading..." : "Select Destination"}
@@ -705,6 +810,10 @@ export function TransactionFormModal({
                           ))}
                         </select>
                       )}
+                    />
+                    <FieldError
+                      id={`${field.name}-error`}
+                      errors={field.state.meta.errors}
                     />
                   </div>
                 )}
@@ -937,20 +1046,34 @@ export function TransactionFormModal({
             </div>
           )}
 
-          {/* 2e. Category — tampil hanya saat bukan transfer DAN bukan split mode */}
+          {/* 2e. Category — conditionally rendered (non-transfer AND non-split).
+              Validator is inline because the form-level schema declares
+              categoryId as optional (transfer/split paths legitimately leave
+              it null). Mounting only inside this branch means the validator
+              is scoped exactly to the cases where Category IS required — no
+              cross-mode leakage. Replaces the prior `alert()` popup. */}
           {activeTab !== "transfer" && !isSplit && (
             <form.Field
               name="categoryId"
+              validators={{
+                onChange: z.string().min(1, "Category is required"),
+              }}
               children={(field) => (
                 <div className="space-y-2">
                   <Label htmlFor={field.name}>Category *</Label>
                   <select
                     id={field.name}
                     name={field.name}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-1 aria-[invalid=true]:ring-destructive/30"
                     value={field.state.value}
                     onChange={(e) => field.handleChange(e.target.value)}
                     disabled={isLoading}
+                    aria-invalid={field.state.meta.errors.length > 0}
+                    aria-describedby={
+                      field.state.meta.errors.length > 0
+                        ? `${field.name}-error`
+                        : undefined
+                    }
                   >
                     <option value="" disabled>
                       {isLoading ? "Loading..." : "Select Category"}
@@ -963,6 +1086,10 @@ export function TransactionFormModal({
                         </option>
                       ))}
                   </select>
+                  <FieldError
+                    id={`${field.name}-error`}
+                    errors={field.state.meta.errors}
+                  />
                 </div>
               )}
             />
