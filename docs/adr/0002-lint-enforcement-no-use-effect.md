@@ -1,13 +1,14 @@
 # ADR-0002 — Enforce the `no-use-effect` convention via lint + pre-commit guard
 
-|                   |                |
-| ----------------- | -------------- |
-| **Status**        | Accepted       |
-| **Date**          | 2026-04-26     |
-| **Accepted**      | 2026-04-26     |
-| **Deciders**      | Hendri Permana |
-| **Supersedes**    | —              |
-| **Superseded by** | —              |
+|                   |                                                |
+| ----------------- | ---------------------------------------------- |
+| **Status**        | Accepted (amended 2026-04-30)                  |
+| **Date**          | 2026-04-26                                     |
+| **Accepted**      | 2026-04-26                                     |
+| **Amended**       | 2026-04-30 — consolidated to single-tool guard |
+| **Deciders**      | Hendri Permana                                 |
+| **Supersedes**    | —                                              |
+| **Superseded by** | —                                              |
 
 ## Context
 
@@ -176,9 +177,55 @@ Files edited:
 ## Verification
 
 ```bash
-vp check                          # → fmt + lint + tsc + no-use-effect guard
-pnpm run lint:no-use-effect       # standalone
+vp run check                      # → fmt + lint + tsc + no-use-effect guard
+vp run lint:no-use-effect         # standalone
 node scripts/check-no-use-effect.mjs --quiet   # raw form (silent on success)
 ```
 
 All three should be green at the time this ADR is accepted (74 files, 154 tests, 3 justified `React.useEffect` sites, 0 unjustified).
+
+---
+
+## Amendment 2026-04-30 — Consolidation to single-tool enforcement
+
+### What changed
+
+Layer 1 (the `oxlint` `no-restricted-imports` rule) has been **removed**. Layer 2 (`scripts/check-no-use-effect.mjs`) has been **extended** to detect both forms it previously did not need to handle:
+
+- **(A) Banned named imports** — `import { useEffect [as x], useLayoutEffect } from "react"` (single- or multi-line). Always a violation. No sentinel exemption is honored — if you genuinely need to bypass, rewrite as namespace + sentinel-justified `React.useEffect(...)`.
+- **(B) Unjustified call sites** — unchanged from the original ADR. Exemptable via the `no-use-effect skill exemption` sentinel comment.
+
+`.oxlintrc.json` is preserved with an empty `rules` block as a marker for future oxlint configuration; this avoids whiplash if a later rule needs adding.
+
+### Why
+
+The original two-layer design rested on the assumption that `oxlint`'s `no-restricted-imports` would only flag _named_ imports, leaving namespace imports for the script to handle. That assumption broke in practice for two reasons:
+
+1. **The ESLint spec for `no-restricted-imports` says `importNames` ALSO flags namespace imports**, on the grounds that a namespace import (`import * as React from "react"`) technically grants access to all named exports including the restricted ones. Oxlint's IDE/LSP build follows the spec strictly; the CLI build at version 1.62.0 does not yet, but almost certainly will in a future release.
+
+2. **The codebase deliberately uses the namespace style in 38 files** (it's the project convention). The strict-spec interpretation therefore produced 38 false-positive squiggles — one per React component file — in any IDE running an oxlint LSP that follows the spec. The CLI was clean today, but the next CLI upgrade would have triggered a 38-file fire-drill.
+
+Rather than tolerate creeping IDE noise that would eventually become a CLI break, we consolidated all enforcement into the script, which has full access to file context and can correctly distinguish the two import styles. Concretely, the script now:
+
+- For named-import detection: line-by-line pre-filters on `^import\s+(?:type\s+)?\{`, then walks forward to the closing `}` to handle multi-line specifier lists, then matches against a regex that requires a closing `from "react"` (or `"react/..."` subpath). This avoids false positives on `import { useEffect } from "./my-react-mock"` and similar.
+- For call-site detection: unchanged from the original (`\bReact\.useEffect\s*\(` etc., with the contiguous-comment-block sentinel walker).
+
+### Consequences of the amendment
+
+- **Positive** — zero IDE squiggles on the namespace style; pre-empts the future CLI break; single source of truth for the convention; script's error message can distinguish named-import vs call-site violations and offer tailored remediation; the regex-based check is faster than oxlint at the CLI level (single Node process, ~100 ms on `src/`).
+- **Negative** — we lose just-in-time IDE feedback on the named-import form (the developer sees the error at `git commit` instead of as-you-type). Acceptable trade given (a) named React imports are essentially never used in this codebase by convention, and (b) the pre-commit guard runs in <1 s.
+- **Neutral** — wiring is unchanged: `vp run check`, `lint:no-use-effect`, and the `staged` hook in `vite.config.ts` all keep working without modification because they already invoke the script.
+
+### Verification of the amendment
+
+A five-case smoke test was run before merging (synthetic files dropped in `src/__smoke__/`, then deleted):
+
+| Input                                                          | Expected            | Got |
+| -------------------------------------------------------------- | ------------------- | --- |
+| `import { useEffect } from "react"`                            | flag (named-import) | ✓   |
+| Multi-line `import { ..., useLayoutEffect, ... } from "react"` | flag (named-import) | ✓   |
+| `React.useEffect(() => {}, [])` no comment                     | flag (call-site)    | ✓   |
+| `React.useEffect(() => {}, [])` with sentinel comment          | OK                  | ✓   |
+| Plain `import * as React from "react"` (no call)               | OK                  | ✓   |
+
+Real `src/` post-amendment: 0 violations.

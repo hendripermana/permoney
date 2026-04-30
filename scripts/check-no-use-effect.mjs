@@ -6,19 +6,35 @@
  *
  * WHY THIS EXISTS
  * ───────────────
- * `oxlint` ships `no-restricted-imports`, which we enable in `.oxlintrc.json`
- * to ban *named* imports of `useEffect` / `useLayoutEffect` from `"react"`.
- * That covers the `import { useEffect } from "react"` style.
+ * Originally this script was the *second half* of an enforcement pair, the
+ * first half being an `oxlint` `no-restricted-imports` rule banning named
+ * imports of `useEffect`/`useLayoutEffect` from `"react"`. That oxlint rule
+ * was removed because, per the ESLint spec it implements, `importNames`
+ * also flags namespace imports (`import * as React from "react"`) on the
+ * grounds that the namespace technically grants access to the restricted
+ * names. The codebase deliberately uses the namespace style in 38 files —
+ * so the rule produced 38 false-positive squiggles in IDEs running an LSP
+ * version of oxlint that follows the spec strictly. (Oxlint CLI 1.62.0 did
+ * not flag those yet; future versions almost certainly will.) Rather than
+ * tolerate creeping IDE noise that would eventually become a CLI break, we
+ * consolidated all enforcement into THIS script, which has full access to
+ * file context and can correctly distinguish the two import styles.
  *
- * The codebase uses the **namespace** style (`import * as React from "react"`
- * + `React.useEffect(...)`), which `no-restricted-imports` cannot detect:
- * the rule operates on import specifiers, not member-access expressions.
- * So this script is the second half of the enforcement pair — it scans for
- * `React.useEffect(` and `React.useLayoutEffect(` and fails commits/CI when
- * unjustified call sites appear.
+ * WHAT THIS SCRIPT DETECTS
+ * ────────────────────────
+ *   (A) Named imports — `import { useEffect [as x], useLayoutEffect } from
+ *       "react"` (single- or multi-line). Always a violation. No exemption
+ *       sentinel is honored for these — if you genuinely need to bypass,
+ *       rewrite as namespace + sentinel-justified `React.useEffect(...)`.
  *
- * CONTRACT
- * ────────
+ *   (B) Member-access call sites — `React.useEffect(` and
+ *       `React.useLayoutEffect(`. These ARE exemptable via the sentinel
+ *       comment described below, because the namespace style is the
+ *       project convention and certain integrations (e.g. focus traps,
+ *       imperative DOM measurement) genuinely require an effect.
+ *
+ * EXEMPTION CONTRACT (applies only to (B))
+ * ────────────────────────────────────────
  * A call site is **justified** (i.e. allowed) iff one of the following is
  * true:
  *
@@ -72,10 +88,20 @@ const SENTINEL = "no-use-effect skill exemption"
 const MAX_WALK = 200
 // Patterns we hunt for. We deliberately match `React.useEffect(` (note the
 // open paren) so trivial mentions in strings/identifiers don't false-positive.
-const VIOLATION_PATTERNS = [
+const CALL_SITE_PATTERNS = [
   /\bReact\.useEffect\s*\(/,
   /\bReact\.useLayoutEffect\s*\(/,
 ]
+// Named-import detector. We first stitch a multi-line `import { ... } from
+// "react"` block into a single string, THEN run this regex over it. The
+// regex is anchored on the closing `} from "react"` (also accepts single
+// quotes / `react/...` subpath like `react/jsx-runtime`, defensive). It is
+// case-sensitive and tolerates whitespace, line breaks, type-only imports,
+// trailing commas, and `as` aliases. Type-only imports are still banned —
+// `useEffect` is not a type, so a `import type { useEffect }` is a code
+// smell that should never appear; no point exempting it.
+const NAMED_IMPORT_PATTERN =
+  /import\s+(?:type\s+)?\{[\s\S]*?\b(useEffect|useLayoutEffect)\b[\s\S]*?\}\s*from\s*["']react(?:\/[^"']*)?["']/
 // ──────────────────────────────────────────────────────────────────────────
 
 const QUIET = process.argv.includes("--quiet")
@@ -139,7 +165,48 @@ function precedingCommentBlock(lines, callLine) {
   return collected.join("\n")
 }
 
-/** Scan one file; return array of `{ line, snippet }` for unjustified hits. */
+/**
+ * Find banned named-import statements. Iterates lines, and whenever a line
+ * starts an `import { ...` block destined for `"react"`, walks forward to
+ * the closing `}` (or end of file) and tests the joined block against
+ * NAMED_IMPORT_PATTERN. Returns 0 or more `{ line, snippet, kind }` records
+ * with `line` pointing at the FIRST line of the offending import statement.
+ */
+function findNamedImportViolations(lines) {
+  const out = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    // Cheap pre-filter: does this line begin an `import { ...` (possibly
+    // `import type { ...`)? If not, skip — avoids quadratic behavior on
+    // files with thousands of non-import lines.
+    if (!/^\s*import\s+(?:type\s+)?\{/.test(line)) continue
+
+    // Walk forward up to MAX_WALK lines collecting until we see a `}`.
+    // We don't try to handle nested braces because TS import specifiers
+    // forbid them — `{` then `}` is always the spec list.
+    const buf = [line]
+    let j = i
+    while (j < lines.length - 1 && !/\}/.test(lines[j])) {
+      j++
+      buf.push(lines[j])
+      if (j - i > MAX_WALK) break
+    }
+    const block = buf.join("\n")
+    if (NAMED_IMPORT_PATTERN.test(block)) {
+      out.push({
+        line: i + 1,
+        snippet: block.replace(/\s+/g, " ").slice(0, 200),
+        kind: "named-import",
+      })
+    }
+    // Skip past the import we just consumed so we don't double-scan its
+    // continuation lines.
+    i = j
+  }
+  return out
+}
+
+/** Scan one file; return array of `{ line, snippet, kind }` for unjustified hits. */
 function scanFile(absPath) {
   const rel = relative(REPO_ROOT, absPath).replaceAll("\\", "/")
   if (ALLOWLIST_PATHS.has(rel)) return []
@@ -148,15 +215,21 @@ function scanFile(absPath) {
   const lines = src.split(/\r?\n/)
   const violations = []
 
+  // (A) Named-import violations — never exemptable.
+  for (const v of findNamedImportViolations(lines)) {
+    violations.push(v)
+  }
+
+  // (B) Call-site violations — exemptable via sentinel.
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
-    const matched = VIOLATION_PATTERNS.some((re) => re.test(line))
+    const matched = CALL_SITE_PATTERNS.some((re) => re.test(line))
     if (!matched) continue
 
     const block = precedingCommentBlock(lines, i)
     if (block.includes(SENTINEL)) continue
 
-    violations.push({ line: i + 1, snippet: line.trim() })
+    violations.push({ line: i + 1, snippet: line.trim(), kind: "call-site" })
   }
 
   return violations.map((v) => ({ file: rel, ...v }))
@@ -182,21 +255,27 @@ if (allViolations.length === 0) {
   process.exit(0)
 }
 
+const namedCount = allViolations.filter((v) => v.kind === "named-import").length
+const callCount = allViolations.filter((v) => v.kind === "call-site").length
 console.error(
-  `\u001b[31m✗ no-use-effect: found ${allViolations.length} unjustified ` +
-    `\`React.useEffect\` / \`React.useLayoutEffect\` site(s):\u001b[0m\n`
+  `\u001b[31m✗ no-use-effect: found ${allViolations.length} violation(s) ` +
+    `(${namedCount} banned named import(s), ${callCount} unjustified call site(s)):\u001b[0m\n`
 )
 for (const v of allViolations) {
-  console.error(`  ${v.file}:${v.line}`)
+  const label = v.kind === "named-import" ? "named-import" : "call-site"
+  console.error(`  [${label}] ${v.file}:${v.line}`)
   console.error(`      ${v.snippet}`)
 }
 console.error(
   [
     ``,
-    `Remediation (pick ONE):`,
-    `  • Refactor per .agents/skills/no-use-effect/SKILL.md`,
-    `      (derived state · data-fetching lib · event handler ·`,
-    `       useMountEffect · key prop)`,
+    `Remediation:`,
+    `  • For named-import violations: switch to the namespace style`,
+    `      \`import * as React from "react"\` and use the API as`,
+    `      \`React.useEffect(...)\` (then apply the rules below).`,
+    `  • For call-site violations: refactor per`,
+    `      .agents/skills/no-use-effect/SKILL.md (derived state ·`,
+    `      data-fetching lib · event handler · useMountEffect · key prop).`,
     `  • If genuinely outside the five rules, prepend a comment block`,
     `    containing the sentinel "${SENTINEL}"`,
     `    IMMEDIATELY above the call site (contiguous comment lines,`,
