@@ -90,5 +90,5 @@ jobs:
       - name: Build
         env:
           # Smoke-test build with a dummy DB URL so Prisma client generation succeeds.
-          DATABASE_URL: file:./prisma/ci-smoke.db
+          DATABASE_URL: postgres://ci:ci@localhost:5432/ci
         run: pnpm build

@@ -11,16 +11,16 @@
 
 ## Stack
 
-| Layer           | Choice                           | Why                                                                          |
-| --------------- | -------------------------------- | ---------------------------------------------------------------------------- |
-| Build           | **Vite+** (`vp` CLI)             | Unified Rolldown + Oxlint + Oxfmt + Vitest + tsdown                          |
-| Framework       | **TanStack Start**               | Isomorphic, file-based routing, server functions, no `"use server"` ceremony |
-| UI              | **shadcn/ui** + Tailwind v4      | Owned components, design tokens via CSS vars                                 |
-| Reactive ledger | **TanStack DB** + `useLiveQuery` | Optimistic mutations with automatic rollback                                 |
-| Data            | **TanStack Query**               | Server-state cache + RPC bridge for `createServerFn`                         |
-| ORM             | **Prisma 7** + LibSQL adapter    | Type-safe schema, native SQLite, future Turso edge replicas                  |
-| Forms           | **TanStack Form** + Zod          | Schema-validated forms with field-level errors                               |
-| Testing         | **Vitest** (via `vp test`)       | Same engine as build, no config drift                                        |
+| Layer           | Choice                              | Why                                                                          |
+| --------------- | ----------------------------------- | ---------------------------------------------------------------------------- |
+| Build           | **Vite+** (`vp` CLI)                | Unified Rolldown + Oxlint + Oxfmt + Vitest + tsdown                          |
+| Framework       | **TanStack Start**                  | Isomorphic, file-based routing, server functions, no `"use server"` ceremony |
+| UI              | **shadcn/ui** + Tailwind v4         | Owned components, design tokens via CSS vars                                 |
+| Reactive ledger | **TanStack DB** + `useLiveQuery`    | Optimistic mutations with automatic rollback                                 |
+| Data            | **TanStack Query**                  | Server-state cache + RPC bridge for `createServerFn`                         |
+| ORM             | **Prisma 7** + `@prisma/adapter-pg` | Type-safe schema, PostgreSQL backing database                                |
+| Forms           | **TanStack Form** + Zod             | Schema-validated forms with field-level errors                               |
+| Testing         | **Vitest** (via `vp test`)          | Same engine as build, no config drift                                        |
 
 ## Quick Start
 
@@ -31,7 +31,8 @@ vp install
 # 2. Copy env template and fill values
 cp .env.example .env
 
-# 3. Apply database migrations to local SQLite
+# 3. Start local Postgres container and apply migrations
+vp run db:up
 pnpm db:migrate
 
 # 4. Start dev server (default port 3006)
@@ -64,6 +65,7 @@ src/
 │   └── transactions.tsx # Main ledger UI (uses TanStack DB)
 ├── components/          # Feature components
 │   └── ui/              # shadcn primitives (owned, edit freely)
+├── hooks/               # Custom React hooks
 ├── lib/
 │   ├── collections.ts   # TanStack DB collections (client-side reactive ledger)
 │   └── transaction-filters.ts  # Pure filter/search reducers
@@ -94,9 +96,9 @@ All Prisma + Node-only modules use the **`.server.ts` hard fence** convention en
 - `useLiveQuery` subscribes to the collection; UI updates optimistically with automatic rollback if the server function fails.
 - Routes that consume collections **must** call `collection.preload()` in their loader and set `ssr: false`.
 
-### Money Type — Float → BigInt Migration In Flight
+### Money Type — BigInt
 
-All monetary fields (`amount`, `balance`) are currently `Float` (legacy). Migrating to integer minor units (BigInt cents/sen) per ISO 4217 — see [`docs/adr/0001-money-type-migration.md`](./docs/adr/0001-money-type-migration.md).
+All monetary fields (`amount`, `balance`) use integer minor units (BigInt cents/sen) per ISO 4217 to prevent precision loss. See [`docs/adr/0002-migrate-amount-to-bigint.md`](./docs/adr/0002-migrate-amount-to-bigint.md).
 
 ## Contributing
 

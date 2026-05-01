@@ -12,7 +12,7 @@
     "lint": "vp lint",
     "lint:no-use-effect": "node scripts/check-no-use-effect.mjs",
     "format": "vp fmt",
-    "check": "vp check && node scripts/check-no-use-effect.mjs",
+    "check": "vp check && node scripts/check-no-use-effect.mjs && node scripts/check-pre-auth-stub.mjs",
     "typecheck": "vp check --type-aware",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",

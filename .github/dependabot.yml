@@ -36,9 +36,19 @@ updates:
     labels:
       - dependencies
 
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: monthly
+    groups:
+      ci-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
     labels:
       - ci
