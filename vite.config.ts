@@ -12,12 +12,17 @@ const config = defineConfig({
     // on the first command. `scripts/staged-check.mjs` is a 30-line Node
     // script that spawns the two real steps in order:
     //   1. `vp check --fix` — fmt + lint + typecheck (auto-fix where safe).
-    //   2. `node scripts/check-no-use-effect.mjs` — enforce ADR-0002:
-    //      ban `React.useEffect(...)` without the `no-use-effect skill
-    //      exemption` sentinel comment block. `vp lint`'s built-in
-    //      `no-restricted-imports` rule already blocks the named-import
-    //      style; this guard covers the namespace style (`React.useEffect`)
-    //      which the lint rule cannot detect.
+    //   2. `node scripts/check-no-use-effect.mjs` — enforce ADR-0002.
+    //      As of the 2026-04-30 amendment, this single guard catches BOTH
+    //      forms: banned named imports (`import { useEffect } from
+    //      "react"`) AND unjustified `React.useEffect(...)` call sites.
+    //      The `oxlint` `no-restricted-imports` rule that previously
+    //      handled the named-import case was removed because its
+    //      spec-strict LSP build also flagged the project's namespace
+    //      style; see ADR-0002 amendment for the full rationale. The
+    //      detector lives in `scripts/check-no-use-effect.detector.mjs`
+    //      (pure functions, unit-tested by `…detector.test.mjs`) and is
+    //      invoked by this thin CLI shim.
     "*": "node scripts/staged-check.mjs",
   },
   lint: {
