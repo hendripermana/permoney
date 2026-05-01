@@ -6,7 +6,6 @@ import {
   Outlet,
   type ErrorComponentProps,
 } from "@tanstack/react-router"
-import { ReactQueryDevtools } from "@tanstack/react-query-devtools"
 import { QueryClientProvider } from "@tanstack/react-query"
 import { getQueryClient } from "@/lib/query-client"
 import { Button } from "@/components/ui/button"
@@ -20,6 +19,13 @@ const queryClient = getQueryClient()
 // Memastikan DevTools hanya diload di mode development (tidak mengotori bundle production)
 // DevTools untuk Router dilepas sementara untuk resolusi dependensi
 // const TanStackRouterDevtools = ...
+const ReactQueryDevtools = import.meta.env.PROD
+  ? () => null
+  : React.lazy(() =>
+      import("@tanstack/react-query-devtools").then((res) => ({
+        default: res.ReactQueryDevtools,
+      }))
+    )
 
 export const Route = createRootRoute({
   head: () => ({

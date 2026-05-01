@@ -31,7 +31,17 @@ export const createSmartRuleFn = createServerFn({ method: "POST" })
     createRuleSchema.parse(data)
   )
   .handler(async ({ data }) => {
-    // Borrow default user for multi-tenant simulation
+    // ╔════════════════════════════════════════════════════════════════════╗
+    // ║ ⚠️  SECURITY: prisma-find-first-user — TEMPORARY PRE-AUTH STUB    ║
+    // ║                                                                    ║
+    // ║ This handler treats the FIRST user in the DB as the actor for     ║
+    // ║ EVERY request. There is no authentication, no session, no tenant  ║
+    // ║ scoping. Anyone who hits this endpoint can mutate any data.       ║
+    // ║                                                                    ║
+    // ║ Removing the auth stub is M1-2 / M1-3 in the v1.0 production-    ║
+    // ║ readiness project. Do NOT call this code in production. Do NOT   ║
+    // ║ remove this comment without a linked PR that lands ADR-0004.      ║
+    // ╚════════════════════════════════════════════════════════════════════╝
     const user = await prisma.user.findFirst()
     if (!user) throw new Error("User not found")
 

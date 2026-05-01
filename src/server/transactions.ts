@@ -178,8 +178,17 @@ export const createTransactionFn = createServerFn({ method: "POST" })
     transactionInputSchema.parse(data)
   )
   .handler(async ({ data }) => {
-    // Since we don't have an Auth/Login system yet, we borrow the first user ID
-    // that we created during the Database Seeding earlier.
+    // ╔════════════════════════════════════════════════════════════════════╗
+    // ║ ⚠️  SECURITY: prisma-find-first-user — TEMPORARY PRE-AUTH STUB    ║
+    // ║                                                                    ║
+    // ║ This handler treats the FIRST user in the DB as the actor for     ║
+    // ║ EVERY request. There is no authentication, no session, no tenant  ║
+    // ║ scoping. Anyone who hits this endpoint can mutate any data.       ║
+    // ║                                                                    ║
+    // ║ Removing the auth stub is M1-2 / M1-3 in the v1.0 production-    ║
+    // ║ readiness project. Do NOT call this code in production. Do NOT   ║
+    // ║ remove this comment without a linked PR that lands ADR-0004.      ║
+    // ╚════════════════════════════════════════════════════════════════════╝
     const devUser = await prisma.user.findFirst()
     if (!devUser)
       throw new Error("CRITICAL: User not found. Please run DB Seeding again.")
@@ -511,6 +520,17 @@ export const updateTransactionFn = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     if (!data.id) throw new Error("ID is required for updating")
 
+    // ╔════════════════════════════════════════════════════════════════════╗
+    // ║ ⚠️  SECURITY: prisma-find-first-user — TEMPORARY PRE-AUTH STUB    ║
+    // ║                                                                    ║
+    // ║ This handler treats the FIRST user in the DB as the actor for     ║
+    // ║ EVERY request. There is no authentication, no session, no tenant  ║
+    // ║ scoping. Anyone who hits this endpoint can mutate any data.       ║
+    // ║                                                                    ║
+    // ║ Removing the auth stub is M1-2 / M1-3 in the v1.0 production-    ║
+    // ║ readiness project. Do NOT call this code in production. Do NOT   ║
+    // ║ remove this comment without a linked PR that lands ADR-0004.      ║
+    // ╚════════════════════════════════════════════════════════════════════╝
     const devUser = await prisma.user.findFirst()
     if (!devUser) throw new Error("User not found")
 
@@ -939,6 +959,17 @@ export const bulkCreateTransactionsFn = createServerFn({ method: "POST" })
     bulkTransactionInputSchema.parse(data)
   )
   .handler(async ({ data }) => {
+    // ╔════════════════════════════════════════════════════════════════════╗
+    // ║ ⚠️  SECURITY: prisma-find-first-user — TEMPORARY PRE-AUTH STUB    ║
+    // ║                                                                    ║
+    // ║ This handler treats the FIRST user in the DB as the actor for     ║
+    // ║ EVERY request. There is no authentication, no session, no tenant  ║
+    // ║ scoping. Anyone who hits this endpoint can mutate any data.       ║
+    // ║                                                                    ║
+    // ║ Removing the auth stub is M1-2 / M1-3 in the v1.0 production-    ║
+    // ║ readiness project. Do NOT call this code in production. Do NOT   ║
+    // ║ remove this comment without a linked PR that lands ADR-0004.      ║
+    // ╚════════════════════════════════════════════════════════════════════╝
     const user = await prisma.user.findFirst()
     if (!user) throw new Error("User not found")
 
