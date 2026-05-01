@@ -14,7 +14,7 @@ import path from "path"
  */
 
 const EXPECTED_COUNT = 4
-const SEARCH_PATTERN = /prisma\.user\.findFirst\(/g
+const SEARCH_PATTERN = /prisma\.user\.findFirst\s*\(/g
 const SEARCH_DIR = "src/server"
 
 function countOccurrences(dir) {
