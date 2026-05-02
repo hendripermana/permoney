@@ -23,22 +23,40 @@ model Family {
   users      User[]
   accounts   Account[]
   merchants  Merchant[]
-  categories Category[]
-  smartRules SmartRule[]
+  categories   Category[]
+  smartRules   SmartRule[]
+  transactions Transaction[]
 }
 
 model User {
-  id           String        @id @default(cuid())
-  email        String        @unique
-  name         String
-  password     String
+  id              String        @id @default(cuid())
+  email           String        @unique
+  name            String
+  emailVerifiedAt DateTime?
+  passwordHash    String
 
   // Fitur Enterprise: Preferensi tampilan user
-  theme        String        @default("system")
+  theme           String        @default("system")
 
-  familyId     String
-  family       Family        @relation(fields: [familyId], references: [id])
-  transactions Transaction[]
+  familyId        String
+  family          Family        @relation(fields: [familyId], references: [id])
+  transactions    Transaction[]
+  sessions        Session[]
+}
+
+model Session {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  userAgent    String?
+  ip           String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @default(now()) @updatedAt
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 model Account {
@@ -161,6 +179,9 @@ model Transaction {
   userId      String
   user        User      @relation(fields: [userId], references: [id])
 
+  familyId    String
+  family      Family    @relation(fields: [familyId], references: [id])
+
   // Relasi ke Transfer (Hanya terisi jika type == "transfer")
   transferOut Transfer? @relation("OutflowTransaction")
   transferIn  Transfer? @relation("InflowTransaction")
@@ -179,9 +200,8 @@ model Transaction {
   @@index([deletedAt, date(sort: Desc)])
   // Per-account history (account-detail drill-down planned post-ADR-0004).
   @@index([accountId, date(sort: Desc)])
-  // Current dev "borrow user" pattern. Will be redundant once ADR-0004
-  // adds `familyId` directly on Transaction; remove at that time.
-  @@index([userId])
+  // Primary list-page index for tenant-scoped queries
+  @@index([familyId, deletedAt, date(sort: Desc)])
   // Aggregations.
   @@index([categoryId])
   @@index([merchantId])
