@@ -13,6 +13,7 @@ import type { Prisma } from "@prisma/client"
 // pattern `**/*.server.*`. import-protection plugin tetap warn di sini karena
 // dia analisis source level — itu EXPECTED dan SAFE. Lihat AGENTS.md §6.F.
 import { prisma } from "./db.server"
+import { familyMiddleware, createTenantDb } from "./middleware/with-family"
 
 // Canonical Prisma type untuk callback `$transaction`. Lebih bersih dari
 // `Parameters<Parameters<typeof prisma.$transaction>[0]>[0]` dan stable
@@ -23,20 +24,24 @@ type PrismaTxClient = Prisma.TransactionClient
  * BACKEND FUNCTION: Fetch reference data for the Transaction Form Dropdowns
  * This function executes strictly on the Server (Node.js).
  */
-export const getTransactionFormData = createServerFn({ method: "GET" }).handler(
-  async () => {
+export const getTransactionFormData = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .handler(async ({ context }) => {
+    const db = createTenantDb(context.familyId)
     // ENTERPRISE TRICK: Use Promise.all() for parallel execution!
     // Fetching Accounts, Categories, and Merchants concurrently makes loading 3x faster.
     const [accounts, categories, merchants] = await Promise.all([
-      prisma.account.findMany({ orderBy: { name: "asc" } }),
+      db.account.findMany({ orderBy: { name: "asc" } }),
+      // UNSAFE: system categories (isSystem=true, familyId=null) must remain readable;
+      // after M1-5 RLS, the Category policy will expose them via OR clause.
+      // For now, read all categories visible to this family.
       prisma.category.findMany({ orderBy: { name: "asc" } }),
-      prisma.merchant.findMany({ orderBy: { name: "asc" } }),
+      db.merchant.findMany({ orderBy: { name: "asc" } }),
     ])
 
     // Return the processed data to the Frontend
     return { accounts, categories, merchants }
-  }
-)
+  })
 
 // =============================================================================
 // MONEY INPUT SCHEMA (post-ADR-0001)
@@ -177,21 +182,9 @@ export const createTransactionFn = createServerFn({ method: "POST" })
   .inputValidator((data: z.input<typeof transactionInputSchema>) =>
     transactionInputSchema.parse(data)
   )
-  .handler(async ({ data }) => {
-    // ╔════════════════════════════════════════════════════════════════════╗
-    // ║ ⚠️  SECURITY: prisma-find-first-user — TEMPORARY PRE-AUTH STUB    ║
-    // ║                                                                    ║
-    // ║ This handler treats the FIRST user in the DB as the actor for     ║
-    // ║ EVERY request. There is no authentication, no session, no tenant  ║
-    // ║ scoping. Anyone who hits this endpoint can mutate any data.       ║
-    // ║                                                                    ║
-    // ║ Removing the auth stub is M1-2 / M1-3 in the v1.0 production-    ║
-    // ║ readiness project. Do NOT call this code in production. Do NOT   ║
-    // ║ remove this comment without a linked PR that lands ADR-0004.      ║
-    // ╚════════════════════════════════════════════════════════════════════╝
-    const devUser = await prisma.user.findFirst()
-    if (!devUser)
-      throw new Error("CRITICAL: User not found. Please run DB Seeding again.")
+  .middleware([familyMiddleware])
+  .handler(async ({ data, context }) => {
+    const { user, familyId } = context
 
     // 🚀 THE ENTERPRISE MAGIC: Prisma $transaction (ACID)
     // If any process inside this block fails, all changes are rolled back automatically.
@@ -249,7 +242,8 @@ export const createTransactionFn = createServerFn({ method: "POST" })
             toAccountId: data.toAccountId,
             categoryId: data.categoryId || null,
             merchantId: data.merchantId || null,
-            userId: devUser.id,
+            userId: user.id,
+            familyId,
             status: data.status,
             destinationAmount: data.destinationAmount,
             destinationCurrency: data.destinationCurrency,
@@ -271,7 +265,8 @@ export const createTransactionFn = createServerFn({ method: "POST" })
             toAccountId: data.accountId,
             categoryId: data.categoryId || null,
             merchantId: data.merchantId || null,
-            userId: devUser.id,
+            userId: user.id,
+            familyId,
             status: data.status,
             destinationAmount: data.destinationAmount,
             destinationCurrency: data.destinationCurrency,
@@ -332,7 +327,8 @@ export const createTransactionFn = createServerFn({ method: "POST" })
           categoryId: data.isSplit ? null : data.categoryId || null,
           merchantId: data.isSplit ? null : data.merchantId || null,
           isSplit: data.isSplit,
-          userId: devUser.id,
+          userId: user.id,
+          familyId,
           status: data.status,
           accountBalanceAfter: accountBalanceAfter,
           attachmentUrl: data.attachmentUrl,
@@ -370,10 +366,12 @@ export const createTransactionFn = createServerFn({ method: "POST" })
  * BACKEND FUNCTION: Fetch complete transaction ledger
  * Menerapkan Data Projection: Hanya mengambil field relasi yang dibutuhkan UI
  */
-export const getTransactionsFn = createServerFn({ method: "GET" }).handler(
-  async () => {
+export const getTransactionsFn = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .handler(async ({ context }) => {
+    const db = createTenantDb(context.familyId)
     // Enterprise trick: Kita urutkan dari yang terbaru (descending)
-    const transactions = await prisma.transaction.findMany({
+    const transactions = await db.transaction.findMany({
       orderBy: { date: "desc" },
       where: {
         deletedAt: null, // SOFT DELETE FILTER: hanya ambil transaksi aktif
@@ -421,8 +419,7 @@ export const getTransactionsFn = createServerFn({ method: "GET" }).handler(
         amount: absMoney(tx.amount),
       })
     )
-  }
-)
+  })
 
 // =========================================================================
 // THE INVISIBLE LEDGER: SMART DELETE & UPDATE (ENTERPRISE ARCHITECTURE)
@@ -517,22 +514,10 @@ export const deleteTransactionFn = createServerFn({ method: "POST" })
  */
 export const updateTransactionFn = createServerFn({ method: "POST" })
   .inputValidator(transactionInputSchema)
-  .handler(async ({ data }) => {
+  .middleware([familyMiddleware])
+  .handler(async ({ data, context }) => {
     if (!data.id) throw new Error("ID is required for updating")
-
-    // ╔════════════════════════════════════════════════════════════════════╗
-    // ║ ⚠️  SECURITY: prisma-find-first-user — TEMPORARY PRE-AUTH STUB    ║
-    // ║                                                                    ║
-    // ║ This handler treats the FIRST user in the DB as the actor for     ║
-    // ║ EVERY request. There is no authentication, no session, no tenant  ║
-    // ║ scoping. Anyone who hits this endpoint can mutate any data.       ║
-    // ║                                                                    ║
-    // ║ Removing the auth stub is M1-2 / M1-3 in the v1.0 production-    ║
-    // ║ readiness project. Do NOT call this code in production. Do NOT   ║
-    // ║ remove this comment without a linked PR that lands ADR-0004.      ║
-    // ╚════════════════════════════════════════════════════════════════════╝
-    const devUser = await prisma.user.findFirst()
-    if (!devUser) throw new Error("User not found")
+    const { user } = context
 
     // The Magic: Kita jalankan penghapusan murni dan pembuatan murni secara berurutan
     // dalam satu ACID Transaction. Zero Balance Mismatch Guaranteed!
@@ -644,7 +629,8 @@ export const updateTransactionFn = createServerFn({ method: "POST" })
             toAccountId: data.toAccountId,
             categoryId: data.categoryId || null,
             merchantId: data.merchantId || null,
-            userId: devUser.id,
+            userId: user.id,
+            familyId: context.familyId,
             status: data.status,
             destinationAmount: data.destinationAmount,
             destinationCurrency: data.destinationCurrency,
@@ -666,7 +652,8 @@ export const updateTransactionFn = createServerFn({ method: "POST" })
             toAccountId: data.accountId,
             categoryId: data.categoryId || null,
             merchantId: data.merchantId || null,
-            userId: devUser.id,
+            userId: user.id,
+            familyId: context.familyId,
             status: data.status,
             destinationAmount: data.destinationAmount,
             destinationCurrency: data.destinationCurrency,
@@ -725,7 +712,8 @@ export const updateTransactionFn = createServerFn({ method: "POST" })
             categoryId: data.isSplit ? null : data.categoryId || null,
             merchantId: data.isSplit ? null : data.merchantId || null,
             isSplit: data.isSplit,
-            userId: devUser.id,
+            userId: user.id,
+            familyId: context.familyId,
             status: data.status,
             accountBalanceAfter: accountBalanceAfter,
             attachmentUrl: data.attachmentUrl,
@@ -958,20 +946,9 @@ export const bulkCreateTransactionsFn = createServerFn({ method: "POST" })
   .inputValidator((data: z.input<typeof bulkTransactionInputSchema>) =>
     bulkTransactionInputSchema.parse(data)
   )
-  .handler(async ({ data }) => {
-    // ╔════════════════════════════════════════════════════════════════════╗
-    // ║ ⚠️  SECURITY: prisma-find-first-user — TEMPORARY PRE-AUTH STUB    ║
-    // ║                                                                    ║
-    // ║ This handler treats the FIRST user in the DB as the actor for     ║
-    // ║ EVERY request. There is no authentication, no session, no tenant  ║
-    // ║ scoping. Anyone who hits this endpoint can mutate any data.       ║
-    // ║                                                                    ║
-    // ║ Removing the auth stub is M1-2 / M1-3 in the v1.0 production-    ║
-    // ║ readiness project. Do NOT call this code in production. Do NOT   ║
-    // ║ remove this comment without a linked PR that lands ADR-0004.      ║
-    // ╚════════════════════════════════════════════════════════════════════╝
-    const user = await prisma.user.findFirst()
-    if (!user) throw new Error("User not found")
+  .middleware([familyMiddleware])
+  .handler(async ({ data, context }) => {
+    const { user, familyId } = context
 
     return await prisma.$transaction(async (tx: PrismaTxClient) => {
       // 1. Create all transactions
@@ -979,6 +956,7 @@ export const bulkCreateTransactionsFn = createServerFn({ method: "POST" })
         data: data.transactions.map((t) => ({
           id: t.id,
           userId: user.id,
+          familyId,
           type: t.type,
           amount:
             t.type === "expense"

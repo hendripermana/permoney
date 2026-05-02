@@ -39,7 +39,7 @@ async function main() {
     data: {
       email: "admin@permana.icu",
       name: "Hendri",
-      password: "password123",
+      passwordHash: "password123",
       familyId: family.id,
     },
   })

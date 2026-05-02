@@ -1,3 +1,4 @@
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -13,70 +14,82 @@ datasource db {
 }
 
 model Family {
-  id         String     @id @default(cuid())
-  name       String
+  id   String @id @default(cuid())
+  name String
 
   // Fitur Enterprise: Setting default keluarga
-  currency   String     @default("IDR")
-  timezone   String     @default("Asia/Jakarta")
+  currency String @default("IDR")
+  timezone String @default("Asia/Jakarta")
 
-  users      User[]
-  accounts   Account[]
-  merchants  Merchant[]
+  users        User[]
+  accounts     Account[]
+  merchants    Merchant[]
   categories   Category[]
   smartRules   SmartRule[]
   transactions Transaction[]
 }
 
 model User {
-  id              String        @id @default(cuid())
-  email           String        @unique
+  id              String    @id @default(cuid())
+  email           String    @unique
   name            String
   emailVerifiedAt DateTime?
   passwordHash    String
 
   // Fitur Enterprise: Preferensi tampilan user
-  theme           String        @default("system")
+  theme String @default("system")
 
-  familyId        String
-  family          Family        @relation(fields: [familyId], references: [id])
-  transactions    Transaction[]
-  sessions        Session[]
+  familyId      String?
+  family        Family?       @relation(fields: [familyId], references: [id])
+  transactions  Transaction[]
+  sessions      Session[]
+  emailVerified Boolean       @default(false)
+  image         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  authaccounts  AuthAccount[]
+
+  @@map("User")
 }
 
 model Session {
-  id           String    @id @default(cuid())
-  userId       String
-  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  expiresAt    DateTime
-  revokedAt    DateTime?
-  userAgent    String?
-  ip           String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @default(now()) @updatedAt
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revokedAt DateTime?
+  userAgent String?
+  ip        String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now()) @updatedAt
+
+  token     String
+  ipAddress String?
 
   @@index([userId])
   @@index([expiresAt])
+  @@unique([token])
+  @@map("Session")
 }
 
 model Account {
-  id               String        @id @default(cuid())
-  name             String
+  id   String @id @default(cuid())
+  name String
 
   // Tipe makin pro: "DEPOSITORY" (Bank/Dompet), "CREDIT" (Kartu Kredit), "LOAN" (Hutang), "RECEIVABLE" (Piutang/Uang dipinjam orang), "INVESTMENT" (Saham)
-  type             String
+  type     String
   // Stored in MINOR UNITS (sen for IDR, cents for USD, satoshi for BTC).
   // Per-currency scale is driven by `CURRENCIES[code].minorUnitConversion`
   // in src/lib/data/currencies.ts. See docs/adr/0001-money-type-migration.md.
-  balance          BigInt
-  currency         String        @default("IDR") // Bisa USD, JPY, dll
+  balance  BigInt
+  currency String @default("IDR") // Bisa USD, JPY, dll
 
   // Fitur Enterprise: Visual & Status
-  color            String?       // Hex color misal "#3b82f6"
-  status           String        @default("active") // "active" atau "closed"
+  color  String? // Hex color misal "#3b82f6"
+  status String  @default("active") // "active" atau "closed"
 
-  familyId         String
-  family           Family        @relation(fields: [familyId], references: [id])
+  familyId String
+  family   Family @relation(fields: [familyId], references: [id])
 
   transactionsFrom Transaction[] @relation("FromAccount")
   transactionsTo   Transaction[] @relation("ToAccount")
@@ -87,12 +100,12 @@ model Account {
 }
 
 model Merchant {
-  id           String        @id @default(cuid())
-  name         String
+  id   String @id @default(cuid())
+  name String
 
   // Fitur Enterprise: Logo/Website
-  color        String?
-  logoUrl      String?
+  color   String?
+  logoUrl String?
 
   familyId     String
   family       Family        @relation(fields: [familyId], references: [id])
@@ -105,17 +118,17 @@ model Merchant {
 }
 
 model Category {
-  id           String        @id @default(cuid())
-  name         String
-  type         String        // "expense" atau "income"
+  id   String @id @default(cuid())
+  name String
+  type String // "expense" atau "income"
 
   // Fitur Enterprise: Visual Category
-  color        String        @default("#6172F3")
-  icon         String        @default("shapes") // Referensi nama icon dari Tabler/Lucide
+  color String @default("#6172F3")
+  icon  String @default("shapes") // Referensi nama icon dari Tabler/Lucide
 
-  isSystem     Boolean       @default(false)
-  familyId     String?
-  family       Family?       @relation(fields: [familyId], references: [id])
+  isSystem Boolean @default(false)
+  familyId String?
+  family   Family? @relation(fields: [familyId], references: [id])
 
   parentId     String?
   parent       Category?     @relation("SubCategories", fields: [parentId], references: [id])
@@ -130,16 +143,16 @@ model Category {
 }
 
 model Transaction {
-  id          String   @id @default(cuid())
+  id       String @id @default(cuid())
   // Stored in MINOR UNITS of `currency`. Negative for outflow, positive for inflow.
   // See src/lib/money.ts for arithmetic helpers; never use raw `+ -` on this field.
-  amount      BigInt
-  type        String   // "expense", "income", "transfer"
-  kind        String   @default("standard")
-  currency    String   @default("IDR")
+  amount   BigInt
+  type     String // "expense", "income", "transfer"
+  kind     String @default("standard")
+  currency String @default("IDR")
 
   // Transaction Lifecycle Status: PENDING (gantung), CLEARED (selesai), RECONCILED (dicocokkan)
-  status              String    @default("CLEARED")
+  status String @default("CLEARED")
 
   // Multi-Currency Transfer Support (Implied Rate Architecture)
   // User menginput nominal yang benar-benar masuk ke akun tujuan, bukan hanya tebakan kurs API.
@@ -147,47 +160,47 @@ model Transaction {
   destinationAmount   BigInt?
   destinationCurrency String?
 
-  date        DateTime @default(now())
+  date DateTime @default(now())
 
   description String
   notes       String?
-  excluded    Boolean  @default(false)
+  excluded    Boolean @default(false)
 
   // Running Balance Snapshot: Saldo akun setelah transaksi ini dicatat (untuk grafik historis instan).
   // Stored in MINOR UNITS of `currency`.
   accountBalanceAfter BigInt?
 
   // Proof of Purchase: URL struk/foto kwitansi (S3/Cloudflare R2)
-  attachmentUrl       String?
+  attachmentUrl String?
 
   // Soft Delete (GAAP Compliance): Transaksi tidak pernah benar-benar dihapus
   // NULL = aktif, ada timestamp = soft-deleted (audit trail tetap ada)
-  deletedAt           DateTime?
+  deletedAt DateTime?
 
-  merchantId  String?
-  merchant    Merchant? @relation(fields: [merchantId], references: [id])
+  merchantId String?
+  merchant   Merchant? @relation(fields: [merchantId], references: [id])
 
-  accountId   String
-  account     Account   @relation("FromAccount", fields: [accountId], references: [id])
+  accountId String
+  account   Account @relation("FromAccount", fields: [accountId], references: [id])
 
   toAccountId String?
-  toAccount   Account?  @relation("ToAccount", fields: [toAccountId], references: [id])
+  toAccount   Account? @relation("ToAccount", fields: [toAccountId], references: [id])
 
-  categoryId  String?
-  category    Category? @relation(fields: [categoryId], references: [id])
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id])
 
-  userId      String
-  user        User      @relation(fields: [userId], references: [id])
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 
-  familyId    String
-  family      Family    @relation(fields: [familyId], references: [id])
+  familyId String
+  family   Family @relation(fields: [familyId], references: [id])
 
   // Relasi ke Transfer (Hanya terisi jika type == "transfer")
   transferOut Transfer? @relation("OutflowTransaction")
   transferIn  Transfer? @relation("InflowTransaction")
 
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @default(now()) @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   // Split Transaction Engine: 1 transaksi = banyak line item kategori
   isSplit      Boolean      @default(false)
@@ -197,33 +210,34 @@ model Transaction {
   // NOT auto-index foreign-key columns, so these are not redundant.
   // Main list query (`getTransactionsFn`): filter on deletedAt IS NULL,
   // order by date DESC. Covering index avoids a full scan on every page.
-  @@index([deletedAt, date(sort: Desc)])
   // Per-account history (account-detail drill-down planned post-ADR-0004).
-  @@index([accountId, date(sort: Desc)])
   // Primary list-page index for tenant-scoped queries
-  @@index([familyId, deletedAt, date(sort: Desc)])
   // Aggregations.
+  @@index([deletedAt, date(sort: Desc)])
+  @@index([accountId, date(sort: Desc)])
+  @@index([familyId, deletedAt, date(sort: Desc)])
   @@index([categoryId])
   @@index([merchantId])
 }
 
 model Transfer {
-  id                   String      @id @default(cuid())
+  id String @id @default(cuid())
 
   // Transaksi Uang Keluar (Sumber)
   outflowTransactionId String      @unique
   outflowTransaction   Transaction @relation("OutflowTransaction", fields: [outflowTransactionId], references: [id], onDelete: Cascade)
 
   // Transaksi Uang Masuk (Tujuan)
-  inflowTransactionId  String      @unique
-  inflowTransaction    Transaction @relation("InflowTransaction", fields: [inflowTransactionId], references: [id], onDelete: Cascade)
+  inflowTransactionId String      @unique
+  inflowTransaction   Transaction @relation("InflowTransaction", fields: [inflowTransactionId], references: [id], onDelete: Cascade)
 
-  createdAt            DateTime    @default(now())
+  createdAt DateTime @default(now())
 }
 
 // Split Transaction Engine: Line Items untuk satu struk multi-kategori
+
 model SplitEntry {
-  id          String   @id @default(cuid())
+  id          String @id @default(cuid())
   description String
   // Stored in MINOR UNITS, same currency as the parent transaction.
   // Always positive (absolute value); sign is carried by the parent's `type`.
@@ -234,13 +248,13 @@ model SplitEntry {
   transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
 
   // Optional: Kategori & Merchant per baris
-  categoryId  String?
-  category    Category? @relation(fields: [categoryId], references: [id])
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id])
 
-  merchantId  String?
-  merchant    Merchant? @relation(fields: [merchantId], references: [id])
+  merchantId String?
+  merchant   Merchant? @relation(fields: [merchantId], references: [id])
 
-  createdAt   DateTime  @default(now())
+  createdAt DateTime @default(now())
 
   // Hot read path: hydrating split children for a transaction list.
   // See ADR-0003.
@@ -250,22 +264,55 @@ model SplitEntry {
 // ==========================================
 // The Smart Rules Engine
 // ==========================================
+
 model SmartRule {
-  id           String   @id @default(cuid())
-  keyword      String   // Stores comma-separated strings (e.g. "fore, coffeeshop, kenangan")
+  id      String @id @default(cuid())
+  keyword String // Stores comma-separated strings (e.g. "fore, coffeeshop, kenangan")
 
   // The 'THEN' assignments: if matches, assign these
-  merchantId   String?
-  merchant     Merchant? @relation(fields: [merchantId], references: [id])
-  categoryId   String?
-  category     Category? @relation(fields: [categoryId], references: [id])
+  merchantId String?
+  merchant   Merchant? @relation(fields: [merchantId], references: [id])
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id])
 
-  familyId     String
-  family       Family    @relation(fields: [familyId], references: [id])
+  familyId String
+  family   Family @relation(fields: [familyId], references: [id])
 
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @default(now()) @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   // Tenant-scoped rule evaluation (see ADR-0003).
   @@index([familyId])
+}
+
+model AuthAccount {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("AuthAccount")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("Verification")
 }
