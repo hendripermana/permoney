@@ -12,17 +12,24 @@ export class RateLimitError extends Error {
   }
 }
 
-// Initialize Redis if env vars are present
+// Lazy initialization: defer Redis creation until first use
 let redis: Redis | undefined
-try {
-  if (
-    process.env.UPSTASH_REDIS_REST_URL &&
-    process.env.UPSTASH_REDIS_REST_TOKEN
-  ) {
-    redis = Redis.fromEnv()
+let redisInitialized = false
+
+function getRedis(): Redis | undefined {
+  if (redisInitialized) return redis
+  redisInitialized = true
+  try {
+    if (
+      process.env.UPSTASH_REDIS_REST_URL &&
+      process.env.UPSTASH_REDIS_REST_TOKEN
+    ) {
+      redis = Redis.fromEnv()
+    }
+  } catch {
+    // Ignore
   }
-} catch (e) {
-  // Ignore
+  return redis
 }
 
 // In-memory fallback map for local dev/testing
@@ -33,9 +40,10 @@ const getRateLimiter = (
   maxRequests: number,
   windowMs: number
 ) => {
-  if (redis) {
+  const redisClient = getRedis()
+  if (redisClient) {
     return new Ratelimit({
-      redis,
+      redis: redisClient,
       limiter: Ratelimit.slidingWindow(maxRequests, `${windowMs} ms`),
       prefix,
     })

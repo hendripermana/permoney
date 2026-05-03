@@ -110,7 +110,7 @@ export const meFn = createServerFn({ method: "GET" }).handler(async () => {
   }
 })
 
-import { checkRateLimit } from "./middleware/rate-limit"
+import { checkRateLimit } from "./middleware/rate-limit.server"
 
 export const signupFn = createServerFn({ method: "POST" })
   .inputValidator(signupSchema)

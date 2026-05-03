@@ -1,13 +1,13 @@
-/*
-  Warnings:
+-- Multi-step migration untuk Session.token (safe untuk existing data)
+-- Step 1: Add columns sebagai nullable
+ALTER TABLE "Session" ADD COLUMN "ipAddress" TEXT,
+ADD COLUMN "token" TEXT;
 
-  - A unique constraint covering the columns `[token]` on the table `Session` will be added. If there are existing duplicate values, this will fail.
-  - Added the required column `token` to the `Session` table without a default value. This is not possible if the table is not empty.
+-- Step 2: Backfill existing sessions dengan unique tokens (gunakan id sebagai basis)
+UPDATE "Session" SET "token" = 'legacy-' || id WHERE "token" IS NULL;
 
-*/
--- AlterTable
-ALTER TABLE "Session" ADD COLUMN     "ipAddress" TEXT,
-ADD COLUMN     "token" TEXT NOT NULL;
+-- Step 3: Add NOT NULL constraint
+ALTER TABLE "Session" ALTER COLUMN "token" SET NOT NULL;
 
 -- AlterTable
 ALTER TABLE "User" ADD COLUMN     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,

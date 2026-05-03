@@ -1,6 +1,7 @@
 import "dotenv/config"
 import { PrismaPg } from "@prisma/adapter-pg"
 import { PrismaClient } from "@prisma/client"
+import { hash } from "@node-rs/argon2"
 
 // ENTERPRISE BEST PRACTICE: FAIL-FAST
 const dbUrl = process.env.DATABASE_URL
@@ -35,11 +36,20 @@ async function main() {
     data: { name: "Keluarga Permoney", currency: "IDR" },
   })
 
+  // Hash password dengan Argon2id (sama dengan auth flow)
+  const passwordHash = await hash("password123", {
+    memoryCost: 65536, // 64 MiB
+    timeCost: 3, // 3 iterations
+    parallelism: 4, // 4 lanes
+    outputLen: 32, // 32 bytes
+    algorithm: 2, // Argon2id
+  })
+
   await prisma.user.create({
     data: {
       email: "admin@permana.icu",
       name: "Hendri",
-      passwordHash: "password123",
+      passwordHash,
       familyId: family.id,
     },
   })
