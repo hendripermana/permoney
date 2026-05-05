@@ -7,13 +7,14 @@ import path from "path"
  * This script ensures that the pre-auth stub `prisma.user.findFirst()`
  * is not accidentally removed or expanded without explicit intent.
  *
- * EXPECTED BASELINE COUNT: 4
+ * EXPECTED BASELINE COUNT: 0
  *
- * When M1 (authentication) lands, this count should become 0 and this
- * script can be safely deleted.
+ * M1 (authentication) has landed — all pre-auth stubs have been removed.
+ * This count is now 0. This script remains as a guard to prevent
+ * re-introduction of raw prisma.user.findFirst() auth stubs.
  */
 
-const EXPECTED_COUNT = 4
+const EXPECTED_COUNT = 0
 const SEARCH_PATTERN = /prisma\.user\.findFirst\s*\(/g
 const SEARCH_DIR = "src/server"
 
