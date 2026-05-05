@@ -7,19 +7,44 @@ import {
   FieldGroup,
   FieldLabel,
   FieldSeparator,
+  FieldError,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { useServerFn } from "@tanstack/react-start"
+import { useMutation } from "@tanstack/react-query"
+import { loginFn } from "@/server/auth-fns"
+import { useRouter } from "@tanstack/react-router"
 
 export function LoginForm({
   className,
   ...props
 }: React.ComponentProps<"div">) {
+  const router = useRouter()
+  const login = useServerFn(loginFn)
+
+  const mutation = useMutation({
+    mutationFn: async (formData: FormData) => {
+      const email = formData.get("email") as string
+      const password = formData.get("password") as string
+      return login({ data: { email, password } })
+    },
+    onSuccess: () => {
+      void router.invalidate()
+    },
+  })
+
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
       <Card className="overflow-hidden border-none p-0 shadow-lg">
         <CardContent className="grid min-h-[500px] p-0 md:grid-cols-2">
           {/* BAGIAN KIRI: FORM LOGIN */}
-          <form className="flex flex-col justify-center p-6 md:p-8">
+          <form
+            className="flex flex-col justify-center p-6 md:p-8"
+            onSubmit={(e) => {
+              e.preventDefault()
+              mutation.mutate(new FormData(e.currentTarget))
+            }}
+          >
             <FieldGroup>
               <div className="mb-4 flex flex-col items-center gap-2 text-center">
                 <h1 className="text-3xl font-bold">Welcome to Permoney 🐝</h1>
@@ -56,12 +81,18 @@ export function LoginForm({
                   required
                 />
               </Field>
+              {mutation.error && (
+                <FieldError className="text-red-500">
+                  {mutation.error.message}
+                </FieldError>
+              )}
               <Field className="mt-4">
                 <Button
                   type="submit"
+                  disabled={mutation.isPending}
                   className="w-full bg-yellow-500 font-semibold text-black hover:bg-yellow-600"
                 >
-                  Login
+                  {mutation.isPending ? "Logging in..." : "Login"}
                 </Button>
               </Field>
               <FieldSeparator className="my-4 *:data-[slot=field-separator-content]:bg-card">

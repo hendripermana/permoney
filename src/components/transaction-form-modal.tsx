@@ -424,6 +424,7 @@ export function TransactionFormModal({
             ...payload,
             id: optimisticId,
             createdAt: new Date(),
+            familyId: "",
             // splitEntries di optimistic payload adalah versi ringkas (tanpa relasi Prisma)
             splitEntries: payload.splitEntries as any,
           })

@@ -44,3 +44,9 @@ docs/superpowers/
 
 # Captain's private operator runbook (Bahasa Indonesia)
 CAPTAIN_NOTES.md
+
+# Generated route tree (as any assertions)
+src/routeTree.gen.ts
+
+# IDE workspace files
+.idea/workspace.xml

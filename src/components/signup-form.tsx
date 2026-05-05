@@ -6,18 +6,45 @@ import {
   FieldDescription,
   FieldGroup,
   FieldLabel,
+  FieldError,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { useServerFn } from "@tanstack/react-start"
+import { useMutation } from "@tanstack/react-query"
+import { signupFn } from "@/server/auth-fns"
+import { useRouter } from "@tanstack/react-router"
 
 export function SignUpForm({
   className,
   ...props
 }: React.ComponentProps<"div">) {
+  const router = useRouter()
+  const signup = useServerFn(signupFn)
+
+  const mutation = useMutation({
+    mutationFn: async (formData: FormData) => {
+      const fullname = formData.get("fullname") as string
+      const username = formData.get("username") as string
+      const email = formData.get("email") as string
+      const password = formData.get("password") as string
+      return signup({ data: { fullname, username, email, password } })
+    },
+    onSuccess: () => {
+      void router.invalidate()
+    },
+  })
+
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
       <Card className="overflow-hidden border-none p-0 shadow-lg">
         <CardContent className="grid min-h-[500px] p-0 md:grid-cols-2">
-          <form className="flex flex-col justify-center p-6 md:p-8">
+          <form
+            className="flex flex-col justify-center p-6 md:p-8"
+            onSubmit={(e) => {
+              e.preventDefault()
+              mutation.mutate(new FormData(e.currentTarget))
+            }}
+          >
             <FieldGroup>
               <div className="mb-4 flex flex-col items-center gap-2 text-center">
                 <h1 className="text-3xl font-bold">Join Permoney 🐝</h1>
@@ -70,12 +97,20 @@ export function SignUpForm({
                   required
                 />
               </Field>
+              {mutation.error && (
+                <FieldError className="text-red-500">
+                  {mutation.error.message}
+                </FieldError>
+              )}
               <Field className="mt-4">
                 <Button
                   type="submit"
+                  disabled={mutation.isPending}
                   className="w-full bg-yellow-500 font-semibold text-black hover:bg-yellow-600"
                 >
-                  Create Account
+                  {mutation.isPending
+                    ? "Creating Account..."
+                    : "Create Account"}
                 </Button>
               </Field>
               <FieldDescription className="mt-4 text-center">

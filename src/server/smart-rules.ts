@@ -1,24 +1,26 @@
 import { createServerFn } from "@tanstack/react-start"
 import { prisma } from "./db.server"
+import { familyMiddleware, createTenantDb } from "./middleware/with-family"
 import { z } from "zod"
 
 /**
- * 1. GET ALL RULES
+ * 1. GET ALL RULES — tenant-scoped via familyMiddleware
  */
-export const getSmartRulesFn = createServerFn({ method: "GET" }).handler(
-  async () => {
-    return prisma.smartRule.findMany({
+export const getSmartRulesFn = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .handler(async ({ context }) => {
+    const db = createTenantDb(context.familyId)
+    return db.smartRule.findMany({
       include: {
         category: true,
         merchant: true,
       },
       orderBy: { createdAt: "desc" },
     })
-  }
-)
+  })
 
 /**
- * 2. CREATE NEW RULE
+ * 2. CREATE NEW RULE — tenant-scoped via familyMiddleware
  */
 const createRuleSchema = z.object({
   keyword: z.string().min(1),
@@ -30,38 +32,31 @@ export const createSmartRuleFn = createServerFn({ method: "POST" })
   .inputValidator((data: z.infer<typeof createRuleSchema>) =>
     createRuleSchema.parse(data)
   )
-  .handler(async ({ data }) => {
-    // ╔════════════════════════════════════════════════════════════════════╗
-    // ║ ⚠️  SECURITY: prisma-find-first-user — TEMPORARY PRE-AUTH STUB    ║
-    // ║                                                                    ║
-    // ║ This handler treats the FIRST user in the DB as the actor for     ║
-    // ║ EVERY request. There is no authentication, no session, no tenant  ║
-    // ║ scoping. Anyone who hits this endpoint can mutate any data.       ║
-    // ║                                                                    ║
-    // ║ Removing the auth stub is M1-2 / M1-3 in the v1.0 production-    ║
-    // ║ readiness project. Do NOT call this code in production. Do NOT   ║
-    // ║ remove this comment without a linked PR that lands ADR-0004.      ║
-    // ╚════════════════════════════════════════════════════════════════════╝
-    const user = await prisma.user.findFirst()
-    if (!user) throw new Error("User not found")
-
+  .middleware([familyMiddleware])
+  .handler(async ({ data, context }) => {
     return prisma.smartRule.create({
       data: {
         keyword: data.keyword.toLowerCase(), // store as lowercase for easy matching
         categoryId: data.categoryId,
         merchantId: data.merchantId,
-        familyId: user.familyId,
+        familyId: context.familyId,
       },
     })
   })
 
 /**
- * 3. DELETE RULE
+ * 3. DELETE RULE — tenant-scoped via familyMiddleware
+ * Verifies ownership before deleting via the tenant-scoped client.
  */
 export const deleteSmartRuleFn = createServerFn({ method: "POST" })
   .inputValidator(z.object({ id: z.string() }))
-  .handler(async ({ data }) => {
-    return prisma.smartRule.delete({
+  .middleware([familyMiddleware])
+  .handler(async ({ data, context }) => {
+    const db = createTenantDb(context.familyId)
+    const res = await db.smartRule.deleteMany({
       where: { id: data.id },
     })
+    if (res.count !== 1)
+      throw new Error("Smart rule not found or access denied")
+    return { success: true, deletedId: data.id }
   })
