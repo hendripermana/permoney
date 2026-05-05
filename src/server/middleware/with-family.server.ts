@@ -95,11 +95,14 @@ export function scopeTenant(
               "deleteMany",
             ]
             if (filterOps.includes(operation)) {
-              const typedArgs = args as { where?: Record<string, unknown> }
+              const typedArgs = (args ?? {}) as {
+                where?: Record<string, unknown>
+              }
               typedArgs.where = {
                 ...typedArgs.where,
                 familyId,
               }
+              args = typedArgs
             }
             // Note: `findUnique` / `findUniqueOrThrow` / `create` / `update` / `delete`
             // are NOT injected — they require unique fields (id) or are handled

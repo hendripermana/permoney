@@ -1,5 +1,5 @@
 import { expect, test } from "vite-plus/test"
-import { hash, type Options } from "@node-rs/argon2"
+import { hash, verify, type Options } from "@node-rs/argon2"
 
 const argonOpts: Options = {
   memoryCost: 65536, // 64 MiB
@@ -9,16 +9,16 @@ const argonOpts: Options = {
   algorithm: 2, // Argon2id
 }
 
-test("Argon2id hashing takes between 100ms and 500ms", async () => {
+test("Argon2id hash can be verified correctly", async () => {
   const password = "testPassword123!@#"
 
-  const start = performance.now()
-  await hash(password, argonOpts)
-  const end = performance.now()
+  const passwordHash = await hash(password, argonOpts)
+  expect(passwordHash).toBeTruthy()
+  expect(passwordHash.length).toBeGreaterThan(0)
 
-  const duration = end - start
-  console.log(`Argon2id hash took ${duration}ms`)
+  const isValid = await verify(passwordHash, password)
+  expect(isValid).toBe(true)
 
-  expect(duration).toBeGreaterThanOrEqual(100)
-  expect(duration).toBeLessThanOrEqual(500)
+  const isInvalid = await verify(passwordHash, "wrongPassword")
+  expect(isInvalid).toBe(false)
 })

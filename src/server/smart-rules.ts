@@ -56,10 +56,10 @@ export const deleteSmartRuleFn = createServerFn({ method: "POST" })
   .middleware([familyMiddleware])
   .handler(async ({ data, context }) => {
     const db = createTenantDb(context.familyId)
-    // findFirst with the scoped db ensures the rule belongs to this family
-    const rule = await db.smartRule.findFirst({ where: { id: data.id } })
-    if (!rule) throw new Error("Smart rule not found or access denied")
-    return prisma.smartRule.delete({
+    const res = await db.smartRule.deleteMany({
       where: { id: data.id },
     })
+    if (res.count !== 1)
+      throw new Error("Smart rule not found or access denied")
+    return { success: true, deletedId: data.id }
   })
