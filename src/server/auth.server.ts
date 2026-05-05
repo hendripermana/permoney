@@ -26,13 +26,15 @@ const argonOpts: Options = {
   algorithm: 2, // Argon2id
 }
 
+const isProduction = process.env.NODE_ENV === "production"
+
 export const auth = betterAuth({
   advanced: {
-    useSecureCookies: true,
-    cookiePrefix: "__Host-permoney",
+    useSecureCookies: isProduction,
+    cookiePrefix: isProduction ? "__Host-permoney" : "permoney",
     defaultCookieAttributes: {
       httpOnly: true,
-      secure: true,
+      secure: isProduction,
       sameSite: "lax",
     },
   },
