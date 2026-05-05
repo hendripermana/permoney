@@ -12,7 +12,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { useServerFn } from "@tanstack/react-start"
 import { useMutation } from "@tanstack/react-query"
-import { loginFn } from "@/server/auth.server"
+import { loginFn } from "@/server/auth-fns"
 import { useRouter } from "@tanstack/react-router"
 
 export function LoginForm({

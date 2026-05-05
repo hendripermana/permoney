@@ -76,7 +76,23 @@ const config = defineConfig({
   //   inspector, so disabling injection is a free win — devtools UI and
   //   enhanced logs continue to work.
   plugins: [
-    tanstackStart(),
+    tanstackStart({
+      importProtection: {
+        ignoreImporters: [
+          // Server-fn helper files: their .server.* imports live only inside
+          // createServerFn/createMiddleware handler bodies which are code-split
+          // to the server bundle by TanStack Start. Static analysis would flag
+          // them, but at runtime these imports never execute in the client.
+          "src/server/middleware/with-family.ts",
+          "src/server/middleware/rate-limit.ts",
+          "src/server/middleware/session.ts",
+          "src/server/transactions.ts",
+          "src/server/smart-rules.ts",
+          "src/server/auth-fns.ts",
+          "src/routes/api/auth/$.ts",
+        ],
+      },
+    }),
     nitro(),
     viteReact(),
     tailwindcss(),

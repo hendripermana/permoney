@@ -1,9 +1,6 @@
 import { createServerFn } from "@tanstack/react-start"
 import { prisma } from "./db.server"
-import {
-  familyMiddleware,
-  createTenantDb,
-} from "./middleware/with-family.server"
+import { familyMiddleware, createTenantDb } from "./middleware/with-family"
 import { z } from "zod"
 
 /**

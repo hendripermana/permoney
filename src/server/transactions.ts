@@ -13,10 +13,7 @@ import type { Prisma } from "@prisma/client"
 // pattern `**/*.server.*`. import-protection plugin tetap warn di sini karena
 // dia analisis source level — itu EXPECTED dan SAFE. Lihat AGENTS.md §6.F.
 import { prisma } from "./db.server"
-import {
-  familyMiddleware,
-  createTenantDb,
-} from "./middleware/with-family.server"
+import { familyMiddleware, createTenantDb } from "./middleware/with-family"
 
 // Canonical Prisma type untuk callback `$transaction`. Lebih bersih dari
 // `Parameters<Parameters<typeof prisma.$transaction>[0]>[0]` dan stable
