@@ -93,6 +93,64 @@ const config = defineConfig({
         ],
       },
     }),
+    // Shim for tanstack-start-injected-head-scripts:v virtual module.
+    // start-plugin-core registers this module only for consumer==="server"
+    // environments. When Vite's vite:import-analysis processes router-manifest.js
+    // in the client environment it can't resolve the specifier and throws.
+    // This fallback plugin catches any environment the server plugin doesn't cover.
+    // Uses Vite 6 filter/handler API to match devServerPlugin's pattern.
+    {
+      name: "tanstack-start-injected-head-scripts-shim",
+      sharedDuringBuild: true,
+      resolveId: {
+        filter: {
+          id: /^tanstack-start-injected-head-scripts:v$/,
+        },
+        handler(id: string) {
+          return `\0${id}`
+        },
+      },
+      load: {
+        filter: {
+          // eslint-disable-next-line no-control-regex -- \0 is Vite virtual module convention
+          id: /^\0tanstack-start-injected-head-scripts:v$/,
+        },
+        handler(_id: string) {
+          return "export const injectedHeadScripts = undefined"
+        },
+      },
+    },
+    // Fix for TanStack Router's default import from react-dom/server
+    // react-dom/server.browser.js uses CommonJS exports without default export
+    // in ESM environments. During Vite dev, SSR utilities (renderRouterToString/
+    // renderRouterToStream) can leak into the client module graph.
+    //
+    // We alias react-dom/server → react-dom/server.browser in the client build
+    // through a stub that wraps CJS named exports as both named + default exports.
+    // The SSR build uses Vite's separate module graph and resolves through
+    // Nitro/server.node.js natively, so this alias is client-only.
+    {
+      name: "react-dom-server-interop",
+      resolveId(id, importer) {
+        if (
+          id === "react-dom/server" &&
+          importer &&
+          !importer.includes("\0react-dom-server-interop")
+        ) {
+          return `\0react-dom-server-interop`
+        }
+      },
+      load(id) {
+        if (id === "\0react-dom-server-interop") {
+          return `
+import * as ReactDOMServer from "react-dom/server";
+const _default = ReactDOMServer;
+export { _default as default };
+export * from "react-dom/server";
+`
+        }
+      },
+    },
     nitro(),
     viteReact(),
     tailwindcss(),

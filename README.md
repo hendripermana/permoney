@@ -6,6 +6,7 @@
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![TanStack Start](https://img.shields.io/badge/TanStack%20Start-1.169-FF4154)
 ![Prisma](https://img.shields.io/badge/Prisma-7.8-2D3748)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hendripermana/permoney)
 
 ---
 
