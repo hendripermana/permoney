@@ -25,16 +25,35 @@ const prisma = new PrismaClient({
 async function main() {
   console.log("🌱 Seeding the database via the Postgres adapter...")
 
-  await prisma.transaction.deleteMany()
-  await prisma.account.deleteMany()
-  await prisma.category.deleteMany()
-  await prisma.merchant.deleteMany()
-  await prisma.user.deleteMany()
-  await prisma.family.deleteMany()
-
-  const family = await prisma.family.create({
-    data: { name: "Keluarga Permoney", currency: "IDR" },
+  // Create Family first (not RLS-protected) so we have a tenant ID.
+  // Upsert handles re-seeding without delete-before-create (which RLS blocks).
+  const family = await prisma.family.upsert({
+    where: { id: "seed-family-01" },
+    update: { name: "Keluarga Permoney" },
+    create: {
+      id: "seed-family-01",
+      name: "Keluarga Permoney",
+      currency: "IDR",
+    },
   })
+
+  // Set the GUC so RLS policies allow tenant-scoped reads/writes.
+  await prisma.$executeRawUnsafe(
+    `SELECT set_config('app.family_id', $1, false)`,
+    family.id
+  )
+
+  // Clean up stale seed data scoped to this tenant.
+  await prisma.transaction.deleteMany({ where: { familyId: family.id } })
+  await prisma.splitEntry.deleteMany({
+    where: { transaction: { familyId: family.id } },
+  })
+  await prisma.account.deleteMany({ where: { familyId: family.id } })
+  await prisma.merchant.deleteMany({ where: { familyId: family.id } })
+  await prisma.category.deleteMany({
+    where: { familyId: family.id, isSystem: false },
+  })
+  await prisma.user.deleteMany({ where: { familyId: family.id } })
 
   // Hash password dengan Argon2id (sama dengan auth flow)
   const passwordHash = await hash("password123", {
@@ -45,8 +64,10 @@ async function main() {
     algorithm: 2, // Argon2id
   })
 
-  await prisma.user.create({
-    data: {
+  await prisma.user.upsert({
+    where: { email: "admin@permana.icu" },
+    update: { name: "Hendri", passwordHash, familyId: family.id },
+    create: {
       email: "admin@permana.icu",
       name: "Hendri",
       passwordHash,
