@@ -13,7 +13,12 @@ import type { Prisma } from "@prisma/client"
 // pattern `**/*.server.*`. import-protection plugin tetap warn di sini karena
 // dia analisis source level — itu EXPECTED dan SAFE. Lihat AGENTS.md §6.F.
 import { prisma } from "./db.server"
-import { familyMiddleware, createTenantDb } from "./middleware/with-family"
+import {
+  familyMiddleware,
+  createTenantDb,
+  scopedTx,
+  withGuc,
+} from "./middleware/with-family"
 
 // Canonical Prisma type untuk callback `$transaction`. Lebih bersih dari
 // `Parameters<Parameters<typeof prisma.$transaction>[0]>[0]` dan stable
@@ -27,23 +32,20 @@ type PrismaTxClient = Prisma.TransactionClient
 export const getTransactionFormData = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
   .handler(async ({ context }) => {
-    const db = createTenantDb(context.familyId)
-    // ENTERPRISE TRICK: Use Promise.all() for parallel execution!
-    // Fetching Accounts, Categories, and Merchants concurrently makes loading 3x faster.
-    const [accounts, categories, merchants] = await Promise.all([
-      db.account.findMany({ orderBy: { name: "asc" } }),
-      // Tenant-safe: system categories (isSystem=true) + family-specific categories
-      prisma.category.findMany({
-        where: {
-          OR: [{ isSystem: true }, { familyId: context.familyId }],
-        },
-        orderBy: { name: "asc" },
-      }),
-      db.merchant.findMany({ orderBy: { name: "asc" } }),
-    ])
-
-    // Return the processed data to the Frontend
-    return { accounts, categories, merchants }
+    return withGuc(context.familyId, async () => {
+      const db = createTenantDb(context.familyId)
+      const [accounts, categories, merchants] = await Promise.all([
+        db.account.findMany({ orderBy: { name: "asc" } }),
+        prisma.category.findMany({
+          where: {
+            OR: [{ isSystem: true }, { familyId: context.familyId }],
+          },
+          orderBy: { name: "asc" },
+        }),
+        db.merchant.findMany({ orderBy: { name: "asc" } }),
+      ])
+      return { accounts, categories, merchants }
+    })
   })
 
 // =============================================================================
@@ -181,17 +183,16 @@ const transactionInputSchema = z.object({
  * BACKEND FUNCTION: Create Transaction & Update Balances (ACID Compliant)
  */
 export const createTransactionFn = createServerFn({ method: "POST" })
-  // 🚀 FIXED: Using inputValidator instead of validator for TanStack v1.132+
+  .middleware([familyMiddleware])
   .inputValidator((data: z.input<typeof transactionInputSchema>) =>
     transactionInputSchema.parse(data)
   )
-  .middleware([familyMiddleware])
   .handler(async ({ data, context }) => {
     const { user, familyId } = context
 
     // 🚀 THE ENTERPRISE MAGIC: Prisma $transaction (ACID)
     // If any process inside this block fails, all changes are rolled back automatically.
-    const result = await prisma.$transaction(async (tx: PrismaTxClient) => {
+    const result = await scopedTx(familyId, async (tx: PrismaTxClient) => {
       // === SPLIT PARITY GUARD (GAAP Compliance) ===
       // Backend MUST validate that SplitEntries sum === parent.amount.
       // UI validation is a convenience; THIS is the authoritative check.
@@ -395,56 +396,57 @@ export const createTransactionFn = createServerFn({ method: "POST" })
 export const getTransactionsFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
   .handler(async ({ context }) => {
-    const db = createTenantDb(context.familyId)
-    // Enterprise trick: Kita urutkan dari yang terbaru (descending)
-    const transactions = await db.transaction.findMany({
-      orderBy: { date: "desc" },
-      where: {
-        deletedAt: null, // SOFT DELETE FILTER: hanya ambil transaksi aktif
-        // Gunakan objek eksplisit untuk mengecek ketiadaan relasi (Best Practice)
-        transferIn: {
-          is: null,
-        },
-      },
-      // Menggunakan 'include' untuk menarik data relasi secara instan
-      include: {
-        account: {
-          select: { name: true, type: true, color: true },
-        },
-        toAccount: {
-          select: { name: true, type: true, color: true },
-        },
-        category: {
-          // Hanya ambil nama, warna, dan icon untuk keperluan UI
-          select: { name: true, color: true, icon: true },
-        },
-        merchant: {
-          select: { name: true, logoUrl: true },
-        },
-        // Sertakan split entries beserta relasi kategori & merchant-nya
-        splitEntries: {
-          orderBy: { createdAt: "asc" },
-          include: {
-            category: {
-              select: { name: true, color: true, icon: true },
-            },
-            merchant: { select: { name: true, logoUrl: true } },
+    return withGuc(context.familyId, async () => {
+      const db = createTenantDb(context.familyId)
+      const transactions = await db.transaction.findMany({
+        orderBy: { date: "desc" },
+        where: {
+          deletedAt: null, // SOFT DELETE FILTER: hanya ambil transaksi aktif
+          // Gunakan objek eksplisit untuk mengecek ketiadaan relasi (Best Practice)
+          transferIn: {
+            is: null,
           },
         },
-      },
-    })
-
-    // The MAP logic: Ubah array yang didapat dari DB.
-    // Amounts are stored signed (negative for expense) but the UI consumes
-    // them as positive magnitudes; sign is communicated via `type`.
-    // Wire-encode bigint → string at this boundary; client revives via
-    // TanStack DB collection `select` callback (see src/lib/collections.ts).
-    return transactions.map((tx) =>
-      serializeTransaction({
-        ...tx,
-        amount: absMoney(tx.amount),
+        // Menggunakan 'include' untuk menarik data relasi secara instan
+        include: {
+          account: {
+            select: { name: true, type: true, color: true },
+          },
+          toAccount: {
+            select: { name: true, type: true, color: true },
+          },
+          category: {
+            // Hanya ambil nama, warna, dan icon untuk keperluan UI
+            select: { name: true, color: true, icon: true },
+          },
+          merchant: {
+            select: { name: true, logoUrl: true },
+          },
+          // Sertakan split entries beserta relasi kategori & merchant-nya
+          splitEntries: {
+            orderBy: { createdAt: "asc" },
+            include: {
+              category: {
+                select: { name: true, color: true, icon: true },
+              },
+              merchant: { select: { name: true, logoUrl: true } },
+            },
+          },
+        },
       })
-    )
+
+      // The MAP logic: Ubah array yang didapat dari DB.
+      // Amounts are stored signed (negative for expense) but the UI consumes
+      // them as positive magnitudes; sign is communicated via `type`.
+      // Wire-encode bigint → string at this boundary; client revives via
+      // TanStack DB collection `select` callback (see src/lib/collections.ts).
+      return transactions.map((tx) =>
+        serializeTransaction({
+          ...tx,
+          amount: absMoney(tx.amount),
+        })
+      )
+    })
   })
 
 // =========================================================================
@@ -456,11 +458,11 @@ export const getTransactionsFn = createServerFn({ method: "GET" })
  * Transaksi tidak pernah benar-benar dihapus; hanya ditandai dengan deletedAt.
  */
 export const deleteTransactionFn = createServerFn({ method: "POST" })
-  .inputValidator(z.object({ id: z.string() }))
   .middleware([familyMiddleware])
+  .inputValidator(z.object({ id: z.string() }))
   .handler(async ({ data, context }) => {
     const { familyId } = context
-    return await prisma.$transaction(async (tx: PrismaTxClient) => {
+    return await scopedTx(familyId, async (tx: PrismaTxClient) => {
       // 1. Cari transaksi lama beserta relasi transfernya
       const oldTx = await tx.transaction.findUnique({
         where: { id: data.id },
@@ -536,15 +538,15 @@ export const deleteTransactionFn = createServerFn({ method: "POST" })
  * FASE 2 membuat record baru dengan ID yang sama — continuity terjaga.
  */
 export const updateTransactionFn = createServerFn({ method: "POST" })
-  .inputValidator(transactionInputSchema)
   .middleware([familyMiddleware])
+  .inputValidator(transactionInputSchema)
   .handler(async ({ data, context }) => {
     if (!data.id) throw new Error("ID is required for updating")
     const { user, familyId } = context
 
     // The Magic: Kita jalankan penghapusan murni dan pembuatan murni secara berurutan
     // dalam satu ACID Transaction. Zero Balance Mismatch Guaranteed!
-    return await prisma.$transaction(async (tx: PrismaTxClient) => {
+    return await scopedTx(familyId, async (tx: PrismaTxClient) => {
       // === SPLIT PARITY GUARD (GAAP Compliance) ===
       // Same authoritative invariant as createTransactionFn — UPDATE flow can
       // independently violate parity if a client tampers with split entries
@@ -791,11 +793,12 @@ export const updateTransactionFn = createServerFn({ method: "POST" })
  * BACKEND FUNCTION: Bulk Delete Transactions (Soft Delete — GAAP Compliance)
  */
 export const bulkDeleteTransactionsFn = createServerFn({ method: "POST" })
+  .middleware([familyMiddleware])
   .inputValidator(z.object({ ids: z.array(z.string()) }))
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
     if (data.ids.length === 0) return { success: true }
 
-    return await prisma.$transaction(async (tx: PrismaTxClient) => {
+    return await scopedTx(context.familyId, async (tx: PrismaTxClient) => {
       // 1. Ambil data asli untuk merestore saldo
       // (termasuk transfer out/inflow)
       const oldTxs = await tx.transaction.findMany({
@@ -860,6 +863,7 @@ export const bulkDeleteTransactionsFn = createServerFn({ method: "POST" })
  * Securely handles Category, Merchant, and Account shifts while preserving double-entry ledger logic for account balance transfers.
  */
 export const bulkUpdateTransactionsFn = createServerFn({ method: "POST" })
+  .middleware([familyMiddleware])
   .inputValidator(
     z.object({
       ids: z.array(z.string()),
@@ -868,10 +872,10 @@ export const bulkUpdateTransactionsFn = createServerFn({ method: "POST" })
       accountId: z.string().optional(),
     })
   )
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
     if (data.ids.length === 0) return { success: true }
 
-    return await prisma.$transaction(async (tx: PrismaTxClient) => {
+    return await scopedTx(context.familyId, async (tx: PrismaTxClient) => {
       // 1. Handle Account Change (Requires Balance Shifting)
       // We explicitly skip transfers for bulk account edits to prevent complex dual-leg logic breakage.
       if (data.accountId !== undefined) {
@@ -984,14 +988,14 @@ const bulkTransactionInputSchema = z.object({
 })
 
 export const bulkCreateTransactionsFn = createServerFn({ method: "POST" })
+  .middleware([familyMiddleware])
   .inputValidator((data: z.input<typeof bulkTransactionInputSchema>) =>
     bulkTransactionInputSchema.parse(data)
   )
-  .middleware([familyMiddleware])
   .handler(async ({ data, context }) => {
     const { user, familyId } = context
 
-    return await prisma.$transaction(async (tx: PrismaTxClient) => {
+    return await scopedTx(familyId, async (tx: PrismaTxClient) => {
       // 1. Create all transactions
       await tx.transaction.createMany({
         data: data.transactions.map((t) => ({

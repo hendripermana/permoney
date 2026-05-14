@@ -135,3 +135,38 @@ export function createTenantDb(
 }
 
 export type TenantDb = ReturnType<typeof createTenantDb>
+
+// ============================================================================
+// M1-5 RLS: Transaction-scoped GUC helpers
+// ============================================================================
+
+type PrismaTxClient = Parameters<Parameters<typeof prisma.$transaction>[0]>[0]
+
+export async function scopedTx<T>(
+  familyId: string,
+  fn: (tx: PrismaTxClient) => Promise<T>,
+  options?: { maxWait?: number; timeout?: number }
+): Promise<T> {
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      `SELECT set_config('app.family_id', $1, true)`,
+      familyId
+    )
+    return fn(tx)
+  }, options)
+}
+
+export async function withGuc<T>(
+  familyId: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  await prisma.$executeRawUnsafe(
+    `SELECT set_config('app.family_id', $1, false)`,
+    familyId
+  )
+  try {
+    return await fn()
+  } finally {
+    await prisma.$executeRawUnsafe(`RESET app.family_id`)
+  }
+}
