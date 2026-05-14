@@ -32,10 +32,10 @@ const createRuleSchema = z.object({
 })
 
 export const createSmartRuleFn = createServerFn({ method: "POST" })
+  .middleware([familyMiddleware])
   .inputValidator((data: z.infer<typeof createRuleSchema>) =>
     createRuleSchema.parse(data)
   )
-  .middleware([familyMiddleware])
   .handler(async ({ data, context }) => {
     return scopedTx(context.familyId, async (tx) => {
       return tx.smartRule.create({
@@ -53,8 +53,8 @@ export const createSmartRuleFn = createServerFn({ method: "POST" })
  * 3. DELETE RULE — tenant-scoped via familyMiddleware + scopedTx
  */
 export const deleteSmartRuleFn = createServerFn({ method: "POST" })
-  .inputValidator(z.object({ id: z.string() }))
   .middleware([familyMiddleware])
+  .inputValidator(z.object({ id: z.string() }))
   .handler(async ({ data, context }) => {
     return scopedTx(context.familyId, async (tx) => {
       const res = await tx.smartRule.deleteMany({

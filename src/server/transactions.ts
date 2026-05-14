@@ -183,11 +183,10 @@ const transactionInputSchema = z.object({
  * BACKEND FUNCTION: Create Transaction & Update Balances (ACID Compliant)
  */
 export const createTransactionFn = createServerFn({ method: "POST" })
-  // 🚀 FIXED: Using inputValidator instead of validator for TanStack v1.132+
+  .middleware([familyMiddleware])
   .inputValidator((data: z.input<typeof transactionInputSchema>) =>
     transactionInputSchema.parse(data)
   )
-  .middleware([familyMiddleware])
   .handler(async ({ data, context }) => {
     const { user, familyId } = context
 
@@ -459,8 +458,8 @@ export const getTransactionsFn = createServerFn({ method: "GET" })
  * Transaksi tidak pernah benar-benar dihapus; hanya ditandai dengan deletedAt.
  */
 export const deleteTransactionFn = createServerFn({ method: "POST" })
-  .inputValidator(z.object({ id: z.string() }))
   .middleware([familyMiddleware])
+  .inputValidator(z.object({ id: z.string() }))
   .handler(async ({ data, context }) => {
     const { familyId } = context
     return await scopedTx(familyId, async (tx: PrismaTxClient) => {
@@ -539,8 +538,8 @@ export const deleteTransactionFn = createServerFn({ method: "POST" })
  * FASE 2 membuat record baru dengan ID yang sama — continuity terjaga.
  */
 export const updateTransactionFn = createServerFn({ method: "POST" })
-  .inputValidator(transactionInputSchema)
   .middleware([familyMiddleware])
+  .inputValidator(transactionInputSchema)
   .handler(async ({ data, context }) => {
     if (!data.id) throw new Error("ID is required for updating")
     const { user, familyId } = context
@@ -794,8 +793,8 @@ export const updateTransactionFn = createServerFn({ method: "POST" })
  * BACKEND FUNCTION: Bulk Delete Transactions (Soft Delete — GAAP Compliance)
  */
 export const bulkDeleteTransactionsFn = createServerFn({ method: "POST" })
-  .inputValidator(z.object({ ids: z.array(z.string()) }))
   .middleware([familyMiddleware])
+  .inputValidator(z.object({ ids: z.array(z.string()) }))
   .handler(async ({ data, context }) => {
     if (data.ids.length === 0) return { success: true }
 
@@ -864,6 +863,7 @@ export const bulkDeleteTransactionsFn = createServerFn({ method: "POST" })
  * Securely handles Category, Merchant, and Account shifts while preserving double-entry ledger logic for account balance transfers.
  */
 export const bulkUpdateTransactionsFn = createServerFn({ method: "POST" })
+  .middleware([familyMiddleware])
   .inputValidator(
     z.object({
       ids: z.array(z.string()),
@@ -872,7 +872,6 @@ export const bulkUpdateTransactionsFn = createServerFn({ method: "POST" })
       accountId: z.string().optional(),
     })
   )
-  .middleware([familyMiddleware])
   .handler(async ({ data, context }) => {
     if (data.ids.length === 0) return { success: true }
 
@@ -989,10 +988,10 @@ const bulkTransactionInputSchema = z.object({
 })
 
 export const bulkCreateTransactionsFn = createServerFn({ method: "POST" })
+  .middleware([familyMiddleware])
   .inputValidator((data: z.input<typeof bulkTransactionInputSchema>) =>
     bulkTransactionInputSchema.parse(data)
   )
-  .middleware([familyMiddleware])
   .handler(async ({ data, context }) => {
     const { user, familyId } = context
 
