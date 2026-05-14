@@ -11,7 +11,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { useServerFn } from "@tanstack/react-start"
 import { useMutation } from "@tanstack/react-query"
-import { signupFn } from "@/server/auth-fns"
+import { signupFn } from "@/server/auth-fns.server"
 import { useRouter } from "@tanstack/react-router"
 
 export function SignUpForm({

@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router"
 import { useSession } from "@/lib/auth-client"
-import { onboardFn } from "@/server/auth-fns"
+import { onboardFn } from "@/server/auth-fns.server"
 import { Button } from "@/components/ui/button"
 import { useServerFn } from "@tanstack/react-start"
 import { useState } from "react"
