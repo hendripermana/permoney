@@ -24,7 +24,7 @@ type FormMerchant = TransactionFormData["merchants"][number]
 
 // === NEW IMPORTS UNTUK CALENDAR ===
 import { format } from "date-fns"
-import type { DateRange } from "react-day-picker"
+import type { DateRange } from "@daypicker/react"
 import { Calendar } from "@/components/ui/calendar"
 
 import { cn } from "@/lib/utils"
@@ -316,7 +316,7 @@ export function TransactionFilterPanel({
               </Label>
               <div className="flex justify-center rounded-md border p-2">
                 <Calendar
-                  initialFocus
+                  autoFocus
                   mode="range"
                   defaultMonth={
                     draft.dateFrom ? new Date(draft.dateFrom) : new Date()
@@ -339,8 +339,8 @@ export function TransactionFilterPanel({
                   }}
                   numberOfMonths={1}
                   captionLayout="dropdown"
-                  fromYear={2000}
-                  toYear={new Date().getFullYear() + 5}
+                  startMonth={new Date(2000, 0)}
+                  endMonth={new Date(new Date().getFullYear() + 5, 11)}
                 />
               </div>
             </div>

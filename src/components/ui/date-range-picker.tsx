@@ -11,7 +11,7 @@ import {
   endOfToday,
 } from "date-fns"
 import { Calendar as CalendarIcon } from "lucide-react"
-import type { DateRange } from "react-day-picker"
+import type { DateRange } from "@daypicker/react"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -140,7 +140,7 @@ export function PermoneyDateRangePicker({
           {/* Bagian Kanan: Kalender */}
           <div className="p-2">
             <Calendar
-              initialFocus
+              autoFocus
               mode="range"
               defaultMonth={tempDate?.from}
               selected={tempDate}

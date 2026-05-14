@@ -948,7 +948,7 @@ export function TransactionFormModal({
                           )
                           field.handleChange(merged)
                         }}
-                        initialFocus
+                        autoFocus
                       />
                     </PopoverContent>
                   </Popover>

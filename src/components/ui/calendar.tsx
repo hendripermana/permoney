@@ -4,7 +4,7 @@ import {
   getDefaultClassNames,
   type DayButton,
   type Locale,
-} from "react-day-picker"
+} from "@daypicker/react"
 
 import { cn } from "@/lib/utils"
 import { Button, buttonVariants } from "@/components/ui/button"
@@ -89,7 +89,7 @@ function Calendar({
             : "flex items-center gap-1 rounded-(--cell-radius) text-sm [&>svg]:size-3.5 [&>svg]:text-muted-foreground",
           defaultClassNames.caption_label
         ),
-        table: "w-full border-collapse",
+        month_grid: "w-full border-collapse",
         weekdays: cn("flex", defaultClassNames.weekdays),
         weekday: cn(
           "flex-1 rounded-(--cell-radius) text-[0.8rem] font-normal text-muted-foreground select-none",
@@ -201,7 +201,7 @@ function CalendarDayButton({
   // ─── Justified `useEffect` (no-use-effect skill exemption) ──────
   // This effect imperatively calls `.focus()` on a DOM node when
   // `modifiers.focused` flips to true. The dep IS expected to change
-  // over the component's lifetime (react-day-picker rotates focus as
+  // over the component's lifetime (@daypicker/react rotates focus as
   // the user arrows around the grid), which means:
   //   - Rule 1 (derive) doesn't apply — focus is an imperative DOM op
   //   - Rule 4 (`useMountEffect`) doesn't apply — needs to fire on
