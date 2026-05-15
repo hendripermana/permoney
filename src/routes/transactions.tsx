@@ -73,13 +73,12 @@ type TransactionArray = Array<TransactionData>
 type GroupedRecord = Record<string, TransactionArray>
 
 export const Route = createFileRoute("/transactions")({
-  component: TransactionsPage,
-  // TanStack DB (useLiveQuery) hanya hidup di browser, tidak bisa di-render di server.
-  ssr: false,
   // URL search params divalidasi otomatis oleh Zod via TanStack Router.
   // PENTING: validateSearch HARUS dideklarasikan SEBELUM loader agar
   // search params sudah ter-validasi saat loader dijalankan.
   validateSearch: zodValidator(transactionSearchSchema),
+  // TanStack DB (useLiveQuery) hanya hidup di browser, tidak bisa di-render di server.
+  ssr: false,
   // === PRELOAD COLLECTION DURING NAVIGATION ===
   // Wajib per skill `@tanstack/db/skills/meta-framework`: tanpa preload,
   // `startSyncImmediate()` di dalam `useLiveQuery` akan fire saat render,
@@ -101,6 +100,7 @@ export const Route = createFileRoute("/transactions")({
   // Per-route error UI: more contextual than the root errorComponent because
   // it can say "Failed to load transactions" instead of a generic message.
   errorComponent: TransactionsErrorComponent,
+  component: TransactionsPage,
 })
 
 function TransactionsPendingComponent() {

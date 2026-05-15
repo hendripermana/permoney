@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # required for `diff`
-      - uses: millionco/react-doctor@main
+      - uses: millionco/react-doctor@0a52ca3d0543fee548ed9449945d7031b57ac575
         with:
           diff: main
           github-token: ${{ secrets.GITHUB_TOKEN }}
