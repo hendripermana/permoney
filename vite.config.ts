@@ -25,6 +25,7 @@ const config = defineConfig({
     //      invoked by this thin CLI shim.
     "*": "node scripts/staged-check.mjs",
   },
+
   lint: {
     options: { typeAware: true, typeCheck: true },
     // =========================================================
@@ -90,6 +91,7 @@ const config = defineConfig({
           "src/server/smart-rules.ts",
           "src/server/auth-fns.server.ts",
           "src/routes/api/auth/$.ts",
+          "src/routes/onboarding.tsx",
         ],
       },
     }),
@@ -120,37 +122,7 @@ const config = defineConfig({
         },
       },
     },
-    // Fix for TanStack Router's default import from react-dom/server
-    // react-dom/server.browser.js uses CommonJS exports without default export
-    // in ESM environments. During Vite dev, SSR utilities (renderRouterToString/
-    // renderRouterToStream) can leak into the client module graph.
-    //
-    // We alias react-dom/server → react-dom/server.browser in the client build
-    // through a stub that wraps CJS named exports as both named + default exports.
-    // The SSR build uses Vite's separate module graph and resolves through
-    // Nitro/server.node.js natively, so this alias is client-only.
-    {
-      name: "react-dom-server-interop",
-      resolveId(id, importer) {
-        if (
-          id === "react-dom/server" &&
-          importer &&
-          !importer.includes("\0react-dom-server-interop")
-        ) {
-          return `\0react-dom-server-interop`
-        }
-      },
-      load(id) {
-        if (id === "\0react-dom-server-interop") {
-          return `
-import * as ReactDOMServer from "react-dom/server";
-const _default = ReactDOMServer;
-export { _default as default };
-export * from "react-dom/server";
-`
-        }
-      },
-    },
+
     nitro(),
     viteReact(),
     tailwindcss(),

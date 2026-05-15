@@ -76,6 +76,10 @@ export const Route = createFileRoute("/transactions")({
   component: TransactionsPage,
   // TanStack DB (useLiveQuery) hanya hidup di browser, tidak bisa di-render di server.
   ssr: false,
+  // URL search params divalidasi otomatis oleh Zod via TanStack Router.
+  // PENTING: validateSearch HARUS dideklarasikan SEBELUM loader agar
+  // search params sudah ter-validasi saat loader dijalankan.
+  validateSearch: zodValidator(transactionSearchSchema),
   // === PRELOAD COLLECTION DURING NAVIGATION ===
   // Wajib per skill `@tanstack/db/skills/meta-framework`: tanpa preload,
   // `startSyncImmediate()` di dalam `useLiveQuery` akan fire saat render,
@@ -90,8 +94,6 @@ export const Route = createFileRoute("/transactions")({
   },
   // Metadata halaman — digunakan oleh SiteHeader untuk judul dinamis
   staticData: { title: "Transactions" },
-  // URL search params divalidasi otomatis oleh Zod via TanStack Router
-  validateSearch: zodValidator(transactionSearchSchema),
   // Fallback UI while the loader (`transactionCollection.preload()`) runs.
   // Without it, navigating to /transactions shows a blank canvas during the
   // initial collection sync, which on a slow network can be several seconds.

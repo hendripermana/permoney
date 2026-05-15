@@ -1,19 +1,30 @@
 import { createFileRoute, redirect } from "@tanstack/react-router"
-import { useSession } from "@/lib/auth-client"
-import { onboardFn } from "@/server/auth-fns.server"
+import { onboardFn } from "@/server/auth-fns"
 import { Button } from "@/components/ui/button"
 import { useServerFn } from "@tanstack/react-start"
 import { useState } from "react"
+import { createServerFn } from "@tanstack/react-start"
+import { getSession } from "@/server/middleware/session"
+
+// Server function untuk cek session di beforeLoad.
+// Hooks (useSession) TIDAK BOLEH dipanggil di async functions / route lifecycle.
+const getOnboardingSession = createServerFn({ method: "GET" }).handler(
+  async () => {
+    const session = await getSession()
+    if (!session?.user) return { authenticated: false, hasFamilyId: false }
+    const user = session.user as Record<string, unknown>
+    return {
+      authenticated: true,
+      hasFamilyId: Boolean(user.familyId),
+    }
+  }
+)
 
 export const Route = createFileRoute("/onboarding")({
   beforeLoad: async () => {
-    const { data: session } = useSession()
-    if (!session) throw redirect({ to: "/login" })
-    // familyId is an additionalField registered in auth.server.ts — the
-    // Better Auth client type doesn't know about it, but it's present at
-    // runtime after signup.
-    if ((session.user as Record<string, unknown>).familyId)
-      throw redirect({ to: "/dashboard" })
+    const result = await getOnboardingSession()
+    if (!result.authenticated) throw redirect({ to: "/login" })
+    if (result.hasFamilyId) throw redirect({ to: "/dashboard" })
   },
   component: OnboardingPage,
 })
