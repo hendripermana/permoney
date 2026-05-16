@@ -76,86 +76,6 @@ These commands map to their corresponding tools. For example, `vp dev --port 300
 
 ## TanStack Intent — Agent Skills Discovery
 
-The `<!-- intent-skills:start -->
-
-# Skill mappings - load `use` with `npx @tanstack/intent@latest load <use>`.
-
-skills:
-
-- when: "TanStack DB core concepts: createCollection with queryCollectionOptions, electricCollectionOptions, powerSyncCollectionOptions, rxdbCollectionOptions, trailbaseCollectionOptions, localOnlyCollectionOptions. Live queries via query builder (from, where, join, select, groupBy, orderBy, limit). Optimistic mutations with draft proxy (collection.insert, collection.update, collection.delete). createOptimisticAction, createTransaction, createPacedMutations. Entry point for all TanStack DB skills."
-  use: "@tanstack/db#db-core"
-- when: "Creating typed collections with createCollection. Adapter selection: queryCollectionOptions (REST/TanStack Query), electricCollectionOptions (ElectricSQL real-time sync), powerSyncCollectionOptions (PowerSync SQLite), rxdbCollectionOptions (RxDB), trailbaseCollectionOptions (TrailBase), localOnlyCollectionOptions, localStorageCollectionOptions. CollectionConfig options: getKey, schema, sync, gcTime, autoIndex (default off), defaultIndexType, syncMode (eager/on-demand, plus progressive for Electric). StandardSchema validation with Zod/Valibot/ArkType. Collection lifecycle (idle/loading/ready/error). Adapter-specific sync patterns including Electric txid tracking, Query direct writes, and PowerSync query-driven sync with onLoad/onLoadSubset hooks."
-  use: "@tanstack/db#db-core/collection-setup"
-- when: "Building custom collection adapters for new backends. SyncConfig interface: sync function receiving begin, write, commit, markReady, truncate, metadata primitives. ChangeMessage format (insert, update, delete). loadSubset for on-demand sync. LoadSubsetOptions (where, orderBy, limit, cursor). Expression parsing: parseWhereExpression, parseOrderByExpression, extractSimpleComparisons, parseLoadSubsetOptions. Collection options creator pattern. rowUpdateMode (partial vs full). Subscription lifecycle and cleanup functions. Persisted sync metadata API (metadata.row and metadata.collection) for storing per-row and per-collection adapter state."
-  use: "@tanstack/db#db-core/custom-adapter"
-- when: "Query builder fluent API: from, where, join, leftJoin, rightJoin, innerJoin, fullJoin, select, fn.select, groupBy, having, orderBy, limit, offset, distinct, findOne. Operators: eq, gt, gte, lt, lte, like, ilike, inArray, isNull, isUndefined, and, or, not. Aggregates: count, sum, avg, min, max. String functions: upper, lower, length, concat, coalesce. Math: add. $selected namespace. createLiveQueryCollection. Derived collections. Predicate push-down. Incremental view maintenance via differential dataflow (d2ts). Virtual properties ($synced, $origin, $key, $collectionId). Includes subqueries for hierarchical data. toArray and concat(toArray(...)) scalar includes. queryOnce for one-shot queries. createEffect for reactive side effects (onEnter, onUpdate, onExit, onBatch)."
-  use: "@tanstack/db#db-core/live-queries"
-- when: "collection.insert, collection.update (Immer-style draft proxy), collection.delete. createOptimisticAction (onMutate + mutationFn). createPacedMutations with debounceStrategy, throttleStrategy, queueStrategy. createTransaction, getActiveTransaction, ambient transaction context. Transaction lifecycle (pending/persisting/completed/failed). Mutation merging. onInsert/onUpdate/onDelete handlers. PendingMutation type. Transaction.isPersisted."
-  use: "@tanstack/db#db-core/mutations-optimistic"
-- when: "SQLite-backed persistence for TanStack DB collections. persistedCollectionOptions wraps any adapter (Electric, Query, PowerSync, or local-only) with durable local storage. Platform adapters: browser (WA-SQLite OPFS), React Native (op-sqlite), Expo (expo-sqlite), Electron (IPC), Node (better-sqlite3), Capacitor, Tauri, Cloudflare Durable Objects. Multi-tab/multi-process coordination via BrowserCollectionCoordinator / ElectronCollectionCoordinator / SingleProcessCoordinator. schemaVersion for migration resets. Local-only mode for offline-first without a server."
-  use: "@tanstack/db#db-core/persistence"
-- when: "Integrating TanStack DB with meta-frameworks (TanStack Start, Next.js, Remix, Nuxt, SvelteKit). Client-side only: SSR is NOT supported — routes must disable SSR. Preloading collections in route loaders with collection.preload(). Pattern: ssr: false + await collection.preload() in loader. Multiple collection preloading with Promise.all. Framework-specific loader APIs."
-  use: "@tanstack/db#meta-framework"
-- when: "Two-way event patterns between devtools panel and application. App-to-devtools observation, devtools-to-app commands, time-travel debugging with snapshots and revert. structuredClone for snapshot safety, distinct event suffixes for observation vs commands, serializable payloads only."
-  use: "@tanstack/devtools-event-client#devtools-bidirectional"
-- when: "Create typed EventClient for a library. Define event maps with typed payloads, pluginId auto-prepend namespacing, emit()/on()/onAll()/onAllPluginEvents() API. Connection lifecycle (5 retries, 300ms), event queuing, enabled/disabled state, SSR fallbacks, singleton pattern. Unique pluginId requirement to avoid event collisions."
-  use: "@tanstack/devtools-event-client#devtools-event-client"
-- when: "Analyze library codebase for critical architecture and debugging points, add strategic event emissions. Identify middleware boundaries, state transitions, lifecycle hooks. Consolidate events (1 not 15), debounce high-frequency updates, DRY shared payload fields, guard emit() for production. Transparent server/client event bridging."
-  use: "@tanstack/devtools-event-client#devtools-instrumentation"
-- when: "Configure @tanstack/devtools-vite for source inspection (data-tsd-source, inspectHotkey, ignore patterns), console piping (client-to-server, server-to-client, levels), enhanced logging, server event bus (port, host, HTTPS), production stripping (removeDevtoolsOnBuild), editor integration (launch-editor, custom editor.open). Must be FIRST plugin in Vite config. Vite ^6 || ^7 only."
-  use: "@tanstack/devtools-vite#devtools-vite-plugin"
-- when: "React bindings for TanStack DB. useLiveQuery hook with dependency arrays (8 overloads: query function, config object, pre-created collection, disabled state via returning undefined/null). useLiveSuspenseQuery for React Suspense with Error Boundaries (data always defined). useLiveInfiniteQuery for cursor-based pagination (pageSize, fetchNextPage, hasNextPage, isFetchingNextPage). usePacedMutations for debounced React state updates. Return shape: data, state, collection, status, isLoading, isReady, isError. Import from @tanstack/react-db (re-exports all of @tanstack/db)."
-  use: "@tanstack/react-db#react-db"
-- when: "Step-by-step migration from Next.js App Router to TanStack Start: route definition conversion, API mapping, server function conversion from Server Actions, middleware conversion, data fetching pattern changes."
-  use: "@tanstack/react-start#lifecycle/migrate-from-nextjs"
-- when: "React bindings for TanStack Start: createStart, StartClient, StartServer, React-specific imports, re-exports from @tanstack/react-router, full project setup with React, useServerFn hook."
-  use: "@tanstack/react-start#react-start"
-- when: "Implement, review, debug, and refactor TanStack Start React Server Components in React 19 apps. Use when tasks mention @tanstack/react-start/rsc, renderServerComponent, createCompositeComponent, CompositeComponent, renderToReadableStream, createFromReadableStream, createFromFetch, Composite Components, React Flight streams, loader or query owned RSC caching, router.invalidate, structuralSharing: false, selective SSR, stale names like renderRsc or .validator, or migration from Next App Router RSC patterns. Do not use for generic SSR or non-TanStack RSC frameworks except brief comparison."
-  use: "@tanstack/react-start#react-start/server-components"
-- when: "Framework-agnostic core concepts for TanStack Router: route trees, createRouter, createRoute, createRootRoute, createRootRouteWithContext, addChildren, Register type declaration, route matching, route sorting, file naming conventions. Entry point for all router skills."
-  use: "@tanstack/router-core#router-core"
-- when: "Route protection with beforeLoad, redirect()/throw redirect(), isRedirect helper, authenticated layout routes (\_authenticated), non-redirect auth (inline login), RBAC with roles and permissions, auth provider integration (Auth0, Clerk, Supabase), router context for auth state."
-  use: "@tanstack/router-core#router-core/auth-and-guards"
-- when: "Automatic code splitting (autoCodeSplitting), .lazy.tsx convention, createLazyFileRoute, createLazyRoute, lazyRouteComponent, getRouteApi for typed hooks in split files, codeSplitGroupings per-route override, splitBehavior programmatic config, critical vs non-critical properties."
-  use: "@tanstack/router-core#router-core/code-splitting"
-- when: "Route loader option, loaderDeps for cache keys, staleTime/gcTime/ defaultPreloadStaleTime SWR caching, pendingComponent/pendingMs/ pendingMinMs, errorComponent/onError/onCatch, beforeLoad, router context and createRootRouteWithContext DI pattern, router.invalidate, Await component, deferred data loading with unawaited promises."
-  use: "@tanstack/router-core#router-core/data-loading"
-- when: "Link component, useNavigate, Navigate component, router.navigate, ToOptions/NavigateOptions/LinkOptions, from/to relative navigation, activeOptions/activeProps, preloading (intent/viewport/render), preloadDelay, navigation blocking (useBlocker, Block), createLink, linkOptions helper, scroll restoration, MatchRoute."
-  use: "@tanstack/router-core#router-core/navigation"
-- when: "notFound() function, notFoundComponent, defaultNotFoundComponent, notFoundMode (fuzzy/root), errorComponent, CatchBoundary, CatchNotFound, isNotFound, NotFoundRoute (deprecated), route masking (mask option, createRouteMask, unmaskOnReload)."
-  use: "@tanstack/router-core#router-core/not-found-and-errors"
-- when: "Dynamic path segments ($paramName), splat routes ($ / \_splat), optional params ({-$paramName}), prefix/suffix patterns ({$param}.ext), useParams, params.parse/stringify, pathParamsAllowedCharacters, i18n locale patterns."
-  use: "@tanstack/router-core#router-core/path-params"
-- when: "validateSearch, search param validation with Zod/Valibot/ArkType adapters, fallback(), search middlewares (retainSearchParams, stripSearchParams), custom serialization (parseSearch, stringifySearch), search param inheritance, loaderDeps for cache keys, reading and writing search params."
-  use: "@tanstack/router-core#router-core/search-params"
-- when: "Non-streaming and streaming SSR, RouterClient/RouterServer, renderRouterToString/renderRouterToStream, createRequestHandler, defaultRenderHandler/defaultStreamHandler, HeadContent/Scripts components, head route option (meta/links/styles/scripts), ScriptOnce, automatic loader dehydration/hydration, memory history on server, data serialization, document head management."
-  use: "@tanstack/router-core#router-core/ssr"
-- when: "Full type inference philosophy (never cast, never annotate inferred values), Register module declaration, from narrowing on hooks and Link, strict:false for shared components, getRouteApi for code-split typed access, addChildren with object syntax for TS perf, LinkProps and ValidateLinkOptions type utilities, as const satisfies pattern."
-  use: "@tanstack/router-core#router-core/type-safety"
-- when: "TanStack Router bundler plugin for route generation and automatic code splitting. Supports Vite, Webpack, Rspack, and esbuild. Configures autoCodeSplitting, routesDirectory, target framework, and code split groupings."
-  use: "@tanstack/router-plugin#router-plugin"
-- when: "Core overview for TanStack Start: tanstackStart() Vite plugin, getRouter() factory, root route document shell (HeadContent, Scripts, Outlet), client/server entry points, routeTree.gen.ts, tsconfig configuration. Entry point for all Start skills."
-  use: "@tanstack/start-client-core#start-core"
-- when: "Deploy to Cloudflare Workers, Netlify, Vercel, Node.js/Docker, Bun, Railway. Selective SSR (ssr option per route), SPA mode, static prerendering, ISR with Cache-Control headers, SEO and head management."
-  use: "@tanstack/start-client-core#start-core/deployment"
-- when: "Isomorphic-by-default principle, environment boundary functions (createServerFn, createServerOnlyFn, createClientOnlyFn, createIsomorphicFn), ClientOnly component, useHydrated hook, import protection, dead code elimination, environment variable safety (VITE\_ prefix, process.env)."
-  use: "@tanstack/start-client-core#start-core/execution-model"
-- when: "createMiddleware, request middleware (.server only), server function middleware (.client + .server), context passing via next({ context }), sendContext for client-server transfer, global middleware via createStart in src/start.ts, middleware factories, method order enforcement, fetch override precedence."
-  use: "@tanstack/start-client-core#start-core/middleware"
-- when: "createServerFn (GET/POST), inputValidator (Zod or function), useServerFn hook, server context utilities (getRequest, getRequestHeader, setResponseHeader, setResponseStatus), error handling (throw errors, redirect, notFound), streaming, FormData handling, file organization (.functions.ts, .server.ts)."
-  use: "@tanstack/start-client-core#start-core/server-functions"
-- when: "Server-side API endpoints using the server property on createFileRoute, HTTP method handlers (GET, POST, PUT, DELETE), createHandlers for per-handler middleware, handler context (request, params, context), request body parsing, response helpers, file naming for API routes."
-  use: "@tanstack/start-client-core#start-core/server-routes"
-- when: "Server-side runtime for TanStack Start: createStartHandler, request/response utilities (getRequest, setResponseHeader, setCookie, getCookie, useSession), three-phase request handling, AsyncLocalStorage context."
-  use: "@tanstack/start-server-core#start-server-core"
-- when: "Programmatic route tree building as an alternative to filesystem conventions: rootRoute, index, route, layout, physical, defineVirtualSubtreeConfig. Use with TanStack Router plugin's virtualRouteConfig option."
-  use: "@tanstack/virtual-file-routes#virtual-file-routes"
-- when: "Load environment variables from a .env file into process.env for Node.js applications. Use when configuring apps with secrets, setting up local development environments, managing API keys and database uRLs, parsing .env file contents, or populating environment variables programmatically. Always use this skill when the user mentions .env, even for simple tasks like \"set up dotenv\" — the skill contains critical gotchas (encrypted keys, variable expansion, command substitution) that prevent common production issues."
-  use: "dotenv#dotenv"
-- when: "Use dotenvx to run commands with environment variables, manage multiple .env files, expand variables, and encrypt env files for safe commits and CI/CD."
-use: "dotenv#dotenvx"
-<!-- intent-skills:end -->` block below is **auto-generated** by [`@tanstack/intent`](https://tanstack.com/intent/latest). It maps high-level tasks (the `when:` field) to versioned skill documents (the `use:` field) shipped inside installed npm packages. Skills update when the corresponding package updates — no copy-pasting stale rules files.
-
 **Usage for AI agents:**
 
 - When a user request matches a `when:` description, load the corresponding skill with:
@@ -175,7 +95,7 @@ use: "dotenv#dotenvx"
 
 <!-- intent-skills:start -->
 
-# Skill mappings - load `use` with `npx @tanstack/intent@latest load <use>`.
+# Skill mappings - load `use` with `pnpm dlx @tanstack/intent@latest load <use>`.
 
 skills:
 
@@ -233,6 +153,8 @@ skills:
   use: "@tanstack/router-plugin#router-plugin"
 - when: "Core overview for TanStack Start: tanstackStart() Vite plugin, getRouter() factory, root route document shell (HeadContent, Scripts, Outlet), client/server entry points, routeTree.gen.ts, tsconfig configuration. Entry point for all Start skills."
   use: "@tanstack/start-client-core#start-core"
+- when: "Server-side authentication primitives for TanStack Start: session cookies (HttpOnly, Secure, SameSite, \_\_Host- prefix), session read/issue/destroy via createServerFn and middleware, OAuth authorization-code flow with state and PKCE, password-reset enumeration defense, CSRF for non-GET RPCs, rate limiting auth endpoints, session rotation on privilege change. Pairs with router-core/auth-and-guards for the routing side."
+  use: "@tanstack/start-client-core#start-core/auth-server-primitives"
 - when: "Deploy to Cloudflare Workers, Netlify, Vercel, Node.js/Docker, Bun, Railway. Selective SSR (ssr option per route), SPA mode, static prerendering, ISR with Cache-Control headers, SEO and head management."
   use: "@tanstack/start-client-core#start-core/deployment"
 - when: "Isomorphic-by-default principle, environment boundary functions (createServerFn, createServerOnlyFn, createClientOnlyFn, createIsomorphicFn), ClientOnly component, useHydrated hook, import protection, dead code elimination, environment variable safety (VITE\_ prefix, process.env)."
@@ -245,8 +167,6 @@ skills:
   use: "@tanstack/start-client-core#start-core/server-routes"
 - when: "Server-side runtime for TanStack Start: createStartHandler, request/response utilities (getRequest, setResponseHeader, setCookie, getCookie, useSession), three-phase request handling, AsyncLocalStorage context."
   use: "@tanstack/start-server-core#start-server-core"
-- when: "Programmatic route tree building as an alternative to filesystem conventions: rootRoute, index, route, layout, physical, defineVirtualSubtreeConfig. Use with TanStack Router plugin's virtualRouteConfig option."
-  use: "@tanstack/virtual-file-routes#virtual-file-routes"
 - when: "Load environment variables from a .env file into process.env for Node.js applications. Use when configuring apps with secrets, setting up local development environments, managing API keys and database uRLs, parsing .env file contents, or populating environment variables programmatically. Always use this skill when the user mentions .env, even for simple tasks like \"set up dotenv\" — the skill contains critical gotchas (encrypted keys, variable expansion, command substitution) that prevent common production issues."
   use: "dotenv#dotenv"
 - when: "Use dotenvx to run commands with environment variables, manage multiple .env files, expand variables, and encrypt env files for safe commits and CI/CD."
@@ -305,15 +225,26 @@ When adding a community component, always follow the Vite+ pattern:
 
 ## 5. THE TRANSACTION CORE ARCHITECTURE
 
-Transactions are the heart of Permoney. To maintain a bulletproof ledger and high-performance UX, follow these architectural directives:
+Transactions are the heart of Permoney. This is not a CRUD module. It is the canonical financial ledger that every future feature depends on: accounts, budgets, reports, bank imports, smart rules, AI enrichment, audit trails, and reconciliation. If a shortcut makes transaction history, balances, tenant isolation, or auditability weaker, the shortcut is wrong even when the UI works and the build is green.
 
 ### A. Data Integrity & Double-Entry (Server-Side)
 
-- **ACID Transactions**: Every financial mutation (Create/Update/Delete) MUST be wrapped in a `prisma.$transaction([])` block.
+- **ACID Transactions**: Every financial mutation (create/update/delete/bulk/import/onboarding demo data) MUST be wrapped in an interactive `prisma.$transaction(async (tx) => ...)` block so reads, writes, RLS GUC setup, balance updates, idempotency checks, and audit logs share the same transaction.
 - **Signed Amounts**: At the Database level, `amount` must be SIGNED (Negative for Expense/Transfer Out, Positive for Income/Transfer In). The UI handles absolute values for display.
 - **Atomic Balance Updates**: Never compute a new balance in memory and save it. Use Prisma's `{ increment: x }` or `{ decrement: x }` to avoid race conditions.
 - **Split Transaction Normalization**: If `isSplit` is true, the `categoryId` and `merchantId` on the parent `Transaction` must be `null`. Data exclusively lives in the `SplitEntry` children.
 - **Transfer Logic**: A `Transfer` is a dual-leg operation creating an Outflow and Inflow transaction. Use the `kind` field to distinguish between `funds_movement`, `cc_payment`, and `loan_payment`.
+- **Database Is the Law**: Core financial invariants must be enforced by database constraints where possible: transaction type/status/kind domains, amount sign, ISO-like currency code shape, destination amount/currency pair validity, transfer destination requirements, and account balance rules.
+- **Idempotency Is Mandatory**: Any mutation that can be retried by the browser, network, import worker, or future bank-sync job must accept an idempotency key. Replaying the same key must not create another transaction or change balances again. Same key with different payload must fail with a conflict.
+- **Delete Must Be Idempotent**: Deleting a transaction twice must never reverse the balance twice. A deleted transaction may return no-op success or a conflict, but it must not mutate balances again.
+- **No Hard Delete for Ledger History**: User-visible transaction history, transfer legs, split entries, and audit evidence must not be erased as the correctness mechanism. If update uses reversal-and-replace, the old state and new state must be represented in `AuditLog` inside the same transaction.
+- **AuditLog Required for Mutations**: Every create/update/delete/bulk/import/onboarding mutation must write append-only audit rows in the same transaction, including `familyId`, `userId`, entity identity, action, before/after snapshots, request metadata when available, and idempotency key when applicable.
+- **Tenant-Owned References**: Before writing `accountId`, `toAccountId`, `categoryId`, `merchantId`, split-entry references, or smart-rule outputs, validate that every referenced row belongs to `context.familyId`, except explicitly allowed global system categories. Foreign keys alone are not tenant isolation.
+- **RLS GUC Must Be Transaction-Scoped**: Any query relying on Postgres RLS must set `app.family_id` on the same transaction/connection as the query, using `set_config(..., true)`. Do not use connection-level GUC state outside the transaction as a correctness dependency.
+- **Bulk Paths Must Match Single Paths**: `bulkCreateTransactionsFn`, `bulkUpdateTransactionsFn`, `bulkDeleteTransactionsFn`, import flows, and future bank-sync ingestion must satisfy the same validation, idempotency, audit, RLS, and balance invariants as single create/update/delete.
+- **Raw Bank Data Is Not Canonical Ledger Data**: Future bank/API integrations must store raw provider payloads in an import-staging model first. Only normalized, deduplicated, idempotent, tenant-validated, user-confirmed or rule-confirmed rows may become canonical `Transaction` records.
+- **Real Postgres Tests Required**: Ledger correctness cannot be proven with mocked Prisma only. Any change to transaction/account balance behavior requires real Postgres integration tests for concurrency, idempotency replay, delete replay, tenant isolation, RLS GUC behavior, and constraint rejection.
+- **No "Good Enough" Ledger Work**: If the work touches money movement, balances, transaction history, tenant isolation, import, or audit, do not simplify it just because the task is hard. Stop and design the invariant, then implement and test it.
 
 ### B. Reactive Ledger (Client-Side)
 
@@ -334,7 +265,7 @@ Transactions are the heart of Permoney. To maintain a bulletproof ledger and hig
   Source: `node_modules/@tanstack/db/skills/meta-framework/SKILL.md` § _HIGH — Forgetting to preload in route loader_. Loader runs during navigation, blocks until collection reaches `status === "ready"`, so by the time the component renders there is zero async work in render.
 
 - **`ssr: false` is a hard requirement for any route touching TanStack DB collections.** Collections are browser-only; SSR rendering will hang or error.
-- **Synchronization**: After any server mutation (e.g., `createTransactionFn`), you MUST call `transactionCollection.utils.refetch()` to sync the local IndexedDB with the SQLite source of truth.
+- **Synchronization**: After any server mutation (e.g., `createTransactionFn`), you MUST call `transactionCollection.utils.refetch()` to sync the local TanStack DB state with the server/Postgres source of truth.
 - **Optimistic Bulk UI**: For mass edits, perform an optimistic update on the `transactionCollection` draft before triggering `bulkUpdateTransactionsFn` for instant user feedback.
 
 ### C. Performance & State Orchestration
@@ -500,4 +431,22 @@ The plugin still flags `import { findAllTransactions } from "./transactions.serv
 - [ ] Any new module that imports `@prisma/client`, reads secrets, or uses Node-only APIs is named `*.server.ts` AND consumers import it with the explicit `.server` suffix in the path.
 - [ ] `src/server/db.server.ts` remains a lazy Proxy with `/* @__PURE__ */` annotation and zero module-level side effects.
 - [ ] Client-side types derive from `Awaited<ReturnType<typeof fn>>`, not from `@prisma/client`.
-- [ ] `vp check` and `vp test` pass; `/transactions` loads without `🚨 SECURITY BREACH` or `Calling 'require' for '.prisma/client/index-browser'` errors.
+- [ ] `vp check` and `vp test` pass; `/transactions` loads in dev and preview without `🚨 SECURITY BREACH`, `Calling 'require' for '.prisma/client/index-browser'`, missing export, or browser module-resolution errors.
+
+## 7. DEV RUNTIME STABILITY (M1.5)
+
+### A. React/TanStack/Vite+ Compatibility
+
+During the M1.5 phase, we encountered `react-dom/server.browser.js` export errors during dev in TanStack Start (specifically on routes fetching data).
+
+**Root Cause (accurate)**:
+
+The `/transactions` route already had `ssr: false`. The error appeared when an **unauthenticated user** hit the route: the loader called `transactionCollection.preload()` → `getTransactionsFn` → `familyMiddleware` → threw `UNAUTHENTICATED`. TanStack Start's error-handling path for a client-only route attempted to render the error through a server-side rendering pipeline (`react-dom/server.browser.js`), which is not exported in the browser environment. The issue is **not** a missing `ssr: false` — it is a missing auth guard before the loader.
+
+**Resolution**:
+
+- **Do NOT** suppress the errors by adding Vite `optimizeDeps` hacks (like including/excluding `react-dom/server.browser.js` or `react-server-dom-webpack`). This will break the production build.
+- **Do NOT** use the generic `@tanstack/react-start-plugin` interop mode or manual aliases.
+- **The True Fix**: Add a `beforeLoad` guard that calls a lightweight session-check server function (`getSessionGuardFn`) and redirects to `/login` or `/onboarding` before the loader ever runs. This prevents the error path from triggering in the first place. The `ssr: false` flag is still required (TanStack DB is client-only) but is not the fix for the auth error.
+- **Upstream note**: TanStack Start/Router should not attempt to resolve `react-dom/server.browser.js` in the client graph when rendering error boundaries for `ssr: false` routes. This is worth a minimal reproduction and upstream issue, but the app-level fix (auth guard) is the correct defense regardless.
+- Verify stability by running the M1.5 dev smoke check (`node scripts/smoke-check.mjs`) and verifying preview parity (`vp build` then `vp preview`).
