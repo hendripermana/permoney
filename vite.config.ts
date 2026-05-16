@@ -91,7 +91,6 @@ const config = defineConfig({
           "src/server/smart-rules.ts",
           "src/server/auth-fns.server.ts",
           "src/routes/api/auth/$.ts",
-          "src/routes/onboarding.tsx",
         ],
       },
     }),

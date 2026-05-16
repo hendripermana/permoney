@@ -3,10 +3,25 @@ import { getRequest } from "@tanstack/react-start/server"
 import { auth } from "./auth.server"
 import { signupSchema, loginSchema } from "./auth-schemas"
 import { checkRateLimit } from "./middleware/rate-limit"
-import { requireSession } from "./middleware/session"
+import { getSession, requireSession } from "./middleware/session"
 import { prisma } from "./db.server"
 
 export { signupSchema, loginSchema }
+
+/**
+ * Lightweight session+family guard for use in route `beforeLoad`.
+ * Returns auth state so the route can redirect without letting the loader run.
+ */
+export const getSessionGuardFn = createServerFn({ method: "GET" }).handler(
+  async () => {
+    const session = await getSession()
+    if (!session?.user) return { authenticated: false, hasFamilyId: false }
+    return {
+      authenticated: true,
+      hasFamilyId: Boolean((session.user as Record<string, unknown>).familyId),
+    }
+  }
+)
 
 export const meFn = createServerFn({ method: "GET" }).handler(async () => {
   const { user } = await requireSession()

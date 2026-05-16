@@ -16,6 +16,7 @@ import { useLiveQuery } from "@tanstack/react-db"
 import { useQuery } from "@tanstack/react-query"
 import {
   createFileRoute,
+  redirect,
   type ErrorComponentProps,
 } from "@tanstack/react-router"
 import { getCoreRowModel, useReactTable } from "@tanstack/react-table"
@@ -45,6 +46,7 @@ import {
   bulkUpdateTransactionsFn,
   getTransactionFormData,
 } from "@/server/transactions"
+import { getSessionGuardFn } from "@/server/auth-fns"
 import { formatCurrency } from "@/lib/currency"
 import { ZERO_MONEY, type Money } from "@/lib/money"
 import {
@@ -79,6 +81,14 @@ export const Route = createFileRoute("/transactions")({
   validateSearch: zodValidator(transactionSearchSchema),
   // TanStack DB (useLiveQuery) hanya hidup di browser, tidak bisa di-render di server.
   ssr: false,
+  // === AUTH GUARD: redirect sebelum loader jalan ===
+  // Tanpa ini, unauthenticated user langsung hit transactionCollection.preload()
+  // → getTransactionsFn → familyMiddleware → server error (bukan redirect).
+  beforeLoad: async () => {
+    const guard = await getSessionGuardFn()
+    if (!guard.authenticated) throw redirect({ to: "/login" })
+    if (!guard.hasFamilyId) throw redirect({ to: "/onboarding" })
+  },
   // === PRELOAD COLLECTION DURING NAVIGATION ===
   // Wajib per skill `@tanstack/db/skills/meta-framework`: tanpa preload,
   // `startSyncImmediate()` di dalam `useLiveQuery` akan fire saat render,
@@ -463,7 +473,7 @@ function TransactionsPage() {
                     Total Income
                   </p>
                   <div className="flex items-center justify-between">
-                    <h2 className="text-3xl font-bold text-emerald-600">
+                    <h2 className="text-3xl font-semibold text-emerald-600">
                       + {formatCurrency(kpiData.totalIncome)}
                     </h2>
                     <div className="rounded-md bg-emerald-100 p-2 text-emerald-700">
@@ -482,7 +492,7 @@ function TransactionsPage() {
                     Total Expenses
                   </p>
                   <div className="flex items-center justify-between">
-                    <h2 className="text-3xl font-bold text-red-600">
+                    <h2 className="text-3xl font-semibold text-red-600">
                       - {formatCurrency(kpiData.totalExpenses)}
                     </h2>
                     <div className="rounded-md bg-red-100 p-2 text-red-700">
@@ -521,7 +531,7 @@ function TransactionsPage() {
                   <p className="mb-2 text-xs font-semibold tracking-wider text-muted-foreground uppercase">
                     Transactions
                   </p>
-                  <h2 className="text-3xl font-bold">
+                  <h2 className="text-3xl font-semibold">
                     {kpiData.transactionCount}
                   </h2>
                   <p className="mt-2 text-xs text-muted-foreground">
@@ -535,7 +545,7 @@ function TransactionsPage() {
             <div className="mb-4 flex flex-col items-center justify-between gap-4 sm:flex-row">
               <div className="flex w-full flex-1 gap-2 md:max-w-3xl">
                 <div className="relative w-full max-w-sm">
-                  <IconSearch className="absolute top-2.5 left-2.5 h-4 w-4 text-muted-foreground" />
+                  <IconSearch className="absolute top-2.5 left-2.5 size-4 text-muted-foreground" />
                   <Input
                     id="global-transaction-search"
                     name="transaction-search"
@@ -868,7 +878,7 @@ function TransactionRow({
           {trx.merchant ? (
             <span className="text-sm font-medium">{trx.merchant.name}</span>
           ) : (
-            <span className="text-sm text-muted-foreground italic">—</span>
+            <span className="text-sm text-muted-foreground italic">-</span>
           )}
         </div>
 
@@ -1024,7 +1034,7 @@ function TransactionRow({
                   </span>
                 ) : (
                   <span className="text-sm text-muted-foreground italic">
-                    —
+                    -
                   </span>
                 )}
               </div>
@@ -1042,9 +1052,9 @@ function TransactionRow({
                 </span>
               </div>
 
-              {/* Split account (always blank — inherits from parent) */}
+              {/* Split account (always blank, inherits from parent) */}
               <div className="hidden w-52 shrink-0 px-4 xl:block">
-                <span className="text-sm text-muted-foreground italic">—</span>
+                <span className="text-sm text-muted-foreground italic">-</span>
               </div>
 
               {/* Split amount */}

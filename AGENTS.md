@@ -438,9 +438,15 @@ The plugin still flags `import { findAllTransactions } from "./transactions.serv
 ### A. React/TanStack/Vite+ Compatibility
 
 During the M1.5 phase, we encountered `react-dom/server.browser.js` export errors during dev in TanStack Start (specifically on routes fetching data).
+
+**Root Cause (accurate)**:
+
+The `/transactions` route already had `ssr: false`. The error appeared when an **unauthenticated user** hit the route: the loader called `transactionCollection.preload()` → `getTransactionsFn` → `familyMiddleware` → threw `UNAUTHENTICATED`. TanStack Start's error-handling path for a client-only route attempted to render the error through a server-side rendering pipeline (`react-dom/server.browser.js`), which is not exported in the browser environment. The issue is **not** a missing `ssr: false` — it is a missing auth guard before the loader.
+
 **Resolution**:
 
 - **Do NOT** suppress the errors by adding Vite `optimizeDeps` hacks (like including/excluding `react-dom/server.browser.js` or `react-server-dom-webpack`). This will break the production build.
 - **Do NOT** use the generic `@tanstack/react-start-plugin` interop mode or manual aliases.
-- **The True Fix**: The route was accidentally attempting to SSR a client-only `useLiveQuery` component. Adding `ssr: false` to the route's `createFileRoute` options resolves the export mismatch cleanly.
+- **The True Fix**: Add a `beforeLoad` guard that calls a lightweight session-check server function (`getSessionGuardFn`) and redirects to `/login` or `/onboarding` before the loader ever runs. This prevents the error path from triggering in the first place. The `ssr: false` flag is still required (TanStack DB is client-only) but is not the fix for the auth error.
+- **Upstream note**: TanStack Start/Router should not attempt to resolve `react-dom/server.browser.js` in the client graph when rendering error boundaries for `ssr: false` routes. This is worth a minimal reproduction and upstream issue, but the app-level fix (auth guard) is the correct defense regardless.
 - Verify stability by running the M1.5 dev smoke check (`node scripts/smoke-check.mjs`) and verifying preview parity (`vp build` then `vp preview`).

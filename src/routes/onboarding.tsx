@@ -1,28 +1,12 @@
 import { createFileRoute, redirect } from "@tanstack/react-router"
-import { onboardFn } from "@/server/auth-fns"
+import { onboardFn, getSessionGuardFn } from "@/server/auth-fns"
 import { Button } from "@/components/ui/button"
 import { useServerFn } from "@tanstack/react-start"
-import { useState } from "react"
-import { createServerFn } from "@tanstack/react-start"
-import { getSession } from "@/server/middleware/session"
-
-// Server function untuk cek session di beforeLoad.
-// Hooks (useSession) TIDAK BOLEH dipanggil di async functions / route lifecycle.
-const getOnboardingSession = createServerFn({ method: "GET" }).handler(
-  async () => {
-    const session = await getSession()
-    if (!session?.user) return { authenticated: false, hasFamilyId: false }
-    const user = session.user as Record<string, unknown>
-    return {
-      authenticated: true,
-      hasFamilyId: Boolean(user.familyId),
-    }
-  }
-)
+import { useState, useTransition } from "react"
 
 export const Route = createFileRoute("/onboarding")({
   beforeLoad: async () => {
-    const result = await getOnboardingSession()
+    const result = await getSessionGuardFn()
     if (!result.authenticated) throw redirect({ to: "/login" })
     if (result.hasFamilyId) throw redirect({ to: "/dashboard" })
   },
@@ -32,31 +16,30 @@ export const Route = createFileRoute("/onboarding")({
 function OnboardingPage() {
   const submitOnboarding = useServerFn(onboardFn)
   const [error, setError] = useState<string | null>(null)
-  const [isPending, setIsPending] = useState(false)
+  const [isPending, startTransition] = useTransition()
 
-  async function handleSubmit() {
+  function handleSubmit() {
     setError(null)
-    setIsPending(true)
-    try {
-      const result = await submitOnboarding()
-      if (result.familyId) {
-        window.location.href = "/dashboard"
+    startTransition(async () => {
+      try {
+        const result = await submitOnboarding()
+        if (result.familyId) {
+          window.location.href = "/dashboard"
+        }
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Something went wrong. Please try again."
+        )
       }
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Something went wrong. Please try again."
-      )
-    } finally {
-      setIsPending(false)
-    }
+    })
   }
 
   return (
     <div className="flex min-h-svh flex-col items-center justify-center gap-6 bg-zinc-100 p-6 md:p-10">
       <div className="w-full max-w-sm text-center">
-        <h1 className="text-2xl font-bold tracking-tight">
+        <h1 className="text-2xl font-semibold tracking-tight">
           Welcome to Permoney
         </h1>
         <p className="mt-2 text-sm text-muted-foreground">

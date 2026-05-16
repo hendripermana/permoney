@@ -47,7 +47,7 @@ export function SignUpForm({
           >
             <FieldGroup>
               <div className="mb-4 flex flex-col items-center gap-2 text-center">
-                <h1 className="text-3xl font-bold">Join Permoney 🐝</h1>
+                <h1 className="text-3xl font-semibold">Join Permoney 🐝</h1>
                 <p className="text-balance text-muted-foreground">
                   Create an account to start tracking your expenses.
                 </p>
@@ -125,7 +125,7 @@ export function SignUpForm({
             <div className="absolute inset-0 z-0 bg-gradient-to-br from-yellow-500/20 to-zinc-900/90" />
             <div className="relative z-10 space-y-4 text-center">
               <div className="mb-6 text-6xl">🐝</div>
-              <h2 className="text-2xl font-bold">
+              <h2 className="text-2xl font-semibold">
                 Your Financial Journey Starts Here.
               </h2>
               <p className="text-sm text-zinc-400">
