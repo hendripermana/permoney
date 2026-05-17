@@ -5,7 +5,52 @@ import viteReact from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
 import { nitro } from "nitro/vite"
 
+const isTestRuntime =
+  process.env.VITEST === "true" || process.env.NODE_ENV === "test"
+
+const tanstackHeadScriptsShim = {
+  name: "tanstack-start-injected-head-scripts-shim",
+  sharedDuringBuild: true,
+  resolveId: {
+    filter: {
+      id: /^tanstack-start-injected-head-scripts:v$/,
+    },
+    handler(id: string) {
+      return `\0${id}`
+    },
+  },
+  load: {
+    filter: {
+      // eslint-disable-next-line no-control-regex -- \0 is Vite virtual module convention
+      id: /^\0tanstack-start-injected-head-scripts:v$/,
+    },
+    handler(_id: string) {
+      return "export const injectedHeadScripts = undefined"
+    },
+  },
+}
+
 const config = defineConfig({
+  test: {
+    exclude: [
+      "**/node_modules/**",
+      "**/.git/**",
+      ".agents/**",
+      ".claude/**",
+      ".factory/**",
+      ".forge/**",
+      ".junie/**",
+      ".kilo/**",
+      ".kilocode/**",
+      ".kiro/**",
+      ".trae/**",
+      ".windsurf/**",
+      "tests/e2e/**",
+      "tests/integration/**",
+    ],
+    include: ["scripts/**/*.test.mjs", "src/**/*.test.ts", "src/**/*.test.tsx"],
+  },
+
   staged: {
     // Pre-commit dispatcher. Vite+ `staged` values run as a single argv
     // array (no shell), so chaining via `&&` is not possible — flags land
@@ -77,55 +122,38 @@ const config = defineConfig({
   //   inspector, so disabling injection is a free win — devtools UI and
   //   enhanced logs continue to work.
   plugins: [
-    tanstackStart({
-      importProtection: {
-        ignoreImporters: [
-          // Server-fn helper files: their .server.* imports live only inside
-          // createServerFn/createMiddleware handler bodies which are code-split
-          // to the server bundle by TanStack Start. Static analysis would flag
-          // them, but at runtime these imports never execute in the client.
-          "src/server/middleware/with-family.ts",
-          "src/server/middleware/rate-limit.ts",
-          "src/server/middleware/session.ts",
-          "src/server/transactions.ts",
-          "src/server/smart-rules.ts",
-          "src/server/auth-fns.server.ts",
-          "src/routes/api/auth/$.ts",
-        ],
-      },
-    }),
-    // Shim for tanstack-start-injected-head-scripts:v virtual module.
-    // start-plugin-core registers this module only for consumer==="server"
-    // environments. When Vite's vite:import-analysis processes router-manifest.js
-    // in the client environment it can't resolve the specifier and throws.
-    // This fallback plugin catches any environment the server plugin doesn't cover.
-    // Uses Vite 6 filter/handler API to match devServerPlugin's pattern.
-    {
-      name: "tanstack-start-injected-head-scripts-shim",
-      sharedDuringBuild: true,
-      resolveId: {
-        filter: {
-          id: /^tanstack-start-injected-head-scripts:v$/,
-        },
-        handler(id: string) {
-          return `\0${id}`
-        },
-      },
-      load: {
-        filter: {
-          // eslint-disable-next-line no-control-regex -- \0 is Vite virtual module convention
-          id: /^\0tanstack-start-injected-head-scripts:v$/,
-        },
-        handler(_id: string) {
-          return "export const injectedHeadScripts = undefined"
-        },
-      },
-    },
-
-    nitro(),
+    ...(!isTestRuntime
+      ? [
+          tanstackStart({
+            importProtection: {
+              ignoreImporters: [
+                // Server-fn helper files: their .server.* imports live only inside
+                // createServerFn/createMiddleware handler bodies which are code-split
+                // to the server bundle by TanStack Start. Static analysis would flag
+                // them, but at runtime these imports never execute in the client.
+                "src/server/middleware/with-family.ts",
+                "src/server/middleware/rate-limit.ts",
+                "src/server/middleware/session.ts",
+                "src/server/transactions.ts",
+                "src/server/smart-rules.ts",
+                "src/server/auth-fns.server.ts",
+                "src/routes/api/auth/$.ts",
+              ],
+            },
+          }),
+          // Shim for tanstack-start-injected-head-scripts:v virtual module.
+          // start-plugin-core registers this module only for consumer==="server"
+          // environments. When Vite's vite:import-analysis processes router-manifest.js
+          // in the client environment it can't resolve the specifier and throws.
+          // This fallback plugin catches any environment the server plugin doesn't cover.
+          // Uses Vite 6 filter/handler API to match devServerPlugin's pattern.
+          tanstackHeadScriptsShim,
+          nitro(),
+          tailwindcss(),
+          devtools({ injectSource: { enabled: false } }),
+        ]
+      : []),
     viteReact(),
-    tailwindcss(),
-    devtools({ injectSource: { enabled: false } }),
   ],
 })
 
