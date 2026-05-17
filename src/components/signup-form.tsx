@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { useServerFn } from "@tanstack/react-start"
-import { useMutation } from "@tanstack/react-query"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { signupFn } from "@/server/auth-fns"
 import { useRouter } from "@tanstack/react-router"
 
@@ -19,6 +19,7 @@ export function SignUpForm({
   ...props
 }: React.ComponentProps<"div">) {
   const router = useRouter()
+  const queryClient = useQueryClient()
   const signup = useServerFn(signupFn)
 
   const mutation = useMutation({
@@ -29,8 +30,9 @@ export function SignUpForm({
       const password = formData.get("password") as string
       return signup({ data: { fullname, username, email, password } })
     },
-    onSuccess: () => {
-      void router.invalidate()
+    onSuccess: async (result) => {
+      await Promise.all([queryClient.invalidateQueries(), router.invalidate()])
+      await router.navigate({ to: result.redirectTo })
     },
   })
 
@@ -39,6 +41,7 @@ export function SignUpForm({
       <Card className="overflow-hidden border-none p-0 shadow-lg">
         <CardContent className="grid min-h-[500px] p-0 md:grid-cols-2">
           <form
+            method="post"
             className="flex flex-col justify-center p-6 md:p-8"
             onSubmit={(e) => {
               e.preventDefault()

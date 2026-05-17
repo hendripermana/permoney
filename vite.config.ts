@@ -136,7 +136,7 @@ const config = defineConfig({
                 "src/server/middleware/session.ts",
                 "src/server/transactions.ts",
                 "src/server/smart-rules.ts",
-                "src/server/auth-fns.server.ts",
+                "src/server/auth-fns.ts",
                 "src/routes/api/auth/$.ts",
               ],
             },
