@@ -13,6 +13,7 @@ const argonOpts: Options = {
 }
 
 const isProduction = process.env.NODE_ENV === "production"
+const BETTER_AUTH_PASSWORD_HASH_SENTINEL = "better-auth-managed-credential"
 
 export const auth = betterAuth({
   advanced: {
@@ -27,25 +28,16 @@ export const auth = betterAuth({
   database: prismaAdapter(db, {
     provider: "postgresql",
   }),
-  databaseHooks: {
-    user: {
-      create: {
-        after: async (user) => {
-          // Create Family and update user with familyId
-          const family = await db.family.create({
-            data: { name: `${user.name}'s Family` },
-          })
-          await db.user.update({
-            where: { id: user.id },
-            data: { familyId: family.id },
-          })
-        },
-      },
-    },
-  },
   user: {
     modelName: "User",
     additionalFields: {
+      passwordHash: {
+        type: "string",
+        required: false,
+        input: false,
+        returned: false,
+        defaultValue: BETTER_AUTH_PASSWORD_HASH_SENTINEL,
+      },
       familyId: {
         type: "string",
         required: false,

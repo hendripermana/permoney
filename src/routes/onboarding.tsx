@@ -1,19 +1,22 @@
 import { createFileRoute, redirect } from "@tanstack/react-router"
 import { onboardFn, getSessionGuardFn } from "@/server/auth-fns"
+import { getOnboardingRouteRedirect } from "@/server/onboarding-contract"
 import { Button } from "@/components/ui/button"
 import { useServerFn } from "@tanstack/react-start"
+import { useRouter } from "@tanstack/react-router"
 import { useState, useTransition } from "react"
 
 export const Route = createFileRoute("/onboarding")({
   beforeLoad: async () => {
     const result = await getSessionGuardFn()
-    if (!result.authenticated) throw redirect({ to: "/login" })
-    if (result.hasFamilyId) throw redirect({ to: "/dashboard" })
+    const redirectTo = getOnboardingRouteRedirect(result)
+    if (redirectTo) throw redirect({ to: redirectTo })
   },
   component: OnboardingPage,
 })
 
 function OnboardingPage() {
+  const router = useRouter()
   const submitOnboarding = useServerFn(onboardFn)
   const [error, setError] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
@@ -24,7 +27,8 @@ function OnboardingPage() {
       try {
         const result = await submitOnboarding()
         if (result.familyId) {
-          window.location.href = "/dashboard"
+          await router.invalidate()
+          await router.navigate({ to: "/dashboard" })
         }
       } catch (err) {
         setError(

@@ -41,11 +41,24 @@ Better-Auth provides seamless native integration with TanStack Start, which is t
 Better-Auth dictates a specific core schema, which we will adapt and integrate into our existing Prisma models:
 
 - **`User` model additions:** Add `name` (if missing), `emailVerified`, `image`, and `createdAt`/`updatedAt`.
-  - Add `passwordHash` to `User` (separate from any legacy mock `password` field).
-  - `familyId` remains as the tenant scoping key.
+  - `passwordHash` remains on `User` only as a legacy required column during the Better-Auth migration. Better-Auth stores real email/password credentials on `AuthAccount.password`; new Better-Auth signups write a non-secret sentinel to `User.passwordHash` until a later schema cleanup removes or relaxes the legacy column.
+  - `familyId` is nullable until guided onboarding completes. Signup must not create `Family`.
 - **`Session` model:** `id`, `userId`, `expiresAt`, `ipAddress`, `userAgent`, `createdAt`, `updatedAt`.
 - **`Account` model:** For OAuth provider linking.
 - **`Verification` model:** `id`, `identifier`, `value`, `expiresAt`.
+
+### 2.1 Onboarding Contract
+
+Permoney uses the guided onboarding contract:
+
+1. Signup creates and authenticates a `User` with `familyId = null`.
+2. `/dashboard` and `/transactions` reject authenticated users without a family and redirect them to `/onboarding`.
+3. `/onboarding` is the only flow that creates `Family` and assigns `User.familyId`.
+4. Replaying onboarding for an already-onboarded user is idempotent and returns the existing `familyId`; it must not create another family or any duplicate demo ledger rows.
+
+This rejects the alternative contract where signup creates `Family` immediately.
+Future demo account/sample transaction work must build on this guided initializer,
+not reintroduce signup-time tenant creation.
 
 ### 3. Cookie Config
 

@@ -1,10 +1,12 @@
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, redirect } from "@tanstack/react-router"
 import { AppSidebar } from "@/components/app-sidebar"
 import { ChartAreaInteractive } from "@/components/chart-area-interactive"
 import { DataTable } from "@/components/data-table"
 import { SectionCards } from "@/components/section-cards"
 import { SiteHeader } from "@/components/site-header"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
+import { getSessionGuardFn } from "@/server/auth-fns"
+import { getProtectedRouteRedirect } from "@/server/onboarding-contract"
 // KITA IMPORT TOOLTIP PROVIDER DI SINI
 import { TooltipProvider } from "@/components/ui/tooltip"
 
@@ -12,6 +14,11 @@ import data from "./data.json"
 
 export const Route = createFileRoute("/dashboard")({
   component: DashboardPage,
+  beforeLoad: async () => {
+    const guard = await getSessionGuardFn()
+    const redirectTo = getProtectedRouteRedirect(guard)
+    if (redirectTo) throw redirect({ to: redirectTo })
+  },
   // Metadata halaman — digunakan oleh SiteHeader untuk judul dinamis
   staticData: { title: "Dashboard" },
 })
