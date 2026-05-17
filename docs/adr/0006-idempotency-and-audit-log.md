@@ -202,6 +202,26 @@ M2-3 and M2-5 implement this ADR. They must preserve these invariants:
 - Bulk/import/onboarding paths must match the single-mutation semantics.
 - Audit entries are append-only from online application traffic.
 
+### RLS GUC Transaction Scope
+
+`app.family_id` is never request-global, session-global, or connection-global.
+Tenant-scoped reads and writes must run through `scopedTenantTransaction` or an
+explicitly equivalent interactive Prisma transaction that calls
+`set_config('app.family_id', familyId, true)` on the transaction client before
+the first RLS-protected query.
+
+The helper passes a `TenantTransactionClient` into the callback. Protected
+queries must use that client. Setting the GUC on one client and then querying
+through the root Prisma singleton is a security bug because pooled connections
+do not guarantee the later query runs on the same connection. `set_config(...,
+false)`, manual `RESET app.family_id`, and root-client tenant reads after GUC
+setup are rejected patterns for online application traffic.
+
+Paths that create the tenant inside the same transaction, such as onboarding,
+may call `setTenantGuc(tx, newFamilyId)` after the `Family` row exists and
+before touching any RLS-protected table. The same rule applies: every protected
+query stays on that transaction client until commit or rollback.
+
 ## Tests Required In Follow-Up Issues
 
 The ADR itself does not implement these tests. M2-3, M2-5, and the real-Postgres integration suite must cover:

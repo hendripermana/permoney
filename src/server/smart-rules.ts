@@ -2,9 +2,7 @@ import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
 import {
   familyMiddleware,
-  createTenantDb,
-  scopedTx,
-  withGuc,
+  scopedTenantTransaction,
 } from "./middleware/with-family"
 
 /**
@@ -13,9 +11,9 @@ import {
 export const getSmartRulesFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
   .handler(async ({ context }) => {
-    return withGuc(context.familyId, async () => {
-      const db = createTenantDb(context.familyId)
-      return db.smartRule.findMany({
+    return scopedTenantTransaction(context.familyId, async (tx) => {
+      return tx.smartRule.findMany({
+        where: { familyId: context.familyId },
         include: { category: true, merchant: true },
         orderBy: { createdAt: "desc" },
       })
@@ -23,7 +21,7 @@ export const getSmartRulesFn = createServerFn({ method: "GET" })
   })
 
 /**
- * 2. CREATE NEW RULE — tenant-scoped via familyMiddleware + scopedTx
+ * 2. CREATE NEW RULE — tenant-scoped via familyMiddleware + scopedTenantTransaction
  */
 const createRuleSchema = z.object({
   keyword: z.string().min(1),
@@ -37,7 +35,7 @@ export const createSmartRuleFn = createServerFn({ method: "POST" })
     createRuleSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
-    return scopedTx(context.familyId, async (tx) => {
+    return scopedTenantTransaction(context.familyId, async (tx) => {
       return tx.smartRule.create({
         data: {
           keyword: data.keyword.toLowerCase(),
@@ -50,13 +48,13 @@ export const createSmartRuleFn = createServerFn({ method: "POST" })
   })
 
 /**
- * 3. DELETE RULE — tenant-scoped via familyMiddleware + scopedTx
+ * 3. DELETE RULE — tenant-scoped via familyMiddleware + scopedTenantTransaction
  */
 export const deleteSmartRuleFn = createServerFn({ method: "POST" })
   .middleware([familyMiddleware])
   .inputValidator(z.object({ id: z.string() }))
   .handler(async ({ data, context }) => {
-    return scopedTx(context.familyId, async (tx) => {
+    return scopedTenantTransaction(context.familyId, async (tx) => {
       const res = await tx.smartRule.deleteMany({
         where: { id: data.id, familyId: context.familyId },
       })
