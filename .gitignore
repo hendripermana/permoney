@@ -3,6 +3,7 @@ node_modules
 dist
 dist-ssr
 *.local
+build.log
 count.txt
 .env
 .nitro
@@ -26,6 +27,9 @@ prisma/dev.db-journal
 .vite-hooks/_/
 
 # AI Agent Workspaces
+.commandcode
+.forge
+.mcp.json
 .agents
 .claude
 .cursor
