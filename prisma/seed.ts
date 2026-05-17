@@ -25,166 +25,174 @@ const prisma = new PrismaClient({
 async function main() {
   console.log("🌱 Seeding the database via the Postgres adapter...")
 
-  // Create Family first (not RLS-protected) so we have a tenant ID.
-  // Upsert handles re-seeding without delete-before-create (which RLS blocks).
-  const family = await prisma.family.upsert({
-    where: { id: "seed-family-01" },
-    update: { name: "Keluarga Permoney" },
-    create: {
-      id: "seed-family-01",
-      name: "Keluarga Permoney",
-      currency: "IDR",
-    },
-  })
+  const [family, passwordHash] = await Promise.all([
+    // Create Family first (not RLS-protected) so we have a tenant ID.
+    // Upsert handles re-seeding without delete-before-create (which RLS blocks).
+    prisma.family.upsert({
+      where: { id: "seed-family-01" },
+      update: { name: "Keluarga Permoney" },
+      create: {
+        id: "seed-family-01",
+        name: "Keluarga Permoney",
+        currency: "IDR",
+      },
+    }),
+    // Hash password dengan Argon2id (sama dengan auth flow)
+    hash("password123", {
+      memoryCost: 65536, // 64 MiB
+      timeCost: 3, // 3 iterations
+      parallelism: 4, // 4 lanes
+      outputLen: 32, // 32 bytes
+      algorithm: 2, // Argon2id
+    }),
+  ])
 
-  // Set the GUC so RLS policies allow tenant-scoped reads/writes.
-  await prisma.$executeRawUnsafe(
-    `SELECT set_config('app.family_id', $1, false)`,
-    family.id
-  )
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`
+      SELECT set_config('app.family_id', ${family.id}, true)
+    `
 
-  // Clean up stale seed data scoped to this tenant.
-  await prisma.transaction.deleteMany({ where: { familyId: family.id } })
-  await prisma.splitEntry.deleteMany({
-    where: { transaction: { familyId: family.id } },
-  })
-  await prisma.account.deleteMany({ where: { familyId: family.id } })
-  await prisma.merchant.deleteMany({ where: { familyId: family.id } })
-  await prisma.category.deleteMany({
-    where: { familyId: family.id, isSystem: false },
-  })
-  await prisma.user.deleteMany({ where: { familyId: family.id } })
+    // Clean up stale seed data scoped to this tenant. Child rows go first;
+    // after transactions are gone, the remaining tenant tables are independent.
+    await tx.splitEntry.deleteMany({
+      where: { transaction: { familyId: family.id } },
+    })
+    await tx.transaction.deleteMany({ where: { familyId: family.id } })
+    await Promise.all([
+      tx.account.deleteMany({ where: { familyId: family.id } }),
+      tx.merchant.deleteMany({ where: { familyId: family.id } }),
+      tx.category.deleteMany({
+        where: { familyId: family.id, isSystem: false },
+      }),
+      tx.user.deleteMany({ where: { familyId: family.id } }),
+    ])
 
-  // Hash password dengan Argon2id (sama dengan auth flow)
-  const passwordHash = await hash("password123", {
-    memoryCost: 65536, // 64 MiB
-    timeCost: 3, // 3 iterations
-    parallelism: 4, // 4 lanes
-    outputLen: 32, // 32 bytes
-    algorithm: 2, // Argon2id
-  })
-
-  await prisma.user.upsert({
-    where: { email: "admin@permana.icu" },
-    update: { name: "Hendri", passwordHash, familyId: family.id },
-    create: {
-      email: "admin@permana.icu",
-      name: "Hendri",
-      passwordHash,
-      familyId: family.id,
-    },
-  })
-
-  await prisma.account.createMany({
-    data: [
-      {
-        name: "BCA Utama",
-        type: "DEPOSITORY",
-        // Rp 15,000,000 stored as sen (×100). See ADR-0001.
-        balance: 1_500_000_000n,
-        familyId: family.id,
-        color: "#0066AE",
-      },
-      {
-        name: "Dompet Cash",
-        type: "DEPOSITORY",
-        // Rp 500,000 → 50,000,000 sen
-        balance: 50_000_000n,
-        familyId: family.id,
-        color: "#22C55E",
-      },
-      {
-        name: "Piutang Teman",
-        type: "RECEIVABLE",
-        balance: 0n,
-        familyId: family.id,
-        color: "#F59E0B",
-      },
-    ],
-  })
-
-  await prisma.category.createMany({
-    data: [
-      {
-        name: "Makan & Minum",
-        type: "expense",
-        isSystem: true,
-        color: "#EF4444",
-        icon: "utensils",
-      },
-      {
-        name: "Groceries",
-        type: "expense",
-        isSystem: false,
-        color: "#F59E0B",
-        icon: "shopping-cart",
-      },
-      {
-        name: "Belanja",
-        type: "expense",
-        isSystem: false,
-        color: "#EC4899",
-        icon: "shopping-bag",
-      },
-      {
-        name: "Food & Drink",
-        type: "expense",
-        isSystem: false,
-        color: "#F97316",
-        icon: "coffee",
-      },
-      {
-        name: "Gaji Bulanan",
-        type: "income",
-        isSystem: true,
-        color: "#10B981",
-        icon: "wallet",
-      },
-      {
-        name: "Salary",
-        type: "income",
-        isSystem: false,
-        color: "#059669",
-        icon: "cash",
-      },
-      {
-        name: "Freelance",
-        type: "income",
-        isSystem: false,
-        color: "#3B82F6",
-        icon: "briefcase",
-      },
-    ],
-  })
-
-  await prisma.merchant.createMany({
-    data: [
-      { name: "Starbucks", familyId: family.id },
-      { name: "Budi (Teman)", familyId: family.id },
-      { name: "Indomaret", familyId: family.id },
-      { name: "Alfamart", familyId: family.id },
-      { name: "Warung Madura SQ", familyId: family.id },
-      { name: "Bebek Kaleyo", familyId: family.id },
-      { name: "Kopi Kenangan", familyId: family.id },
-      { name: "Tous Les Jours", familyId: family.id },
-      { name: "Sushi Tei", familyId: family.id },
-      { name: "Namaaz Dining", familyId: family.id },
-      { name: "Henshin", familyId: family.id },
-      { name: "Ruth's Chris Steak House", familyId: family.id },
-      { name: "Osteria Gia", familyId: family.id },
-      { name: "Pertamina", familyId: family.id },
-      { name: "Shell", familyId: family.id },
-      { name: "Vivo", familyId: family.id },
-      { name: "Smart Parking", familyId: family.id },
-      { name: "Parkir Lebusa", familyId: family.id },
-      { name: "TransJakarta", familyId: family.id },
-      { name: "MRT Jakarta", familyId: family.id },
-      { name: "KRL Commuter Line", familyId: family.id },
-      { name: "Gojek", familyId: family.id },
-      { name: "Grab", familyId: family.id },
-      { name: "ShopeeFood", familyId: family.id },
-      { name: "Tokopedia", familyId: family.id },
-    ],
+    await Promise.all([
+      tx.user.upsert({
+        where: { email: "admin@permana.icu" },
+        update: { name: "Hendri", passwordHash, familyId: family.id },
+        create: {
+          email: "admin@permana.icu",
+          name: "Hendri",
+          passwordHash,
+          familyId: family.id,
+        },
+      }),
+      tx.account.createMany({
+        data: [
+          {
+            name: "BCA Utama",
+            type: "DEPOSITORY",
+            // Rp 15,000,000 stored as sen (×100). See ADR-0001.
+            balance: 1_500_000_000n,
+            familyId: family.id,
+            color: "#0066AE",
+          },
+          {
+            name: "Dompet Cash",
+            type: "DEPOSITORY",
+            // Rp 500,000 → 50,000,000 sen
+            balance: 50_000_000n,
+            familyId: family.id,
+            color: "#22C55E",
+          },
+          {
+            name: "Piutang Teman",
+            type: "RECEIVABLE",
+            balance: 0n,
+            familyId: family.id,
+            color: "#F59E0B",
+          },
+        ],
+      }),
+      tx.category.createMany({
+        data: [
+          {
+            name: "Makan & Minum",
+            type: "expense",
+            isSystem: true,
+            color: "#EF4444",
+            icon: "utensils",
+          },
+          {
+            name: "Groceries",
+            type: "expense",
+            isSystem: false,
+            familyId: family.id,
+            color: "#F59E0B",
+            icon: "shopping-cart",
+          },
+          {
+            name: "Belanja",
+            type: "expense",
+            isSystem: false,
+            familyId: family.id,
+            color: "#EC4899",
+            icon: "shopping-bag",
+          },
+          {
+            name: "Food & Drink",
+            type: "expense",
+            isSystem: false,
+            familyId: family.id,
+            color: "#F97316",
+            icon: "coffee",
+          },
+          {
+            name: "Gaji Bulanan",
+            type: "income",
+            isSystem: true,
+            color: "#10B981",
+            icon: "wallet",
+          },
+          {
+            name: "Salary",
+            type: "income",
+            isSystem: false,
+            familyId: family.id,
+            color: "#059669",
+            icon: "cash",
+          },
+          {
+            name: "Freelance",
+            type: "income",
+            isSystem: false,
+            familyId: family.id,
+            color: "#3B82F6",
+            icon: "briefcase",
+          },
+        ],
+      }),
+      tx.merchant.createMany({
+        data: [
+          { name: "Starbucks", familyId: family.id },
+          { name: "Budi (Teman)", familyId: family.id },
+          { name: "Indomaret", familyId: family.id },
+          { name: "Alfamart", familyId: family.id },
+          { name: "Warung Madura SQ", familyId: family.id },
+          { name: "Bebek Kaleyo", familyId: family.id },
+          { name: "Kopi Kenangan", familyId: family.id },
+          { name: "Tous Les Jours", familyId: family.id },
+          { name: "Sushi Tei", familyId: family.id },
+          { name: "Namaaz Dining", familyId: family.id },
+          { name: "Henshin", familyId: family.id },
+          { name: "Ruth's Chris Steak House", familyId: family.id },
+          { name: "Osteria Gia", familyId: family.id },
+          { name: "Pertamina", familyId: family.id },
+          { name: "Shell", familyId: family.id },
+          { name: "Vivo", familyId: family.id },
+          { name: "Smart Parking", familyId: family.id },
+          { name: "Parkir Lebusa", familyId: family.id },
+          { name: "TransJakarta", familyId: family.id },
+          { name: "MRT Jakarta", familyId: family.id },
+          { name: "KRL Commuter Line", familyId: family.id },
+          { name: "Gojek", familyId: family.id },
+          { name: "Grab", familyId: family.id },
+          { name: "ShopeeFood", familyId: family.id },
+          { name: "Tokopedia", familyId: family.id },
+        ],
+      }),
+    ])
   })
 
   console.log("✅ Seeding finished. Database state is healthy.")

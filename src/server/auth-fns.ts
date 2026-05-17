@@ -5,6 +5,7 @@ import { signupSchema, loginSchema } from "./auth-schemas"
 import { checkRateLimit } from "./middleware/rate-limit"
 import { getSession, requireSession } from "./middleware/session"
 import { prisma } from "./db.server"
+import { setTenantGuc } from "./middleware/with-family"
 
 export { signupSchema, loginSchema }
 
@@ -82,7 +83,7 @@ export const logoutFn = createServerFn({ method: "POST" }).handler(async () => {
  * Inside one Prisma $transaction:
  *   1. Create a Family row with a safe default name.
  *   2. Update User.familyId to the new Family's id.
- *   3. Set the Postgres app.family_id GUC (via scopedTx for RLS).
+ *   3. Set the Postgres app.family_id GUC on the same transaction client.
  *
  * Returns the new familyId so the client can redirect to the dashboard.
  */
@@ -110,10 +111,7 @@ export const onboardFn = createServerFn({ method: "POST" }).handler(
         data: { name: familyName },
       })
 
-      await tx.$executeRawUnsafe(
-        `SELECT set_config('app.family_id', $1, true)`,
-        family.id
-      )
+      await setTenantGuc(tx, family.id)
 
       await tx.user.update({
         where: { id: user.id },
