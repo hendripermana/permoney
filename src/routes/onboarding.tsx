@@ -1,9 +1,8 @@
-import { createFileRoute, redirect } from "@tanstack/react-router"
+import { createFileRoute, redirect, useRouter } from "@tanstack/react-router"
 import { onboardFn, getSessionGuardFn } from "@/server/auth-fns"
 import { getOnboardingRouteRedirect } from "@/server/onboarding-contract"
 import { Button } from "@/components/ui/button"
 import { useServerFn } from "@tanstack/react-start"
-import { useRouter } from "@tanstack/react-router"
 import { useState, useTransition } from "react"
 
 export const Route = createFileRoute("/onboarding")({
@@ -63,7 +62,7 @@ function OnboardingPage() {
         size="lg"
         className="w-full max-w-sm"
       >
-        {isPending ? "Setting up your workspace…" : "Get Started"}
+        {isPending ? "Setting up your workspace..." : "Get Started"}
       </Button>
 
       <p className="text-xs text-muted-foreground">

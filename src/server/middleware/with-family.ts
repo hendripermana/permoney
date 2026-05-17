@@ -23,10 +23,11 @@ interface ScopedTenantTransactionOptions {
 export async function setTenantGuc(
   tx: TenantTransactionClient,
   familyId: string
-): Promise<void> {
+): Promise<string> {
   await tx.$executeRaw`
     SELECT set_config('app.family_id', ${familyId}, true)
   `
+  return familyId
 }
 
 export async function scopedTenantTransaction<T>(

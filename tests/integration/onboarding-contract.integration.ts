@@ -6,6 +6,7 @@ import {
   expect,
   test,
 } from "vite-plus/test"
+import { randomUUID } from "node:crypto"
 import { auth } from "../../src/server/auth.server"
 import { initializeOnboardingForUser } from "../../src/server/onboarding-service"
 import {
@@ -33,12 +34,13 @@ describe("onboarding contract", () => {
 
   test("newly signed-up users are created without a family", async () => {
     const email = "signup-contract@permoney.local"
+    const signupCredential = `PermoneyTest-${randomUUID()}`
 
     const result = await auth.api.signUpEmail({
       body: {
         email,
         name: "Signup Contract",
-        password: "password123",
+        password: signupCredential,
       },
       headers: new Headers(),
     })
@@ -63,7 +65,13 @@ describe("onboarding contract", () => {
     })
 
     const first = await initializeOnboardingForUser(harness.prisma, user.id)
-    const second = await initializeOnboardingForUser(harness.prisma, user.id)
+    const storedAfterFirst = await harness.prisma.user.findFirstOrThrow({
+      where: { familyId: first.familyId, id: user.id },
+    })
+    const second = await initializeOnboardingForUser(
+      harness.prisma,
+      storedAfterFirst.id
+    )
 
     const [storedUser, families] = await Promise.all([
       harness.prisma.user.findUniqueOrThrow({ where: { id: user.id } }),
@@ -91,7 +99,9 @@ describe("onboarding contract", () => {
     ])
 
     const [storedUser, familyCount] = await Promise.all([
-      harness.prisma.user.findUniqueOrThrow({ where: { id: user.id } }),
+      harness.prisma.user.findFirstOrThrow({
+        where: { familyId: first.familyId, id: user.id },
+      }),
       harness.prisma.family.count(),
     ])
 

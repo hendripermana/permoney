@@ -13,7 +13,7 @@ const argonOpts: Options = {
 }
 
 const isProduction = process.env.NODE_ENV === "production"
-const BETTER_AUTH_PASSWORD_HASH_SENTINEL = "better-auth-managed-credential"
+const LEGACY_AUTH_USER_FIELD_PLACEHOLDER = "better-auth-managed-user-field"
 
 export const auth = betterAuth({
   advanced: {
@@ -36,7 +36,7 @@ export const auth = betterAuth({
         required: false,
         input: false,
         returned: false,
-        defaultValue: BETTER_AUTH_PASSWORD_HASH_SENTINEL,
+        defaultValue: LEGACY_AUTH_USER_FIELD_PLACEHOLDER,
       },
       familyId: {
         type: "string",

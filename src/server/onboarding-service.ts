@@ -38,14 +38,14 @@ export async function initializeOnboardingForUser(
       },
     })
 
-    await setTenantGuc(tx, family.id)
+    const scopedFamilyId = await setTenantGuc(tx, family.id)
 
     await tx.user.update({
       where: { id: user.id },
-      data: { familyId: family.id },
+      data: { familyId: scopedFamilyId },
     })
 
-    return { created: true, familyId: family.id }
+    return { created: true, familyId: scopedFamilyId }
   })
 }
 
