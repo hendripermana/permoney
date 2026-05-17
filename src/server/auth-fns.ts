@@ -5,7 +5,11 @@ import { signupSchema, loginSchema } from "./auth-schemas"
 import { checkRateLimit } from "./middleware/rate-limit"
 import { getSession, requireSession } from "./middleware/session"
 import { prisma } from "./db.server"
-import { setTenantGuc } from "./middleware/with-family"
+import {
+  getPostAuthRedirectPath,
+  hasFamilyIdValue,
+} from "./onboarding-contract"
+import { initializeOnboardingForUser } from "./onboarding-service"
 
 export { signupSchema, loginSchema }
 
@@ -17,9 +21,10 @@ export const getSessionGuardFn = createServerFn({ method: "GET" }).handler(
   async () => {
     const session = await getSession()
     if (!session?.user) return { authenticated: false, hasFamilyId: false }
+    const familyId = readAuthFamilyId(session.user)
     return {
       authenticated: true,
-      hasFamilyId: Boolean((session.user as Record<string, unknown>).familyId),
+      hasFamilyId: hasFamilyIdValue(familyId),
     }
   }
 )
@@ -50,7 +55,11 @@ export const signupFn = createServerFn({ method: "POST" })
       },
       headers: request.headers,
     })
-    return { success: true, user: res?.user }
+    return {
+      redirectTo: "/onboarding" as const,
+      success: true,
+      user: res?.user,
+    }
   })
 
 export const loginFn = createServerFn({ method: "POST" })
@@ -65,7 +74,11 @@ export const loginFn = createServerFn({ method: "POST" })
       },
       headers: request.headers,
     })
-    return { success: true, user: res?.user }
+    return {
+      redirectTo: getPostAuthRedirectPath(readAuthFamilyId(res?.user)),
+      success: true,
+      user: res?.user,
+    }
   })
 
 export const logoutFn = createServerFn({ method: "POST" }).handler(async () => {
@@ -79,46 +92,29 @@ export const logoutFn = createServerFn({ method: "POST" }).handler(async () => {
 /**
  * M1-7: Guided onboarding initializer.
  *
- * Callable only when the session exists and user.familyId === null.
+ * Callable when the session exists. If the user already has a family, this is
+ * an idempotent replay and returns the existing familyId.
+ *
  * Inside one Prisma $transaction:
- *   1. Create a Family row with a safe default name.
- *   2. Update User.familyId to the new Family's id.
+ *   1. Lock the User row so concurrent onboarding requests serialize.
+ *   2. Create a Family row with a safe default name if familyId is still null.
  *   3. Set the Postgres app.family_id GUC on the same transaction client.
+ *   4. Update User.familyId to the new Family's id.
  *
  * Returns the new familyId so the client can redirect to the dashboard.
  */
 export const onboardFn = createServerFn({ method: "POST" }).handler(
   async () => {
     const { user } = await requireSession()
-
-    if (user.familyId) {
-      throw Object.assign(new Error("User is already onboarded"), {
-        code: "ALREADY_ONBOARDED",
-        status: 409,
-      })
-    }
-
-    // Derive family name from user's email or fallback.
-    const familyName = user.email
-      ? `${user.email.split("@")[0]}'s Family`
-      : "My Family"
-
-    return prisma.$transaction(async (tx) => {
-      // Set RLS GUC before any tenant-scoped operations.
-      // Note: Family and User are NOT RLS-protected, but this ensures
-      // any future tenant-scoped code in this transaction path is safe.
-      const family = await tx.family.create({
-        data: { name: familyName },
-      })
-
-      await setTenantGuc(tx, family.id)
-
-      await tx.user.update({
-        where: { id: user.id },
-        data: { familyId: family.id },
-      })
-
-      return { familyId: family.id }
-    })
+    return await initializeOnboardingForUser(prisma, user.id)
   }
 )
+
+function readAuthFamilyId(user: unknown): string | null {
+  if (typeof user !== "object" || user === null || !("familyId" in user)) {
+    return null
+  }
+
+  const familyId = (user as { familyId?: unknown }).familyId
+  return hasFamilyIdValue(familyId) ? familyId : null
+}

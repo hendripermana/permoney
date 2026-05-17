@@ -26,6 +26,8 @@ async function main() {
   console.log("🌱 Seeding the database via the Postgres adapter...")
 
   const [family, passwordHash] = await Promise.all([
+    // Dev seed creates an already-onboarded demo tenant. Product signup does
+    // not create Family; guided onboarding owns that contract.
     // Create Family first (not RLS-protected) so we have a tenant ID.
     // Upsert handles re-seeding without delete-before-create (which RLS blocks).
     prisma.family.upsert({

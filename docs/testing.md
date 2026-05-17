@@ -95,7 +95,15 @@ owner.serverContext.familyId
 ```
 
 Use `createAuthenticatedUserWithoutFamily()` for onboarding and auth-boundary
-tests where the session exists but `user.familyId` is `null`.
+tests where the session exists but `user.familyId` is `null`. This is the
+canonical signup state: signup creates an authenticated user only, and guided
+onboarding creates the family later.
+
+Onboarding contract tests should cover both sides of the route boundary:
+authenticated users without `familyId` are redirected away from protected app
+routes, and onboarded users may enter `/dashboard` and `/transactions`.
+Initializer tests should use real Postgres and verify replay does not create
+duplicate family or future demo ledger rows.
 
 ## CI
 

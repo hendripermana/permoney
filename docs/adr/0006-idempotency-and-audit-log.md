@@ -222,6 +222,22 @@ may call `setTenantGuc(tx, newFamilyId)` after the `Family` row exists and
 before touching any RLS-protected table. The same rule applies: every protected
 query stays on that transaction client until commit or rollback.
 
+### Onboarding Contract
+
+M2-18 settles onboarding on the guided-family-creation model. Signup creates an
+authenticated `User` with `familyId = null`; it does not create `Family`.
+Protected app routes redirect authenticated users without a family to
+`/onboarding`. The onboarding initializer runs in one interactive Prisma
+transaction, locks the `User` row, creates `Family` only if `familyId` is still
+null, sets the transaction-scoped RLS GUC for the new family, and assigns
+`User.familyId`.
+
+Sequential or concurrent replays of onboarding for the same user must return the
+existing `familyId` and must not create duplicate family, account, transaction,
+or audit rows. PER-45 may add demo accounts/sample transactions only inside
+this initializer and only with the idempotency and audit-log rules from this
+ADR.
+
 ## Tests Required In Follow-Up Issues
 
 The ADR itself does not implement these tests. M2-3, M2-5, and the real-Postgres integration suite must cover:

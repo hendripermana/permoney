@@ -13,6 +13,7 @@ const argonOpts: Options = {
 }
 
 const isProduction = process.env.NODE_ENV === "production"
+const LEGACY_AUTH_USER_FIELD_PLACEHOLDER = "better-auth-managed-user-field"
 
 export const auth = betterAuth({
   advanced: {
@@ -27,25 +28,16 @@ export const auth = betterAuth({
   database: prismaAdapter(db, {
     provider: "postgresql",
   }),
-  databaseHooks: {
-    user: {
-      create: {
-        after: async (user) => {
-          // Create Family and update user with familyId
-          const family = await db.family.create({
-            data: { name: `${user.name}'s Family` },
-          })
-          await db.user.update({
-            where: { id: user.id },
-            data: { familyId: family.id },
-          })
-        },
-      },
-    },
-  },
   user: {
     modelName: "User",
     additionalFields: {
+      passwordHash: {
+        type: "string",
+        required: false,
+        input: false,
+        returned: false,
+        defaultValue: LEGACY_AUTH_USER_FIELD_PLACEHOLDER,
+      },
       familyId: {
         type: "string",
         required: false,
