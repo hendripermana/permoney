@@ -34,7 +34,7 @@ cp .env.example .env
 
 # 3. Start local Postgres container and apply migrations
 vp run db:up
-pnpm db:migrate
+vp run db:migrate
 
 # 4. Start dev server (default port 3006)
 vp dev
@@ -45,15 +45,18 @@ Visit <http://localhost:3006>.
 ## Development
 
 ```bash
-vp check          # format + lint + type-check (single-pass, ~3s)
-vp test           # run Vitest suite once
-vp test watch     # TDD watch mode
-vp build          # production bundle
-vp preview        # serve production build locally
+vp check                 # format + lint + type-check
+vp test run              # run fast unit suite once
+vp run test:integration  # run real Postgres integration suite
+vp test watch            # TDD watch mode
+vp build                 # production bundle
+vp preview               # serve production build locally
 
-pnpm db:migrate   # create + apply new migration in dev
-pnpm db:studio    # browse data with Prisma Studio
+vp run db:migrate   # create + apply new migration in dev
+vp run db:studio    # browse data with Prisma Studio
 ```
+
+Testing workflow details live in [`docs/testing.md`](./docs/testing.md).
 
 **Pre-commit hooks** run automatically (`vp staged` for changed files + `intent stale` to detect skill drift).
 
@@ -104,7 +107,8 @@ All monetary fields (`amount`, `balance`) use integer minor units (BigInt cents/
 ## Contributing
 
 - Branch from `main`, open PR, wait for CI green.
-- Run `vp check && vp test` locally before pushing.
+- Run `vp check && vp test run` locally before pushing. For ledger/data-integrity
+  work, also run `vp run test:integration`.
 - Follow conventions in [`AGENTS.md`](./AGENTS.md) — they apply to humans and AI agents alike.
 - Security issues: see [`SECURITY.md`](./SECURITY.md), do **not** open public issues.
 
