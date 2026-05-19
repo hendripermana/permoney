@@ -74,6 +74,44 @@ These commands map to their corresponding tools. For example, `vp dev --port 300
 - [ ] Run `vp install` after pulling remote changes and before getting started.
 - [ ] Run `vp check` and `vp test` to validate changes.
 
+## Long-Horizon Engineering Standard For Agents
+
+Permoney is not being built as a short-lived prototype. Agents must treat the
+core system as financial infrastructure that should remain understandable,
+adaptable, and trustworthy for decades. Do not optimize for "it works today" if
+the shortcut weakens future adaptability, tenant isolation, ledger correctness,
+auditability, or the ability to replace technologies cleanly.
+
+When choosing between designs, prefer the option with clearer boundaries and
+stronger invariants, even when it takes more work now. Authentication,
+onboarding, tenant scoping, ledger mutation, import staging, audit logging, UI
+state, and browser behavior must each have explicit ownership. A feature is not
+properly done when behavior is merely green locally; it is done when the
+architecture explains why the behavior remains correct under retries,
+concurrency, future integrations, and framework evolution.
+
+Future agents must work with this mindset:
+
+- Build core paths so they can survive framework, auth provider, database, AI,
+  bank-sync, and deployment changes without rewriting the financial model.
+- Keep irreversible financial meaning in durable server/database invariants,
+  not in UI convention or request timing.
+- Make state transitions explicit. Examples: authenticated-but-not-onboarded,
+  tenant-scoped, transaction-scoped, replayed idempotency key, soft-deleted
+  ledger row, and audited mutation.
+- Prefer a smaller, stricter contract over a broad ambiguous one. Ambiguity is
+  technical debt, especially in money movement and tenant isolation.
+- Test the real boundary that can fail: real Postgres for data integrity, real
+  browser E2E for routing/hydration/client-bundle safety, and targeted unit
+  tests for pure logic.
+- Never hide architectural uncertainty behind passing tests. If the design
+  tradeoff is material, document the decision and why it keeps Permoney more
+  adaptable.
+- Do not choose the easiest implementation because it is easy. Choose the
+  implementation whose boundaries would still make sense if Permoney is far
+  larger, integrated with more providers, or maintained by a different team
+  years from now.
+
 ## TanStack Intent — Agent Skills Discovery
 
 **Usage for AI agents:**

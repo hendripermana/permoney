@@ -1,15 +1,10 @@
 import { createServerFn } from "@tanstack/react-start"
-import { getRequest } from "@tanstack/react-start/server"
-import { auth } from "./auth.server"
 import { signupSchema, loginSchema } from "./auth-schemas"
-import { checkRateLimit } from "./middleware/rate-limit"
 import { getSession, requireSession } from "./middleware/session"
-import { prisma } from "./db.server"
 import {
   getPostAuthRedirectPath,
   hasFamilyIdValue,
 } from "./onboarding-contract"
-import { initializeOnboardingForUser } from "./onboarding-service"
 
 export { signupSchema, loginSchema }
 
@@ -45,6 +40,11 @@ export const meFn = createServerFn({ method: "GET" }).handler(async () => {
 export const signupFn = createServerFn({ method: "POST" })
   .inputValidator(signupSchema)
   .handler(async ({ data }) => {
+    const [{ getRequest }, { auth }, { checkRateLimit }] = await Promise.all([
+      import("@tanstack/react-start/server"),
+      import("./auth.server"),
+      import("./middleware/rate-limit"),
+    ])
     const request = getRequest()
     await checkRateLimit(request, data.email, "signup")
     const res = await auth.api.signUpEmail({
@@ -65,6 +65,11 @@ export const signupFn = createServerFn({ method: "POST" })
 export const loginFn = createServerFn({ method: "POST" })
   .inputValidator(loginSchema)
   .handler(async ({ data }) => {
+    const [{ getRequest }, { auth }, { checkRateLimit }] = await Promise.all([
+      import("@tanstack/react-start/server"),
+      import("./auth.server"),
+      import("./middleware/rate-limit"),
+    ])
     const request = getRequest()
     await checkRateLimit(request, data.email, "login")
     const res = await auth.api.signInEmail({
@@ -82,6 +87,10 @@ export const loginFn = createServerFn({ method: "POST" })
   })
 
 export const logoutFn = createServerFn({ method: "POST" }).handler(async () => {
+  const [{ getRequest }, { auth }] = await Promise.all([
+    import("@tanstack/react-start/server"),
+    import("./auth.server"),
+  ])
   const request = getRequest()
   await auth.api.signOut({
     headers: request.headers,
@@ -105,7 +114,12 @@ export const logoutFn = createServerFn({ method: "POST" }).handler(async () => {
  */
 export const onboardFn = createServerFn({ method: "POST" }).handler(
   async () => {
-    const { user } = await requireSession()
+    const [{ user }, { prisma }, { initializeOnboardingForUser }] =
+      await Promise.all([
+        requireSession(),
+        import("./db.server"),
+        import("./onboarding-service"),
+      ])
     return await initializeOnboardingForUser(prisma, user.id)
   }
 )

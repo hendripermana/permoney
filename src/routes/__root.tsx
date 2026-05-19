@@ -9,6 +9,7 @@ import {
 import { QueryClientProvider } from "@tanstack/react-query"
 import { getQueryClient } from "@/lib/query-client"
 import { Button } from "@/components/ui/button"
+import { useMountEffect } from "@/hooks/use-mount-effect"
 
 import appCss from "../styles.css?url"
 
@@ -41,7 +42,7 @@ export const Route = createRootRoute({
   // 🚀 BEST PRACTICE: Halaman 404 resmi kita
   notFoundComponent: () => (
     <div className="flex min-h-screen flex-col items-center justify-center p-4 text-center">
-      <h1 className="text-4xl font-bold text-red-500">404</h1>
+      <h1 className="text-4xl font-semibold text-red-500">404</h1>
       <p className="text-lg text-gray-600">
         Bro, halamannya nggak ada (Not Found)!
       </p>
@@ -78,7 +79,7 @@ function RootErrorComponent({ error, reset }: ErrorComponentProps) {
   return (
     <RootDocument>
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
-        <h1 className="text-3xl font-bold">Ada yang salah 😵</h1>
+        <h1 className="text-3xl font-semibold">Ada yang salah 😵</h1>
         <p className="max-w-prose text-muted-foreground">
           Aplikasi mengalami error tak terduga. Tim sudah otomatis dapat
           notifikasi. Coba reset, atau refresh halaman.
@@ -103,6 +104,14 @@ function RootErrorComponent({ error, reset }: ErrorComponentProps) {
 }
 
 function RootComponent() {
+  useMountEffect(() => {
+    document.documentElement.dataset.permoneyHydrated = "true"
+
+    return () => {
+      delete document.documentElement.dataset.permoneyHydrated
+    }
+  })
+
   return (
     <RootDocument>
       {/* 3. BUNGKUS APLIKASIMU DENGAN PROVIDER */}

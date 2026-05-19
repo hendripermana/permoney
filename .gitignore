@@ -13,6 +13,9 @@ count.txt
 .vinxi
 __unconfig*
 todos.json
+playwright-report
+test-results
+.playwright
 
 /src/generated/prisma
 

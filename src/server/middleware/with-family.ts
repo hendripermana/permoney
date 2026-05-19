@@ -1,5 +1,4 @@
 import type { Prisma } from "@prisma/client"
-import { prisma } from "../db.server"
 
 // Re-export middleware from session.ts for ergonomic import
 export { authMiddleware, familyMiddleware } from "./session"
@@ -35,6 +34,7 @@ export async function scopedTenantTransaction<T>(
   fn: (tx: TenantTransactionClient) => Promise<T>,
   options?: ScopedTenantTransactionOptions
 ): Promise<T> {
+  const { prisma } = await import("../db.server")
   return prisma.$transaction(async (tx) => {
     await setTenantGuc(tx, familyId)
     return await fn(tx)

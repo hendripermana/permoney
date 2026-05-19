@@ -1,8 +1,10 @@
-import { auth } from "../auth.server"
-import { getRequest } from "@tanstack/react-start/server"
 import { createMiddleware } from "@tanstack/react-start"
 
 export async function getSession() {
+  const [{ getRequest }, { auth }] = await Promise.all([
+    import("@tanstack/react-start/server"),
+    import("../auth.server"),
+  ])
   const request = getRequest()
   const session = await auth.api.getSession({
     headers: request.headers,

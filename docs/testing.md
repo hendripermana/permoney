@@ -9,7 +9,7 @@ without slowing down every local feedback loop.
 vp test run                  # default unit suite
 vp run test:unit             # explicit unit suite
 vp run test:integration      # real Postgres integration suite
-vp run test:e2e              # browser E2E suite, currently allowed to be empty
+vp run test:e2e              # Playwright browser E2E suite
 vp run test:ci               # CI-safe unit + integration gate
 ```
 
@@ -19,6 +19,47 @@ live under `tests/integration/**/*.integration.ts`, so `vp test run` remains
 the fast default unit path. The default suite is intentionally scoped to
 `src/**/*.test.*` and `scripts/**/*.test.mjs`; local agent/cache worktrees such
 as `.kilo/**` and `.kilocode/**` are excluded.
+
+## Browser E2E Baseline
+
+Playwright is the deterministic browser E2E runner for M2 route safety. The
+suite lives in `tests/e2e/**/*.e2e.ts` and starts the app through
+`playwright.config.ts` on `http://127.0.0.1:3010` by default. It creates an
+isolated real Postgres database through the same harness used by integration
+tests, applies migrations, runs the app with the non-superuser runtime role,
+and drops the database during teardown.
+
+First-time local browser install:
+
+```bash
+vp exec playwright install chromium
+```
+
+Local workflow:
+
+```bash
+vp run db:up
+PERMONEY_TEST_ADMIN_PASSWORD=<local docker password> vp run test:e2e
+```
+
+Supported E2E environment variables:
+
+- `PERMONEY_E2E_PORT`: override the managed app port. Defaults to `3010`.
+- `PERMONEY_E2E_BASE_URL`: run tests against an already-running app instead of
+  starting the managed Playwright web server.
+- `PERMONEY_TEST_*`: same database harness variables documented below for
+  integration tests.
+
+The E2E gate must not depend on manual browser setup. Tests create users through
+the UI and verify the canonical onboarding contract: signup creates an
+authenticated user without a family, guided onboarding creates the family, and
+protected routes redirect until onboarding is complete.
+
+The suite fails if the browser emits console/page errors containing known
+server-client boundary regressions such as `SECURITY BREACH`,
+`PrismaClient is unable to run in this browser`, `renderRouterToString`,
+`node:stream/web`, `react-dom/server.browser.js`, or
+`Calling 'require' for '.prisma/client/index-browser'`.
 
 ## Postgres Integration Harness
 
@@ -115,5 +156,6 @@ databases through the harness, and runs:
 vp run test:integration
 ```
 
-Heavier browser E2E tests should stay in `tests/e2e/**/*.e2e.ts` and must not
-depend on manual login or clicks outside the runner.
+Browser E2E tests should stay in `tests/e2e/**/*.e2e.ts`. Keep this suite small
+enough for PR confidence, deterministic enough for CI, and strict enough to
+catch auth-route, hydration, TanStack DB preload, and browser-bundle regressions.
