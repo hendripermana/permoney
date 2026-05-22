@@ -5,6 +5,7 @@ dist-ssr
 *.local
 build.log
 count.txt
+coverage
 .env
 .nitro
 .tanstack

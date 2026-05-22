@@ -107,8 +107,9 @@ All monetary fields (`amount`, `balance`) use integer minor units (BigInt cents/
 ## Contributing
 
 - Branch from `main`, open PR, wait for CI green.
-- Run `vp check && vp test run` locally before pushing. For ledger/data-integrity
-  work, also run `vp run test:integration`.
+- Run `vp check && vp run test:unit:coverage` locally before pushing. For
+  ledger/data-integrity work, also run `vp run test:integration`; for route or
+  auth-guard work, run `vp run test:e2e`.
 - Follow conventions in [`AGENTS.md`](./AGENTS.md) — they apply to humans and AI agents alike.
 - Security issues: see [`SECURITY.md`](./SECURITY.md), do **not** open public issues.
 
