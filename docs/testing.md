@@ -8,6 +8,7 @@ without slowing down every local feedback loop.
 ```bash
 vp test run                  # default unit suite
 vp run test:unit             # explicit unit suite
+vp run test:unit:coverage    # unit suite plus M2 finance-domain coverage gate
 vp run test:integration      # real Postgres integration suite
 vp run test:e2e              # Playwright browser E2E suite
 vp run test:ci               # CI-safe unit + integration gate
@@ -19,6 +20,39 @@ live under `tests/integration/**/*.integration.ts`, so `vp test run` remains
 the fast default unit path. The default suite is intentionally scoped to
 `src/**/*.test.*` and `scripts/**/*.test.mjs`; local agent/cache worktrees such
 as `.kilo/**` and `.kilocode/**` are excluded.
+
+## Coverage Gates
+
+Vitest coverage runs through Vite+ with the V8 provider:
+
+```bash
+vp run test:unit:coverage
+```
+
+The unit coverage gate is intentionally narrow. It measures pure finance-domain
+logic where a regression can corrupt balances or user-visible money semantics:
+
+- `src/lib/currency.ts`
+- `src/lib/money.ts`
+- `src/lib/split-parity.ts`
+- `src/lib/transaction-filters.ts`
+
+These files must keep at least 90% line coverage and 90% branch coverage. This
+is a real invariant gate, not a vanity whole-app percentage. Generated code,
+test helpers, scripts, Playwright tests, integration fixtures, and the generated
+route tree (`src/routeTree.gen.ts`) are excluded so they cannot inflate the
+number.
+
+UI components are not line-coverage gated for M2. Browser safety is covered by
+deterministic Playwright flows instead. Server ledger paths such as
+`src/server/transactions.ts`, RLS helpers, idempotency, and audit behavior must
+be covered by real Postgres integration tests before M2 closes; mocked Prisma
+does not prove those invariants.
+
+Any M2 PR that touches ledger mutation, balance updates, RLS, idempotency,
+audit logging, or auth guards must include deterministic tests in the relevant
+suite. If an existing test already covers the change, the PR must explicitly
+name that test and explain the invariant it proves.
 
 ## Browser E2E Baseline
 
@@ -148,12 +182,22 @@ duplicate family or future demo ledger rows.
 
 ## CI
 
-CI runs the fast unit suite separately from the Postgres integration suite. The
-integration job starts a Postgres service, creates isolated `permoney_test_*`
-databases through the harness, and runs:
+CI exposes separate pass/fail status checks for each gate:
+
+- `check`: formatting, linting, type-checking, no-`useEffect`, and auth-stub
+  guards.
+- `test:unit`: Vitest unit tests plus the finance-domain coverage gate.
+- `test:integration`: real Postgres integration tests.
+- `test:e2e`: Playwright browser route/auth/bundle regression tests with a
+  real Postgres database.
+- `build`: production build smoke test.
+
+The integration and E2E jobs each start a Postgres service, create isolated
+`permoney_test_*` databases through the harness, and run:
 
 ```bash
 vp run test:integration
+vp run test:e2e
 ```
 
 Browser E2E tests should stay in `tests/e2e/**/*.e2e.ts`. Keep this suite small

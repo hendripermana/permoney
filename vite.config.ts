@@ -49,6 +49,31 @@ const config = defineConfig({
       "tests/integration/**",
     ],
     include: ["scripts/**/*.test.mjs", "src/**/*.test.ts", "src/**/*.test.tsx"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "json-summary", "lcov"],
+      reportsDirectory: "coverage/unit",
+      skipFull: false,
+      include: [
+        "src/lib/currency.ts",
+        "src/lib/money.ts",
+        "src/lib/split-parity.ts",
+        "src/lib/transaction-filters.ts",
+      ],
+      exclude: [
+        "src/routeTree.gen.ts",
+        "src/**/*.test.ts",
+        "src/**/*.test.tsx",
+        "tests/**",
+        "scripts/**",
+      ],
+      thresholds: {
+        "src/lib/{currency,money,split-parity,transaction-filters}.ts": {
+          branches: 90,
+          lines: 90,
+        },
+      },
+    },
   },
 
   staged: {

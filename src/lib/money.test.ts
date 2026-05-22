@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vite-plus/test"
 import {
+  CURRENCIES,
+  type CurrencyCode,
+  type CurrencyDefinition,
+} from "./data/currencies"
+import {
   ZERO_MONEY,
   absMoney,
   addMoney,
@@ -19,6 +24,32 @@ import {
   toMoney,
   type Money,
 } from "./money"
+
+function withTestCurrency(
+  code: string,
+  overrides: Partial<CurrencyDefinition>,
+  run: (currency: CurrencyCode) => void
+): void {
+  const mutableCurrencies = CURRENCIES as Record<string, CurrencyDefinition>
+  const previousDefinition = mutableCurrencies[code]
+  mutableCurrencies[code] = {
+    ...CURRENCIES.USD,
+    isoCode: code,
+    name: code,
+    symbol: "¤",
+    ...overrides,
+  }
+
+  try {
+    run(code as CurrencyCode)
+  } finally {
+    if (previousDefinition) {
+      mutableCurrencies[code] = previousDefinition
+    } else {
+      delete mutableCurrencies[code]
+    }
+  }
+}
 
 // =============================================================================
 // Wire serialization (encode/decode round-trip)
@@ -440,6 +471,15 @@ describe("formatMoney", () => {
     })
     expect(out).not.toContain("$")
   })
+
+  it("manual fallback respects showSymbol for non-Intl currency codes", () => {
+    withTestCurrency("PERMONEYTEST", { defaultFormat: "%u %n" }, (currency) => {
+      expect(formatMoney(12_345n, currency)).toBe("¤ 123.45")
+      expect(formatMoney(12_345n, currency, { showSymbol: false })).toBe(
+        "123.45"
+      )
+    })
+  })
 })
 
 // =============================================================================
@@ -554,6 +594,11 @@ describe("mulMoney", () => {
     expect(mulMoney(100n, -0.5)).toBe(-50n)
   })
 
+  it("rounds away from zero when remainder is greater than half", () => {
+    expect(mulMoney(16n, 0.1)).toBe(2n)
+    expect(mulMoney(-16n, 0.1)).toBe(-2n)
+  })
+
   it("realistic tax calc: 11% PPN on Rp 100,000", () => {
     // 100_000 sen × 0.11 = 11_000 sen exactly (since 0.11 round-trips)
     expect(mulMoney(100_000n, 0.11)).toBe(11_000n)
@@ -592,5 +637,21 @@ describe("toMoney + ZERO_MONEY", () => {
   it("ZERO_MONEY is bigint zero", () => {
     expect(ZERO_MONEY).toBe(0n)
     expect(addMoney(ZERO_MONEY, 100n)).toBe(100n)
+  })
+})
+
+describe("currency metadata invariants", () => {
+  it("rejects non-positive minor-unit conversions", () => {
+    withTestCurrency("BADZERO", { minorUnitConversion: 0 }, (currency) => {
+      expect(() => toMinorUnits("1", currency)).toThrow(
+        /Invalid minorUnitConversion/
+      )
+    })
+  })
+
+  it("rejects minor-unit conversions that are not powers of ten", () => {
+    withTestCurrency("BADTWELVE", { minorUnitConversion: 12 }, (currency) => {
+      expect(() => toMinorUnits("1", currency)).toThrow(/not a power of 10/)
+    })
   })
 })
