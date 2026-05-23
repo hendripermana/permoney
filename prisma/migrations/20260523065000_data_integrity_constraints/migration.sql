@@ -264,7 +264,7 @@ ALTER TABLE "Account"
 
 ALTER TABLE "Transaction"
   ADD CONSTRAINT split_parent_details_live_on_children CHECK (
-    "isSplit" = false OR ("categoryId" IS NULL AND "merchantId" IS NULL)
+    NOT "isSplit" OR ("categoryId" IS NULL AND "merchantId" IS NULL)
   );
 
 ALTER TABLE "SplitEntry"
@@ -292,7 +292,7 @@ BEGIN
   FROM "Transaction"
   WHERE id = transaction_id;
 
-  IF NOT FOUND OR parent_is_split = false THEN
+  IF NOT FOUND OR NOT parent_is_split THEN
     RETURN;
   END IF;
 
@@ -320,17 +320,15 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
   IF TG_TABLE_NAME = 'SplitEntry' THEN
-    IF TG_OP IN ('UPDATE', 'DELETE') THEN
+    IF TG_OP <> 'INSERT' THEN
       PERFORM validate_split_entries_match_parent(OLD."transactionId");
     END IF;
 
-    IF TG_OP IN ('INSERT', 'UPDATE') THEN
+    IF TG_OP <> 'DELETE' THEN
       PERFORM validate_split_entries_match_parent(NEW."transactionId");
     END IF;
   ELSE
-    IF TG_OP IN ('INSERT', 'UPDATE') THEN
-      PERFORM validate_split_entries_match_parent(NEW.id);
-    END IF;
+    PERFORM validate_split_entries_match_parent(NEW.id);
   END IF;
 
   RETURN NULL;

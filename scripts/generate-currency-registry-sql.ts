@@ -2,7 +2,9 @@ import { CURRENCIES } from "../src/lib/data/currencies"
 
 const CURRENCY_CODE_PATTERN = /^[A-Z]{3,5}$/
 
-const currencyCodes = Object.keys(CURRENCIES).sort()
+const currencyCodes = Object.keys(CURRENCIES).sort((left, right) =>
+  left.localeCompare(right)
+)
 
 for (const code of currencyCodes) {
   if (!CURRENCY_CODE_PATTERN.test(code)) {

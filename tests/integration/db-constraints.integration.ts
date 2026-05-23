@@ -45,7 +45,9 @@ describe("M2 data-integrity database constraints", () => {
       ORDER BY code ASC
     `
 
-    expect(rows.map((row) => row.code)).toEqual(Object.keys(CURRENCIES).sort())
+    expect(rows.map((row) => row.code)).toEqual(
+      Object.keys(CURRENCIES).sort((left, right) => left.localeCompare(right))
+    )
   })
 
   test("rejects expense transactions with positive signed amounts", async () => {
