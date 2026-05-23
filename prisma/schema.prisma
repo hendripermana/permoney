@@ -1,4 +1,3 @@
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -13,13 +12,26 @@ datasource db {
   provider = "postgresql"
 }
 
+model Iso4217Currency {
+  code     String  @id
+  isActive Boolean @default(true) @map("is_active")
+
+  accounts                         Account[]     @relation("AccountCurrency")
+  families                         Family[]      @relation("FamilyCurrency")
+  transactionCurrencies            Transaction[] @relation("TransactionCurrency")
+  transactionDestinationCurrencies Transaction[] @relation("TransactionDestinationCurrency")
+
+  @@map("iso_4217_currency")
+}
+
 model Family {
   id   String @id @default(cuid())
   name String
 
   // Fitur Enterprise: Setting default keluarga
-  currency String @default("IDR")
-  timezone String @default("Asia/Jakarta")
+  currency         String          @default("IDR")
+  timezone         String          @default("Asia/Jakarta")
+  currencyRegistry Iso4217Currency @relation("FamilyCurrency", fields: [currency], references: [code], onDelete: Restrict, onUpdate: Cascade, map: "family_currency_is_iso_4217")
 
   users        User[]
   accounts     Account[]
@@ -66,9 +78,9 @@ model Session {
   token     String
   ipAddress String?
 
+  @@unique([token])
   @@index([userId])
   @@index([expiresAt])
-  @@unique([token])
   @@map("Session")
 }
 
@@ -77,12 +89,13 @@ model Account {
   name String
 
   // Tipe makin pro: "DEPOSITORY" (Bank/Dompet), "CREDIT" (Kartu Kredit), "LOAN" (Hutang), "RECEIVABLE" (Piutang/Uang dipinjam orang), "INVESTMENT" (Saham)
-  type     String
+  type             String
   // Stored in MINOR UNITS (sen for IDR, cents for USD, satoshi for BTC).
   // Per-currency scale is driven by `CURRENCIES[code].minorUnitConversion`
   // in src/lib/data/currencies.ts. See docs/adr/0001-money-type-migration.md.
-  balance  BigInt
-  currency String @default("IDR") // Bisa USD, JPY, dll
+  balance          BigInt
+  currency         String          @default("IDR") // Bisa USD, JPY, dll
+  currencyRegistry Iso4217Currency @relation("AccountCurrency", fields: [currency], references: [code], onDelete: Restrict, onUpdate: Cascade, map: "account_currency_is_iso_4217")
 
   // Fitur Enterprise: Visual & Status
   color  String? // Hex color misal "#3b82f6"
@@ -143,13 +156,14 @@ model Category {
 }
 
 model Transaction {
-  id       String @id @default(cuid())
+  id               String          @id @default(cuid())
   // Stored in MINOR UNITS of `currency`. Negative for outflow, positive for inflow.
   // See src/lib/money.ts for arithmetic helpers; never use raw `+ -` on this field.
-  amount   BigInt
-  type     String // "expense", "income", "transfer"
-  kind     String @default("standard")
-  currency String @default("IDR")
+  amount           BigInt
+  type             String // "expense", "income", "transfer"
+  kind             String          @default("standard")
+  currency         String          @default("IDR")
+  currencyRegistry Iso4217Currency @relation("TransactionCurrency", fields: [currency], references: [code], onDelete: Restrict, onUpdate: Cascade, map: "currency_is_iso_4217")
 
   // Transaction Lifecycle Status: PENDING (gantung), CLEARED (selesai), RECONCILED (dicocokkan)
   status String @default("CLEARED")
@@ -157,8 +171,9 @@ model Transaction {
   // Multi-Currency Transfer Support (Implied Rate Architecture)
   // User menginput nominal yang benar-benar masuk ke akun tujuan, bukan hanya tebakan kurs API.
   // Stored in MINOR UNITS of `destinationCurrency`.
-  destinationAmount   BigInt?
-  destinationCurrency String?
+  destinationAmount           BigInt?
+  destinationCurrency         String?
+  destinationCurrencyRegistry Iso4217Currency? @relation("TransactionDestinationCurrency", fields: [destinationCurrency], references: [code], onDelete: Restrict, onUpdate: Cascade, map: "destination_currency_is_iso_4217")
 
   date DateTime @default(now())
 
