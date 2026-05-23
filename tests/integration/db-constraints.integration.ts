@@ -301,12 +301,14 @@ describe("M2 data-integrity database constraints", () => {
 
   test("rejects split parents with category or merchant stored on the parent row", async () => {
     const context = await createLedgerContext()
-    const category = await factories.createCategory({
-      familyId: context.familyId,
-    })
-    const merchant = await factories.createMerchant({
-      familyId: context.familyId,
-    })
+    const [category, merchant] = await Promise.all([
+      factories.createCategory({
+        familyId: context.familyId,
+      }),
+      factories.createMerchant({
+        familyId: context.familyId,
+      }),
+    ])
 
     await expectDatabaseRejection(() =>
       harness.withFamily(context.familyId, (tx) =>
@@ -435,7 +437,7 @@ describe("M2 data-integrity database constraints", () => {
       }),
     ])
 
-    const [expense, income, transfer] = await Promise.all([
+    const [expense, income, transfer, validSplit] = await Promise.all([
       factories.createTransaction({
         accountId: assetAccount.id,
         amount: -1_000n,
@@ -466,39 +468,38 @@ describe("M2 data-integrity database constraints", () => {
           },
         })
       ),
+      harness.withFamily(owner.family.id, async (tx) => {
+        const transaction = await tx.transaction.create({
+          data: {
+            accountId: assetAccount.id,
+            amount: -1_000n,
+            currency: "IDR",
+            description: "Valid split expense",
+            familyId: owner.family.id,
+            isSplit: true,
+            type: "expense",
+            userId: owner.user.id,
+          },
+        })
+
+        await tx.splitEntry.createMany({
+          data: [
+            {
+              amount: 400n,
+              description: "Valid first split line",
+              transactionId: transaction.id,
+            },
+            {
+              amount: 600n,
+              description: "Valid second split line",
+              transactionId: transaction.id,
+            },
+          ],
+        })
+
+        return transaction
+      }),
     ])
-
-    const validSplit = await harness.withFamily(owner.family.id, async (tx) => {
-      const transaction = await tx.transaction.create({
-        data: {
-          accountId: assetAccount.id,
-          amount: -1_000n,
-          currency: "IDR",
-          description: "Valid split expense",
-          familyId: owner.family.id,
-          isSplit: true,
-          type: "expense",
-          userId: owner.user.id,
-        },
-      })
-
-      await tx.splitEntry.createMany({
-        data: [
-          {
-            amount: 400n,
-            description: "Valid first split line",
-            transactionId: transaction.id,
-          },
-          {
-            amount: 600n,
-            description: "Valid second split line",
-            transactionId: transaction.id,
-          },
-        ],
-      })
-
-      return transaction
-    })
 
     expect(expense.amount).toBe(-1_000n)
     expect(income.amount).toBe(1_000n)
