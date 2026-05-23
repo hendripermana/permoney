@@ -39,6 +39,7 @@ model Family {
   categories   Category[]
   smartRules   SmartRule[]
   transactions Transaction[]
+  idempotencyRecords IdempotencyRecord[]
 }
 
 model User {
@@ -191,6 +192,7 @@ model Transaction {
   // Soft Delete (GAAP Compliance): Transaksi tidak pernah benar-benar dihapus
   // NULL = aktif, ada timestamp = soft-deleted (audit trail tetap ada)
   deletedAt DateTime?
+  idempotencyKey String?
 
   merchantId String?
   merchant   Merchant? @relation(fields: [merchantId], references: [id])
@@ -233,6 +235,23 @@ model Transaction {
   @@index([familyId, deletedAt, date(sort: Desc)])
   @@index([categoryId])
   @@index([merchantId])
+  @@unique([familyId, idempotencyKey], name: "tx_family_idempotency")
+}
+
+model IdempotencyRecord {
+  id           String   @id @default(cuid())
+  familyId     String
+  family       Family   @relation(fields: [familyId], references: [id], onDelete: Restrict)
+  endpoint     String
+  key          String
+  requestHash  String
+  statusCode   Int
+  responseJson Json
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+
+  @@unique([familyId, endpoint, key])
+  @@index([expiresAt])
 }
 
 model Transfer {

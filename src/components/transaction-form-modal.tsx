@@ -23,13 +23,17 @@ import { cn } from "@/lib/utils"
 import { getTransactionFormData } from "@/server/transactions"
 import { toDisplayNumber, toMinorUnits, type Money } from "@/lib/money"
 import { CURRENCIES, type CurrencyCode } from "@/lib/data/currencies"
+import { createUuidV7 } from "@/lib/uuid-v7"
 
 type TransactionFormData = Awaited<ReturnType<typeof getTransactionFormData>>
 type FormAccount = TransactionFormData["accounts"][number]
 type FormCategory = TransactionFormData["categories"][number]
 type FormMerchant = TransactionFormData["merchants"][number]
 
-import { transactionCollection } from "@/lib/collections"
+import {
+  transactionCollection,
+  type TransactionRecord,
+} from "@/lib/collections"
 import { TimeInput } from "@/components/ui/time-input"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -62,6 +66,15 @@ const splitEntrySchema = z.object({
 })
 
 type SplitEntryValue = z.infer<typeof splitEntrySchema>
+
+interface OptimisticTransactionRelationDraft {
+  account: unknown
+  category: unknown
+  isSplit: boolean
+  merchant: unknown
+  splitEntries: unknown
+  toAccount: unknown
+}
 
 const transactionSchema = z.object({
   type: z.enum(["expense", "income", "transfer"]),
@@ -407,26 +420,31 @@ export function TransactionFormModal({
             draft.updatedAt = payload.updatedAt
             // Immer draft hanya mengenal scalar fields di schema collection-nya.
             // Relasi dan field baru (account, isSplit, splitEntries) di-cast secara eksplisit.
-            ;(draft as any).account = payload.account
-            ;(draft as any).toAccount = payload.toAccount
-            ;(draft as any).category = payload.category
-            ;(draft as any).merchant = payload.merchant
-            ;(draft as any).isSplit = payload.isSplit
-            ;(draft as any).splitEntries = payload.splitEntries
+            const relationDraft =
+              draft as unknown as OptimisticTransactionRelationDraft
+            relationDraft.account = payload.account
+            relationDraft.toAccount = payload.toAccount
+            relationDraft.category = payload.category
+            relationDraft.merchant = payload.merchant
+            relationDraft.isSplit = payload.isSplit
+            relationDraft.splitEntries = payload.splitEntries
           })
         } else {
           // 1. Generate Client-Side ID untuk Sinkronisasi Optimistic ke Database
-          const optimisticId = crypto.randomUUID()
+          const optimisticId = createUuidV7()
+          const idempotencyKey = createUuidV7()
 
           // 2. CUKUP Insert ke UI Lokal saja!
           // Arsitektur kita di collections.ts (onInsert) akan melanjutkannya ke server secara gaib.
           transactionCollection.insert({
             ...payload,
             id: optimisticId,
+            idempotencyKey,
             createdAt: new Date(),
             familyId: "",
             // splitEntries di optimistic payload adalah versi ringkas (tanpa relasi Prisma)
-            splitEntries: payload.splitEntries as any,
+            splitEntries:
+              payload.splitEntries as TransactionRecord["splitEntries"],
           })
         }
 
