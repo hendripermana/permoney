@@ -196,6 +196,38 @@ function createdAuditEntries<T extends { id: string }>(
   }))
 }
 
+type AccountDeltaMap = Record<string, bigint>
+
+function addAccountDelta(
+  accountDeltas: AccountDeltaMap,
+  accountId: string,
+  amount: bigint
+): void {
+  if (!accountDeltas[accountId]) accountDeltas[accountId] = 0n
+  accountDeltas[accountId] += amount
+}
+
+async function applyAccountDeltas(
+  tx: TenantTransactionClient,
+  accountDeltas: AccountDeltaMap
+): Promise<void> {
+  await Promise.all(
+    Object.entries(accountDeltas).map(([accountId, delta]) =>
+      tx.account.update({
+        where: { id: accountId },
+        data: { balance: { increment: delta } },
+      })
+    )
+  )
+}
+
+function signedIncomeExpenseAmount(
+  type: "expense" | "income",
+  amount: bigint
+): bigint {
+  return type === "expense" ? negateMoney(absMoney(amount)) : absMoney(amount)
+}
+
 // Schema untuk setiap baris line item dalam split transaction
 const splitEntrySchema = z.object({
   description: z.string().min(1),
@@ -1500,27 +1532,38 @@ export async function bulkDeleteTransactionsForFamily({
         where: { id: { in: Array.from(touchedAccountIds) } },
       })
 
-      const accountDeltas: Record<string, bigint> = {}
-      const addDelta = (id: string, amount: bigint) => {
-        if (!accountDeltas[id]) accountDeltas[id] = 0n
-        accountDeltas[id] += amount
-      }
-
+      const accountDeltas: AccountDeltaMap = {}
       const oldInflowTxsById = indexById(oldInflowTxs)
       for (const oldTx of oldTxs) {
         if (oldTx.type === "transfer" && oldTx.transferOut) {
           const inflowTx = oldInflowTxsById.get(
             oldTx.transferOut.inflowTransactionId
           )
-          addDelta(oldTx.accountId, absMoney(oldTx.amount))
+          addAccountDelta(
+            accountDeltas,
+            oldTx.accountId,
+            absMoney(oldTx.amount)
+          )
           if (inflowTx) {
-            addDelta(inflowTx.accountId, negateMoney(absMoney(inflowTx.amount)))
+            addAccountDelta(
+              accountDeltas,
+              inflowTx.accountId,
+              negateMoney(absMoney(inflowTx.amount))
+            )
           }
         } else if (oldTx.type !== "transfer") {
           if (oldTx.type === "expense") {
-            addDelta(oldTx.accountId, absMoney(oldTx.amount))
+            addAccountDelta(
+              accountDeltas,
+              oldTx.accountId,
+              absMoney(oldTx.amount)
+            )
           } else if (oldTx.type === "income") {
-            addDelta(oldTx.accountId, negateMoney(absMoney(oldTx.amount)))
+            addAccountDelta(
+              accountDeltas,
+              oldTx.accountId,
+              negateMoney(absMoney(oldTx.amount))
+            )
           }
         }
       }
@@ -1533,14 +1576,7 @@ export async function bulkDeleteTransactionsForFamily({
       }
 
       // 2. Terapkan agregasi delta secara masal
-      await Promise.all(
-        Object.entries(accountDeltas).map(([accountId, delta]) =>
-          tx.account.update({
-            where: { id: accountId },
-            data: { balance: { increment: delta } },
-          })
-        )
-      )
+      await applyAccountDeltas(tx, accountDeltas)
 
       // 3. Soft delete
       await tx.transaction.updateMany({
@@ -1660,12 +1696,7 @@ export async function bulkUpdateTransactionsForFamily({
           },
         })
 
-        const accountDeltas: Record<string, bigint> = {}
-        const addDelta = (id: string, amount: bigint) => {
-          if (!accountDeltas[id]) accountDeltas[id] = 0n
-          accountDeltas[id] += amount
-        }
-
+        const accountDeltas: AccountDeltaMap = {}
         for (const t of txsToMove) {
           const magnitude = absMoney(t.amount)
           const refundSigned: bigint =
@@ -1673,18 +1704,11 @@ export async function bulkUpdateTransactionsForFamily({
           const chargeSigned: bigint =
             t.type === "expense" ? negateMoney(magnitude) : magnitude
 
-          addDelta(t.accountId, refundSigned)
-          addDelta(data.accountId, chargeSigned)
+          addAccountDelta(accountDeltas, t.accountId, refundSigned)
+          addAccountDelta(accountDeltas, data.accountId, chargeSigned)
         }
 
-        await Promise.all(
-          Object.entries(accountDeltas).map(([accId, delta]) =>
-            tx.account.update({
-              where: { id: accId },
-              data: { balance: { increment: delta } },
-            })
-          )
-        )
+        await applyAccountDeltas(tx, accountDeltas)
       }
 
       // 2. Prepare scalar updates payload
@@ -1798,17 +1822,18 @@ export async function bulkCreateTransactionsForFamily({
         where: { id: { in: Array.from(touchedAccountIds) } },
       })
 
-      // 1. Create all transactions
-      await tx.transaction.createMany({
-        data: data.transactions.map((t) => ({
+      const transactionIds = data.transactions.map((t) => t.id)
+      const accountDeltas: AccountDeltaMap = {}
+      const rows = data.transactions.map((t) => {
+        const signedAmount = signedIncomeExpenseAmount(t.type, t.amount)
+        addAccountDelta(accountDeltas, t.accountId, signedAmount)
+
+        return {
           id: t.id,
           userId: user.id,
           familyId,
           type: t.type,
-          amount:
-            t.type === "expense"
-              ? negateMoney(absMoney(t.amount))
-              : absMoney(t.amount),
+          amount: signedAmount,
           description: t.description,
           accountId: t.accountId,
           categoryId: t.categoryId,
@@ -1817,32 +1842,18 @@ export async function bulkCreateTransactionsForFamily({
           notes: t.notes,
           status: t.status,
           attachmentUrl: t.attachmentUrl,
-        })),
+        }
       })
 
-      // 2. Adjust account balances
-      const accountDeltas: Record<string, bigint> = {}
-      for (const t of data.transactions) {
-        if (!accountDeltas[t.accountId]) accountDeltas[t.accountId] = 0n
-        accountDeltas[t.accountId] +=
-          t.type === "expense"
-            ? negateMoney(absMoney(t.amount))
-            : absMoney(t.amount)
-      }
-
-      await Promise.all(
-        Object.entries(accountDeltas).map(([accId, delta]) =>
-          tx.account.update({
-            where: { id: accId },
-            data: { balance: { increment: delta } },
-          })
-        )
-      )
+      await Promise.all([
+        tx.transaction.createMany({ data: rows }),
+        applyAccountDeltas(tx, accountDeltas),
+      ])
 
       // Re-read data terbaru setelah mutasi
       const [newTxs, newAccounts] = await Promise.all([
         tx.transaction.findMany({
-          where: { id: { in: data.transactions.map((t) => t.id) } },
+          where: { id: { in: transactionIds } },
           include: { splitEntries: true },
         }),
         tx.account.findMany({

@@ -21,7 +21,7 @@ import {
   deleteSmartRuleForFamily,
 } from "../../src/server/smart-rules"
 import { initializeOnboardingForUser } from "../../src/server/onboarding-service"
-import { getAuditLogForFamily } from "../../src/server/audit-log"
+import { getAuditLogFn, getAuditLogForFamily } from "../../src/server/audit-log"
 import { auditLog, createAuditContext } from "../../src/server/middleware/audit"
 import {
   createIntegrationHarness,
@@ -32,6 +32,7 @@ import { createTestFactories, type TestFactories } from "./support/factories"
 describe("AuditLog Integration & Security Tests", () => {
   let harness: IntegrationHarness
   let factories: TestFactories
+  const AUDIT_TEST_DATE = new Date("2026-05-24T00:00:00.000Z")
 
   beforeAll(async () => {
     harness = await createIntegrationHarness()
@@ -64,22 +65,234 @@ describe("AuditLog Integration & Security Tests", () => {
     return { owner, account, category }
   }
 
+  async function auditLogBaseline(familyId: string): Promise<Set<string>> {
+    const baselineLogs = await harness.withFamily(familyId, (tx) =>
+      tx.auditLog.findMany({ select: { id: true } })
+    )
+    return new Set(baselineLogs.map((log) => log.id))
+  }
+
+  function logsSince<T extends { id: string }>(
+    logs: readonly T[],
+    baselineIds: ReadonlySet<string>
+  ): T[] {
+    return logs.filter((log) => !baselineIds.has(log.id))
+  }
+
+  async function orderedAuditLogsSince(
+    familyId: string,
+    baselineIds: ReadonlySet<string>
+  ): Promise<AuditLog[]> {
+    const logs = await harness.withFamily(familyId, (tx) =>
+      tx.auditLog.findMany({
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      })
+    )
+    return logsSince(logs, baselineIds)
+  }
+
+  function expenseCreatePayload({
+    accountId,
+    amount,
+    categoryId,
+    description,
+    id,
+    idempotencyKey,
+  }: {
+    accountId: string
+    amount: bigint
+    categoryId: string
+    description: string
+    id: string
+    idempotencyKey: string
+  }) {
+    return {
+      id,
+      idempotencyKey,
+      accountId,
+      amount,
+      categoryId,
+      date: AUDIT_TEST_DATE,
+      description,
+      type: "expense" as const,
+    }
+  }
+
+  function expenseUpdatePayload({
+    accountId,
+    amount,
+    categoryId,
+    description,
+    id,
+  }: {
+    accountId: string
+    amount: bigint
+    categoryId: string
+    description: string
+    id: string
+  }) {
+    return {
+      id,
+      accountId,
+      amount,
+      categoryId,
+      date: AUDIT_TEST_DATE,
+      description,
+      currency: "IDR",
+      isSplit: false,
+      status: "CLEARED" as const,
+      type: "expense" as const,
+    }
+  }
+
+  function transferPayload({
+    accountId,
+    amount,
+    description,
+    id,
+    idempotencyKey,
+    toAccountId,
+  }: {
+    accountId: string
+    amount: bigint
+    description: string
+    id: string
+    idempotencyKey?: string
+    toAccountId: string
+  }) {
+    return {
+      id,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      accountId,
+      amount,
+      currency: "IDR",
+      date: AUDIT_TEST_DATE,
+      description,
+      isSplit: false,
+      status: "CLEARED" as const,
+      toAccountId,
+      type: "transfer" as const,
+    }
+  }
+
+  async function createTransferFixture({
+    amount,
+    description,
+    destinationBalance,
+    destinationName,
+    sourceName,
+  }: {
+    amount: bigint
+    description: string
+    destinationBalance: bigint
+    destinationName: string
+    sourceName: string
+  }) {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const [sourceAccount, destinationAccount] = await Promise.all([
+      factories.createAccount({
+        balance: 100_000n,
+        familyId: owner.family.id,
+        name: sourceName,
+      }),
+      factories.createAccount({
+        balance: destinationBalance,
+        familyId: owner.family.id,
+        name: destinationName,
+      }),
+    ])
+    const transferTransactionId = factories.createIdempotencyKey()
+    const idempotencyKey = factories.createIdempotencyKey()
+
+    await createTransactionForFamily({
+      data: transferPayload({
+        id: transferTransactionId,
+        idempotencyKey,
+        accountId: sourceAccount.id,
+        amount,
+        description,
+        toAccountId: destinationAccount.id,
+      }),
+      familyId: owner.family.id,
+      runInTenantTransaction: harness.withFamily,
+      user: owner.user,
+    })
+
+    const transfer = await harness.withFamily(owner.family.id, (tx) =>
+      tx.transfer.findFirstOrThrow({
+        where: { outflowTransactionId: transferTransactionId },
+      })
+    )
+
+    return {
+      owner,
+      sourceAccount,
+      destinationAccount,
+      transfer,
+      transferTransactionId,
+    }
+  }
+
+  function bulkExpensePayload({
+    accountId,
+    amount,
+    categoryId,
+    description,
+    id,
+  }: {
+    accountId: string
+    amount: bigint
+    categoryId: string
+    description: string
+    id: string
+  }) {
+    return {
+      id,
+      accountId,
+      amount,
+      categoryId,
+      date: AUDIT_TEST_DATE,
+      description,
+      status: "CLEARED" as const,
+      type: "expense" as const,
+    }
+  }
+
+  async function writeCustomAuditLog({
+    entityId,
+    owner,
+  }: {
+    entityId: string
+    owner: Awaited<ReturnType<typeof createFixture>>["owner"]
+  }): Promise<void> {
+    const auditCtx = await createAuditContext({
+      user: { id: owner.user.id, familyId: owner.family.id },
+    })
+
+    await harness.withFamily(owner.family.id, async (tx) => {
+      await auditLog(tx, auditCtx, {
+        action: "create",
+        entityType: "CustomTest",
+        entityId,
+        after: { val: 1 },
+      })
+    })
+  }
+
   test("1. createTransactionForFamily writes expected AuditLog rows including Account/update", async () => {
     const { owner, account, category } = await createFixture()
     const txId = factories.createIdempotencyKey()
     const idempotencyKey = factories.createIdempotencyKey()
 
     await createTransactionForFamily({
-      data: {
+      data: expenseCreatePayload({
         id: txId,
         idempotencyKey,
         accountId: account.id,
         amount: 10_000n,
         categoryId: category.id,
-        date: new Date("2026-05-24T00:00:00.000Z"),
         description: "Audit test expense",
-        type: "expense",
-      },
+      }),
       familyId: owner.family.id,
       runInTenantTransaction: harness.withFamily,
       user: owner.user,
@@ -116,51 +329,36 @@ describe("AuditLog Integration & Security Tests", () => {
 
     // 1. Buat transaksi awal
     await createTransactionForFamily({
-      data: {
+      data: expenseCreatePayload({
         id: txId,
         idempotencyKey,
         accountId: account.id,
         amount: 10_000n,
         categoryId: category.id,
-        date: new Date("2026-05-24T00:00:00.000Z"),
         description: "Initial expense",
-        type: "expense",
-      },
+      }),
       familyId: owner.family.id,
       runInTenantTransaction: harness.withFamily,
       user: owner.user,
     })
 
     // Catat ID log yang sudah ada untuk memisahkan log baru
-    const baselineLogs = await harness.withFamily(owner.family.id, (tx) =>
-      tx.auditLog.findMany()
-    )
-    const baselineIds = new Set(baselineLogs.map((l) => l.id))
+    const baselineIds = await auditLogBaseline(owner.family.id)
 
     // 2. Jalankan updateTransactionForFamily secara langsung
     await updateTransactionForFamily({
-      data: {
+      data: expenseUpdatePayload({
         id: txId,
         accountId: account.id,
         amount: 15_000n, // Naikkan amount
         categoryId: category.id,
-        date: new Date("2026-05-24T00:00:00.000Z"),
         description: "Updated expense",
-        type: "expense",
-        currency: "IDR",
-        isSplit: false,
-        status: "CLEARED",
-      },
+      }),
       familyId: owner.family.id,
       user: owner.user,
     })
 
-    const allLogs = await harness.withFamily(owner.family.id, (tx) =>
-      tx.auditLog.findMany({
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      })
-    )
-    const logs = allLogs.filter((l) => !baselineIds.has(l.id))
+    const logs = await orderedAuditLogsSince(owner.family.id, baselineIds)
 
     // Ekspektasikan 2 audit log: 1 untuk Account/update dan 1 untuk Transaction/update
     expect(logs).toHaveLength(2)
@@ -184,26 +382,21 @@ describe("AuditLog Integration & Security Tests", () => {
     const idempotencyKey = factories.createIdempotencyKey()
 
     await createTransactionForFamily({
-      data: {
+      data: expenseCreatePayload({
         id: txId,
         idempotencyKey,
         accountId: account.id,
         amount: 20_000n,
         categoryId: category.id,
-        date: new Date("2026-05-24T00:00:00.000Z"),
         description: "To be deleted",
-        type: "expense",
-      },
+      }),
       familyId: owner.family.id,
       runInTenantTransaction: harness.withFamily,
       user: owner.user,
     })
 
     // Catat ID log yang sudah ada untuk memisahkan log baru
-    const baselineLogs = await harness.withFamily(owner.family.id, (tx) =>
-      tx.auditLog.findMany()
-    )
-    const baselineIds = new Set(baselineLogs.map((l) => l.id))
+    const baselineIds = await auditLogBaseline(owner.family.id)
 
     // Jalankan soft delete secara langsung
     await deleteTransactionForFamily({
@@ -212,12 +405,7 @@ describe("AuditLog Integration & Security Tests", () => {
       user: owner.user,
     })
 
-    const allLogs = await harness.withFamily(owner.family.id, (tx) =>
-      tx.auditLog.findMany({
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      })
-    )
-    const logs = allLogs.filter((l) => !baselineIds.has(l.id))
+    const logs = await orderedAuditLogsSince(owner.family.id, baselineIds)
 
     expect(logs).toHaveLength(2)
 
@@ -235,46 +423,14 @@ describe("AuditLog Integration & Security Tests", () => {
   })
 
   test("transfer create and delete audit the Transfer graph without hard-deleting it", async () => {
-    const owner = await factories.createAuthenticatedOnboardedUser()
-    const [sourceAccount, destinationAccount] = await Promise.all([
-      factories.createAccount({
-        balance: 100_000n,
-        familyId: owner.family.id,
-        name: "Transfer source",
-      }),
-      factories.createAccount({
-        balance: 25_000n,
-        familyId: owner.family.id,
-        name: "Transfer destination",
-      }),
-    ])
-    const transferTransactionId = factories.createIdempotencyKey()
-    const idempotencyKey = factories.createIdempotencyKey()
-
-    await createTransactionForFamily({
-      data: {
-        id: transferTransactionId,
-        idempotencyKey,
-        accountId: sourceAccount.id,
+    const { owner, transfer, transferTransactionId } =
+      await createTransferFixture({
         amount: 15_000n,
-        currency: "IDR",
-        date: new Date("2026-05-24T00:00:00.000Z"),
         description: "Audited transfer",
-        toAccountId: destinationAccount.id,
-        type: "transfer",
-      },
-      familyId: owner.family.id,
-      runInTenantTransaction: harness.withFamily,
-      user: owner.user,
-    })
-
-    const transferBeforeDelete = await harness.withFamily(
-      owner.family.id,
-      (tx) =>
-        tx.transfer.findFirstOrThrow({
-          where: { outflowTransactionId: transferTransactionId },
-        })
-    )
+        destinationBalance: 25_000n,
+        destinationName: "Transfer destination",
+        sourceName: "Transfer source",
+      })
 
     await deleteTransactionForFamily({
       id: transferTransactionId,
@@ -285,7 +441,7 @@ describe("AuditLog Integration & Security Tests", () => {
     const [transferAfterDelete, transferLogs] = await Promise.all([
       harness.withFamily(owner.family.id, (tx) =>
         tx.transfer.findUniqueOrThrow({
-          where: { id: transferBeforeDelete.id },
+          where: { id: transfer.id },
           include: {
             inflowTransaction: true,
             outflowTransaction: true,
@@ -295,7 +451,7 @@ describe("AuditLog Integration & Security Tests", () => {
       harness.withFamily(owner.family.id, (tx) =>
         tx.auditLog.findMany({
           where: {
-            entityId: transferBeforeDelete.id,
+            entityId: transfer.id,
             entityType: "Transfer",
           },
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -319,64 +475,29 @@ describe("AuditLog Integration & Security Tests", () => {
   })
 
   test("transfer update keeps Transfer audit identity stable", async () => {
-    const owner = await factories.createAuthenticatedOnboardedUser()
-    const [sourceAccount, destinationAccount] = await Promise.all([
-      factories.createAccount({
-        balance: 100_000n,
-        familyId: owner.family.id,
-        name: "Transfer update source",
-      }),
-      factories.createAccount({
-        balance: 10_000n,
-        familyId: owner.family.id,
-        name: "Transfer update destination",
-      }),
-    ])
-    const transferTransactionId = factories.createIdempotencyKey()
-    const idempotencyKey = factories.createIdempotencyKey()
-
-    await createTransactionForFamily({
-      data: {
-        id: transferTransactionId,
-        idempotencyKey,
-        accountId: sourceAccount.id,
-        amount: 10_000n,
-        currency: "IDR",
-        date: new Date("2026-05-24T00:00:00.000Z"),
-        description: "Transfer before update",
-        toAccountId: destinationAccount.id,
-        type: "transfer",
-      },
-      familyId: owner.family.id,
-      runInTenantTransaction: harness.withFamily,
-      user: owner.user,
+    const {
+      destinationAccount,
+      owner,
+      sourceAccount,
+      transfer,
+      transferTransactionId,
+    } = await createTransferFixture({
+      amount: 10_000n,
+      description: "Transfer before update",
+      destinationBalance: 10_000n,
+      destinationName: "Transfer update destination",
+      sourceName: "Transfer update source",
     })
-
-    const transferBeforeUpdate = await harness.withFamily(
-      owner.family.id,
-      (tx) =>
-        tx.transfer.findFirstOrThrow({
-          where: { outflowTransactionId: transferTransactionId },
-        })
-    )
-    const baselineLogs = await harness.withFamily(owner.family.id, (tx) =>
-      tx.auditLog.findMany()
-    )
-    const baselineIds = new Set(baselineLogs.map((log) => log.id))
+    const baselineIds = await auditLogBaseline(owner.family.id)
 
     await updateTransactionForFamily({
-      data: {
+      data: transferPayload({
         id: transferTransactionId,
         accountId: sourceAccount.id,
         amount: 12_500n,
-        currency: "IDR",
-        date: new Date("2026-05-24T00:00:00.000Z"),
         description: "Transfer after update",
-        isSplit: false,
-        status: "CLEARED",
         toAccountId: destinationAccount.id,
-        type: "transfer",
-      },
+      }),
       familyId: owner.family.id,
       user: owner.user,
     })
@@ -391,18 +512,18 @@ describe("AuditLog Integration & Security Tests", () => {
         tx.auditLog.findMany({
           where: {
             action: "update",
-            entityId: transferBeforeUpdate.id,
+            entityId: transfer.id,
             entityType: "Transfer",
           },
         })
       ),
     ])
-    const newLogs = logsAfterUpdate.filter((log) => !baselineIds.has(log.id))
+    const newLogs = logsSince(logsAfterUpdate, baselineIds)
 
-    expect(transferAfterUpdate.id).toBe(transferBeforeUpdate.id)
+    expect(transferAfterUpdate.id).toBe(transfer.id)
     expect(newLogs).toHaveLength(1)
-    expect((newLogs[0]!.beforeJson as JsonObj).id).toBe(transferBeforeUpdate.id)
-    expect((newLogs[0]!.afterJson as JsonObj).id).toBe(transferBeforeUpdate.id)
+    expect((newLogs[0]!.beforeJson as JsonObj).id).toBe(transfer.id)
+    expect((newLogs[0]!.afterJson as JsonObj).id).toBe(transfer.id)
   })
 
   test("bulk transaction helpers audit create, update, and soft_delete paths", async () => {
@@ -420,26 +541,20 @@ describe("AuditLog Integration & Security Tests", () => {
     await bulkCreateTransactionsForFamily({
       data: {
         transactions: [
-          {
+          bulkExpensePayload({
             id: firstId,
             accountId: account.id,
             amount: 1_000n,
             categoryId: category.id,
-            date: new Date("2026-05-24T00:00:00.000Z"),
             description: "Bulk first",
-            status: "CLEARED",
-            type: "expense",
-          },
-          {
+          }),
+          bulkExpensePayload({
             id: secondId,
             accountId: account.id,
             amount: 2_000n,
             categoryId: category.id,
-            date: new Date("2026-05-24T00:00:00.000Z"),
             description: "Bulk second",
-            status: "CLEARED",
-            type: "expense",
-          },
+          }),
         ],
       },
       familyId: owner.family.id,
@@ -453,13 +568,7 @@ describe("AuditLog Integration & Security Tests", () => {
     )
     expect(createLogs).toHaveLength(2)
 
-    const baselineAfterCreate = await harness.withFamily(
-      owner.family.id,
-      (tx) => tx.auditLog.findMany()
-    )
-    const baselineAfterCreateIds = new Set(
-      baselineAfterCreate.map((log) => log.id)
-    )
+    const baselineAfterCreateIds = await auditLogBaseline(owner.family.id)
 
     await bulkUpdateTransactionsForFamily({
       data: {
@@ -475,9 +584,7 @@ describe("AuditLog Integration & Security Tests", () => {
         where: { action: "update" },
       })
     )
-    const newUpdateLogs = updateLogs.filter(
-      (log) => !baselineAfterCreateIds.has(log.id)
-    )
+    const newUpdateLogs = logsSince(updateLogs, baselineAfterCreateIds)
     expect(
       newUpdateLogs.filter((log) => log.entityType === "Transaction")
     ).toHaveLength(2)
@@ -485,13 +592,7 @@ describe("AuditLog Integration & Security Tests", () => {
       false
     )
 
-    const baselineAfterUpdate = await harness.withFamily(
-      owner.family.id,
-      (tx) => tx.auditLog.findMany()
-    )
-    const baselineAfterUpdateIds = new Set(
-      baselineAfterUpdate.map((log) => log.id)
-    )
+    const baselineAfterUpdateIds = await auditLogBaseline(owner.family.id)
 
     await bulkDeleteTransactionsForFamily({
       ids: [firstId, secondId],
@@ -502,9 +603,7 @@ describe("AuditLog Integration & Security Tests", () => {
     const logsAfterDelete = await harness.withFamily(owner.family.id, (tx) =>
       tx.auditLog.findMany()
     )
-    const newDeleteLogs = logsAfterDelete.filter(
-      (log) => !baselineAfterUpdateIds.has(log.id)
-    )
+    const newDeleteLogs = logsSince(logsAfterDelete, baselineAfterUpdateIds)
     expect(
       newDeleteLogs.filter(
         (log) =>
@@ -580,16 +679,14 @@ describe("AuditLog Integration & Security Tests", () => {
     const txId = factories.createIdempotencyKey()
     const idempotencyKey = factories.createIdempotencyKey()
 
-    const payload = {
+    const payload = expenseCreatePayload({
       id: txId,
       idempotencyKey,
       accountId: account.id,
       amount: 5_000n,
       categoryId: category.id,
-      date: new Date("2026-05-24T00:00:00.000Z"),
       description: "Idempotency audit check",
-      type: "expense",
-    }
+    })
 
     // Call 1
     await createTransactionForFamily({
@@ -618,19 +715,8 @@ describe("AuditLog Integration & Security Tests", () => {
   })
 
   test("6. UPDATE on AuditLog by runtime role is blocked (Postgres constraint)", async () => {
-    const owner = await factories.createAuthenticatedOnboardedUser()
-    const auditCtx = await createAuditContext({
-      user: { id: owner.user.id, familyId: owner.family.id },
-    })
-
-    await harness.withFamily(owner.family.id, async (tx) => {
-      await auditLog(tx, auditCtx, {
-        action: "create",
-        entityType: "CustomTest",
-        entityId: "test-update-block",
-        after: { val: 1 },
-      })
-    })
+    const { owner } = await createFixture()
+    await writeCustomAuditLog({ entityId: "test-update-block", owner })
 
     await expect(
       harness.withFamily(owner.family.id, (tx) =>
@@ -643,19 +729,8 @@ describe("AuditLog Integration & Security Tests", () => {
   })
 
   test("7. DELETE on AuditLog by runtime role is blocked (Postgres constraint)", async () => {
-    const owner = await factories.createAuthenticatedOnboardedUser()
-    const auditCtx = await createAuditContext({
-      user: { id: owner.user.id, familyId: owner.family.id },
-    })
-
-    await harness.withFamily(owner.family.id, async (tx) => {
-      await auditLog(tx, auditCtx, {
-        action: "create",
-        entityType: "CustomTest",
-        entityId: "test-delete-block",
-        after: { val: 1 },
-      })
-    })
+    const { owner } = await createFixture()
+    await writeCustomAuditLog({ entityId: "test-delete-block", owner })
 
     await expect(
       harness.withFamily(owner.family.id, (tx) =>
@@ -667,19 +742,8 @@ describe("AuditLog Integration & Security Tests", () => {
   })
 
   test("runtime role cannot TRUNCATE AuditLog", async () => {
-    const owner = await factories.createAuthenticatedOnboardedUser()
-    const auditCtx = await createAuditContext({
-      user: { id: owner.user.id, familyId: owner.family.id },
-    })
-
-    await harness.withFamily(owner.family.id, async (tx) => {
-      await auditLog(tx, auditCtx, {
-        action: "create",
-        entityType: "CustomTest",
-        entityId: "test-truncate-block",
-        after: { val: 1 },
-      })
-    })
+    const { owner } = await createFixture()
+    await writeCustomAuditLog({ entityId: "test-truncate-block", owner })
 
     await expect(
       harness.withFamily(owner.family.id, (tx) =>
@@ -716,6 +780,7 @@ describe("AuditLog Integration & Security Tests", () => {
   })
 
   test("9. getAuditLogFn works with pagination and filtering", async () => {
+    expect(getAuditLogFn).toBeDefined()
     const owner = await factories.createAuthenticatedOnboardedUser()
     const auditCtx = await createAuditContext({
       user: { id: owner.user.id, familyId: owner.family.id },
