@@ -15,7 +15,16 @@ export interface AuditContext {
   userAgent?: string | null
 }
 
-const SENSITIVE_KEY_PATTERNS = ["password", "token", "secret"] as const
+export interface AuditLogEntry {
+  action: AuditAction
+  entityType: string
+  entityId: string
+  before?: unknown
+  after?: unknown
+  familyId?: string
+}
+
+const SENSITIVE_KEY_PATTERN = /password|token|secret/i
 
 /**
  * Mengonversi nilai secara aman ke format yang kompatibel dengan JSON (tidak ada BigInt),
@@ -53,12 +62,7 @@ export function safeJsonCanonicalize(val: unknown): unknown {
         continue // Omit undefined properties
       }
 
-      const normalizedKey = key.toLowerCase()
-      if (
-        SENSITIVE_KEY_PATTERNS.some((pattern) =>
-          normalizedKey.includes(pattern)
-        )
-      ) {
+      if (SENSITIVE_KEY_PATTERN.test(key)) {
         res[key] = "[REDACTED]"
       } else {
         res[key] = safeJsonCanonicalize(v)
@@ -120,39 +124,48 @@ export async function createAuditContext(
 export async function auditLog(
   tx: Prisma.TransactionClient,
   ctx: AuditContext,
-  entry: {
-    action: AuditAction
-    entityType: string
-    entityId: string
-    before?: unknown
-    after?: unknown
-    familyId?: string // override opsional untuk onboarding
-  }
+  entry: AuditLogEntry
 ): Promise<void> {
-  const familyId = entry.familyId ?? ctx.session.user.familyId
-  if (!familyId) {
-    throw new Error("Cannot write audit log without familyId")
-  }
+  await auditLogs(tx, ctx, [entry])
+}
 
-  await tx.auditLog.create({
-    data: {
-      familyId,
-      userId: ctx.session.user.id,
-      action: entry.action,
-      entityType: entry.entityType,
-      entityId: entry.entityId,
-      beforeJson:
-        entry.before === undefined
-          ? Prisma.DbNull
-          : (safeJsonCanonicalize(entry.before) as Prisma.InputJsonValue),
-      afterJson:
-        entry.after === undefined
-          ? Prisma.DbNull
-          : (safeJsonCanonicalize(entry.after) as Prisma.InputJsonValue),
-      ip: ctx.ip ?? null,
-      userAgent: ctx.userAgent ?? null,
-      requestId: ctx.requestId,
-      idempotencyKey: ctx.idempotencyKey ?? null,
-    },
+/**
+ * Menulis beberapa baris audit dalam satu query supaya mutation path tidak
+ * mengulang blok create dan tidak memicu waterfall await di loop.
+ */
+export async function auditLogs(
+  tx: Prisma.TransactionClient,
+  ctx: AuditContext,
+  entries: AuditLogEntry[]
+): Promise<void> {
+  if (entries.length === 0) return
+
+  await tx.auditLog.createMany({
+    data: entries.map((entry) => {
+      const familyId = entry.familyId ?? ctx.session.user.familyId
+      if (!familyId) {
+        throw new Error("Cannot write audit log without familyId")
+      }
+
+      return {
+        familyId,
+        userId: ctx.session.user.id,
+        action: entry.action,
+        entityType: entry.entityType,
+        entityId: entry.entityId,
+        beforeJson:
+          entry.before === undefined
+            ? Prisma.DbNull
+            : (safeJsonCanonicalize(entry.before) as Prisma.InputJsonValue),
+        afterJson:
+          entry.after === undefined
+            ? Prisma.DbNull
+            : (safeJsonCanonicalize(entry.after) as Prisma.InputJsonValue),
+        ip: ctx.ip ?? null,
+        userAgent: ctx.userAgent ?? null,
+        requestId: ctx.requestId,
+        idempotencyKey: ctx.idempotencyKey ?? null,
+      }
+    }),
   })
 }

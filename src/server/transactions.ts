@@ -7,7 +7,11 @@ import {
   scopedTenantTransaction,
   type TenantTransactionClient,
 } from "./middleware/with-family"
-import { auditLog, createAuditContext } from "./middleware/audit"
+import {
+  auditLogs,
+  createAuditContext,
+  type AuditLogEntry,
+} from "./middleware/audit"
 
 /**
  * BACKEND FUNCTION: Fetch reference data for the Transaction Form Dropdowns
@@ -130,6 +134,66 @@ function serializeTransaction<
     }))
   }
   return out as Serialized<T>
+}
+
+function indexById<T extends { id: string }>(
+  items: readonly T[]
+): Map<string, T> {
+  return new Map(items.map((item) => [item.id, item]))
+}
+
+function accountBalanceAuditEntries<T extends { id: string; balance: bigint }>(
+  oldAccounts: readonly T[],
+  newAccounts: readonly T[]
+): AuditLogEntry[] {
+  const newAccountsById = indexById(newAccounts)
+  return oldAccounts.flatMap((oldAccount) => {
+    const newAccount = newAccountsById.get(oldAccount.id)
+    if (!newAccount || oldAccount.balance === newAccount.balance) return []
+    return [
+      {
+        action: "update",
+        entityType: "Account",
+        entityId: oldAccount.id,
+        before: oldAccount,
+        after: newAccount,
+      },
+    ]
+  })
+}
+
+function pairedAuditEntries<TBefore extends { id: string }, TAfter>({
+  action,
+  afterItems,
+  beforeItems,
+  entityType,
+}: {
+  action: AuditLogEntry["action"]
+  afterItems: readonly (TAfter & { id: string })[]
+  beforeItems: readonly TBefore[]
+  entityType: string
+}): AuditLogEntry[] {
+  const afterById = indexById(afterItems)
+  return beforeItems.map((beforeItem) => ({
+    action,
+    entityType,
+    entityId: beforeItem.id,
+    before: beforeItem,
+    after: afterById.get(beforeItem.id),
+  }))
+}
+
+function createdAuditEntries<T extends { id: string }>(
+  entityType: string,
+  items: readonly T[]
+): AuditLogEntry[] {
+  return items.map((item) => ({
+    action: "create",
+    entityType,
+    entityId: item.id,
+    before: null,
+    after: item,
+  }))
 }
 
 // Schema untuk setiap baris line item dalam split transaction
@@ -480,6 +544,10 @@ export async function createTransactionForFamily({
   user,
 }: CreateTransactionForFamilyArgs) {
   const data = createTransactionInputSchema.parse(rawData)
+  const auditCtx = await createAuditContext(
+    { user: { id: user.id, familyId } },
+    data.idempotencyKey
+  )
 
   const createOrReplay = async () =>
     await runInTenantTransaction(
@@ -606,45 +674,14 @@ export async function createTransactionForFamily({
             tx.account.findUniqueOrThrow({ where: { id: data.toAccountId } }),
           ])
 
-          const auditCtx = await createAuditContext(
-            { user: { id: user.id, familyId } },
-            data.idempotencyKey
-          )
-          await auditLog(tx, auditCtx, {
-            action: "update",
-            entityType: "Account",
-            entityId: data.accountId,
-            before: oldSrcAcc,
-            after: newSrcAcc,
-          })
-          await auditLog(tx, auditCtx, {
-            action: "update",
-            entityType: "Account",
-            entityId: data.toAccountId,
-            before: oldDstAcc,
-            after: newDstAcc,
-          })
-          await auditLog(tx, auditCtx, {
-            action: "create",
-            entityType: "Transaction",
-            entityId: outflowTx.id,
-            before: null,
-            after: outflowTx,
-          })
-          await auditLog(tx, auditCtx, {
-            action: "create",
-            entityType: "Transaction",
-            entityId: inflowTx.id,
-            before: null,
-            after: inflowTx,
-          })
-          await auditLog(tx, auditCtx, {
-            action: "create",
-            entityType: "Transfer",
-            entityId: createdTransfer.id,
-            before: null,
-            after: createdTransfer,
-          })
+          await auditLogs(tx, auditCtx, [
+            ...accountBalanceAuditEntries(
+              [oldSrcAcc, oldDstAcc],
+              [newSrcAcc, newDstAcc]
+            ),
+            ...createdAuditEntries("Transaction", [outflowTx, inflowTx]),
+            ...createdAuditEntries("Transfer", [createdTransfer]),
+          ])
 
           return serializeTransaction({
             ...outflowTx,
@@ -731,43 +768,22 @@ export async function createTransactionForFamily({
           )
         }
 
-        const newAccount = await tx.account.findUniqueOrThrow({
-          where: { id: data.accountId },
-        })
+        const [newAccount, createdSplitEntries] = await Promise.all([
+          tx.account.findUniqueOrThrow({
+            where: { id: data.accountId },
+          }),
+          data.isSplit && data.splitEntries?.length
+            ? tx.splitEntry.findMany({
+                where: { transactionId: newTransaction.id },
+              })
+            : Promise.resolve([]),
+        ])
 
-        const auditCtx = await createAuditContext(
-          { user: { id: user.id, familyId } },
-          data.idempotencyKey
-        )
-        await auditLog(tx, auditCtx, {
-          action: "update",
-          entityType: "Account",
-          entityId: data.accountId,
-          before: oldAccount,
-          after: newAccount,
-        })
-        await auditLog(tx, auditCtx, {
-          action: "create",
-          entityType: "Transaction",
-          entityId: newTransaction.id,
-          before: null,
-          after: newTransaction,
-        })
-
-        if (data.isSplit && data.splitEntries?.length) {
-          const createdSplitEntries = await tx.splitEntry.findMany({
-            where: { transactionId: newTransaction.id },
-          })
-          for (const entry of createdSplitEntries) {
-            await auditLog(tx, auditCtx, {
-              action: "create",
-              entityType: "SplitEntry",
-              entityId: entry.id,
-              before: null,
-              after: entry,
-            })
-          }
-        }
+        await auditLogs(tx, auditCtx, [
+          ...accountBalanceAuditEntries([oldAccount], [newAccount]),
+          ...createdAuditEntries("Transaction", [newTransaction]),
+          ...createdAuditEntries("SplitEntry", createdSplitEntries),
+        ])
 
         return serializeTransaction({
           ...newTransaction,
@@ -998,47 +1014,38 @@ export async function deleteTransactionForFamily({
           : Promise.resolve(null),
       ])
 
-      // Tulis audit log Account/update
-      for (const oldAcc of oldAccounts) {
-        const newAcc = newAccounts.find((a) => a.id === oldAcc.id)
-        if (!newAcc || oldAcc.balance === newAcc.balance) continue
-        await auditLog(tx, auditCtx, {
-          action: "update",
-          entityType: "Account",
-          entityId: oldAcc.id,
-          before: oldAcc,
-          after: newAcc,
-        })
-      }
-
-      // Tulis audit log Transaction/soft_delete
-      await auditLog(tx, auditCtx, {
-        action: "soft_delete",
-        entityType: "Transaction",
-        entityId: oldTx.id,
-        before: oldTx,
-        after: updatedOutflowTx,
-      })
-
-      if (updatedInflowTx && inflowTx) {
-        await auditLog(tx, auditCtx, {
+      await auditLogs(tx, auditCtx, [
+        ...accountBalanceAuditEntries(oldAccounts, newAccounts),
+        {
           action: "soft_delete",
           entityType: "Transaction",
-          entityId: inflowTx.id,
-          before: inflowTx,
-          after: updatedInflowTx,
-        })
-      }
-
-      if (oldTransferGraph && updatedTransferGraph) {
-        await auditLog(tx, auditCtx, {
-          action: "soft_delete",
-          entityType: "Transfer",
-          entityId: oldTransferGraph.id,
-          before: oldTransferGraph,
-          after: updatedTransferGraph,
-        })
-      }
+          entityId: oldTx.id,
+          before: oldTx,
+          after: updatedOutflowTx,
+        },
+        ...(updatedInflowTx && inflowTx
+          ? [
+              {
+                action: "soft_delete" as const,
+                entityType: "Transaction",
+                entityId: inflowTx.id,
+                before: inflowTx,
+                after: updatedInflowTx,
+              },
+            ]
+          : []),
+        ...(oldTransferGraph && updatedTransferGraph
+          ? [
+              {
+                action: "soft_delete" as const,
+                entityType: "Transfer",
+                entityId: oldTransferGraph.id,
+                before: oldTransferGraph,
+                after: updatedTransferGraph,
+              },
+            ]
+          : []),
+      ])
 
       return { success: true }
     }
@@ -1259,64 +1266,36 @@ export async function updateTransactionForFamily({
           }),
         ])
 
-        // Tulis audit log Account/update
-        for (const oldAcc of oldAccounts) {
-          const newAcc = newAccounts.find((a) => a.id === oldAcc.id)
-          if (!newAcc || oldAcc.balance === newAcc.balance) continue
-          await auditLog(tx, auditCtx, {
-            action: "update",
-            entityType: "Account",
-            entityId: oldAcc.id,
-            before: oldAcc,
-            after: newAcc,
-          })
-        }
-
-        // Tulis audit log Transaction/update
-        await auditLog(tx, auditCtx, {
-          action: "update",
-          entityType: "Transaction",
-          entityId: oldTx.id,
-          before: oldTx,
-          after: newOutflow,
-        })
-
-        if (oldInflowTx) {
-          await auditLog(tx, auditCtx, {
+        await auditLogs(tx, auditCtx, [
+          ...accountBalanceAuditEntries(oldAccounts, newAccounts),
+          {
             action: "update",
             entityType: "Transaction",
-            entityId: oldInflowTx.id,
-            before: oldInflowTx,
-            after: newInflow,
-          })
-        } else {
-          await auditLog(tx, auditCtx, {
-            action: "create",
-            entityType: "Transaction",
-            entityId: newInflow.id,
-            before: null,
-            after: newInflow,
-          })
-        }
-
-        // Tulis audit log Transfer
-        if (oldTransfer) {
-          await auditLog(tx, auditCtx, {
-            action: "update",
-            entityType: "Transfer",
-            entityId: oldTransfer.id,
-            before: oldTransfer,
-            after: createdTransfer,
-          })
-        } else {
-          await auditLog(tx, auditCtx, {
-            action: "create",
-            entityType: "Transfer",
-            entityId: createdTransfer.id,
-            before: null,
-            after: createdTransfer,
-          })
-        }
+            entityId: oldTx.id,
+            before: oldTx,
+            after: newOutflow,
+          },
+          ...(oldInflowTx
+            ? [
+                {
+                  action: "update" as const,
+                  entityType: "Transaction",
+                  entityId: oldInflowTx.id,
+                  before: oldInflowTx,
+                  after: newInflow,
+                },
+              ]
+            : createdAuditEntries("Transaction", [newInflow])),
+          oldTransfer
+            ? {
+                action: "update",
+                entityType: "Transfer",
+                entityId: oldTransfer.id,
+                before: oldTransfer,
+                after: createdTransfer,
+              }
+            : createdAuditEntries("Transfer", [createdTransfer])[0]!,
+        ])
       } else {
         const amountSign: Money =
           data.type === "expense"
@@ -1400,70 +1379,46 @@ export async function updateTransactionForFamily({
           }),
         ])
 
-        // Tulis audit log Account/update
-        for (const oldAcc of oldAccounts) {
-          const newAcc = newAccounts.find((a) => a.id === oldAcc.id)
-          if (!newAcc || oldAcc.balance === newAcc.balance) continue
-          await auditLog(tx, auditCtx, {
+        await auditLogs(tx, auditCtx, [
+          ...accountBalanceAuditEntries(oldAccounts, newAccounts),
+          {
             action: "update",
-            entityType: "Account",
-            entityId: oldAcc.id,
-            before: oldAcc,
-            after: newAcc,
-          })
-        }
-
-        // Tulis audit log Transaction/update
-        await auditLog(tx, auditCtx, {
-          action: "update",
-          entityType: "Transaction",
-          entityId: oldTx.id,
-          before: oldTx,
-          after: updatedTx,
-        })
-
-        // Split entries logs
-        if (oldTx.splitEntries?.length) {
-          for (const entry of oldTx.splitEntries) {
-            await auditLog(tx, auditCtx, {
-              action: "delete",
-              entityType: "SplitEntry",
-              entityId: entry.id,
-              before: entry,
-              after: null,
-            })
-          }
-        }
-        if (updatedTx.splitEntries?.length) {
-          for (const entry of updatedTx.splitEntries) {
-            await auditLog(tx, auditCtx, {
-              action: "create",
-              entityType: "SplitEntry",
-              entityId: entry.id,
-              before: null,
-              after: entry,
-            })
-          }
-        }
-
-        if (oldInflowTx) {
-          await auditLog(tx, auditCtx, {
-            action: "delete",
             entityType: "Transaction",
-            entityId: oldInflowTx.id,
-            before: oldInflowTx,
+            entityId: oldTx.id,
+            before: oldTx,
+            after: updatedTx,
+          },
+          ...oldTx.splitEntries.map((entry) => ({
+            action: "delete" as const,
+            entityType: "SplitEntry",
+            entityId: entry.id,
+            before: entry,
             after: null,
-          })
-        }
-        if (oldTransfer) {
-          await auditLog(tx, auditCtx, {
-            action: "delete",
-            entityType: "Transfer",
-            entityId: oldTransfer.id,
-            before: oldTransfer,
-            after: null,
-          })
-        }
+          })),
+          ...createdAuditEntries("SplitEntry", updatedTx.splitEntries),
+          ...(oldInflowTx
+            ? [
+                {
+                  action: "delete" as const,
+                  entityType: "Transaction",
+                  entityId: oldInflowTx.id,
+                  before: oldInflowTx,
+                  after: null,
+                },
+              ]
+            : []),
+          ...(oldTransfer
+            ? [
+                {
+                  action: "delete" as const,
+                  entityType: "Transfer",
+                  entityId: oldTransfer.id,
+                  before: oldTransfer,
+                  after: null,
+                },
+              ]
+            : []),
+        ])
       }
 
       return serializeTransaction({
@@ -1510,9 +1465,14 @@ export async function bulkDeleteTransactionsForFamily({
         include: { transferOut: true, splitEntries: true },
       })
 
-      const inflowTxIds = oldTxs
-        .filter((t) => t.type === "transfer" && t.transferOut)
-        .map((t) => t.transferOut!.inflowTransactionId)
+      const inflowTxIds: string[] = []
+      const outflowTxIds: string[] = []
+      for (const oldTx of oldTxs) {
+        outflowTxIds.push(oldTx.id)
+        if (oldTx.type === "transfer" && oldTx.transferOut) {
+          inflowTxIds.push(oldTx.transferOut.inflowTransactionId)
+        }
+      }
 
       const oldInflowTxs =
         inflowTxIds.length > 0
@@ -1525,7 +1485,7 @@ export async function bulkDeleteTransactionsForFamily({
       const oldTransfers =
         oldTxs.length > 0
           ? await tx.transfer.findMany({
-              where: { outflowTransactionId: { in: oldTxs.map((t) => t.id) } },
+              where: { outflowTransactionId: { in: outflowTxIds } },
               include: {
                 inflowTransaction: true,
                 outflowTransaction: true,
@@ -1546,18 +1506,15 @@ export async function bulkDeleteTransactionsForFamily({
         accountDeltas[id] += amount
       }
 
+      const oldInflowTxsById = indexById(oldInflowTxs)
       for (const oldTx of oldTxs) {
         if (oldTx.type === "transfer" && oldTx.transferOut) {
-          const inflowTx = oldInflowTxs.find(
-            (t) => t.id === oldTx.transferOut!.inflowTransactionId
+          const inflowTx = oldInflowTxsById.get(
+            oldTx.transferOut.inflowTransactionId
           )
           addDelta(oldTx.accountId, absMoney(oldTx.amount))
           if (inflowTx) {
             addDelta(inflowTx.accountId, negateMoney(absMoney(inflowTx.amount)))
-            await tx.transaction.update({
-              where: { id: inflowTx.id },
-              data: { deletedAt: new Date() },
-            })
           }
         } else if (oldTx.type !== "transfer") {
           if (oldTx.type === "expense") {
@@ -1566,6 +1523,13 @@ export async function bulkDeleteTransactionsForFamily({
             addDelta(oldTx.accountId, negateMoney(absMoney(oldTx.amount)))
           }
         }
+      }
+
+      if (inflowTxIds.length > 0) {
+        await tx.transaction.updateMany({
+          where: { id: { in: inflowTxIds } },
+          data: { deletedAt: new Date() },
+        })
       }
 
       // 2. Terapkan agregasi delta secara masal
@@ -1611,50 +1575,27 @@ export async function bulkDeleteTransactionsForFamily({
             : Promise.resolve([]),
         ])
 
-      // Tulis audit log Account/update (1 per touched Account)
-      for (const oldAcc of oldAccounts) {
-        const newAcc = newAccounts.find((a) => a.id === oldAcc.id)
-        if (!newAcc || oldAcc.balance === newAcc.balance) continue
-        await auditLog(tx, auditCtx, {
-          action: "update",
-          entityType: "Account",
-          entityId: oldAcc.id,
-          before: oldAcc,
-          after: newAcc,
-        })
-      }
-
-      // Tulis audit log Transaction/soft_delete
-      for (const oldTx of oldTxs) {
-        const newTx = newOutflowTxs.find((t) => t.id === oldTx.id)
-        await auditLog(tx, auditCtx, {
+      await auditLogs(tx, auditCtx, [
+        ...accountBalanceAuditEntries(oldAccounts, newAccounts),
+        ...pairedAuditEntries({
           action: "soft_delete",
+          beforeItems: oldTxs,
+          afterItems: newOutflowTxs,
           entityType: "Transaction",
-          entityId: oldTx.id,
-          before: oldTx,
-          after: newTx,
-        })
-      }
-      for (const oldInflow of oldInflowTxs) {
-        const newInflow = newInflowTxs.find((t) => t.id === oldInflow.id)
-        await auditLog(tx, auditCtx, {
+        }),
+        ...pairedAuditEntries({
           action: "soft_delete",
+          beforeItems: oldInflowTxs,
+          afterItems: newInflowTxs,
           entityType: "Transaction",
-          entityId: oldInflow.id,
-          before: oldInflow,
-          after: newInflow,
-        })
-      }
-      for (const oldTransfer of oldTransfers) {
-        const newTransfer = newTransfers.find((t) => t.id === oldTransfer.id)
-        await auditLog(tx, auditCtx, {
+        }),
+        ...pairedAuditEntries({
           action: "soft_delete",
+          beforeItems: oldTransfers,
+          afterItems: newTransfers,
           entityType: "Transfer",
-          entityId: oldTransfer.id,
-          before: oldTransfer,
-          after: newTransfer,
-        })
-      }
+        }),
+      ])
 
       return { success: true }
     }
@@ -1799,30 +1740,15 @@ export async function bulkUpdateTransactionsForFamily({
         }),
       ])
 
-      // Tulis audit log Account/update (1 per touched Account)
-      for (const oldAcc of oldAccounts) {
-        const newAcc = newAccounts.find((a) => a.id === oldAcc.id)
-        if (!newAcc || oldAcc.balance === newAcc.balance) continue
-        await auditLog(tx, auditCtx, {
+      await auditLogs(tx, auditCtx, [
+        ...accountBalanceAuditEntries(oldAccounts, newAccounts),
+        ...pairedAuditEntries({
           action: "update",
-          entityType: "Account",
-          entityId: oldAcc.id,
-          before: oldAcc,
-          after: newAcc,
-        })
-      }
-
-      // Tulis audit log Transaction/update
-      for (const oldTx of oldTxs) {
-        const newTx = newTxs.find((t) => t.id === oldTx.id)
-        await auditLog(tx, auditCtx, {
-          action: "update",
+          beforeItems: oldTxs,
+          afterItems: newTxs,
           entityType: "Transaction",
-          entityId: oldTx.id,
-          before: oldTx,
-          after: newTx,
-        })
-      }
+        }),
+      ])
 
       return { success: true }
     }
@@ -1924,29 +1850,10 @@ export async function bulkCreateTransactionsForFamily({
         }),
       ])
 
-      // Tulis audit log Account/update (1 per touched Account)
-      for (const oldAcc of oldAccounts) {
-        const newAcc = newAccounts.find((a) => a.id === oldAcc.id)
-        if (!newAcc || oldAcc.balance === newAcc.balance) continue
-        await auditLog(tx, auditCtx, {
-          action: "update",
-          entityType: "Account",
-          entityId: oldAcc.id,
-          before: oldAcc,
-          after: newAcc,
-        })
-      }
-
-      // Tulis audit log Transaction/create
-      for (const newTx of newTxs) {
-        await auditLog(tx, auditCtx, {
-          action: "create",
-          entityType: "Transaction",
-          entityId: newTx.id,
-          before: null,
-          after: newTx,
-        })
-      }
+      await auditLogs(tx, auditCtx, [
+        ...accountBalanceAuditEntries(oldAccounts, newAccounts),
+        ...createdAuditEntries("Transaction", newTxs),
+      ])
 
       return { success: true, count: data.transactions.length }
     }
