@@ -6,6 +6,7 @@ on:
     branches: [main]
 
 permissions:
+  checks: write # required to create/update the React Doctor check run
   contents: read
   pull-requests: write # required to post PR comments
 
@@ -13,10 +14,15 @@ jobs:
   react-doctor:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
+        if: github.event_name == 'pull_request'
         with:
-          fetch-depth: 0 # required for `diff`
-      - uses: millionco/react-doctor@0a52ca3d0543fee548ed9449945d7031b57ac575
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/checkout@v6
+        if: github.event_name != 'pull_request'
         with:
-          diff: main
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      - uses: millionco/react-doctor@30f05ef5320f78a040cc95a7ec30dc573f2d3bce
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
