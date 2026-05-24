@@ -14,6 +14,7 @@ const RESET_TABLES = [
   "Transfer",
   "SplitEntry",
   "Transaction",
+  "IdempotencyRecord",
   "SmartRule",
   "Merchant",
   "Category",

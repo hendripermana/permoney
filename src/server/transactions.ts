@@ -167,22 +167,325 @@ const transactionInputSchema = z.object({
   attachmentUrl: z.string().nullable().optional(),
 })
 
-/**
- * BACKEND FUNCTION: Create Transaction & Update Balances (ACID Compliant)
- */
-export const createTransactionFn = createServerFn({ method: "POST" })
-  .middleware([familyMiddleware])
-  .inputValidator((data: z.input<typeof transactionInputSchema>) =>
-    transactionInputSchema.parse(data)
+const uuidV7Schema = z
+  .string()
+  .trim()
+  .regex(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    "idempotencyKey must be a UUIDv7"
   )
-  .handler(async ({ data, context }) => {
-    const { user, familyId } = context
+  .transform((value) => value.toLowerCase())
 
-    // 🚀 THE ENTERPRISE MAGIC: Prisma $transaction (ACID)
-    // If any process inside this block fails, all changes are rolled back automatically.
-    const result = await scopedTenantTransaction(
+const createTransactionTransportInputSchema = transactionInputSchema.extend({
+  idempotencyKey: uuidV7Schema.optional(),
+})
+
+const createTransactionInputSchema =
+  createTransactionTransportInputSchema.required({
+    idempotencyKey: true,
+  })
+
+type CreateTransactionInput = z.infer<typeof createTransactionInputSchema>
+type RunInTenantTransaction = <T>(
+  familyId: string,
+  callback: (tx: TenantTransactionClient) => Promise<T>
+) => Promise<T>
+
+interface CreateTransactionForFamilyArgs {
+  data: unknown
+  familyId: string
+  runInTenantTransaction?: RunInTenantTransaction
+  user: { id: string }
+}
+
+export class IdempotencyConflictError extends Error {
+  statusCode = 409
+
+  constructor(message = "Idempotency key reused with a different payload") {
+    super(message)
+    this.name = "IdempotencyConflictError"
+  }
+}
+
+interface PersistedSplitEntryForIdempotency {
+  amount: bigint
+  categoryId: string | null
+  description: string
+  merchantId: string | null
+}
+
+interface PersistedTransferOutForIdempotency {
+  inflowTransaction: {
+    accountId: string
+    amount: bigint
+    categoryId: string | null
+    currency: string
+    date: Date
+    description: string
+    destinationAmount: bigint | null
+    destinationCurrency: string | null
+    merchantId: string | null
+    notes: string | null
+    status: string
+    toAccountId: string | null
+    type: string
+  } | null
+}
+
+interface PersistedTransactionForIdempotency {
+  accountBalanceAfter: bigint | null
+  accountId: string
+  amount: bigint
+  attachmentUrl: string | null
+  categoryId: string | null
+  createdAt: Date
+  currency: string
+  date: Date
+  deletedAt: Date | null
+  description: string
+  destinationAmount: bigint | null
+  destinationCurrency: string | null
+  excluded: boolean
+  familyId: string
+  id: string
+  idempotencyKey: string | null
+  isSplit: boolean
+  kind: string
+  merchantId: string | null
+  notes: string | null
+  splitEntries: PersistedSplitEntryForIdempotency[]
+  status: string
+  toAccountId: string | null
+  transferIn: unknown
+  transferOut: PersistedTransferOutForIdempotency | null
+  type: string
+  updatedAt: Date
+  userId: string
+}
+
+function canonicalMoney(value: bigint | null | undefined): string | null {
+  return value == null ? null : encodeMoney(absMoney(value))
+}
+
+function canonicalSplitEntries(
+  entries: Array<{
+    amount: bigint
+    categoryId?: string | null
+    description: string
+    merchantId?: string | null
+  }>
+) {
+  return entries.map((entry) => ({
+    amount: encodeMoney(absMoney(entry.amount)),
+    categoryId: entry.categoryId ?? null,
+    description: entry.description,
+    merchantId: entry.merchantId ?? null,
+  }))
+}
+
+function canonicalRequestPayload(data: CreateTransactionInput) {
+  return {
+    accountId: data.accountId,
+    amount: encodeMoney(absMoney(data.amount)),
+    attachmentUrl: data.attachmentUrl ?? null,
+    categoryId: data.isSplit ? null : (data.categoryId ?? null),
+    currency: data.currency,
+    date: data.date.toISOString(),
+    description: data.description,
+    destinationAmount: canonicalMoney(data.destinationAmount),
+    destinationCurrency: data.destinationCurrency ?? null,
+    isSplit: data.isSplit,
+    merchantId: data.isSplit ? null : (data.merchantId ?? null),
+    notes: data.notes ?? null,
+    splitEntries: data.isSplit
+      ? canonicalSplitEntries(data.splitEntries ?? [])
+      : [],
+    status: data.status,
+    toAccountId: data.toAccountId ?? null,
+    transferPartner:
+      data.type === "transfer"
+        ? {
+            accountId: data.toAccountId ?? null,
+            amount: encodeMoney(
+              absMoney(data.destinationAmount ?? data.amount)
+            ),
+            categoryId: data.categoryId ?? null,
+            currency: data.destinationCurrency ?? data.currency,
+            date: data.date.toISOString(),
+            description: data.description,
+            destinationAmount: canonicalMoney(data.destinationAmount),
+            destinationCurrency: data.destinationCurrency ?? null,
+            merchantId: data.merchantId ?? null,
+            notes: data.notes ?? null,
+            status: data.status,
+            toAccountId: data.accountId,
+            type: "transfer",
+          }
+        : null,
+    type: data.type,
+  }
+}
+
+function canonicalPersistedPayload(tx: PersistedTransactionForIdempotency) {
+  const transferPartner = tx.transferOut?.inflowTransaction ?? null
+
+  return {
+    accountId: tx.accountId,
+    amount: encodeMoney(absMoney(tx.amount)),
+    attachmentUrl: tx.attachmentUrl,
+    categoryId: tx.isSplit ? null : tx.categoryId,
+    currency: tx.currency,
+    date: tx.date.toISOString(),
+    description: tx.description,
+    destinationAmount: canonicalMoney(tx.destinationAmount),
+    destinationCurrency: tx.destinationCurrency,
+    isSplit: tx.isSplit,
+    merchantId: tx.isSplit ? null : tx.merchantId,
+    notes: tx.notes,
+    splitEntries: tx.isSplit ? canonicalSplitEntries(tx.splitEntries) : [],
+    status: tx.status,
+    toAccountId: tx.toAccountId,
+    transferPartner:
+      tx.type === "transfer"
+        ? transferPartner && {
+            accountId: transferPartner.accountId,
+            amount: encodeMoney(absMoney(transferPartner.amount)),
+            categoryId: transferPartner.categoryId,
+            currency: transferPartner.currency,
+            date: transferPartner.date.toISOString(),
+            description: transferPartner.description,
+            destinationAmount: canonicalMoney(
+              transferPartner.destinationAmount
+            ),
+            destinationCurrency: transferPartner.destinationCurrency,
+            merchantId: transferPartner.merchantId,
+            notes: transferPartner.notes,
+            status: transferPartner.status,
+            toAccountId: transferPartner.toAccountId,
+            type: transferPartner.type,
+          }
+        : null,
+    type: tx.type,
+  }
+}
+
+function assertIdempotentPayloadMatches(
+  data: CreateTransactionInput,
+  existing: PersistedTransactionForIdempotency
+): void {
+  if (
+    JSON.stringify(canonicalRequestPayload(data)) !==
+    JSON.stringify(canonicalPersistedPayload(existing))
+  ) {
+    throw new IdempotencyConflictError()
+  }
+}
+
+async function findIdempotentTransaction(
+  tx: TenantTransactionClient,
+  familyId: string,
+  idempotencyKey: string
+): Promise<PersistedTransactionForIdempotency | null> {
+  return await tx.transaction.findUnique({
+    where: {
+      tx_family_idempotency: {
+        familyId,
+        idempotencyKey,
+      },
+    },
+    include: {
+      splitEntries: {
+        orderBy: { createdAt: "asc" },
+      },
+      transferIn: true,
+      transferOut: {
+        include: {
+          inflowTransaction: true,
+        },
+      },
+    },
+  })
+}
+
+function serializePersistedReplay(tx: PersistedTransactionForIdempotency) {
+  const {
+    splitEntries: _splitEntries,
+    transferIn: _transferIn,
+    transferOut: _transferOut,
+    ...transaction
+  } = tx
+
+  return serializeTransaction({
+    ...transaction,
+    amount: absMoney(transaction.amount),
+  })
+}
+
+async function replayIdempotentTransaction(
+  tx: TenantTransactionClient,
+  familyId: string,
+  data: CreateTransactionInput
+) {
+  const existing = await findIdempotentTransaction(
+    tx,
+    familyId,
+    data.idempotencyKey
+  )
+  if (!existing) return null
+
+  assertIdempotentPayloadMatches(data, existing)
+  return serializePersistedReplay(existing)
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return false
+  }
+
+  const code = (error as { code?: unknown }).code
+  return code === "P2002"
+}
+
+async function readIdempotencyHeader(): Promise<string | null> {
+  try {
+    const { getRequest } = await import("@tanstack/react-start/server")
+    return getRequest().headers.get("Idempotency-Key")
+  } catch {
+    return null
+  }
+}
+
+async function normalizeCreateTransactionTransportInput(
+  data: z.infer<typeof createTransactionTransportInputSchema>
+): Promise<CreateTransactionInput> {
+  const rawHeaderKey = await readIdempotencyHeader()
+  const headerKey =
+    rawHeaderKey == null ? null : uuidV7Schema.parse(rawHeaderKey)
+  if (headerKey && data.idempotencyKey && headerKey !== data.idempotencyKey) {
+    throw new Error("Idempotency-Key header does not match idempotencyKey")
+  }
+
+  return createTransactionInputSchema.parse({
+    ...data,
+    idempotencyKey: headerKey ?? data.idempotencyKey,
+  })
+}
+
+export async function createTransactionForFamily({
+  data: rawData,
+  familyId,
+  runInTenantTransaction = scopedTenantTransaction,
+  user,
+}: CreateTransactionForFamilyArgs) {
+  const data = createTransactionInputSchema.parse(rawData)
+
+  const createOrReplay = async () =>
+    await runInTenantTransaction(
       familyId,
       async (tx: TenantTransactionClient) => {
+        const replay = await replayIdempotentTransaction(tx, familyId, data)
+        if (replay) return replay
+
         // === SPLIT PARITY GUARD (GAAP Compliance) ===
         // Backend MUST validate that SplitEntries sum === parent.amount.
         // UI validation is a convenience; THIS is the authoritative check.
@@ -257,6 +560,7 @@ export const createTransactionFn = createServerFn({ method: "POST" })
               destinationCurrency: data.destinationCurrency,
               accountBalanceAfter: sourceBalanceAfter,
               attachmentUrl: data.attachmentUrl,
+              idempotencyKey: data.idempotencyKey,
             },
           })
 
@@ -349,6 +653,7 @@ export const createTransactionFn = createServerFn({ method: "POST" })
             status: data.status,
             accountBalanceAfter: accountBalanceAfter,
             attachmentUrl: data.attachmentUrl,
+            idempotencyKey: data.idempotencyKey,
           },
         })
 
@@ -377,7 +682,37 @@ export const createTransactionFn = createServerFn({ method: "POST" })
       }
     )
 
-    return result
+  try {
+    return await createOrReplay()
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error
+
+    const replay = await runInTenantTransaction(
+      familyId,
+      async (tx: TenantTransactionClient) =>
+        await replayIdempotentTransaction(tx, familyId, data)
+    )
+    if (replay) return replay
+
+    throw error
+  }
+}
+
+/**
+ * BACKEND FUNCTION: Create Transaction & Update Balances (ACID Compliant)
+ */
+export const createTransactionFn = createServerFn({ method: "POST" })
+  .middleware([familyMiddleware])
+  .inputValidator(
+    (data: z.input<typeof createTransactionTransportInputSchema>) =>
+      createTransactionTransportInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await createTransactionForFamily({
+      data: await normalizeCreateTransactionTransportInput(data),
+      familyId: context.familyId,
+      user: context.user,
+    })
   })
 
 /**

@@ -136,6 +136,7 @@ export const transactionCollection = createCollection(
         await createTransactionFn({
           data: {
             id: payload.id as string,
+            idempotencyKey: payload.idempotencyKey as string,
             type: payload.type as "expense" | "income" | "transfer",
             amount: encodeMoney(payload.amount as Money),
             description: payload.description as string,
