@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client"
+import { auditLog, createAuditContext } from "./middleware/audit"
 import { setTenantGuc } from "./middleware/with-family"
 
 interface LockedOnboardingUser {
@@ -17,6 +18,10 @@ export async function initializeOnboardingForUser(
   client: PrismaClient,
   userId: string
 ): Promise<OnboardingInitializationResult> {
+  const auditCtx = await createAuditContext({
+    user: { id: userId, familyId: null },
+  })
+
   return await client.$transaction(async (tx) => {
     const user = await lockUserForOnboarding(tx, userId)
 
@@ -43,6 +48,16 @@ export async function initializeOnboardingForUser(
     await tx.user.update({
       where: { id: user.id },
       data: { familyId: scopedFamilyId },
+    })
+
+    // Catat audit log untuk pembuatan Family baru (onboarding)
+    await auditLog(tx, auditCtx, {
+      action: "create",
+      entityType: "Family",
+      entityId: family.id,
+      before: null,
+      after: family,
+      familyId: family.id,
     })
 
     return { created: true, familyId: scopedFamilyId }

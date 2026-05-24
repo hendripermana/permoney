@@ -254,6 +254,27 @@ model IdempotencyRecord {
   @@index([expiresAt])
 }
 
+model AuditLog {
+  id             String   @id @default(cuid())
+  familyId       String
+  userId         String
+  action         String
+  entityType     String
+  entityId       String
+  beforeJson     Json?
+  afterJson      Json?
+  ip             String?
+  userAgent      String?
+  requestId      String
+  idempotencyKey String?
+  createdAt      DateTime @default(now())
+
+  @@index([familyId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([entityType, entityId])
+  @@index([requestId])
+  @@unique([createdAt, id])
+}
+
 model Transfer {
   id String @id @default(cuid())
 

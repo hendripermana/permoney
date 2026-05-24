@@ -7,6 +7,7 @@ import {
   scopedTenantTransaction,
   type TenantTransactionClient,
 } from "./middleware/with-family"
+import { auditLog, createAuditContext } from "./middleware/audit"
 
 /**
  * BACKEND FUNCTION: Fetch reference data for the Transaction Form Dropdowns
@@ -465,6 +466,7 @@ async function normalizeCreateTransactionTransportInput(
     throw new Error("Idempotency-Key header does not match idempotencyKey")
   }
 
+  // Normalisasi data dengan menyertakan idempotencyKey dari header jika ada
   return createTransactionInputSchema.parse({
     ...data,
     idempotencyKey: headerKey ?? data.idempotencyKey,
@@ -507,6 +509,11 @@ export async function createTransactionForFamily({
           let kind = "funds_movement"
           if (toAccount.type === "CREDIT") kind = "cc_payment"
           else if (toAccount.type === "LOAN") kind = "loan_payment"
+
+          const [oldSrcAcc, oldDstAcc] = await Promise.all([
+            tx.account.findUniqueOrThrow({ where: { id: data.accountId } }),
+            tx.account.findUniqueOrThrow({ where: { id: data.toAccountId } }),
+          ])
 
           // Running Balance Snapshot: baca saldo akun setelah update atomik
           // Tenant-safe: update with familyId constraint
@@ -587,11 +594,56 @@ export async function createTransactionForFamily({
             },
           })
 
-          await tx.transfer.create({
+          const createdTransfer = await tx.transfer.create({
             data: {
               outflowTransactionId: outflowTx.id,
               inflowTransactionId: inflowTx.id,
             },
+          })
+
+          const [newSrcAcc, newDstAcc] = await Promise.all([
+            tx.account.findUniqueOrThrow({ where: { id: data.accountId } }),
+            tx.account.findUniqueOrThrow({ where: { id: data.toAccountId } }),
+          ])
+
+          const auditCtx = await createAuditContext(
+            { user: { id: user.id, familyId } },
+            data.idempotencyKey
+          )
+          await auditLog(tx, auditCtx, {
+            action: "update",
+            entityType: "Account",
+            entityId: data.accountId,
+            before: oldSrcAcc,
+            after: newSrcAcc,
+          })
+          await auditLog(tx, auditCtx, {
+            action: "update",
+            entityType: "Account",
+            entityId: data.toAccountId,
+            before: oldDstAcc,
+            after: newDstAcc,
+          })
+          await auditLog(tx, auditCtx, {
+            action: "create",
+            entityType: "Transaction",
+            entityId: outflowTx.id,
+            before: null,
+            after: outflowTx,
+          })
+          await auditLog(tx, auditCtx, {
+            action: "create",
+            entityType: "Transaction",
+            entityId: inflowTx.id,
+            before: null,
+            after: inflowTx,
+          })
+          await auditLog(tx, auditCtx, {
+            action: "create",
+            entityType: "Transfer",
+            entityId: createdTransfer.id,
+            before: null,
+            after: createdTransfer,
           })
 
           return serializeTransaction({
@@ -605,6 +657,10 @@ export async function createTransactionForFamily({
           data.type === "expense"
             ? negateMoney(absMoney(data.amount))
             : absMoney(data.amount)
+
+        const oldAccount = await tx.account.findUniqueOrThrow({
+          where: { id: data.accountId },
+        })
 
         // Running Balance Snapshot: baca saldo setelah update atomik
         let accountBalanceAfter: bigint | null = null
@@ -673,6 +729,44 @@ export async function createTransactionForFamily({
               })
             )
           )
+        }
+
+        const newAccount = await tx.account.findUniqueOrThrow({
+          where: { id: data.accountId },
+        })
+
+        const auditCtx = await createAuditContext(
+          { user: { id: user.id, familyId } },
+          data.idempotencyKey
+        )
+        await auditLog(tx, auditCtx, {
+          action: "update",
+          entityType: "Account",
+          entityId: data.accountId,
+          before: oldAccount,
+          after: newAccount,
+        })
+        await auditLog(tx, auditCtx, {
+          action: "create",
+          entityType: "Transaction",
+          entityId: newTransaction.id,
+          before: null,
+          after: newTransaction,
+        })
+
+        if (data.isSplit && data.splitEntries?.length) {
+          const createdSplitEntries = await tx.splitEntry.findMany({
+            where: { transactionId: newTransaction.id },
+          })
+          for (const entry of createdSplitEntries) {
+            await auditLog(tx, auditCtx, {
+              action: "create",
+              entityType: "SplitEntry",
+              entityId: entry.id,
+              before: null,
+              after: entry,
+            })
+          }
         }
 
         return serializeTransaction({
@@ -775,9 +869,181 @@ export const getTransactionsFn = createServerFn({ method: "GET" })
     })
   })
 
-// =========================================================================
-// THE INVISIBLE LEDGER: SMART DELETE & UPDATE (ENTERPRISE ARCHITECTURE)
-// =========================================================================
+export async function deleteTransactionForFamily({
+  id,
+  familyId,
+  user,
+}: {
+  id: string
+  familyId: string
+  user: { id: string; familyId?: string | null }
+}) {
+  const auditCtx = await createAuditContext({ user })
+  return await scopedTenantTransaction(
+    familyId,
+    async (tx: TenantTransactionClient) => {
+      // 1. Cari transaksi lama beserta relasi transfernya dan split entries
+      const oldTx = await tx.transaction.findUnique({
+        where: { id },
+        include: { transferOut: true, transferIn: true, splitEntries: true },
+      })
+
+      if (!oldTx) throw new Error("Transaction not found!")
+
+      const oldTransferGraph =
+        oldTx.type === "transfer" && oldTx.transferOut
+          ? await tx.transfer.findUnique({
+              where: { id: oldTx.transferOut.id },
+              include: {
+                inflowTransaction: true,
+                outflowTransaction: true,
+              },
+            })
+          : null
+
+      // Cari inflow transaction jika ini transfer
+      const inflowTx =
+        oldTx.type === "transfer" && oldTx.transferOut
+          ? await tx.transaction.findUnique({
+              where: {
+                id: oldTx.transferOut.inflowTransactionId,
+              },
+              include: { splitEntries: true },
+            })
+          : null
+
+      // Ambil akun-akun yang terpengaruh sebelum mutasi
+      const affectedAccountIds = [oldTx.accountId]
+      if (inflowTx) {
+        affectedAccountIds.push(inflowTx.accountId)
+      }
+      const oldAccounts = await tx.account.findMany({
+        where: { id: { in: affectedAccountIds } },
+      })
+
+      // 2. REVERSE BALANCES (Kembalikan Saldo)
+      if (oldTx.type === "transfer" && oldTx.transferOut) {
+        const srcUpd = await tx.account.updateMany({
+          where: { id: oldTx.accountId, familyId },
+          data: { balance: { increment: absMoney(oldTx.amount) } },
+        })
+        if (srcUpd.count !== 1)
+          throw new Error("Source account not found or access denied!")
+
+        if (inflowTx) {
+          const dstUpd = await tx.account.updateMany({
+            where: { id: inflowTx.accountId, familyId },
+            data: { balance: { decrement: absMoney(inflowTx.amount) } },
+          })
+          if (dstUpd.count !== 1)
+            throw new Error("Destination account not found or access denied!")
+        }
+      } else {
+        const upd = await tx.account.updateMany({
+          where: { id: oldTx.accountId, familyId },
+          data: { balance: { decrement: oldTx.amount } },
+        })
+        if (upd.count !== 1)
+          throw new Error("Account not found or access denied!")
+      }
+
+      // 3. SOFT DELETE (GAAP Compliance)
+      if (oldTx.type === "transfer" && oldTx.transferOut && inflowTx) {
+        // Soft delete outflow
+        await tx.transaction.update({
+          where: { id: oldTx.id },
+          data: { deletedAt: new Date() },
+        })
+
+        // Soft delete inflow
+        await tx.transaction.update({
+          where: { id: inflowTx.id },
+          data: { deletedAt: new Date() },
+        })
+      } else {
+        await tx.transaction.update({
+          where: { id: oldTx.id },
+          data: { deletedAt: new Date() },
+        })
+      }
+
+      // Ambil data terbaru setelah mutasi selesai diaplikasikan
+      const [
+        updatedOutflowTx,
+        updatedInflowTx,
+        newAccounts,
+        updatedTransferGraph,
+      ] = await Promise.all([
+        tx.transaction.findUniqueOrThrow({
+          where: { id: oldTx.id },
+          include: { splitEntries: true },
+        }),
+        inflowTx
+          ? tx.transaction.findUniqueOrThrow({
+              where: { id: inflowTx.id },
+              include: { splitEntries: true },
+            })
+          : Promise.resolve(null),
+        tx.account.findMany({
+          where: { id: { in: affectedAccountIds } },
+        }),
+        oldTransferGraph
+          ? tx.transfer.findUnique({
+              where: { id: oldTransferGraph.id },
+              include: {
+                inflowTransaction: true,
+                outflowTransaction: true,
+              },
+            })
+          : Promise.resolve(null),
+      ])
+
+      // Tulis audit log Account/update
+      for (const oldAcc of oldAccounts) {
+        const newAcc = newAccounts.find((a) => a.id === oldAcc.id)
+        if (!newAcc || oldAcc.balance === newAcc.balance) continue
+        await auditLog(tx, auditCtx, {
+          action: "update",
+          entityType: "Account",
+          entityId: oldAcc.id,
+          before: oldAcc,
+          after: newAcc,
+        })
+      }
+
+      // Tulis audit log Transaction/soft_delete
+      await auditLog(tx, auditCtx, {
+        action: "soft_delete",
+        entityType: "Transaction",
+        entityId: oldTx.id,
+        before: oldTx,
+        after: updatedOutflowTx,
+      })
+
+      if (updatedInflowTx && inflowTx) {
+        await auditLog(tx, auditCtx, {
+          action: "soft_delete",
+          entityType: "Transaction",
+          entityId: inflowTx.id,
+          before: inflowTx,
+          after: updatedInflowTx,
+        })
+      }
+
+      if (oldTransferGraph && updatedTransferGraph) {
+        await auditLog(tx, auditCtx, {
+          action: "soft_delete",
+          entityType: "Transfer",
+          entityId: oldTransferGraph.id,
+          before: oldTransferGraph,
+          after: updatedTransferGraph,
+        })
+      }
+
+      return { success: true }
+    }
+  )
+}
 
 /**
  * BACKEND FUNCTION: Delete Transaction (Soft Delete — GAAP Compliance)
@@ -787,79 +1053,426 @@ export const deleteTransactionFn = createServerFn({ method: "POST" })
   .middleware([familyMiddleware])
   .inputValidator(z.object({ id: z.string() }))
   .handler(async ({ data, context }) => {
-    const { familyId } = context
-    return await scopedTenantTransaction(
-      familyId,
-      async (tx: TenantTransactionClient) => {
-        // 1. Cari transaksi lama beserta relasi transfernya
-        const oldTx = await tx.transaction.findUnique({
-          where: { id: data.id },
-          include: { transferOut: true, transferIn: true },
+    return await deleteTransactionForFamily({
+      id: data.id,
+      familyId: context.familyId,
+      user: context.user,
+    })
+  })
+
+export async function updateTransactionForFamily({
+  data,
+  familyId,
+  user,
+}: {
+  data: z.infer<typeof transactionInputSchema>
+  familyId: string
+  user: { id: string; familyId?: string | null }
+}) {
+  const auditCtx = await createAuditContext({ user })
+  return await scopedTenantTransaction(
+    familyId,
+    async (tx: TenantTransactionClient) => {
+      assertSplitParity(data)
+
+      // --- FASE 1: REVERSAL (HAPUS LAMA) ---
+      // Ambil snapshot graph lengkap sebelum mutasi dilakukan
+      const oldTx = await tx.transaction.findUnique({
+        where: { id: data.id },
+        include: {
+          transferOut: {
+            include: {
+              inflowTransaction: {
+                include: { splitEntries: true },
+              },
+            },
+          },
+          splitEntries: true,
+        },
+      })
+
+      if (!oldTx) throw new Error("Original transaction not found")
+
+      const oldInflowTx =
+        oldTx.type === "transfer" && oldTx.transferOut
+          ? oldTx.transferOut.inflowTransaction
+          : null
+      const oldTransfer =
+        oldTx.type === "transfer" && oldTx.transferOut
+          ? {
+              id: oldTx.transferOut.id,
+              outflowTransactionId: oldTx.transferOut.outflowTransactionId,
+              inflowTransactionId: oldTx.transferOut.inflowTransactionId,
+              createdAt: oldTx.transferOut.createdAt,
+            }
+          : null
+
+      // Kumpulkan semua akun yang terpengaruh (sebelum dan sesudah)
+      const touchedAccountIds = new Set([oldTx.accountId, data.accountId])
+      if (oldInflowTx) touchedAccountIds.add(oldInflowTx.accountId)
+      if (data.toAccountId) touchedAccountIds.add(data.toAccountId)
+
+      const oldAccounts = await tx.account.findMany({
+        where: { id: { in: Array.from(touchedAccountIds) } },
+      })
+
+      if (oldTx.type === "transfer" && oldTx.transferOut) {
+        const inflowTx = await tx.transaction.findUnique({
+          where: {
+            id: oldTx.transferOut.inflowTransactionId,
+          },
+        })
+        const srcUpd = await tx.account.updateMany({
+          where: { id: oldTx.accountId, familyId },
+          data: { balance: { increment: absMoney(oldTx.amount) } },
+        })
+        if (srcUpd.count !== 1)
+          throw new Error("Source account not found or access denied!")
+        if (inflowTx) {
+          const dstUpd = await tx.account.updateMany({
+            where: { id: inflowTx.accountId, familyId },
+            data: { balance: { decrement: absMoney(inflowTx.amount) } },
+          })
+          if (dstUpd.count !== 1)
+            throw new Error("Destination account not found or access denied!")
+          await tx.transaction.delete({ where: { id: inflowTx.id } })
+        }
+      } else {
+        const upd = await tx.account.updateMany({
+          where: { id: oldTx.accountId, familyId },
+          data: { balance: { decrement: oldTx.amount } },
+        })
+        if (upd.count !== 1)
+          throw new Error("Account not found or access denied!")
+      }
+      await tx.transaction.delete({ where: { id: oldTx.id } })
+
+      // --- FASE 2: REPLACE (BUAT BARU DENGAN DATA UPDATE) ---
+      let resultTransaction
+
+      if (data.type === "transfer") {
+        let kind = "funds_movement"
+        const toAccount = await tx.account.findFirst({
+          where: { id: data.toAccountId!, familyId },
+        })
+        if (!toAccount)
+          throw new Error("Destination account not found or access denied!")
+        if (toAccount.type === "CREDIT") kind = "cc_payment"
+        else if (toAccount.type === "LOAN") kind = "loan_payment"
+
+        const srcUpd = await tx.account.updateMany({
+          where: { id: data.accountId, familyId },
+          data: { balance: { decrement: data.amount } },
+        })
+        if (srcUpd.count !== 1)
+          throw new Error("Source account not found or access denied!")
+        const updatedSourceAccount = await tx.account.findFirst({
+          where: { id: data.accountId, familyId },
+          select: { balance: true },
+        })
+        const sourceBalanceAfter = updatedSourceAccount!.balance
+
+        const inAmount = data.destinationAmount ?? data.amount
+        const inCurrency = data.destinationCurrency ?? data.currency
+
+        const dstUpd = await tx.account.updateMany({
+          where: { id: data.toAccountId!, familyId },
+          data: { balance: { increment: inAmount } },
+        })
+        if (dstUpd.count !== 1)
+          throw new Error("Destination account not found or access denied!")
+        const updatedDestAccount = await tx.account.findFirst({
+          where: { id: data.toAccountId!, familyId },
+          select: { balance: true },
+        })
+        const destBalanceAfter = updatedDestAccount!.balance
+
+        const outflowTx = await tx.transaction.create({
+          data: {
+            id: data.id,
+            type: "transfer",
+            kind,
+            currency: data.currency,
+            amount: negateMoney(absMoney(data.amount)),
+            description: data.description,
+            date: data.date,
+            notes: data.notes || null,
+            accountId: data.accountId,
+            toAccountId: data.toAccountId,
+            categoryId: data.categoryId || null,
+            merchantId: data.merchantId || null,
+            userId: user.id,
+            familyId,
+            status: data.status,
+            destinationAmount: data.destinationAmount,
+            destinationCurrency: data.destinationCurrency,
+            accountBalanceAfter: sourceBalanceAfter,
+            attachmentUrl: data.attachmentUrl,
+          },
         })
 
-        if (!oldTx) throw new Error("Transaction not found!")
+        const inflowTx = await tx.transaction.create({
+          data: {
+            type: "transfer",
+            kind,
+            currency: inCurrency,
+            amount: absMoney(inAmount),
+            description: data.description,
+            date: data.date,
+            notes: data.notes || null,
+            accountId: data.toAccountId!,
+            toAccountId: data.accountId,
+            categoryId: data.categoryId || null,
+            merchantId: data.merchantId || null,
+            userId: user.id,
+            familyId,
+            status: data.status,
+            destinationAmount: data.destinationAmount,
+            destinationCurrency: data.destinationCurrency,
+            accountBalanceAfter: destBalanceAfter,
+            attachmentUrl: data.attachmentUrl,
+          },
+        })
 
-        // 2. REVERSE BALANCES (Kembalikan Saldo)
-        if (oldTx.type === "transfer" && oldTx.transferOut) {
-          // Jika ini Transfer, kita harus cari Inflow-nya juga
-          const inflowTx = await tx.transaction.findUnique({
-            where: {
-              id: oldTx.transferOut.inflowTransactionId,
-            },
+        const createdTransfer = await tx.transfer.create({
+          data: {
+            ...(oldTransfer ? { id: oldTransfer.id } : {}),
+            outflowTransactionId: outflowTx.id,
+            inflowTransactionId: inflowTx.id,
+          },
+        })
+
+        resultTransaction = outflowTx
+
+        // Re-read data terbaru setelah mutasi
+        const [newOutflow, newInflow, newAccounts] = await Promise.all([
+          tx.transaction.findUniqueOrThrow({
+            where: { id: outflowTx.id },
+            include: { splitEntries: true },
+          }),
+          tx.transaction.findUniqueOrThrow({
+            where: { id: inflowTx.id },
+            include: { splitEntries: true },
+          }),
+          tx.account.findMany({
+            where: { id: { in: Array.from(touchedAccountIds) } },
+          }),
+        ])
+
+        // Tulis audit log Account/update
+        for (const oldAcc of oldAccounts) {
+          const newAcc = newAccounts.find((a) => a.id === oldAcc.id)
+          if (!newAcc || oldAcc.balance === newAcc.balance) continue
+          await auditLog(tx, auditCtx, {
+            action: "update",
+            entityType: "Account",
+            entityId: oldAcc.id,
+            before: oldAcc,
+            after: newAcc,
           })
+        }
 
-          // Refund akun pengirim (Outflow kan negatif, kita ubah jadi absolute lalu tambahkan)
-          // Tenant-safe: update dengan familyId constraint
-          const srcUpd = await tx.account.updateMany({
-            where: { id: oldTx.accountId, familyId },
-            data: { balance: { increment: absMoney(oldTx.amount) } },
+        // Tulis audit log Transaction/update
+        await auditLog(tx, auditCtx, {
+          action: "update",
+          entityType: "Transaction",
+          entityId: oldTx.id,
+          before: oldTx,
+          after: newOutflow,
+        })
+
+        if (oldInflowTx) {
+          await auditLog(tx, auditCtx, {
+            action: "update",
+            entityType: "Transaction",
+            entityId: oldInflowTx.id,
+            before: oldInflowTx,
+            after: newInflow,
           })
-          if (srcUpd.count !== 1)
-            throw new Error("Source account not found or access denied!")
+        } else {
+          await auditLog(tx, auditCtx, {
+            action: "create",
+            entityType: "Transaction",
+            entityId: newInflow.id,
+            before: null,
+            after: newInflow,
+          })
+        }
 
-          // Tarik kembali uang dari akun penerima
-          if (inflowTx) {
-            const dstUpd = await tx.account.updateMany({
-              where: { id: inflowTx.accountId, familyId },
-              data: { balance: { decrement: absMoney(inflowTx.amount) } },
-            })
-            if (dstUpd.count !== 1)
-              throw new Error("Destination account not found or access denied!")
-            // Soft delete: inflow transaction (TIDAK PERNAH hard delete — audit trail)
-            await tx.transaction.update({
-              where: { id: inflowTx.id },
-              data: { deletedAt: new Date() },
+        // Tulis audit log Transfer
+        if (oldTransfer) {
+          await auditLog(tx, auditCtx, {
+            action: "update",
+            entityType: "Transfer",
+            entityId: oldTransfer.id,
+            before: oldTransfer,
+            after: createdTransfer,
+          })
+        } else {
+          await auditLog(tx, auditCtx, {
+            action: "create",
+            entityType: "Transfer",
+            entityId: createdTransfer.id,
+            before: null,
+            after: createdTransfer,
+          })
+        }
+      } else {
+        const amountSign: Money =
+          data.type === "expense"
+            ? negateMoney(absMoney(data.amount))
+            : absMoney(data.amount)
+
+        let accountBalanceAfter: bigint | null = null
+        if (data.type === "expense") {
+          const upd = await tx.account.updateMany({
+            where: { id: data.accountId, familyId },
+            data: { balance: { decrement: data.amount } },
+          })
+          if (upd.count !== 1)
+            throw new Error("Account not found or access denied!")
+          const updated = await tx.account.findFirst({
+            where: { id: data.accountId, familyId },
+            select: { balance: true },
+          })
+          accountBalanceAfter = updated!.balance
+        } else {
+          const upd = await tx.account.updateMany({
+            where: { id: data.accountId, familyId },
+            data: { balance: { increment: data.amount } },
+          })
+          if (upd.count !== 1)
+            throw new Error("Account not found or access denied!")
+          const updated = await tx.account.findFirst({
+            where: { id: data.accountId, familyId },
+            select: { balance: true },
+          })
+          accountBalanceAfter = updated!.balance
+        }
+
+        const newTx = await tx.transaction.create({
+          data: {
+            id: data.id,
+            type: data.type,
+            amount: amountSign,
+            description: data.description,
+            date: data.date,
+            notes: data.notes || null,
+            accountId: data.accountId,
+            toAccountId: data.toAccountId || null,
+            categoryId: data.isSplit ? null : data.categoryId || null,
+            merchantId: data.isSplit ? null : data.merchantId || null,
+            isSplit: data.isSplit,
+            userId: user.id,
+            familyId,
+            status: data.status,
+            accountBalanceAfter: accountBalanceAfter,
+            attachmentUrl: data.attachmentUrl,
+          },
+        })
+
+        if (data.isSplit && data.splitEntries?.length) {
+          await Promise.all(
+            data.splitEntries.map((entry) =>
+              tx.splitEntry.create({
+                data: {
+                  transactionId: newTx.id,
+                  description: entry.description,
+                  amount: absMoney(entry.amount),
+                  categoryId: entry.categoryId || null,
+                  merchantId: entry.merchantId || null,
+                },
+              })
+            )
+          )
+        }
+
+        resultTransaction = newTx
+
+        // Re-read data terbaru setelah mutasi
+        const [updatedTx, newAccounts] = await Promise.all([
+          tx.transaction.findUniqueOrThrow({
+            where: { id: newTx.id },
+            include: { splitEntries: true },
+          }),
+          tx.account.findMany({
+            where: { id: { in: Array.from(touchedAccountIds) } },
+          }),
+        ])
+
+        // Tulis audit log Account/update
+        for (const oldAcc of oldAccounts) {
+          const newAcc = newAccounts.find((a) => a.id === oldAcc.id)
+          if (!newAcc || oldAcc.balance === newAcc.balance) continue
+          await auditLog(tx, auditCtx, {
+            action: "update",
+            entityType: "Account",
+            entityId: oldAcc.id,
+            before: oldAcc,
+            after: newAcc,
+          })
+        }
+
+        // Tulis audit log Transaction/update
+        await auditLog(tx, auditCtx, {
+          action: "update",
+          entityType: "Transaction",
+          entityId: oldTx.id,
+          before: oldTx,
+          after: updatedTx,
+        })
+
+        // Split entries logs
+        if (oldTx.splitEntries?.length) {
+          for (const entry of oldTx.splitEntries) {
+            await auditLog(tx, auditCtx, {
+              action: "delete",
+              entityType: "SplitEntry",
+              entityId: entry.id,
+              before: entry,
+              after: null,
             })
           }
-        } else {
-          // Reversal untuk Expense/Income biasa
-          if (oldTx.type === "expense") {
-            const upd = await tx.account.updateMany({
-              where: { id: oldTx.accountId, familyId },
-              data: { balance: { increment: absMoney(oldTx.amount) } },
+        }
+        if (updatedTx.splitEntries?.length) {
+          for (const entry of updatedTx.splitEntries) {
+            await auditLog(tx, auditCtx, {
+              action: "create",
+              entityType: "SplitEntry",
+              entityId: entry.id,
+              before: null,
+              after: entry,
             })
-            if (upd.count !== 1)
-              throw new Error("Account not found or access denied!")
-          } else if (oldTx.type === "income") {
-            const upd = await tx.account.updateMany({
-              where: { id: oldTx.accountId, familyId },
-              data: { balance: { decrement: absMoney(oldTx.amount) } },
-            })
-            if (upd.count !== 1)
-              throw new Error("Account not found or access denied!")
           }
         }
 
-        // 3. Soft Delete Data Utama (GAAP: audit trail tetap ada)
-        await tx.transaction.update({
-          where: { id: oldTx.id },
-          data: { deletedAt: new Date() },
-        })
-
-        return { success: true }
+        if (oldInflowTx) {
+          await auditLog(tx, auditCtx, {
+            action: "delete",
+            entityType: "Transaction",
+            entityId: oldInflowTx.id,
+            before: oldInflowTx,
+            after: null,
+          })
+        }
+        if (oldTransfer) {
+          await auditLog(tx, auditCtx, {
+            action: "delete",
+            entityType: "Transfer",
+            entityId: oldTransfer.id,
+            before: oldTransfer,
+            after: null,
+          })
+        }
       }
-    )
-  })
+
+      return serializeTransaction({
+        ...resultTransaction,
+        amount: absMoney(resultTransaction.amount),
+      })
+    }
+  )
+}
 
 /**
  * BACKEND FUNCTION: Update Transaction (Reversal-and-Replace Pattern)
@@ -871,255 +1484,182 @@ export const updateTransactionFn = createServerFn({ method: "POST" })
   .inputValidator(transactionInputSchema)
   .handler(async ({ data, context }) => {
     if (!data.id) throw new Error("ID is required for updating")
-    const { user, familyId } = context
+    return await updateTransactionForFamily({
+      data,
+      familyId: context.familyId,
+      user: context.user,
+    })
+  })
 
-    // The Magic: Kita jalankan penghapusan murni dan pembuatan murni secara berurutan
-    // dalam satu ACID Transaction. Zero Balance Mismatch Guaranteed!
-    return await scopedTenantTransaction(
-      familyId,
-      async (tx: TenantTransactionClient) => {
-        // === SPLIT PARITY GUARD (GAAP Compliance) ===
-        // Same authoritative invariant as createTransactionFn — UPDATE flow can
-        // independently violate parity if a client tampers with split entries
-        // without updating the parent amount (or vice versa). Re-validate here.
-        assertSplitParity(data)
+export async function bulkDeleteTransactionsForFamily({
+  ids,
+  familyId,
+  user,
+}: {
+  ids: string[]
+  familyId: string
+  user: { id: string; familyId?: string | null }
+}) {
+  const auditCtx = await createAuditContext({ user })
+  return await scopedTenantTransaction(
+    familyId,
+    async (tx: TenantTransactionClient) => {
+      // 1. Ambil data asli untuk merestore saldo
+      const oldTxs = await tx.transaction.findMany({
+        where: { id: { in: ids } },
+        include: { transferOut: true, splitEntries: true },
+      })
 
-        // --- FASE 1: REVERSAL (HAPUS LAMA) ---
-        // Kita "pinjam" logika delete untuk mengembalikan saldo ke 0
-        const oldTx = await tx.transaction.findUnique({
-          where: { id: data.id },
-          include: { transferOut: true },
-        })
+      const inflowTxIds = oldTxs
+        .filter((t) => t.type === "transfer" && t.transferOut)
+        .map((t) => t.transferOut!.inflowTransactionId)
 
-        if (!oldTx) throw new Error("Original transaction not found")
+      const oldInflowTxs =
+        inflowTxIds.length > 0
+          ? await tx.transaction.findMany({
+              where: { id: { in: inflowTxIds } },
+              include: { splitEntries: true },
+            })
+          : []
 
+      const oldTransfers =
+        oldTxs.length > 0
+          ? await tx.transfer.findMany({
+              where: { outflowTransactionId: { in: oldTxs.map((t) => t.id) } },
+              include: {
+                inflowTransaction: true,
+                outflowTransaction: true,
+              },
+            })
+          : []
+
+      const touchedAccountIds = new Set(oldTxs.map((t) => t.accountId))
+      oldInflowTxs.forEach((t) => touchedAccountIds.add(t.accountId))
+
+      const oldAccounts = await tx.account.findMany({
+        where: { id: { in: Array.from(touchedAccountIds) } },
+      })
+
+      const accountDeltas: Record<string, bigint> = {}
+      const addDelta = (id: string, amount: bigint) => {
+        if (!accountDeltas[id]) accountDeltas[id] = 0n
+        accountDeltas[id] += amount
+      }
+
+      for (const oldTx of oldTxs) {
         if (oldTx.type === "transfer" && oldTx.transferOut) {
-          const inflowTx = await tx.transaction.findUnique({
-            where: {
-              id: oldTx.transferOut.inflowTransactionId,
-            },
-          })
-          // Tenant-safe: update dengan familyId constraint
-          const srcUpd = await tx.account.updateMany({
-            where: { id: oldTx.accountId, familyId },
-            data: { balance: { increment: absMoney(oldTx.amount) } },
-          })
-          if (srcUpd.count !== 1)
-            throw new Error("Source account not found or access denied!")
+          const inflowTx = oldInflowTxs.find(
+            (t) => t.id === oldTx.transferOut!.inflowTransactionId
+          )
+          addDelta(oldTx.accountId, absMoney(oldTx.amount))
           if (inflowTx) {
-            const dstUpd = await tx.account.updateMany({
-              where: { id: inflowTx.accountId, familyId },
-              data: { balance: { decrement: absMoney(inflowTx.amount) } },
+            addDelta(inflowTx.accountId, negateMoney(absMoney(inflowTx.amount)))
+            await tx.transaction.update({
+              where: { id: inflowTx.id },
+              data: { deletedAt: new Date() },
             })
-            if (dstUpd.count !== 1)
-              throw new Error("Destination account not found or access denied!")
-            // INTERNAL REVERSAL: Hard delete OK — bukan user-facing delete
-            await tx.transaction.delete({ where: { id: inflowTx.id } })
           }
-        } else {
+        } else if (oldTx.type !== "transfer") {
           if (oldTx.type === "expense") {
-            const upd = await tx.account.updateMany({
-              where: { id: oldTx.accountId, familyId },
-              data: { balance: { increment: absMoney(oldTx.amount) } },
-            })
-            if (upd.count !== 1)
-              throw new Error("Account not found or access denied!")
+            addDelta(oldTx.accountId, absMoney(oldTx.amount))
           } else if (oldTx.type === "income") {
-            const upd = await tx.account.updateMany({
-              where: { id: oldTx.accountId, familyId },
-              data: { balance: { decrement: absMoney(oldTx.amount) } },
-            })
-            if (upd.count !== 1)
-              throw new Error("Account not found or access denied!")
+            addDelta(oldTx.accountId, negateMoney(absMoney(oldTx.amount)))
           }
-        }
-        // Hapus data lama (Hard delete OK — ID akan dipertahankan via re-create)
-        await tx.transaction.delete({ where: { id: oldTx.id } })
-
-        // --- FASE 2: REPLACE (BUAT BARU DENGAN DATA UPDATE) ---
-        if (data.type === "transfer") {
-          let kind = "funds_movement"
-          // Tenant-safe: verify account ownership
-          const toAccount = await tx.account.findFirst({
-            where: { id: data.toAccountId!, familyId },
-          })
-          if (!toAccount)
-            throw new Error("Destination account not found or access denied!")
-          if (toAccount.type === "CREDIT") kind = "cc_payment"
-          else if (toAccount.type === "LOAN") kind = "loan_payment"
-
-          // Running Balance Snapshot: baca saldo akun setelah update atomik
-          // Tenant-safe: update dengan familyId constraint
-          const srcUpd = await tx.account.updateMany({
-            where: { id: data.accountId, familyId },
-            data: { balance: { decrement: data.amount } },
-          })
-          if (srcUpd.count !== 1)
-            throw new Error("Source account not found or access denied!")
-          const updatedSourceAccount = await tx.account.findFirst({
-            where: { id: data.accountId, familyId },
-            select: { balance: true },
-          })
-          const sourceBalanceAfter = updatedSourceAccount!.balance
-
-          // Multi-currency: gunakan destinationAmount jika tersedia, fallback ke amount
-          const inAmount = data.destinationAmount ?? data.amount
-          const inCurrency = data.destinationCurrency ?? data.currency
-
-          const dstUpd = await tx.account.updateMany({
-            where: { id: data.toAccountId!, familyId },
-            data: { balance: { increment: inAmount } },
-          })
-          if (dstUpd.count !== 1)
-            throw new Error("Destination account not found or access denied!")
-          const updatedDestAccount = await tx.account.findFirst({
-            where: { id: data.toAccountId!, familyId },
-            select: { balance: true },
-          })
-          const destBalanceAfter = updatedDestAccount!.balance
-
-          const outflowTx = await tx.transaction.create({
-            data: {
-              id: data.id, // KITA PERTAHANKAN ID LAMA AGAR UI TIDAK KACAU
-              type: "transfer",
-              kind,
-              currency: data.currency,
-              amount: negateMoney(absMoney(data.amount)),
-              description: data.description,
-              date: data.date,
-              notes: data.notes || null,
-              accountId: data.accountId,
-              toAccountId: data.toAccountId,
-              categoryId: data.categoryId || null,
-              merchantId: data.merchantId || null,
-              userId: user.id,
-              familyId: context.familyId,
-              status: data.status,
-              destinationAmount: data.destinationAmount,
-              destinationCurrency: data.destinationCurrency,
-              accountBalanceAfter: sourceBalanceAfter,
-              attachmentUrl: data.attachmentUrl,
-            },
-          })
-
-          const inflowTx = await tx.transaction.create({
-            data: {
-              type: "transfer",
-              kind,
-              currency: inCurrency,
-              amount: absMoney(inAmount),
-              description: data.description,
-              date: data.date,
-              notes: data.notes || null,
-              accountId: data.toAccountId!,
-              toAccountId: data.accountId,
-              categoryId: data.categoryId || null,
-              merchantId: data.merchantId || null,
-              userId: user.id,
-              familyId: context.familyId,
-              status: data.status,
-              destinationAmount: data.destinationAmount,
-              destinationCurrency: data.destinationCurrency,
-              accountBalanceAfter: destBalanceAfter,
-              attachmentUrl: data.attachmentUrl,
-            },
-          })
-
-          await tx.transfer.create({
-            data: {
-              outflowTransactionId: outflowTx.id,
-              inflowTransactionId: inflowTx.id,
-            },
-          })
-          return serializeTransaction({
-            ...outflowTx,
-            amount: absMoney(outflowTx.amount),
-          })
-        } else {
-          // Re-create Standard Expense/Income (dengan atau tanpa split)
-          const amountSign: Money =
-            data.type === "expense"
-              ? negateMoney(absMoney(data.amount))
-              : absMoney(data.amount)
-
-          // Running Balance Snapshot: baca saldo setelah update atomik
-          // Tenant-safe: update dengan familyId constraint
-          let accountBalanceAfter: bigint | null = null
-          if (data.type === "expense") {
-            const upd = await tx.account.updateMany({
-              where: { id: data.accountId, familyId },
-              data: { balance: { decrement: data.amount } },
-            })
-            if (upd.count !== 1)
-              throw new Error("Account not found or access denied!")
-            const updated = await tx.account.findFirst({
-              where: { id: data.accountId, familyId },
-              select: { balance: true },
-            })
-            accountBalanceAfter = updated!.balance
-          } else {
-            // type is "income" — only possibility after "expense" and "transfer" are handled
-            const upd = await tx.account.updateMany({
-              where: { id: data.accountId, familyId },
-              data: { balance: { increment: data.amount } },
-            })
-            if (upd.count !== 1)
-              throw new Error("Account not found or access denied!")
-            const updated = await tx.account.findFirst({
-              where: { id: data.accountId, familyId },
-              select: { balance: true },
-            })
-            accountBalanceAfter = updated!.balance
-          }
-
-          const newTx = await tx.transaction.create({
-            data: {
-              id: data.id, // PERTAHANKAN ID LAMA
-              type: data.type,
-              amount: amountSign,
-              description: data.description,
-              date: data.date,
-              notes: data.notes || null,
-              accountId: data.accountId,
-              toAccountId: data.toAccountId || null,
-              // Jika split, kategori hidup di entries, bukan parent
-              categoryId: data.isSplit ? null : data.categoryId || null,
-              merchantId: data.isSplit ? null : data.merchantId || null,
-              isSplit: data.isSplit,
-              userId: user.id,
-              familyId: context.familyId,
-              status: data.status,
-              accountBalanceAfter: accountBalanceAfter,
-              attachmentUrl: data.attachmentUrl,
-            },
-          })
-
-          // Recreate split entries satu-satu (parent lama sudah dihapus via CASCADE)
-          // Menggunakan create() agar Prisma generate cuid() untuk id
-          if (data.isSplit && data.splitEntries?.length) {
-            await Promise.all(
-              data.splitEntries.map((entry) =>
-                tx.splitEntry.create({
-                  data: {
-                    transactionId: newTx.id,
-                    description: entry.description,
-                    amount: absMoney(entry.amount),
-                    categoryId: entry.categoryId || null,
-                    merchantId: entry.merchantId || null,
-                  },
-                })
-              )
-            )
-          }
-
-          return serializeTransaction({
-            ...newTx,
-            amount: absMoney(newTx.amount),
-          })
         }
       }
-    )
-  })
+
+      // 2. Terapkan agregasi delta secara masal
+      await Promise.all(
+        Object.entries(accountDeltas).map(([accountId, delta]) =>
+          tx.account.update({
+            where: { id: accountId },
+            data: { balance: { increment: delta } },
+          })
+        )
+      )
+
+      // 3. Soft delete
+      await tx.transaction.updateMany({
+        where: { id: { in: ids } },
+        data: { deletedAt: new Date() },
+      })
+
+      // Re-read data terbaru setelah mutasi
+      const [newOutflowTxs, newInflowTxs, newAccounts, newTransfers] =
+        await Promise.all([
+          tx.transaction.findMany({
+            where: { id: { in: ids } },
+            include: { splitEntries: true },
+          }),
+          inflowTxIds.length > 0
+            ? tx.transaction.findMany({
+                where: { id: { in: inflowTxIds } },
+                include: { splitEntries: true },
+              })
+            : Promise.resolve([]),
+          tx.account.findMany({
+            where: { id: { in: Array.from(touchedAccountIds) } },
+          }),
+          oldTransfers.length > 0
+            ? tx.transfer.findMany({
+                where: { id: { in: oldTransfers.map((t) => t.id) } },
+                include: {
+                  inflowTransaction: true,
+                  outflowTransaction: true,
+                },
+              })
+            : Promise.resolve([]),
+        ])
+
+      // Tulis audit log Account/update (1 per touched Account)
+      for (const oldAcc of oldAccounts) {
+        const newAcc = newAccounts.find((a) => a.id === oldAcc.id)
+        if (!newAcc || oldAcc.balance === newAcc.balance) continue
+        await auditLog(tx, auditCtx, {
+          action: "update",
+          entityType: "Account",
+          entityId: oldAcc.id,
+          before: oldAcc,
+          after: newAcc,
+        })
+      }
+
+      // Tulis audit log Transaction/soft_delete
+      for (const oldTx of oldTxs) {
+        const newTx = newOutflowTxs.find((t) => t.id === oldTx.id)
+        await auditLog(tx, auditCtx, {
+          action: "soft_delete",
+          entityType: "Transaction",
+          entityId: oldTx.id,
+          before: oldTx,
+          after: newTx,
+        })
+      }
+      for (const oldInflow of oldInflowTxs) {
+        const newInflow = newInflowTxs.find((t) => t.id === oldInflow.id)
+        await auditLog(tx, auditCtx, {
+          action: "soft_delete",
+          entityType: "Transaction",
+          entityId: oldInflow.id,
+          before: oldInflow,
+          after: newInflow,
+        })
+      }
+      for (const oldTransfer of oldTransfers) {
+        const newTransfer = newTransfers.find((t) => t.id === oldTransfer.id)
+        await auditLog(tx, auditCtx, {
+          action: "soft_delete",
+          entityType: "Transfer",
+          entityId: oldTransfer.id,
+          before: oldTransfer,
+          after: newTransfer,
+        })
+      }
+
+      return { success: true }
+    }
+  )
+}
 
 /**
  * BACKEND FUNCTION: Bulk Delete Transactions (Soft Delete — GAAP Compliance)
@@ -1129,76 +1669,168 @@ export const bulkDeleteTransactionsFn = createServerFn({ method: "POST" })
   .inputValidator(z.object({ ids: z.array(z.string()) }))
   .handler(async ({ data, context }) => {
     if (data.ids.length === 0) return { success: true }
+    return await bulkDeleteTransactionsForFamily({
+      ids: data.ids,
+      familyId: context.familyId,
+      user: context.user,
+    })
+  })
 
-    return await scopedTenantTransaction(
-      context.familyId,
-      async (tx: TenantTransactionClient) => {
-        // 1. Ambil data asli untuk merestore saldo
-        // (termasuk transfer out/inflow)
-        const oldTxs = await tx.transaction.findMany({
-          where: { id: { in: data.ids } },
-          include: { transferOut: true },
+export async function bulkUpdateTransactionsForFamily({
+  data,
+  familyId,
+  user,
+}: {
+  data: {
+    ids: string[]
+    categoryId?: string | null
+    merchantId?: string | null
+    accountId?: string
+  }
+  familyId: string
+  user: { id: string; familyId?: string | null }
+}) {
+  const auditCtx = await createAuditContext({ user })
+  return await scopedTenantTransaction(
+    familyId,
+    async (tx: TenantTransactionClient) => {
+      // Ambil data before
+      const oldTxs = await tx.transaction.findMany({
+        where: { id: { in: data.ids } },
+        include: { splitEntries: true },
+      })
+
+      const touchedAccountIds = new Set(oldTxs.map((t) => t.accountId))
+      if (data.accountId !== undefined) {
+        touchedAccountIds.add(data.accountId)
+      }
+
+      const oldAccounts = await tx.account.findMany({
+        where: { id: { in: Array.from(touchedAccountIds) } },
+      })
+
+      // 1. Handle Account Change (Requires Balance Shifting)
+      if (data.accountId !== undefined) {
+        const txsToMove = await tx.transaction.findMany({
+          where: {
+            id: { in: data.ids },
+            type: { not: "transfer" },
+            accountId: { not: data.accountId },
+          },
         })
 
         const accountDeltas: Record<string, bigint> = {}
-
         const addDelta = (id: string, amount: bigint) => {
           if (!accountDeltas[id]) accountDeltas[id] = 0n
           accountDeltas[id] += amount
         }
 
-        for (const oldTx of oldTxs) {
-          if (oldTx.type === "transfer" && oldTx.transferOut) {
-            const inflowTx = await tx.transaction.findUnique({
-              where: {
-                id: oldTx.transferOut.inflowTransactionId,
-              },
-            })
-            addDelta(oldTx.accountId, absMoney(oldTx.amount))
-            if (inflowTx) {
-              addDelta(
-                inflowTx.accountId,
-                negateMoney(absMoney(inflowTx.amount))
-              )
-              // Soft delete: inflow transaction (TIDAK PERNAH hard delete — audit trail)
-              await tx.transaction.update({
-                where: { id: inflowTx.id },
-                data: { deletedAt: new Date() },
-              })
-            }
-          } else if (oldTx.type !== "transfer") {
-            if (oldTx.type === "expense") {
-              addDelta(oldTx.accountId, absMoney(oldTx.amount))
-            } else if (oldTx.type === "income") {
-              addDelta(oldTx.accountId, negateMoney(absMoney(oldTx.amount)))
-            }
-          }
+        for (const t of txsToMove) {
+          const magnitude = absMoney(t.amount)
+          const refundSigned: bigint =
+            t.type === "expense" ? magnitude : negateMoney(magnitude)
+          const chargeSigned: bigint =
+            t.type === "expense" ? negateMoney(magnitude) : magnitude
+
+          addDelta(t.accountId, refundSigned)
+          addDelta(data.accountId, chargeSigned)
         }
 
-        // 2. Terapkan agregasi delta secara masal
         await Promise.all(
-          Object.entries(accountDeltas).map(([accountId, delta]) =>
+          Object.entries(accountDeltas).map(([accId, delta]) =>
             tx.account.update({
-              where: { id: accountId },
+              where: { id: accId },
               data: { balance: { increment: delta } },
             })
           )
         )
-
-        // 3. Soft delete: set deletedAt timestamp — TIDAK PERNAH hard delete
-        await tx.transaction.updateMany({
-          where: { id: { in: data.ids } },
-          data: { deletedAt: new Date() },
-        })
-
-        return { success: true }
       }
-    )
-  })
+
+      // 2. Prepare scalar updates payload
+      type CategoryMerchantUpdate = {
+        categoryId?: string | null
+        merchantId?: string | null
+      }
+      type ParentUpdate = CategoryMerchantUpdate & {
+        accountId?: string
+      }
+
+      const updates: CategoryMerchantUpdate = {}
+      if (data.categoryId !== undefined) updates.categoryId = data.categoryId
+      if (data.merchantId !== undefined) updates.merchantId = data.merchantId
+
+      const parentUpdates: ParentUpdate = { ...updates }
+      if (data.accountId !== undefined) parentUpdates.accountId = data.accountId
+
+      // 3. Execute DB Modifications
+      if (Object.keys(parentUpdates).length > 0) {
+        await tx.transaction.updateMany({
+          where: {
+            id: { in: data.ids },
+            ...(data.categoryId !== undefined || data.merchantId !== undefined
+              ? { isSplit: false }
+              : {}),
+          },
+          data: parentUpdates,
+        })
+      }
+
+      const splitUpdates: CategoryMerchantUpdate = {}
+      if (data.categoryId !== undefined)
+        splitUpdates.categoryId = data.categoryId
+      if (data.merchantId !== undefined)
+        splitUpdates.merchantId = data.merchantId
+
+      if (Object.keys(splitUpdates).length > 0) {
+        await tx.splitEntry.updateMany({
+          where: { transactionId: { in: data.ids } },
+          data: splitUpdates,
+        })
+      }
+
+      // Re-read data terbaru setelah mutasi
+      const [newTxs, newAccounts] = await Promise.all([
+        tx.transaction.findMany({
+          where: { id: { in: data.ids } },
+          include: { splitEntries: true },
+        }),
+        tx.account.findMany({
+          where: { id: { in: Array.from(touchedAccountIds) } },
+        }),
+      ])
+
+      // Tulis audit log Account/update (1 per touched Account)
+      for (const oldAcc of oldAccounts) {
+        const newAcc = newAccounts.find((a) => a.id === oldAcc.id)
+        if (!newAcc || oldAcc.balance === newAcc.balance) continue
+        await auditLog(tx, auditCtx, {
+          action: "update",
+          entityType: "Account",
+          entityId: oldAcc.id,
+          before: oldAcc,
+          after: newAcc,
+        })
+      }
+
+      // Tulis audit log Transaction/update
+      for (const oldTx of oldTxs) {
+        const newTx = newTxs.find((t) => t.id === oldTx.id)
+        await auditLog(tx, auditCtx, {
+          action: "update",
+          entityType: "Transaction",
+          entityId: oldTx.id,
+          before: oldTx,
+          after: newTx,
+        })
+      }
+
+      return { success: true }
+    }
+  )
+}
 
 /**
  * BACKEND FUNCTION: Bulk Update Transactions
- * Securely handles Category, Merchant, and Account shifts while preserving double-entry ledger logic for account balance transfers.
  */
 export const bulkUpdateTransactionsFn = createServerFn({ method: "POST" })
   .middleware([familyMiddleware])
@@ -1212,98 +1844,114 @@ export const bulkUpdateTransactionsFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data, context }) => {
     if (data.ids.length === 0) return { success: true }
-
-    return await scopedTenantTransaction(
-      context.familyId,
-      async (tx: TenantTransactionClient) => {
-        // 1. Handle Account Change (Requires Balance Shifting)
-        // We explicitly skip transfers for bulk account edits to prevent complex dual-leg logic breakage.
-        if (data.accountId !== undefined) {
-          const txsToMove = await tx.transaction.findMany({
-            where: {
-              id: { in: data.ids },
-              type: { not: "transfer" },
-              accountId: { not: data.accountId },
-            },
-          })
-
-          const accountDeltas: Record<string, bigint> = {}
-          const addDelta = (id: string, amount: bigint) => {
-            if (!accountDeltas[id]) accountDeltas[id] = 0n
-            accountDeltas[id] += amount
-          }
-
-          for (const t of txsToMove) {
-            // Expense: Reverse old (+), Charge new (-)
-            // Income: Reverse old (-), Charge new (+)
-            const magnitude = absMoney(t.amount)
-            const refundSigned: bigint =
-              t.type === "expense" ? magnitude : negateMoney(magnitude)
-            const chargeSigned: bigint =
-              t.type === "expense" ? negateMoney(magnitude) : magnitude
-
-            addDelta(t.accountId, refundSigned)
-            addDelta(data.accountId, chargeSigned)
-          }
-
-          await Promise.all(
-            Object.entries(accountDeltas).map(([accId, delta]) =>
-              tx.account.update({
-                where: { id: accId },
-                data: { balance: { increment: delta } },
-              })
-            )
-          )
-        }
-
-        // 2. Prepare scalar updates payload (typed — no `any`)
-        type CategoryMerchantUpdate = {
-          categoryId?: string | null
-          merchantId?: string | null
-        }
-        type ParentUpdate = CategoryMerchantUpdate & {
-          accountId?: string
-        }
-
-        const updates: CategoryMerchantUpdate = {}
-        if (data.categoryId !== undefined) updates.categoryId = data.categoryId
-        if (data.merchantId !== undefined) updates.merchantId = data.merchantId
-
-        const parentUpdates: ParentUpdate = { ...updates }
-        if (data.accountId !== undefined)
-          parentUpdates.accountId = data.accountId
-
-        // 3. Execute DB Modifications (Super-Fast Bulk Updates)
-        if (Object.keys(parentUpdates).length > 0) {
-          await tx.transaction.updateMany({
-            // Categories only apply to non-split transactions!
-            where: {
-              id: { in: data.ids },
-              ...(data.categoryId !== undefined || data.merchantId !== undefined
-                ? { isSplit: false }
-                : {}),
-            },
-            data: parentUpdates,
-          })
-        }
-
-        const splitUpdates: CategoryMerchantUpdate = {}
-        if (data.categoryId !== undefined)
-          splitUpdates.categoryId = data.categoryId
-        if (data.merchantId !== undefined)
-          splitUpdates.merchantId = data.merchantId
-
-        if (Object.keys(splitUpdates).length > 0) {
-          await tx.splitEntry.updateMany({
-            where: { transactionId: { in: data.ids } },
-            data: splitUpdates,
-          })
-        }
-
-        return { success: true }
-      }
-    )
+    return await bulkUpdateTransactionsForFamily({
+      data,
+      familyId: context.familyId,
+      user: context.user,
+    })
   })
+
+export async function bulkCreateTransactionsForFamily({
+  data,
+  familyId,
+  user,
+}: {
+  data: z.infer<typeof bulkTransactionInputSchema>
+  familyId: string
+  user: { id: string; familyId?: string | null }
+}) {
+  const auditCtx = await createAuditContext({ user })
+  return await scopedTenantTransaction(
+    familyId,
+    async (tx: TenantTransactionClient) => {
+      // Ambil data akun-akun terpengaruh sebelum mutasi
+      const touchedAccountIds = new Set(
+        data.transactions.map((t) => t.accountId)
+      )
+      const oldAccounts = await tx.account.findMany({
+        where: { id: { in: Array.from(touchedAccountIds) } },
+      })
+
+      // 1. Create all transactions
+      await tx.transaction.createMany({
+        data: data.transactions.map((t) => ({
+          id: t.id,
+          userId: user.id,
+          familyId,
+          type: t.type,
+          amount:
+            t.type === "expense"
+              ? negateMoney(absMoney(t.amount))
+              : absMoney(t.amount),
+          description: t.description,
+          accountId: t.accountId,
+          categoryId: t.categoryId,
+          merchantId: t.merchantId,
+          date: t.date,
+          notes: t.notes,
+          status: t.status,
+          attachmentUrl: t.attachmentUrl,
+        })),
+      })
+
+      // 2. Adjust account balances
+      const accountDeltas: Record<string, bigint> = {}
+      for (const t of data.transactions) {
+        if (!accountDeltas[t.accountId]) accountDeltas[t.accountId] = 0n
+        accountDeltas[t.accountId] +=
+          t.type === "expense"
+            ? negateMoney(absMoney(t.amount))
+            : absMoney(t.amount)
+      }
+
+      await Promise.all(
+        Object.entries(accountDeltas).map(([accId, delta]) =>
+          tx.account.update({
+            where: { id: accId },
+            data: { balance: { increment: delta } },
+          })
+        )
+      )
+
+      // Re-read data terbaru setelah mutasi
+      const [newTxs, newAccounts] = await Promise.all([
+        tx.transaction.findMany({
+          where: { id: { in: data.transactions.map((t) => t.id) } },
+          include: { splitEntries: true },
+        }),
+        tx.account.findMany({
+          where: { id: { in: Array.from(touchedAccountIds) } },
+        }),
+      ])
+
+      // Tulis audit log Account/update (1 per touched Account)
+      for (const oldAcc of oldAccounts) {
+        const newAcc = newAccounts.find((a) => a.id === oldAcc.id)
+        if (!newAcc || oldAcc.balance === newAcc.balance) continue
+        await auditLog(tx, auditCtx, {
+          action: "update",
+          entityType: "Account",
+          entityId: oldAcc.id,
+          before: oldAcc,
+          after: newAcc,
+        })
+      }
+
+      // Tulis audit log Transaction/create
+      for (const newTx of newTxs) {
+        await auditLog(tx, auditCtx, {
+          action: "create",
+          entityType: "Transaction",
+          entityId: newTx.id,
+          before: null,
+          after: newTx,
+        })
+      }
+
+      return { success: true, count: data.transactions.length }
+    }
+  )
+}
 
 // ===================================
 // BULK CREATE ENGINES (CSV IMPORT)
@@ -1329,59 +1977,18 @@ const bulkTransactionInputSchema = z.object({
   ),
 })
 
+/**
+ * BACKEND FUNCTION: Bulk Create Transactions
+ */
 export const bulkCreateTransactionsFn = createServerFn({ method: "POST" })
   .middleware([familyMiddleware])
   .inputValidator((data: z.input<typeof bulkTransactionInputSchema>) =>
     bulkTransactionInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
-    const { user, familyId } = context
-
-    return await scopedTenantTransaction(
-      familyId,
-      async (tx: TenantTransactionClient) => {
-        // 1. Create all transactions
-        await tx.transaction.createMany({
-          data: data.transactions.map((t) => ({
-            id: t.id,
-            userId: user.id,
-            familyId,
-            type: t.type,
-            amount:
-              t.type === "expense"
-                ? negateMoney(absMoney(t.amount))
-                : absMoney(t.amount),
-            description: t.description,
-            accountId: t.accountId,
-            categoryId: t.categoryId,
-            merchantId: t.merchantId,
-            date: t.date,
-            notes: t.notes,
-            status: t.status,
-            attachmentUrl: t.attachmentUrl,
-          })),
-        })
-
-        // 2. Adjust account balances
-        const accountDeltas: Record<string, bigint> = {}
-        for (const t of data.transactions) {
-          if (!accountDeltas[t.accountId]) accountDeltas[t.accountId] = 0n
-          accountDeltas[t.accountId] +=
-            t.type === "expense"
-              ? negateMoney(absMoney(t.amount))
-              : absMoney(t.amount)
-        }
-
-        await Promise.all(
-          Object.entries(accountDeltas).map(([accId, delta]) =>
-            tx.account.update({
-              where: { id: accId },
-              data: { balance: { increment: delta } },
-            })
-          )
-        )
-
-        return { success: true, count: data.transactions.length }
-      }
-    )
+    return await bulkCreateTransactionsForFamily({
+      data,
+      familyId: context.familyId,
+      user: context.user,
+    })
   })
