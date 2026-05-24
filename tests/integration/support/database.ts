@@ -11,6 +11,7 @@ const DEFAULT_ADMIN_DATABASE_URL = "postgres://permoney@localhost:5433/postgres"
 const FIXED_COMMAND_PATH =
   "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 const RESET_TABLES = [
+  "AuditLog",
   "Transfer",
   "SplitEntry",
   "Transaction",
@@ -108,6 +109,10 @@ export async function createIntegrationHarness(
     databaseUrl: runtimeDatabaseUrl,
     prisma,
     reset: async () => {
+      if (runtimeRole) {
+        await resetDatabaseAsOwner(resolved.databaseUrl)
+        return
+      }
       await resetDatabase(prisma)
     },
     teardown: async () => {
@@ -248,6 +253,17 @@ async function resetDatabase(prisma: PrismaClient): Promise<void> {
   )
 }
 
+async function resetDatabaseAsOwner(databaseUrl: string): Promise<void> {
+  const tableList = RESET_TABLES.map(quoteIdentifier).join(", ")
+  const client = new PgClient({ connectionString: databaseUrl })
+  await client.connect()
+  try {
+    await client.query(`TRUNCATE TABLE ${tableList} RESTART IDENTITY CASCADE`)
+  } finally {
+    await client.end()
+  }
+}
+
 async function createDatabase(
   adminDatabaseUrl: string,
   databaseName: string
@@ -284,6 +300,7 @@ async function createRuntimeRole(
        GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public TO ${quoteIdentifier(
          roleName
        )};
+       REVOKE UPDATE, DELETE, TRUNCATE ON "AuditLog" FROM ${quoteIdentifier(roleName)};
        GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${quoteIdentifier(
          roleName
        )};`
