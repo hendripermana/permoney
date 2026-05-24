@@ -1849,22 +1849,23 @@ export async function bulkCreateTransactionsForFamily({
         tx.transaction.createMany({ data: rows }),
         applyAccountDeltas(tx, accountDeltas),
       ])
-
-      // Re-read data terbaru setelah mutasi
-      const [newTxs, newAccounts] = await Promise.all([
-        tx.transaction.findMany({
-          where: { id: { in: transactionIds } },
-          include: { splitEntries: true },
-        }),
-        tx.account.findMany({
-          where: { id: { in: Array.from(touchedAccountIds) } },
-        }),
-      ])
-
-      await auditLogs(tx, auditCtx, [
-        ...accountBalanceAuditEntries(oldAccounts, newAccounts),
-        ...createdAuditEntries("Transaction", newTxs),
-      ])
+        .then(() =>
+          Promise.all([
+            tx.transaction.findMany({
+              where: { id: { in: transactionIds } },
+              include: { splitEntries: true },
+            }),
+            tx.account.findMany({
+              where: { id: { in: Array.from(touchedAccountIds) } },
+            }),
+          ])
+        )
+        .then(([newTxs, newAccounts]) =>
+          auditLogs(tx, auditCtx, [
+            ...accountBalanceAuditEntries(oldAccounts, newAccounts),
+            ...createdAuditEntries("Transaction", newTxs),
+          ])
+        )
 
       return { success: true, count: data.transactions.length }
     }
