@@ -78,6 +78,12 @@ export async function validateTenantReferences(
     )
   }
   if (refs.splitEntries) {
+    // The loop awaits sequentially on purpose: every `assertX` call queries
+    // through `tx`, the single pg connection backing this Prisma interactive
+    // transaction. pg@9 rejects concurrent `client.query()` on the same
+    // connection — see the file-level docstring above and the integration
+    // test `pg-client-query-deprecation.integration.ts`. React Doctor's
+    // `async-await-in-loop` rule is a false positive here.
     for (let index = 0; index < refs.splitEntries.length; index += 1) {
       const entry = refs.splitEntries[index]
       if (entry?.categoryId) {

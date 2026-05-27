@@ -2119,6 +2119,14 @@ export async function bulkCreateTransactionsForFamily({
       // PER-94: validate every distinct reference across the batch before any
       // row is created. Walk the batch with explicit indexes so the reported
       // field path tells the client which row carried the offending id.
+      //
+      // The loop awaits sequentially on purpose: every `validateTenantReferences`
+      // call queries through `tx`, which is a single pg connection in a Prisma
+      // interactive transaction. pg@9 rejects concurrent `client.query()` on
+      // the same connection (see PR #60, migration to pg@8 deprecation), so
+      // collecting promises and `Promise.all`-ing them would break at runtime
+      // and trip `tests/integration/pg-client-query-deprecation.integration.ts`.
+      // React Doctor's `async-await-in-loop` rule is a false positive here.
       for (let index = 0; index < data.transactions.length; index += 1) {
         const row = data.transactions[index]
         if (!row) continue
