@@ -5,6 +5,7 @@ import {
   familyMiddleware,
   scopedTenantTransaction,
 } from "./middleware/with-family"
+import { validateTenantReferences } from "./validation/tenant-references"
 
 /**
  * 1. GET ALL RULES — tenant-scoped via familyMiddleware + RLS GUC
@@ -41,6 +42,12 @@ export async function createSmartRuleForFamily({
 }) {
   const auditCtx = await createAuditContext({ user })
   return scopedTenantTransaction(familyId, async (tx) => {
+    // PER-94: validate the rule's references before insert.
+    await validateTenantReferences(tx, familyId, {
+      categoryId: data.categoryId,
+      merchantId: data.merchantId,
+    })
+
     const newRule = await tx.smartRule.create({
       data: {
         keyword: data.keyword.toLowerCase(),
