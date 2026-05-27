@@ -110,6 +110,7 @@ model Account {
 
   // Tenant-scoped fetch (every Account read is filtered by familyId once
   // ADR-0004 lands; cheap to add now). See ADR-0003.
+  @@unique([id, familyId], map: "Account_id_familyId_key")
   @@index([familyId])
 }
 
@@ -128,6 +129,7 @@ model Merchant {
   smartRules   SmartRule[]
 
   // Tenant scoping (see ADR-0003).
+  @@unique([id, familyId], map: "Merchant_id_familyId_key")
   @@index([familyId])
 }
 
@@ -195,13 +197,13 @@ model Transaction {
   idempotencyKey String?
 
   merchantId String?
-  merchant   Merchant? @relation(fields: [merchantId], references: [id])
+  merchant   Merchant? @relation(fields: [merchantId, familyId], references: [id, familyId], onDelete: Restrict, onUpdate: Cascade, map: "Transaction_merchantId_familyId_fkey")
 
   accountId String
-  account   Account @relation("FromAccount", fields: [accountId], references: [id])
+  account   Account @relation("FromAccount", fields: [accountId, familyId], references: [id, familyId], onDelete: Restrict, onUpdate: Cascade, map: "Transaction_accountId_familyId_fkey")
 
   toAccountId String?
-  toAccount   Account? @relation("ToAccount", fields: [toAccountId], references: [id])
+  toAccount   Account? @relation("ToAccount", fields: [toAccountId, familyId], references: [id, familyId], onDelete: Restrict, onUpdate: Cascade, map: "Transaction_toAccountId_familyId_fkey")
 
   categoryId String?
   category   Category? @relation(fields: [categoryId], references: [id])
@@ -326,7 +328,7 @@ model SmartRule {
 
   // The 'THEN' assignments: if matches, assign these
   merchantId String?
-  merchant   Merchant? @relation(fields: [merchantId], references: [id])
+  merchant   Merchant? @relation(fields: [merchantId, familyId], references: [id, familyId], onDelete: Restrict, onUpdate: Cascade, map: "SmartRule_merchantId_familyId_fkey")
   categoryId String?
   category   Category? @relation(fields: [categoryId], references: [id])
 
