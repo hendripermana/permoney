@@ -235,11 +235,14 @@ async function findTransactionWithSplitEntries(
   tx: TenantTransactionClient,
   id: string
 ) {
-  const transaction = await tx.transaction.findUniqueOrThrow({ where: { id } })
-  const splitEntries = await tx.splitEntry.findMany({
-    where: { transactionId: id },
-    orderBy: { createdAt: "asc" },
-  })
+  const [transaction, splitEntries] = await runTenantTransactionQueriesInOrder([
+    () => tx.transaction.findUniqueOrThrow({ where: { id } }),
+    () =>
+      tx.splitEntry.findMany({
+        where: { transactionId: id },
+        orderBy: { createdAt: "asc" },
+      }),
+  ] as const)
   return { ...transaction, splitEntries }
 }
 
