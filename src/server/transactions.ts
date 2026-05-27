@@ -12,6 +12,10 @@ import {
   createAuditContext,
   type AuditLogEntry,
 } from "./middleware/audit"
+import {
+  TenantReferenceError,
+  validateTenantReferences,
+} from "./validation/tenant-references"
 
 /**
  * BACKEND FUNCTION: Fetch reference data for the Transaction Form Dropdowns
@@ -931,6 +935,18 @@ export async function createTransactionForFamily({
         const replay = await replayIdempotentTransaction(tx, familyId, data)
         if (replay) return replay
 
+        // PER-94: tenant-owned foreign reference validation. Runs first so a
+        // cross-tenant payload short-circuits with a typed
+        // `TenantReferenceError` before any balance update or audit row is
+        // written. PER-104 DB triggers remain the backstop for raw-SQL paths.
+        await validateTenantReferences(tx, familyId, {
+          accountId: data.accountId,
+          toAccountId: data.toAccountId,
+          merchantId: data.merchantId,
+          categoryId: data.categoryId,
+          splitEntries: data.splitEntries,
+        })
+
         // === SPLIT PARITY GUARD (GAAP Compliance) ===
         // Backend MUST validate that SplitEntries sum === parent.amount.
         // UI validation is a convenience; THIS is the authoritative check.
@@ -1414,6 +1430,15 @@ export async function updateTransactionForFamily({
   return await scopedTenantTransaction(
     familyId,
     async (tx: TenantTransactionClient) => {
+      // PER-94: validate updated foreign references before reversal/replace.
+      await validateTenantReferences(tx, familyId, {
+        accountId: data.accountId,
+        toAccountId: data.toAccountId,
+        merchantId: data.merchantId,
+        categoryId: data.categoryId,
+        splitEntries: data.splitEntries,
+      })
+
       assertSplitParity(data)
 
       // --- FASE 1: REVERSAL (HAPUS LAMA) ---
@@ -1946,6 +1971,13 @@ export async function bulkUpdateTransactionsForFamily({
   return await scopedTenantTransaction(
     familyId,
     async (tx: TenantTransactionClient) => {
+      // PER-94: validate every patched reference before any balance shift.
+      await validateTenantReferences(tx, familyId, {
+        accountId: data.accountId,
+        merchantId: data.merchantId,
+        categoryId: data.categoryId,
+      })
+
       // Ambil data before
       const oldTxs = await findTransactionsWithSplitEntries(tx, data.ids)
 
@@ -2084,6 +2116,36 @@ export async function bulkCreateTransactionsForFamily({
   return await scopedTenantTransaction(
     familyId,
     async (tx: TenantTransactionClient) => {
+      // PER-94: validate every distinct reference across the batch before any
+      // row is created. Walk the batch with explicit indexes so the reported
+      // field path tells the client which row carried the offending id.
+      //
+      // The loop awaits sequentially on purpose: every `validateTenantReferences`
+      // call queries through `tx`, which is a single pg connection in a Prisma
+      // interactive transaction. pg@9 rejects concurrent `client.query()` on
+      // the same connection (see PR #60, migration to pg@8 deprecation), so
+      // collecting promises and `Promise.all`-ing them would break at runtime
+      // and trip `tests/integration/pg-client-query-deprecation.integration.ts`.
+      // React Doctor's `async-await-in-loop` rule is a false positive here.
+      for (let index = 0; index < data.transactions.length; index += 1) {
+        const row = data.transactions[index]
+        if (!row) continue
+        await validateTenantReferences(tx, familyId, {
+          accountId: row.accountId,
+          merchantId: row.merchantId,
+          categoryId: row.categoryId,
+        }).catch((error: unknown) => {
+          if (error instanceof TenantReferenceError) {
+            throw new TenantReferenceError(
+              `transactions[${index}].${error.field}`,
+              error.referenceId,
+              error.familyId
+            )
+          }
+          throw error
+        })
+      }
+
       // Ambil data akun-akun terpengaruh sebelum mutasi
       const touchedAccountIds = new Set(
         data.transactions.map((t) => t.accountId)
