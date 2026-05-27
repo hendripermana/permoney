@@ -157,19 +157,23 @@ BEGIN
       SELECT t."familyId" INTO source_family
         FROM "Transaction" t WHERE t.id = NEW."transactionId";
       IF source_family IS NULL THEN
-        RAISE EXCEPTION
-          'PER-104 SplitEntry % references missing parent transaction %',
-          NEW.id, NEW."transactionId"
-          USING ERRCODE = '23514';
+        RAISE EXCEPTION USING
+          ERRCODE = 'check_violation',
+          MESSAGE = format(
+            'PER-104 SplitEntry %s references missing parent transaction %s',
+            NEW.id, NEW."transactionId"
+          );
       END IF;
     WHEN 'Category' THEN
       category_id := NEW."parentId";
       source_family := NEW."familyId";
     ELSE
-      RAISE EXCEPTION
-        'PER-104 enforce_category_tenant_invariant attached to unsupported table %',
-        TG_TABLE_NAME
-        USING ERRCODE = '42P01';
+      RAISE EXCEPTION USING
+        ERRCODE = 'undefined_table',
+        MESSAGE = format(
+          'PER-104 enforce_category_tenant_invariant attached to unsupported table %s',
+          TG_TABLE_NAME
+        );
   END CASE;
 
   IF category_id IS NULL THEN
@@ -179,10 +183,12 @@ BEGIN
   SELECT c."familyId", c."isSystem" INTO cat_family, cat_is_system
     FROM "Category" c WHERE c.id = category_id;
   IF NOT FOUND THEN
-    RAISE EXCEPTION
-      'PER-104 % references missing Category %',
-      TG_TABLE_NAME, category_id
-      USING ERRCODE = '23503';
+    RAISE EXCEPTION USING
+      ERRCODE = 'foreign_key_violation',
+      MESSAGE = format(
+        'PER-104 %s references missing Category %s',
+        TG_TABLE_NAME, category_id
+      );
   END IF;
 
   IF cat_is_system = true AND cat_family IS NULL THEN
@@ -193,10 +199,12 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  RAISE EXCEPTION
-    'PER-104 cross-tenant Category reference rejected (% -> Category %): source family=%, category family=%',
-    TG_TABLE_NAME, category_id, source_family, cat_family
-    USING ERRCODE = '23514';
+  RAISE EXCEPTION USING
+    ERRCODE = 'check_violation',
+    MESSAGE = format(
+      'PER-104 cross-tenant Category reference rejected (%s -> Category %s): source family=%s, category family=%s',
+      TG_TABLE_NAME, category_id, source_family, cat_family
+    );
 END;
 $$ LANGUAGE plpgsql;
 
@@ -214,29 +222,35 @@ BEGIN
   SELECT t."familyId" INTO source_family
     FROM "Transaction" t WHERE t.id = NEW."transactionId";
   IF source_family IS NULL THEN
-    RAISE EXCEPTION
-      'PER-104 SplitEntry % references missing parent transaction %',
-      NEW.id, NEW."transactionId"
-      USING ERRCODE = '23514';
+    RAISE EXCEPTION USING
+      ERRCODE = 'check_violation',
+      MESSAGE = format(
+        'PER-104 SplitEntry %s references missing parent transaction %s',
+        NEW.id, NEW."transactionId"
+      );
   END IF;
 
   SELECT m."familyId" INTO merchant_family
     FROM "Merchant" m WHERE m.id = NEW."merchantId";
   IF NOT FOUND THEN
-    RAISE EXCEPTION
-      'PER-104 SplitEntry % references missing Merchant %',
-      NEW.id, NEW."merchantId"
-      USING ERRCODE = '23503';
+    RAISE EXCEPTION USING
+      ERRCODE = 'foreign_key_violation',
+      MESSAGE = format(
+        'PER-104 SplitEntry %s references missing Merchant %s',
+        NEW.id, NEW."merchantId"
+      );
   END IF;
 
   IF merchant_family = source_family THEN
     RETURN NEW;
   END IF;
 
-  RAISE EXCEPTION
-    'PER-104 cross-tenant Merchant reference rejected (SplitEntry -> Merchant %): source family=%, merchant family=%',
-    NEW."merchantId", source_family, merchant_family
-    USING ERRCODE = '23514';
+  RAISE EXCEPTION USING
+    ERRCODE = 'check_violation',
+    MESSAGE = format(
+      'PER-104 cross-tenant Merchant reference rejected (SplitEntry -> Merchant %s): source family=%s, merchant family=%s',
+      NEW."merchantId", source_family, merchant_family
+    );
 END;
 $$ LANGUAGE plpgsql;
 
@@ -249,24 +263,30 @@ BEGIN
   SELECT u."familyId" INTO user_family
     FROM "User" u WHERE u.id = NEW."userId";
   IF NOT FOUND THEN
-    RAISE EXCEPTION
-      'PER-104 Transaction % references missing User %',
-      NEW.id, NEW."userId"
-      USING ERRCODE = '23503';
+    RAISE EXCEPTION USING
+      ERRCODE = 'foreign_key_violation',
+      MESSAGE = format(
+        'PER-104 Transaction %s references missing User %s',
+        NEW.id, NEW."userId"
+      );
   END IF;
 
   IF user_family IS NULL THEN
-    RAISE EXCEPTION
-      'PER-104 cross-tenant User actor rejected: Transaction % references unonboarded User % (no family yet)',
-      NEW.id, NEW."userId"
-      USING ERRCODE = '23514';
+    RAISE EXCEPTION USING
+      ERRCODE = 'check_violation',
+      MESSAGE = format(
+        'PER-104 cross-tenant User actor rejected: Transaction %s references unonboarded User %s (no family yet)',
+        NEW.id, NEW."userId"
+      );
   END IF;
 
   IF user_family <> NEW."familyId" THEN
-    RAISE EXCEPTION
-      'PER-104 cross-tenant User actor rejected (Transaction -> User %): transaction family=%, user family=%',
-      NEW."userId", NEW."familyId", user_family
-      USING ERRCODE = '23514';
+    RAISE EXCEPTION USING
+      ERRCODE = 'check_violation',
+      MESSAGE = format(
+        'PER-104 cross-tenant User actor rejected (Transaction -> User %s): transaction family=%s, user family=%s',
+        NEW."userId", NEW."familyId", user_family
+      );
   END IF;
 
   RETURN NEW;
@@ -283,30 +303,36 @@ BEGIN
   SELECT t."familyId" INTO outflow_family
     FROM "Transaction" t WHERE t.id = NEW."outflowTransactionId";
   IF NOT FOUND THEN
-    RAISE EXCEPTION
-      'PER-104 Transfer % references missing outflow Transaction %',
-      NEW.id, NEW."outflowTransactionId"
-      USING ERRCODE = '23503';
+    RAISE EXCEPTION USING
+      ERRCODE = 'foreign_key_violation',
+      MESSAGE = format(
+        'PER-104 Transfer %s references missing outflow Transaction %s',
+        NEW.id, NEW."outflowTransactionId"
+      );
   END IF;
 
   SELECT t."familyId" INTO inflow_family
     FROM "Transaction" t WHERE t.id = NEW."inflowTransactionId";
   IF NOT FOUND THEN
-    RAISE EXCEPTION
-      'PER-104 Transfer % references missing inflow Transaction %',
-      NEW.id, NEW."inflowTransactionId"
-      USING ERRCODE = '23503';
+    RAISE EXCEPTION USING
+      ERRCODE = 'foreign_key_violation',
+      MESSAGE = format(
+        'PER-104 Transfer %s references missing inflow Transaction %s',
+        NEW.id, NEW."inflowTransactionId"
+      );
   END IF;
 
   IF outflow_family = inflow_family THEN
     RETURN NEW;
   END IF;
 
-  RAISE EXCEPTION
-    'PER-104 cross-tenant Transfer leg pair rejected (Transfer -> outflow %, inflow %): outflow family=%, inflow family=%',
-    NEW."outflowTransactionId", NEW."inflowTransactionId",
-    outflow_family, inflow_family
-    USING ERRCODE = '23514';
+  RAISE EXCEPTION USING
+    ERRCODE = 'check_violation',
+    MESSAGE = format(
+      'PER-104 cross-tenant Transfer leg pair rejected (Transfer -> outflow %s, inflow %s): outflow family=%s, inflow family=%s',
+      NEW."outflowTransactionId", NEW."inflowTransactionId",
+      outflow_family, inflow_family
+    );
 END;
 $$ LANGUAGE plpgsql;
 
