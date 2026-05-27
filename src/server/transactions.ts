@@ -21,22 +21,26 @@ export const getTransactionFormData = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
   .handler(async ({ context }) => {
     return scopedTenantTransaction(context.familyId, async (tx) => {
-      const [accounts, categories, merchants] = await Promise.all([
-        tx.account.findMany({
-          where: { familyId: context.familyId },
-          orderBy: { name: "asc" },
-        }),
-        tx.category.findMany({
-          where: {
-            OR: [{ isSystem: true }, { familyId: context.familyId }],
-          },
-          orderBy: { name: "asc" },
-        }),
-        tx.merchant.findMany({
-          where: { familyId: context.familyId },
-          orderBy: { name: "asc" },
-        }),
-      ])
+      const [accounts, categories, merchants] =
+        await runTenantTransactionQueriesInOrder([
+          () =>
+            tx.account.findMany({
+              where: { familyId: context.familyId },
+              orderBy: { name: "asc" },
+            }),
+          () =>
+            tx.category.findMany({
+              where: {
+                OR: [{ isSystem: true }, { familyId: context.familyId }],
+              },
+              orderBy: { name: "asc" },
+            }),
+          () =>
+            tx.merchant.findMany({
+              where: { familyId: context.familyId },
+              orderBy: { name: "asc" },
+            }),
+        ] as const)
       return { accounts, categories, merchants }
     })
   })
@@ -198,6 +202,318 @@ function createdAuditEntries<T extends { id: string }>(
 
 type AccountDeltaMap = Record<string, bigint>
 
+type QueryResultTuple<TQueries extends readonly (() => Promise<unknown>)[]> = {
+  [TIndex in keyof TQueries]: TQueries[TIndex] extends () => Promise<
+    infer TResult
+  >
+    ? TResult
+    : never
+}
+
+/**
+ * Prisma interactive transaction memakai satu pg Client. Jangan jalankan query
+ * dari `tx` yang sama dengan `Promise.all`; pg@8 memberi warning dan pg@9 akan
+ * menolak overlap tersebut.
+ */
+async function runTenantTransactionQueriesInOrder<
+  const TQueries extends readonly (() => Promise<unknown>)[],
+>(queries: TQueries): Promise<QueryResultTuple<TQueries>> {
+  const results: unknown[] = []
+  await queries.reduce<Promise<void>>(
+    (previous, query) =>
+      previous.then(() =>
+        query().then((result) => {
+          results.push(result)
+        })
+      ),
+    Promise.resolve()
+  )
+  return results as QueryResultTuple<TQueries>
+}
+
+async function findTransactionWithSplitEntries(
+  tx: TenantTransactionClient,
+  id: string
+) {
+  const [transaction, splitEntries] = await runTenantTransactionQueriesInOrder([
+    () => tx.transaction.findUniqueOrThrow({ where: { id } }),
+    () =>
+      tx.splitEntry.findMany({
+        where: { transactionId: id },
+        orderBy: { createdAt: "asc" },
+      }),
+  ] as const)
+  return { ...transaction, splitEntries }
+}
+
+async function findOptionalTransactionWithSplitEntries(
+  tx: TenantTransactionClient,
+  id: string
+) {
+  const transaction = await tx.transaction.findUnique({ where: { id } })
+  if (!transaction) return null
+  const splitEntries = await tx.splitEntry.findMany({
+    where: { transactionId: id },
+    orderBy: { createdAt: "asc" },
+  })
+  return { ...transaction, splitEntries }
+}
+
+async function findTransactionAuditGraph(
+  tx: TenantTransactionClient,
+  id: string
+) {
+  const transaction = await tx.transaction.findUnique({ where: { id } })
+  if (!transaction) return null
+
+  const [splitEntries, transferOut, transferIn] =
+    await runTenantTransactionQueriesInOrder([
+      () =>
+        tx.splitEntry.findMany({
+          where: { transactionId: id },
+          orderBy: { createdAt: "asc" },
+        }),
+      () => tx.transfer.findFirst({ where: { outflowTransactionId: id } }),
+      () => tx.transfer.findFirst({ where: { inflowTransactionId: id } }),
+    ] as const)
+
+  return { ...transaction, splitEntries, transferOut, transferIn }
+}
+
+async function findTransferGraph(tx: TenantTransactionClient, id: string) {
+  const transfer = await tx.transfer.findUnique({ where: { id } })
+  if (!transfer) return null
+
+  const [outflowTransaction, inflowTransaction] =
+    await runTenantTransactionQueriesInOrder([
+      () =>
+        tx.transaction.findUniqueOrThrow({
+          where: { id: transfer.outflowTransactionId },
+        }),
+      () =>
+        tx.transaction.findUniqueOrThrow({
+          where: { id: transfer.inflowTransactionId },
+        }),
+    ] as const)
+
+  return { ...transfer, outflowTransaction, inflowTransaction }
+}
+
+async function findTransactionsWithSplitEntries(
+  tx: TenantTransactionClient,
+  ids: readonly string[]
+) {
+  if (ids.length === 0) return []
+
+  const transactions = await tx.transaction.findMany({
+    where: { id: { in: [...ids] } },
+  })
+  const splitEntries = await tx.splitEntry.findMany({
+    where: { transactionId: { in: transactions.map((item) => item.id) } },
+    orderBy: { createdAt: "asc" },
+  })
+  const splitEntriesByTransactionId = new Map<string, typeof splitEntries>()
+  for (const splitEntry of splitEntries) {
+    const current = splitEntriesByTransactionId.get(splitEntry.transactionId)
+    if (current) current.push(splitEntry)
+    else splitEntriesByTransactionId.set(splitEntry.transactionId, [splitEntry])
+  }
+
+  return transactions.map((transaction) => ({
+    ...transaction,
+    splitEntries: splitEntriesByTransactionId.get(transaction.id) ?? [],
+  }))
+}
+
+async function findTransactionsWithTransferOutAndSplitEntries(
+  tx: TenantTransactionClient,
+  ids: readonly string[]
+) {
+  const transactions = await findTransactionsWithSplitEntries(tx, ids)
+  const transfers = await tx.transfer.findMany({
+    where: {
+      outflowTransactionId: { in: transactions.map((item) => item.id) },
+    },
+  })
+  const transfersByOutflowId = new Map(
+    transfers.map((transfer) => [transfer.outflowTransactionId, transfer])
+  )
+
+  return transactions.map((transaction) => ({
+    ...transaction,
+    transferOut: transfersByOutflowId.get(transaction.id) ?? null,
+  }))
+}
+
+async function findTransferGraphs(
+  tx: TenantTransactionClient,
+  ids: readonly string[]
+) {
+  if (ids.length === 0) return []
+
+  const transfers = await tx.transfer.findMany({
+    where: { id: { in: [...ids] } },
+  })
+  const transactionIds = transfers.flatMap((transfer) => [
+    transfer.outflowTransactionId,
+    transfer.inflowTransactionId,
+  ])
+  const transactions = await tx.transaction.findMany({
+    where: { id: { in: transactionIds } },
+  })
+  const transactionsById = indexById(transactions)
+
+  return transfers.map((transfer) => {
+    const outflowTransaction = transactionsById.get(
+      transfer.outflowTransactionId
+    )
+    const inflowTransaction = transactionsById.get(transfer.inflowTransactionId)
+    if (!outflowTransaction || !inflowTransaction) {
+      throw new Error("Transfer graph is incomplete")
+    }
+    return { ...transfer, outflowTransaction, inflowTransaction }
+  })
+}
+
+function accountListRelation(account: {
+  color: string | null
+  name: string
+  type: string
+}) {
+  return { name: account.name, type: account.type, color: account.color }
+}
+
+function categoryListRelation(category: {
+  color: string
+  icon: string
+  name: string
+}) {
+  return { name: category.name, color: category.color, icon: category.icon }
+}
+
+function merchantListRelation(merchant: {
+  logoUrl: string | null
+  name: string
+}) {
+  return { name: merchant.name, logoUrl: merchant.logoUrl }
+}
+
+async function findLedgerTransactionsForFamily(
+  tx: TenantTransactionClient,
+  familyId: string
+) {
+  const transactions = await tx.transaction.findMany({
+    orderBy: { date: "desc" },
+    where: {
+      familyId,
+      deletedAt: null,
+      transferIn: {
+        is: null,
+      },
+    },
+  })
+  const transactionIds = transactions.map((transaction) => transaction.id)
+
+  const accountIds = new Set<string>()
+  const categoryIds = new Set<string>()
+  const merchantIds = new Set<string>()
+  for (const transaction of transactions) {
+    accountIds.add(transaction.accountId)
+    if (transaction.toAccountId) accountIds.add(transaction.toAccountId)
+    if (transaction.categoryId) categoryIds.add(transaction.categoryId)
+    if (transaction.merchantId) merchantIds.add(transaction.merchantId)
+  }
+
+  const splitEntries =
+    transactionIds.length > 0
+      ? await tx.splitEntry.findMany({
+          where: { transactionId: { in: transactionIds } },
+          orderBy: { createdAt: "asc" },
+        })
+      : []
+  for (const splitEntry of splitEntries) {
+    if (splitEntry.categoryId) categoryIds.add(splitEntry.categoryId)
+    if (splitEntry.merchantId) merchantIds.add(splitEntry.merchantId)
+  }
+
+  const [accounts, categories, merchants] =
+    await runTenantTransactionQueriesInOrder([
+      () =>
+        accountIds.size > 0
+          ? tx.account.findMany({
+              where: { id: { in: Array.from(accountIds) } },
+              select: { id: true, name: true, type: true, color: true },
+            })
+          : Promise.resolve([]),
+      () =>
+        categoryIds.size > 0
+          ? tx.category.findMany({
+              where: { id: { in: Array.from(categoryIds) } },
+              select: { id: true, name: true, color: true, icon: true },
+            })
+          : Promise.resolve([]),
+      () =>
+        merchantIds.size > 0
+          ? tx.merchant.findMany({
+              where: { id: { in: Array.from(merchantIds) } },
+              select: { id: true, name: true, logoUrl: true },
+            })
+          : Promise.resolve([]),
+    ] as const)
+
+  const accountsById = indexById(accounts)
+  const categoriesById = indexById(categories)
+  const merchantsById = indexById(merchants)
+  const splitEntriesByTransactionId = new Map<string, typeof splitEntries>()
+  for (const splitEntry of splitEntries) {
+    const current = splitEntriesByTransactionId.get(splitEntry.transactionId)
+    if (current) current.push(splitEntry)
+    else splitEntriesByTransactionId.set(splitEntry.transactionId, [splitEntry])
+  }
+
+  return transactions.map((transaction) => {
+    const account = accountsById.get(transaction.accountId)
+    if (!account) throw new Error("Transaction account relation is incomplete")
+
+    const toAccount = transaction.toAccountId
+      ? accountsById.get(transaction.toAccountId)
+      : null
+    const category = transaction.categoryId
+      ? categoriesById.get(transaction.categoryId)
+      : null
+    const merchant = transaction.merchantId
+      ? merchantsById.get(transaction.merchantId)
+      : null
+
+    return {
+      ...transaction,
+      account: accountListRelation(account),
+      toAccount: toAccount ? accountListRelation(toAccount) : null,
+      category: category ? categoryListRelation(category) : null,
+      merchant: merchant ? merchantListRelation(merchant) : null,
+      splitEntries: (splitEntriesByTransactionId.get(transaction.id) ?? []).map(
+        (splitEntry) => {
+          const splitCategory = splitEntry.categoryId
+            ? categoriesById.get(splitEntry.categoryId)
+            : null
+          const splitMerchant = splitEntry.merchantId
+            ? merchantsById.get(splitEntry.merchantId)
+            : null
+          return {
+            ...splitEntry,
+            category: splitCategory
+              ? categoryListRelation(splitCategory)
+              : null,
+            merchant: splitMerchant
+              ? merchantListRelation(splitMerchant)
+              : null,
+          }
+        }
+      ),
+    }
+  })
+}
+
 function addAccountDelta(
   accountDeltas: AccountDeltaMap,
   accountId: string,
@@ -211,12 +527,16 @@ async function applyAccountDeltas(
   tx: TenantTransactionClient,
   accountDeltas: AccountDeltaMap
 ): Promise<void> {
-  await Promise.all(
-    Object.entries(accountDeltas).map(([accountId, delta]) =>
-      tx.account.update({
-        where: { id: accountId },
-        data: { balance: { increment: delta } },
-      })
+  await runTenantTransactionQueriesInOrder(
+    Object.entries(accountDeltas).map(
+      ([accountId, delta]) =>
+        () =>
+          tx.account
+            .update({
+              where: { id: accountId },
+              data: { balance: { increment: delta } },
+            })
+            .then(() => undefined)
     )
   )
 }
@@ -483,25 +803,48 @@ async function findIdempotentTransaction(
   familyId: string,
   idempotencyKey: string
 ): Promise<PersistedTransactionForIdempotency | null> {
-  return await tx.transaction.findUnique({
+  const transaction = await tx.transaction.findUnique({
     where: {
       tx_family_idempotency: {
         familyId,
         idempotencyKey,
       },
     },
-    include: {
-      splitEntries: {
-        orderBy: { createdAt: "asc" },
-      },
-      transferIn: true,
-      transferOut: {
-        include: {
-          inflowTransaction: true,
-        },
-      },
-    },
   })
+  if (!transaction) return null
+
+  const [splitEntries, transferIn, transferOut] =
+    await runTenantTransactionQueriesInOrder([
+      () =>
+        tx.splitEntry.findMany({
+          where: { transactionId: transaction.id },
+          orderBy: { createdAt: "asc" },
+        }),
+      () =>
+        tx.transfer.findFirst({
+          where: { inflowTransactionId: transaction.id },
+        }),
+      () =>
+        tx.transfer.findFirst({
+          where: { outflowTransactionId: transaction.id },
+        }),
+    ] as const)
+
+  const transferOutWithInflowTransaction = transferOut
+    ? {
+        ...transferOut,
+        inflowTransaction: await tx.transaction.findUniqueOrThrow({
+          where: { id: transferOut.inflowTransactionId },
+        }),
+      }
+    : null
+
+  return {
+    ...transaction,
+    splitEntries,
+    transferIn,
+    transferOut: transferOutWithInflowTransaction,
+  }
 }
 
 function serializePersistedReplay(tx: PersistedTransactionForIdempotency) {
@@ -598,10 +941,11 @@ export async function createTransactionForFamily({
         if (data.type === "transfer") {
           if (!data.toAccountId)
             throw new Error("Transfer requires a destination account!")
+          const toAccountId = data.toAccountId
 
           // Tenant-safe: verify account ownership via familyId
           const toAccount = await tx.account.findFirst({
-            where: { id: data.toAccountId, familyId },
+            where: { id: toAccountId, familyId },
           })
           if (!toAccount)
             throw new Error("Destination account not found or access denied!")
@@ -610,10 +954,17 @@ export async function createTransactionForFamily({
           if (toAccount.type === "CREDIT") kind = "cc_payment"
           else if (toAccount.type === "LOAN") kind = "loan_payment"
 
-          const [oldSrcAcc, oldDstAcc] = await Promise.all([
-            tx.account.findUniqueOrThrow({ where: { id: data.accountId } }),
-            tx.account.findUniqueOrThrow({ where: { id: data.toAccountId } }),
-          ])
+          const [oldSrcAcc, oldDstAcc] =
+            await runTenantTransactionQueriesInOrder([
+              () =>
+                tx.account.findUniqueOrThrow({
+                  where: { id: data.accountId },
+                }),
+              () =>
+                tx.account.findUniqueOrThrow({
+                  where: { id: toAccountId },
+                }),
+            ] as const)
 
           // Running Balance Snapshot: baca saldo akun setelah update atomik
           // Tenant-safe: update with familyId constraint
@@ -635,13 +986,13 @@ export async function createTransactionForFamily({
 
           // Tenant-safe: update with familyId constraint
           const destUpdate = await tx.account.updateMany({
-            where: { id: data.toAccountId, familyId },
+            where: { id: toAccountId, familyId },
             data: { balance: { increment: inAmount } },
           })
           if (destUpdate.count !== 1)
             throw new Error("Destination account not found or access denied!")
           const updatedDestAccount = await tx.account.findFirst({
-            where: { id: data.toAccountId, familyId },
+            where: { id: toAccountId, familyId },
             select: { balance: true },
           })
           const destBalanceAfter = updatedDestAccount!.balance
@@ -657,7 +1008,7 @@ export async function createTransactionForFamily({
               date: data.date,
               notes: data.notes || null,
               accountId: data.accountId,
-              toAccountId: data.toAccountId,
+              toAccountId,
               categoryId: data.categoryId || null,
               merchantId: data.merchantId || null,
               userId: user.id,
@@ -680,7 +1031,7 @@ export async function createTransactionForFamily({
               description: data.description,
               date: data.date,
               notes: data.notes || null,
-              accountId: data.toAccountId,
+              accountId: toAccountId,
               toAccountId: data.accountId,
               categoryId: data.categoryId || null,
               merchantId: data.merchantId || null,
@@ -701,10 +1052,17 @@ export async function createTransactionForFamily({
             },
           })
 
-          const [newSrcAcc, newDstAcc] = await Promise.all([
-            tx.account.findUniqueOrThrow({ where: { id: data.accountId } }),
-            tx.account.findUniqueOrThrow({ where: { id: data.toAccountId } }),
-          ])
+          const [newSrcAcc, newDstAcc] =
+            await runTenantTransactionQueriesInOrder([
+              () =>
+                tx.account.findUniqueOrThrow({
+                  where: { id: data.accountId },
+                }),
+              () =>
+                tx.account.findUniqueOrThrow({
+                  where: { id: toAccountId },
+                }),
+            ] as const)
 
           await auditLogs(tx, auditCtx, [
             ...accountBalanceAuditEntries(
@@ -784,32 +1142,29 @@ export async function createTransactionForFamily({
 
         // Jika isSplit, buat setiap line item satu-satu agar Prisma
         // auto-generate cuid() untuk id (createMany bypass @default di SQLite)
+        let createdSplitEntries: Awaited<
+          ReturnType<TenantTransactionClient["splitEntry"]["create"]>
+        >[] = []
         if (data.isSplit && data.splitEntries?.length) {
-          await Promise.all(
-            data.splitEntries.map((entry) =>
-              tx.splitEntry.create({
-                data: {
-                  transactionId: newTransaction.id,
-                  description: entry.description,
-                  amount: absMoney(entry.amount),
-                  categoryId: entry.categoryId || null,
-                  merchantId: entry.merchantId || null,
-                },
-              })
+          createdSplitEntries = await runTenantTransactionQueriesInOrder(
+            data.splitEntries.map(
+              (entry) => () =>
+                tx.splitEntry.create({
+                  data: {
+                    transactionId: newTransaction.id,
+                    description: entry.description,
+                    amount: absMoney(entry.amount),
+                    categoryId: entry.categoryId || null,
+                    merchantId: entry.merchantId || null,
+                  },
+                })
             )
           )
         }
 
-        const [newAccount, createdSplitEntries] = await Promise.all([
-          tx.account.findUniqueOrThrow({
-            where: { id: data.accountId },
-          }),
-          data.isSplit && data.splitEntries?.length
-            ? tx.splitEntry.findMany({
-                where: { transactionId: newTransaction.id },
-              })
-            : Promise.resolve([]),
-        ])
+        const newAccount = await tx.account.findUniqueOrThrow({
+          where: { id: data.accountId },
+        })
 
         await auditLogs(tx, auditCtx, [
           ...accountBalanceAuditEntries([oldAccount], [newAccount]),
@@ -865,43 +1220,10 @@ export const getTransactionsFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
   .handler(async ({ context }) => {
     return scopedTenantTransaction(context.familyId, async (tx) => {
-      const transactions = await tx.transaction.findMany({
-        orderBy: { date: "desc" },
-        where: {
-          familyId: context.familyId,
-          deletedAt: null, // SOFT DELETE FILTER: hanya ambil transaksi aktif
-          // Gunakan objek eksplisit untuk mengecek ketiadaan relasi (Best Practice)
-          transferIn: {
-            is: null,
-          },
-        },
-        // Menggunakan 'include' untuk menarik data relasi secara instan
-        include: {
-          account: {
-            select: { name: true, type: true, color: true },
-          },
-          toAccount: {
-            select: { name: true, type: true, color: true },
-          },
-          category: {
-            // Hanya ambil nama, warna, dan icon untuk keperluan UI
-            select: { name: true, color: true, icon: true },
-          },
-          merchant: {
-            select: { name: true, logoUrl: true },
-          },
-          // Sertakan split entries beserta relasi kategori & merchant-nya
-          splitEntries: {
-            orderBy: { createdAt: "asc" },
-            include: {
-              category: {
-                select: { name: true, color: true, icon: true },
-              },
-              merchant: { select: { name: true, logoUrl: true } },
-            },
-          },
-        },
-      })
+      const transactions = await findLedgerTransactionsForFamily(
+        tx,
+        context.familyId
+      )
 
       // The MAP logic: Ubah array yang didapat dari DB.
       // Amounts are stored signed (negative for expense) but the UI consumes
@@ -931,33 +1253,22 @@ export async function deleteTransactionForFamily({
     familyId,
     async (tx: TenantTransactionClient) => {
       // 1. Cari transaksi lama beserta relasi transfernya dan split entries
-      const oldTx = await tx.transaction.findUnique({
-        where: { id },
-        include: { transferOut: true, transferIn: true, splitEntries: true },
-      })
+      const oldTx = await findTransactionAuditGraph(tx, id)
 
       if (!oldTx) throw new Error("Transaction not found!")
 
       const oldTransferGraph =
         oldTx.type === "transfer" && oldTx.transferOut
-          ? await tx.transfer.findUnique({
-              where: { id: oldTx.transferOut.id },
-              include: {
-                inflowTransaction: true,
-                outflowTransaction: true,
-              },
-            })
+          ? await findTransferGraph(tx, oldTx.transferOut.id)
           : null
 
       // Cari inflow transaction jika ini transfer
       const inflowTx =
         oldTx.type === "transfer" && oldTx.transferOut
-          ? await tx.transaction.findUnique({
-              where: {
-                id: oldTx.transferOut.inflowTransactionId,
-              },
-              include: { splitEntries: true },
-            })
+          ? await findOptionalTransactionWithSplitEntries(
+              tx,
+              oldTx.transferOut.inflowTransactionId
+            )
           : null
 
       // Ambil akun-akun yang terpengaruh sebelum mutasi
@@ -1021,30 +1332,21 @@ export async function deleteTransactionForFamily({
         updatedInflowTx,
         newAccounts,
         updatedTransferGraph,
-      ] = await Promise.all([
-        tx.transaction.findUniqueOrThrow({
-          where: { id: oldTx.id },
-          include: { splitEntries: true },
-        }),
-        inflowTx
-          ? tx.transaction.findUniqueOrThrow({
-              where: { id: inflowTx.id },
-              include: { splitEntries: true },
-            })
-          : Promise.resolve(null),
-        tx.account.findMany({
-          where: { id: { in: affectedAccountIds } },
-        }),
-        oldTransferGraph
-          ? tx.transfer.findUnique({
-              where: { id: oldTransferGraph.id },
-              include: {
-                inflowTransaction: true,
-                outflowTransaction: true,
-              },
-            })
-          : Promise.resolve(null),
-      ])
+      ] = await runTenantTransactionQueriesInOrder([
+        () => findTransactionWithSplitEntries(tx, oldTx.id),
+        () =>
+          inflowTx
+            ? findTransactionWithSplitEntries(tx, inflowTx.id)
+            : Promise.resolve(null),
+        () =>
+          tx.account.findMany({
+            where: { id: { in: affectedAccountIds } },
+          }),
+        () =>
+          oldTransferGraph
+            ? findTransferGraph(tx, oldTransferGraph.id)
+            : Promise.resolve(null),
+      ] as const)
 
       await auditLogs(tx, auditCtx, [
         ...accountBalanceAuditEntries(oldAccounts, newAccounts),
@@ -1116,25 +1418,16 @@ export async function updateTransactionForFamily({
 
       // --- FASE 1: REVERSAL (HAPUS LAMA) ---
       // Ambil snapshot graph lengkap sebelum mutasi dilakukan
-      const oldTx = await tx.transaction.findUnique({
-        where: { id: data.id },
-        include: {
-          transferOut: {
-            include: {
-              inflowTransaction: {
-                include: { splitEntries: true },
-              },
-            },
-          },
-          splitEntries: true,
-        },
-      })
+      const oldTx = await findTransactionAuditGraph(tx, data.id!)
 
       if (!oldTx) throw new Error("Original transaction not found")
 
       const oldInflowTx =
         oldTx.type === "transfer" && oldTx.transferOut
-          ? oldTx.transferOut.inflowTransaction
+          ? await findTransactionWithSplitEntries(
+              tx,
+              oldTx.transferOut.inflowTransactionId
+            )
           : null
       const oldTransfer =
         oldTx.type === "transfer" && oldTx.transferOut
@@ -1284,19 +1577,15 @@ export async function updateTransactionForFamily({
         resultTransaction = outflowTx
 
         // Re-read data terbaru setelah mutasi
-        const [newOutflow, newInflow, newAccounts] = await Promise.all([
-          tx.transaction.findUniqueOrThrow({
-            where: { id: outflowTx.id },
-            include: { splitEntries: true },
-          }),
-          tx.transaction.findUniqueOrThrow({
-            where: { id: inflowTx.id },
-            include: { splitEntries: true },
-          }),
-          tx.account.findMany({
-            where: { id: { in: Array.from(touchedAccountIds) } },
-          }),
-        ])
+        const [newOutflow, newInflow, newAccounts] =
+          await runTenantTransactionQueriesInOrder([
+            () => findTransactionWithSplitEntries(tx, outflowTx.id),
+            () => findTransactionWithSplitEntries(tx, inflowTx.id),
+            () =>
+              tx.account.findMany({
+                where: { id: { in: Array.from(touchedAccountIds) } },
+              }),
+          ] as const)
 
         await auditLogs(tx, auditCtx, [
           ...accountBalanceAuditEntries(oldAccounts, newAccounts),
@@ -1382,18 +1671,22 @@ export async function updateTransactionForFamily({
           },
         })
 
+        let createdSplitEntries: Awaited<
+          ReturnType<TenantTransactionClient["splitEntry"]["create"]>
+        >[] = []
         if (data.isSplit && data.splitEntries?.length) {
-          await Promise.all(
-            data.splitEntries.map((entry) =>
-              tx.splitEntry.create({
-                data: {
-                  transactionId: newTx.id,
-                  description: entry.description,
-                  amount: absMoney(entry.amount),
-                  categoryId: entry.categoryId || null,
-                  merchantId: entry.merchantId || null,
-                },
-              })
+          createdSplitEntries = await runTenantTransactionQueriesInOrder(
+            data.splitEntries.map(
+              (entry) => () =>
+                tx.splitEntry.create({
+                  data: {
+                    transactionId: newTx.id,
+                    description: entry.description,
+                    amount: absMoney(entry.amount),
+                    categoryId: entry.categoryId || null,
+                    merchantId: entry.merchantId || null,
+                  },
+                })
             )
           )
         }
@@ -1401,15 +1694,14 @@ export async function updateTransactionForFamily({
         resultTransaction = newTx
 
         // Re-read data terbaru setelah mutasi
-        const [updatedTx, newAccounts] = await Promise.all([
-          tx.transaction.findUniqueOrThrow({
-            where: { id: newTx.id },
-            include: { splitEntries: true },
-          }),
-          tx.account.findMany({
-            where: { id: { in: Array.from(touchedAccountIds) } },
-          }),
-        ])
+        const [updatedTx, newAccounts] =
+          await runTenantTransactionQueriesInOrder([
+            () => findTransactionWithSplitEntries(tx, newTx.id),
+            () =>
+              tx.account.findMany({
+                where: { id: { in: Array.from(touchedAccountIds) } },
+              }),
+          ] as const)
 
         await auditLogs(tx, auditCtx, [
           ...accountBalanceAuditEntries(oldAccounts, newAccounts),
@@ -1427,7 +1719,7 @@ export async function updateTransactionForFamily({
             before: entry,
             after: null,
           })),
-          ...createdAuditEntries("SplitEntry", updatedTx.splitEntries),
+          ...createdAuditEntries("SplitEntry", createdSplitEntries),
           ...(oldInflowTx
             ? [
                 {
@@ -1492,38 +1784,27 @@ export async function bulkDeleteTransactionsForFamily({
     familyId,
     async (tx: TenantTransactionClient) => {
       // 1. Ambil data asli untuk merestore saldo
-      const oldTxs = await tx.transaction.findMany({
-        where: { id: { in: ids } },
-        include: { transferOut: true, splitEntries: true },
-      })
+      const oldTxs = await findTransactionsWithTransferOutAndSplitEntries(
+        tx,
+        ids
+      )
 
       const inflowTxIds: string[] = []
-      const outflowTxIds: string[] = []
+      const transferIds: string[] = []
       for (const oldTx of oldTxs) {
-        outflowTxIds.push(oldTx.id)
         if (oldTx.type === "transfer" && oldTx.transferOut) {
           inflowTxIds.push(oldTx.transferOut.inflowTransactionId)
+          transferIds.push(oldTx.transferOut.id)
         }
       }
 
       const oldInflowTxs =
         inflowTxIds.length > 0
-          ? await tx.transaction.findMany({
-              where: { id: { in: inflowTxIds } },
-              include: { splitEntries: true },
-            })
+          ? await findTransactionsWithSplitEntries(tx, inflowTxIds)
           : []
 
       const oldTransfers =
-        oldTxs.length > 0
-          ? await tx.transfer.findMany({
-              where: { outflowTransactionId: { in: outflowTxIds } },
-              include: {
-                inflowTransaction: true,
-                outflowTransaction: true,
-              },
-            })
-          : []
+        transferIds.length > 0 ? await findTransferGraphs(tx, transferIds) : []
 
       const touchedAccountIds = new Set(oldTxs.map((t) => t.accountId))
       oldInflowTxs.forEach((t) => touchedAccountIds.add(t.accountId))
@@ -1586,30 +1867,24 @@ export async function bulkDeleteTransactionsForFamily({
 
       // Re-read data terbaru setelah mutasi
       const [newOutflowTxs, newInflowTxs, newAccounts, newTransfers] =
-        await Promise.all([
-          tx.transaction.findMany({
-            where: { id: { in: ids } },
-            include: { splitEntries: true },
-          }),
-          inflowTxIds.length > 0
-            ? tx.transaction.findMany({
-                where: { id: { in: inflowTxIds } },
-                include: { splitEntries: true },
-              })
-            : Promise.resolve([]),
-          tx.account.findMany({
-            where: { id: { in: Array.from(touchedAccountIds) } },
-          }),
-          oldTransfers.length > 0
-            ? tx.transfer.findMany({
-                where: { id: { in: oldTransfers.map((t) => t.id) } },
-                include: {
-                  inflowTransaction: true,
-                  outflowTransaction: true,
-                },
-              })
-            : Promise.resolve([]),
-        ])
+        await runTenantTransactionQueriesInOrder([
+          () => findTransactionsWithSplitEntries(tx, ids),
+          () =>
+            inflowTxIds.length > 0
+              ? findTransactionsWithSplitEntries(tx, inflowTxIds)
+              : Promise.resolve([]),
+          () =>
+            tx.account.findMany({
+              where: { id: { in: Array.from(touchedAccountIds) } },
+            }),
+          () =>
+            oldTransfers.length > 0
+              ? findTransferGraphs(
+                  tx,
+                  oldTransfers.map((transfer) => transfer.id)
+                )
+              : Promise.resolve([]),
+        ] as const)
 
       await auditLogs(tx, auditCtx, [
         ...accountBalanceAuditEntries(oldAccounts, newAccounts),
@@ -1672,10 +1947,7 @@ export async function bulkUpdateTransactionsForFamily({
     familyId,
     async (tx: TenantTransactionClient) => {
       // Ambil data before
-      const oldTxs = await tx.transaction.findMany({
-        where: { id: { in: data.ids } },
-        include: { splitEntries: true },
-      })
+      const oldTxs = await findTransactionsWithSplitEntries(tx, data.ids)
 
       const touchedAccountIds = new Set(oldTxs.map((t) => t.accountId))
       if (data.accountId !== undefined) {
@@ -1754,15 +2026,13 @@ export async function bulkUpdateTransactionsForFamily({
       }
 
       // Re-read data terbaru setelah mutasi
-      const [newTxs, newAccounts] = await Promise.all([
-        tx.transaction.findMany({
-          where: { id: { in: data.ids } },
-          include: { splitEntries: true },
-        }),
-        tx.account.findMany({
-          where: { id: { in: Array.from(touchedAccountIds) } },
-        }),
-      ])
+      const [newTxs, newAccounts] = await runTenantTransactionQueriesInOrder([
+        () => findTransactionsWithSplitEntries(tx, data.ids),
+        () =>
+          tx.account.findMany({
+            where: { id: { in: Array.from(touchedAccountIds) } },
+          }),
+      ] as const)
 
       await auditLogs(tx, auditCtx, [
         ...accountBalanceAuditEntries(oldAccounts, newAccounts),
@@ -1845,27 +2115,19 @@ export async function bulkCreateTransactionsForFamily({
         }
       })
 
-      await Promise.all([
-        tx.transaction.createMany({ data: rows }),
-        applyAccountDeltas(tx, accountDeltas),
+      await tx.transaction.createMany({ data: rows })
+      await applyAccountDeltas(tx, accountDeltas)
+      const [newTxs, newAccounts] = await runTenantTransactionQueriesInOrder([
+        () => findTransactionsWithSplitEntries(tx, transactionIds),
+        () =>
+          tx.account.findMany({
+            where: { id: { in: Array.from(touchedAccountIds) } },
+          }),
+      ] as const)
+      await auditLogs(tx, auditCtx, [
+        ...accountBalanceAuditEntries(oldAccounts, newAccounts),
+        ...createdAuditEntries("Transaction", newTxs),
       ])
-        .then(() =>
-          Promise.all([
-            tx.transaction.findMany({
-              where: { id: { in: transactionIds } },
-              include: { splitEntries: true },
-            }),
-            tx.account.findMany({
-              where: { id: { in: Array.from(touchedAccountIds) } },
-            }),
-          ])
-        )
-        .then(([newTxs, newAccounts]) =>
-          auditLogs(tx, auditCtx, [
-            ...accountBalanceAuditEntries(oldAccounts, newAccounts),
-            ...createdAuditEntries("Transaction", newTxs),
-          ])
-        )
 
       return { success: true, count: data.transactions.length }
     }

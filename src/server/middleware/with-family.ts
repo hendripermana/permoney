@@ -6,6 +6,10 @@ export { authMiddleware, familyMiddleware } from "./session"
 /**
  * Transaction client yang sudah punya `app.family_id` via `set_config(..., true)`.
  * Semua query RLS-protected harus memakai client ini, bukan root `prisma`.
+ *
+ * Catatan pg: interactive transaction memakai satu client/connection. Query yang
+ * memakai client ini harus diserialkan; `Promise.all(tx.*)` bisa memicu overlap
+ * `client.query()` dan akan ditolak pg@9.
  */
 export type TenantTransactionClient = Prisma.TransactionClient
 
