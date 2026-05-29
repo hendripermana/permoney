@@ -282,13 +282,22 @@ model Transfer {
 
   // Transaksi Uang Keluar (Sumber)
   outflowTransactionId String      @unique
-  outflowTransaction   Transaction @relation("OutflowTransaction", fields: [outflowTransactionId], references: [id], onDelete: Cascade)
+  outflowTransaction   Transaction @relation("OutflowTransaction", fields: [outflowTransactionId], references: [id], onDelete: Restrict)
 
   // Transaksi Uang Masuk (Tujuan)
   inflowTransactionId String      @unique
-  inflowTransaction   Transaction @relation("InflowTransaction", fields: [inflowTransactionId], references: [id], onDelete: Cascade)
+  inflowTransaction   Transaction @relation("InflowTransaction", fields: [inflowTransactionId], references: [id], onDelete: Restrict)
+
+  // Soft-delete shadow (PER-20 / ADR-0012). A transfer is one money movement;
+  // when either Transaction leg is soft-deleted, this column is set in the
+  // same `$transaction` so the audit trail of "was money moved? when? who?"
+  // survives, and so the database refuses any future hard DELETE that would
+  // erase the Transfer row alongside its legs.
+  deletedAt DateTime?
 
   createdAt DateTime @default(now())
+
+  @@index([deletedAt])
 }
 
 // Split Transaction Engine: Line Items untuk satu struk multi-kategori
