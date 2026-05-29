@@ -402,7 +402,7 @@ function merchantListRelation(merchant: {
   return { name: merchant.name, logoUrl: merchant.logoUrl }
 }
 
-async function findLedgerTransactionsForFamily(
+export async function findLedgerTransactionsForFamily(
   tx: TenantTransactionClient,
   familyId: string
 ) {
@@ -414,6 +414,11 @@ async function findLedgerTransactionsForFamily(
       transferIn: {
         is: null,
       },
+      // PER-20 / ADR-0012: defense-in-depth against any future drift between
+      // Transaction.deletedAt and Transfer.deletedAt. A non-transfer row
+      // (`transferOut: null`) passes; an outflow leg only passes when its
+      // Transfer row is also alive.
+      OR: [{ transferOut: { is: null } }, { transferOut: { deletedAt: null } }],
     },
   })
   const transactionIds = transactions.map((transaction) => transaction.id)
@@ -1269,9 +1274,38 @@ export async function deleteTransactionForFamily({
     familyId,
     async (tx: TenantTransactionClient) => {
       // 1. Cari transaksi lama beserta relasi transfernya dan split entries
-      const oldTx = await findTransactionAuditGraph(tx, id)
+      let oldTx = await findTransactionAuditGraph(tx, id)
 
       if (!oldTx) throw new Error("Transaction not found!")
+
+      // PER-20 / ADR-0012: replaying a soft-delete on an already-soft-deleted
+      // transaction (or a leg of a transfer whose Transfer is already
+      // soft-deleted) is a no-op. We return success without re-reversing
+      // balances or writing duplicate audit rows. AGENTS.md § 5.A "Delete
+      // Must Be Idempotent". PER-93 will introduce explicit idempotency-key
+      // replay semantics; this guard preserves correctness in the meantime.
+      if (oldTx.deletedAt !== null) {
+        return { success: true }
+      }
+
+      // PER-20 / ADR-0012: a transfer is one money movement. If the user
+      // clicked the inflow leg, redirect to the outflow leg so the symmetric
+      // handler logic below treats outflow as the source of truth. Soft-
+      // deleting either leg deletes the entire transfer; there is no
+      // "delete one leg only" operation.
+      if (oldTx.type === "transfer" && oldTx.transferIn && !oldTx.transferOut) {
+        const outflowAuditGraph = await findTransactionAuditGraph(
+          tx,
+          oldTx.transferIn.outflowTransactionId
+        )
+        if (!outflowAuditGraph) {
+          throw new Error("Transfer outflow leg missing for inflow soft-delete")
+        }
+        if (outflowAuditGraph.deletedAt !== null) {
+          return { success: true }
+        }
+        oldTx = outflowAuditGraph
+      }
 
       const oldTransferGraph =
         oldTx.type === "transfer" && oldTx.transferOut
@@ -1323,6 +1357,10 @@ export async function deleteTransactionForFamily({
       }
 
       // 3. SOFT DELETE (GAAP Compliance)
+      // PER-20 / ADR-0012: a transfer is one money movement. Soft-deleting
+      // either leg also soft-deletes the opposite leg and the Transfer row
+      // itself, all in this same `$transaction`. The audit trail of "was
+      // money moved? when? who?" survives.
       if (oldTx.type === "transfer" && oldTx.transferOut && inflowTx) {
         // Soft delete outflow
         await tx.transaction.update({
@@ -1333,6 +1371,12 @@ export async function deleteTransactionForFamily({
         // Soft delete inflow
         await tx.transaction.update({
           where: { id: inflowTx.id },
+          data: { deletedAt: new Date() },
+        })
+
+        // Soft delete the Transfer shadow row
+        await tx.transfer.update({
+          where: { id: oldTx.transferOut.id },
           data: { deletedAt: new Date() },
         })
       } else {
@@ -1492,6 +1536,15 @@ export async function updateTransactionForFamily({
           })
           if (dstUpd.count !== 1)
             throw new Error("Destination account not found or access denied!")
+          // PER-20 / ADR-0012: Transfer FK is now ON DELETE RESTRICT. The
+          // hard-delete below would fail with a restrict_violation unless we
+          // first hard-delete the Transfer row that references both legs.
+          // PER-93 will replace this whole reversal-and-replace pattern with
+          // soft-delete + new-row; in the meantime, the dependency on the
+          // Transfer row is explicit instead of inherited from `Cascade`.
+          await tx.transfer.delete({
+            where: { id: oldTx.transferOut.id },
+          })
           await tx.transaction.delete({ where: { id: inflowTx.id } })
         }
       } else {
@@ -1889,6 +1942,16 @@ export async function bulkDeleteTransactionsForFamily({
         where: { id: { in: ids } },
         data: { deletedAt: new Date() },
       })
+
+      // PER-20 / ADR-0012: soft-delete the Transfer shadow rows so the
+      // money-movement audit trail survives. Symmetry with the single-path
+      // handler above.
+      if (transferIds.length > 0) {
+        await tx.transfer.updateMany({
+          where: { id: { in: transferIds } },
+          data: { deletedAt: new Date() },
+        })
+      }
 
       // Re-read data terbaru setelah mutasi
       const [newOutflowTxs, newInflowTxs, newAccounts, newTransfers] =
