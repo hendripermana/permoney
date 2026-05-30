@@ -1,4 +1,3 @@
-import { Client as PgClient } from "pg"
 import {
   afterAll,
   beforeAll,
@@ -12,6 +11,7 @@ import {
   type IntegrationHarness,
 } from "./support/database"
 import { createTestFactories, type TestFactories } from "./support/factories"
+import { withPrivilegedDatabase } from "./support/privileged-db"
 
 const APP_ROLE_WRITE_REJECTION =
   /row-level security|policy|required but not found|No record was found|P2004|P2025/i
@@ -268,30 +268,4 @@ async function seedSystemCategory(
     )
   })
   return input.id
-}
-
-async function withPrivilegedDatabase<T>(
-  databaseName: string,
-  callback: (client: PgClient) => Promise<T>
-): Promise<T> {
-  const client = new PgClient({
-    connectionString: privilegedDatabaseUrl(databaseName),
-  })
-  await client.connect()
-  try {
-    return await callback(client)
-  } finally {
-    await client.end()
-  }
-}
-
-function privilegedDatabaseUrl(databaseName: string): string {
-  const rawAdminDatabaseUrl =
-    process.env.PERMONEY_TEST_ADMIN_DATABASE_URL ??
-    "postgres://permoney@localhost:5433/postgres"
-  const parsedUrl = new URL(rawAdminDatabaseUrl)
-  const password = process.env.PERMONEY_TEST_ADMIN_PASSWORD
-  if (password) parsedUrl.password = password
-  parsedUrl.pathname = `/${databaseName}`
-  return parsedUrl.toString()
 }

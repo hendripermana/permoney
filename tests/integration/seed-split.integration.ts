@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto"
-import { Client as PgClient } from "pg"
 import {
   afterAll,
   beforeAll,
@@ -13,6 +12,12 @@ import {
   createIntegrationHarness,
   type IntegrationHarness,
 } from "./support/database"
+import {
+  privilegedDatabaseUrl,
+  quoteIdentifier,
+  quoteLiteral,
+  withPrivilegedDatabase,
+} from "./support/privileged-db"
 
 // PER-110 / ADR-0014: the seed splits into a privileged system-data phase and
 // an app-tenant phase. These tests prove the role boundary holds on real
@@ -266,32 +271,6 @@ async function readRoleFlags(
   })
 }
 
-async function withPrivilegedDatabase<T>(
-  databaseName: string,
-  callback: (client: PgClient) => Promise<T>
-): Promise<T> {
-  const client = new PgClient({
-    connectionString: privilegedDatabaseUrl(databaseName),
-  })
-  await client.connect()
-  try {
-    return await callback(client)
-  } finally {
-    await client.end()
-  }
-}
-
-function privilegedDatabaseUrl(databaseName: string): string {
-  const rawAdminDatabaseUrl =
-    process.env.PERMONEY_TEST_ADMIN_DATABASE_URL ??
-    "postgres://permoney@localhost:5433/postgres"
-  const parsedUrl = new URL(rawAdminDatabaseUrl)
-  const password = process.env.PERMONEY_TEST_ADMIN_PASSWORD
-  if (password) parsedUrl.password = password
-  parsedUrl.pathname = `/${databaseName}`
-  return parsedUrl.toString()
-}
-
 function buildRoleUrl(
   databaseName: string,
   roleName: string,
@@ -301,12 +280,4 @@ function buildRoleUrl(
   parsedUrl.username = roleName
   parsedUrl.password = password
   return parsedUrl.toString()
-}
-
-function quoteIdentifier(identifier: string): string {
-  return `"${identifier.replaceAll('"', '""')}"`
-}
-
-function quoteLiteral(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`
 }
