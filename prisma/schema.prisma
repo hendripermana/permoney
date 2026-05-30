@@ -95,6 +95,7 @@ model Account {
   // Per-currency scale is driven by `CURRENCIES[code].minorUnitConversion`
   // in src/lib/data/currencies.ts. See docs/adr/0001-money-type-migration.md.
   balance          BigInt
+  version          Int             @default(0) @map("version")
   currency         String          @default("IDR") // Bisa USD, JPY, dll
   currencyRegistry Iso4217Currency @relation("AccountCurrency", fields: [currency], references: [code], onDelete: Restrict, onUpdate: Cascade, map: "account_currency_is_iso_4217")
 

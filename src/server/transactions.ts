@@ -16,6 +16,7 @@ import {
   TenantReferenceError,
   validateTenantReferences,
 } from "./validation/tenant-references"
+import { VersionDriftError } from "./middleware/with-retry"
 
 /**
  * BACKEND FUNCTION: Fetch reference data for the Transaction Form Dropdowns
@@ -205,6 +206,17 @@ function createdAuditEntries<T extends { id: string }>(
 }
 
 type AccountDeltaMap = Record<string, bigint>
+
+interface AccountBalanceVersion {
+  balance: bigint
+  id: string
+  version: number
+}
+
+interface AccountBalanceMutation {
+  after: AccountBalanceVersion
+  before: AccountBalanceVersion
+}
 
 type QueryResultTuple<TQueries extends readonly (() => Promise<unknown>)[]> = {
   [TIndex in keyof TQueries]: TQueries[TIndex] extends () => Promise<
@@ -534,20 +546,92 @@ function addAccountDelta(
 
 async function applyAccountDeltas(
   tx: TenantTransactionClient,
+  familyId: string,
   accountDeltas: AccountDeltaMap
-): Promise<void> {
+): Promise<AccountBalanceMutation[]> {
+  const mutations: AccountBalanceMutation[] = []
   await runTenantTransactionQueriesInOrder(
-    Object.entries(accountDeltas).map(
-      ([accountId, delta]) =>
-        () =>
-          tx.account
-            .update({
-              where: { id: accountId },
-              data: { balance: { increment: delta } },
-            })
-            .then(() => undefined)
-    )
+    Object.entries(accountDeltas).map(([accountId, delta]) => async () => {
+      if (delta === 0n) return
+      mutations.push(
+        await applyAccountBalanceDelta(tx, {
+          accountId,
+          delta,
+          familyId,
+          notFoundMessage: "Account not found or access denied!",
+        })
+      )
+    })
   )
+  return mutations
+}
+
+async function applyAccountBalanceDelta(
+  tx: TenantTransactionClient,
+  {
+    accountId,
+    delta,
+    familyId,
+    notFoundMessage,
+  }: {
+    accountId: string
+    delta: bigint
+    familyId: string
+    notFoundMessage: string
+  }
+): Promise<AccountBalanceMutation> {
+  const before = await findAccountBalanceVersion(
+    tx,
+    accountId,
+    familyId,
+    notFoundMessage
+  )
+
+  const update = await tx.account.updateMany({
+    where: { id: accountId, familyId, version: before.version },
+    data: {
+      balance: { increment: delta },
+      version: { increment: 1 },
+    },
+  })
+
+  if (update.count !== 1) {
+    const current = await tx.account.findFirst({
+      where: { id: accountId, familyId },
+      select: { id: true },
+    })
+    if (!current) {
+      throw new Error(notFoundMessage)
+    }
+    throw new VersionDriftError(
+      `Account ${accountId} balance version drift detected`
+    )
+  }
+
+  const after = await findAccountBalanceVersion(
+    tx,
+    accountId,
+    familyId,
+    notFoundMessage
+  )
+
+  return { after, before }
+}
+
+async function findAccountBalanceVersion(
+  tx: TenantTransactionClient,
+  accountId: string,
+  familyId: string,
+  notFoundMessage: string
+): Promise<AccountBalanceVersion> {
+  const account = await tx.account.findFirst({
+    where: { id: accountId, familyId },
+    select: { balance: true, id: true, version: true },
+  })
+  if (!account) {
+    throw new Error(notFoundMessage)
+  }
+  return account
 }
 
 function signedIncomeExpenseAmount(
@@ -987,36 +1071,25 @@ export async function createTransactionForFamily({
                 }),
             ] as const)
 
-          // Running Balance Snapshot: baca saldo akun setelah update atomik
-          // Tenant-safe: update with familyId constraint
-          const sourceUpdate = await tx.account.updateMany({
-            where: { id: data.accountId, familyId },
-            data: { balance: { decrement: data.amount } },
+          const sourceMutation = await applyAccountBalanceDelta(tx, {
+            accountId: data.accountId,
+            delta: negateMoney(absMoney(data.amount)),
+            familyId,
+            notFoundMessage: "Source account not found or access denied!",
           })
-          if (sourceUpdate.count !== 1)
-            throw new Error("Source account not found or access denied!")
-          const updatedSourceAccount = await tx.account.findFirst({
-            where: { id: data.accountId, familyId },
-            select: { balance: true },
-          })
-          const sourceBalanceAfter = updatedSourceAccount!.balance
+          const sourceBalanceAfter = sourceMutation.after.balance
 
           // Multi-currency: gunakan destinationAmount jika tersedia, fallback ke amount
           const inAmount = data.destinationAmount ?? data.amount
           const inCurrency = data.destinationCurrency ?? data.currency
 
-          // Tenant-safe: update with familyId constraint
-          const destUpdate = await tx.account.updateMany({
-            where: { id: toAccountId, familyId },
-            data: { balance: { increment: inAmount } },
+          const destMutation = await applyAccountBalanceDelta(tx, {
+            accountId: toAccountId,
+            delta: absMoney(inAmount),
+            familyId,
+            notFoundMessage: "Destination account not found or access denied!",
           })
-          if (destUpdate.count !== 1)
-            throw new Error("Destination account not found or access denied!")
-          const updatedDestAccount = await tx.account.findFirst({
-            where: { id: toAccountId, familyId },
-            select: { balance: true },
-          })
-          const destBalanceAfter = updatedDestAccount!.balance
+          const destBalanceAfter = destMutation.after.balance
 
           const outflowTx = await tx.transaction.create({
             data: {
@@ -1106,37 +1179,21 @@ export async function createTransactionForFamily({
             ? negateMoney(absMoney(data.amount))
             : absMoney(data.amount)
 
-        const oldAccount = await tx.account.findUniqueOrThrow({
-          where: { id: data.accountId },
-        })
-
-        // Running Balance Snapshot: baca saldo setelah update atomik
-        let accountBalanceAfter: bigint | null = null
-        if (data.type === "expense") {
-          const upd = await tx.account.updateMany({
-            where: { id: data.accountId, familyId },
-            data: { balance: { decrement: data.amount } },
-          })
-          if (upd.count !== 1)
-            throw new Error("Account not found or access denied!")
-          const updated = await tx.account.findFirst({
-            where: { id: data.accountId, familyId },
-            select: { balance: true },
-          })
-          accountBalanceAfter = updated!.balance
-        } else {
-          const upd = await tx.account.updateMany({
-            where: { id: data.accountId, familyId },
-            data: { balance: { increment: data.amount } },
-          })
-          if (upd.count !== 1)
-            throw new Error("Account not found or access denied!")
-          const updated = await tx.account.findFirst({
-            where: { id: data.accountId, familyId },
-            select: { balance: true },
-          })
-          accountBalanceAfter = updated!.balance
-        }
+        const [oldAccount, accountMutation] =
+          await runTenantTransactionQueriesInOrder([
+            () =>
+              tx.account.findUniqueOrThrow({
+                where: { id: data.accountId },
+              }),
+            () =>
+              applyAccountBalanceDelta(tx, {
+                accountId: data.accountId,
+                delta: amountSign,
+                familyId,
+                notFoundMessage: "Account not found or access denied!",
+              }),
+          ] as const)
+        const accountBalanceAfter = accountMutation.after.balance
 
         const newTransaction = await tx.transaction.create({
           data: {
@@ -1332,28 +1389,28 @@ export async function deleteTransactionForFamily({
 
       // 2. REVERSE BALANCES (Kembalikan Saldo)
       if (oldTx.type === "transfer" && oldTx.transferOut) {
-        const srcUpd = await tx.account.updateMany({
-          where: { id: oldTx.accountId, familyId },
-          data: { balance: { increment: absMoney(oldTx.amount) } },
+        await applyAccountBalanceDelta(tx, {
+          accountId: oldTx.accountId,
+          delta: absMoney(oldTx.amount),
+          familyId,
+          notFoundMessage: "Source account not found or access denied!",
         })
-        if (srcUpd.count !== 1)
-          throw new Error("Source account not found or access denied!")
 
         if (inflowTx) {
-          const dstUpd = await tx.account.updateMany({
-            where: { id: inflowTx.accountId, familyId },
-            data: { balance: { decrement: absMoney(inflowTx.amount) } },
+          await applyAccountBalanceDelta(tx, {
+            accountId: inflowTx.accountId,
+            delta: negateMoney(absMoney(inflowTx.amount)),
+            familyId,
+            notFoundMessage: "Destination account not found or access denied!",
           })
-          if (dstUpd.count !== 1)
-            throw new Error("Destination account not found or access denied!")
         }
       } else {
-        const upd = await tx.account.updateMany({
-          where: { id: oldTx.accountId, familyId },
-          data: { balance: { decrement: oldTx.amount } },
+        await applyAccountBalanceDelta(tx, {
+          accountId: oldTx.accountId,
+          delta: negateMoney(oldTx.amount),
+          familyId,
+          notFoundMessage: "Account not found or access denied!",
         })
-        if (upd.count !== 1)
-          throw new Error("Account not found or access denied!")
       }
 
       // 3. SOFT DELETE (GAAP Compliance)
@@ -1523,19 +1580,19 @@ export async function updateTransactionForFamily({
             id: oldTx.transferOut.inflowTransactionId,
           },
         })
-        const srcUpd = await tx.account.updateMany({
-          where: { id: oldTx.accountId, familyId },
-          data: { balance: { increment: absMoney(oldTx.amount) } },
+        await applyAccountBalanceDelta(tx, {
+          accountId: oldTx.accountId,
+          delta: absMoney(oldTx.amount),
+          familyId,
+          notFoundMessage: "Source account not found or access denied!",
         })
-        if (srcUpd.count !== 1)
-          throw new Error("Source account not found or access denied!")
         if (inflowTx) {
-          const dstUpd = await tx.account.updateMany({
-            where: { id: inflowTx.accountId, familyId },
-            data: { balance: { decrement: absMoney(inflowTx.amount) } },
+          await applyAccountBalanceDelta(tx, {
+            accountId: inflowTx.accountId,
+            delta: negateMoney(absMoney(inflowTx.amount)),
+            familyId,
+            notFoundMessage: "Destination account not found or access denied!",
           })
-          if (dstUpd.count !== 1)
-            throw new Error("Destination account not found or access denied!")
           // PER-20 / ADR-0012: Transfer FK is now ON DELETE RESTRICT. The
           // hard-delete below would fail with a restrict_violation unless we
           // first hard-delete the Transfer row that references both legs.
@@ -1548,12 +1605,12 @@ export async function updateTransactionForFamily({
           await tx.transaction.delete({ where: { id: inflowTx.id } })
         }
       } else {
-        const upd = await tx.account.updateMany({
-          where: { id: oldTx.accountId, familyId },
-          data: { balance: { decrement: oldTx.amount } },
+        await applyAccountBalanceDelta(tx, {
+          accountId: oldTx.accountId,
+          delta: negateMoney(oldTx.amount),
+          familyId,
+          notFoundMessage: "Account not found or access denied!",
         })
-        if (upd.count !== 1)
-          throw new Error("Account not found or access denied!")
       }
       await tx.transaction.delete({ where: { id: oldTx.id } })
 
@@ -1570,32 +1627,24 @@ export async function updateTransactionForFamily({
         if (toAccount.type === "CREDIT") kind = "cc_payment"
         else if (toAccount.type === "LOAN") kind = "loan_payment"
 
-        const srcUpd = await tx.account.updateMany({
-          where: { id: data.accountId, familyId },
-          data: { balance: { decrement: data.amount } },
+        const sourceMutation = await applyAccountBalanceDelta(tx, {
+          accountId: data.accountId,
+          delta: negateMoney(absMoney(data.amount)),
+          familyId,
+          notFoundMessage: "Source account not found or access denied!",
         })
-        if (srcUpd.count !== 1)
-          throw new Error("Source account not found or access denied!")
-        const updatedSourceAccount = await tx.account.findFirst({
-          where: { id: data.accountId, familyId },
-          select: { balance: true },
-        })
-        const sourceBalanceAfter = updatedSourceAccount!.balance
+        const sourceBalanceAfter = sourceMutation.after.balance
 
         const inAmount = data.destinationAmount ?? data.amount
         const inCurrency = data.destinationCurrency ?? data.currency
 
-        const dstUpd = await tx.account.updateMany({
-          where: { id: data.toAccountId!, familyId },
-          data: { balance: { increment: inAmount } },
+        const destMutation = await applyAccountBalanceDelta(tx, {
+          accountId: data.toAccountId!,
+          delta: absMoney(inAmount),
+          familyId,
+          notFoundMessage: "Destination account not found or access denied!",
         })
-        if (dstUpd.count !== 1)
-          throw new Error("Destination account not found or access denied!")
-        const updatedDestAccount = await tx.account.findFirst({
-          where: { id: data.toAccountId!, familyId },
-          select: { balance: true },
-        })
-        const destBalanceAfter = updatedDestAccount!.balance
+        const destBalanceAfter = destMutation.after.balance
 
         const outflowTx = await tx.transaction.create({
           data: {
@@ -1701,32 +1750,13 @@ export async function updateTransactionForFamily({
             ? negateMoney(absMoney(data.amount))
             : absMoney(data.amount)
 
-        let accountBalanceAfter: bigint | null = null
-        if (data.type === "expense") {
-          const upd = await tx.account.updateMany({
-            where: { id: data.accountId, familyId },
-            data: { balance: { decrement: data.amount } },
-          })
-          if (upd.count !== 1)
-            throw new Error("Account not found or access denied!")
-          const updated = await tx.account.findFirst({
-            where: { id: data.accountId, familyId },
-            select: { balance: true },
-          })
-          accountBalanceAfter = updated!.balance
-        } else {
-          const upd = await tx.account.updateMany({
-            where: { id: data.accountId, familyId },
-            data: { balance: { increment: data.amount } },
-          })
-          if (upd.count !== 1)
-            throw new Error("Account not found or access denied!")
-          const updated = await tx.account.findFirst({
-            where: { id: data.accountId, familyId },
-            select: { balance: true },
-          })
-          accountBalanceAfter = updated!.balance
-        }
+        const accountMutation = await applyAccountBalanceDelta(tx, {
+          accountId: data.accountId,
+          delta: amountSign,
+          familyId,
+          notFoundMessage: "Account not found or access denied!",
+        })
+        const accountBalanceAfter = accountMutation.after.balance
 
         const newTx = await tx.transaction.create({
           data: {
@@ -1935,7 +1965,7 @@ export async function bulkDeleteTransactionsForFamily({
       }
 
       // 2. Terapkan agregasi delta secara masal
-      await applyAccountDeltas(tx, accountDeltas)
+      await applyAccountDeltas(tx, familyId, accountDeltas)
 
       // 3. Soft delete
       await tx.transaction.updateMany({
@@ -2075,7 +2105,7 @@ export async function bulkUpdateTransactionsForFamily({
           addAccountDelta(accountDeltas, data.accountId, chargeSigned)
         }
 
-        await applyAccountDeltas(tx, accountDeltas)
+        await applyAccountDeltas(tx, familyId, accountDeltas)
       }
 
       // 2. Prepare scalar updates payload
@@ -2183,31 +2213,25 @@ export async function bulkCreateTransactionsForFamily({
       // row is created. Walk the batch with explicit indexes so the reported
       // field path tells the client which row carried the offending id.
       //
-      // The loop awaits sequentially on purpose: every `validateTenantReferences`
-      // call queries through `tx`, which is a single pg connection in a Prisma
-      // interactive transaction. pg@9 rejects concurrent `client.query()` on
-      // the same connection (see PR #60, migration to pg@8 deprecation), so
-      // collecting promises and `Promise.all`-ing them would break at runtime
-      // and trip `tests/integration/pg-client-query-deprecation.integration.ts`.
-      // React Doctor's `async-await-in-loop` rule is a false positive here.
-      for (let index = 0; index < data.transactions.length; index += 1) {
-        const row = data.transactions[index]
-        if (!row) continue
-        await validateTenantReferences(tx, familyId, {
-          accountId: row.accountId,
-          merchantId: row.merchantId,
-          categoryId: row.categoryId,
-        }).catch((error: unknown) => {
-          if (error instanceof TenantReferenceError) {
-            throw new TenantReferenceError(
-              `transactions[${index}].${error.field}`,
-              error.referenceId,
-              error.familyId
-            )
-          }
-          throw error
-        })
-      }
+      await runTenantTransactionQueriesInOrder(
+        data.transactions.map(
+          (row, index) => () =>
+            validateTenantReferences(tx, familyId, {
+              accountId: row.accountId,
+              merchantId: row.merchantId,
+              categoryId: row.categoryId,
+            }).catch((error: unknown) => {
+              if (error instanceof TenantReferenceError) {
+                throw new TenantReferenceError(
+                  `transactions[${index}].${error.field}`,
+                  error.referenceId,
+                  error.familyId
+                )
+              }
+              throw error
+            })
+        )
+      )
 
       // Ambil data akun-akun terpengaruh sebelum mutasi
       const touchedAccountIds = new Set(
@@ -2241,7 +2265,7 @@ export async function bulkCreateTransactionsForFamily({
       })
 
       await tx.transaction.createMany({ data: rows })
-      await applyAccountDeltas(tx, accountDeltas)
+      await applyAccountDeltas(tx, familyId, accountDeltas)
       const [newTxs, newAccounts] = await runTenantTransactionQueriesInOrder([
         () => findTransactionsWithSplitEntries(tx, transactionIds),
         () =>

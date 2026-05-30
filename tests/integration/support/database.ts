@@ -5,6 +5,7 @@ import { resolve } from "node:path"
 import { Client as PgClient } from "pg"
 import { Prisma, PrismaClient } from "@prisma/client"
 import { PrismaPg } from "@prisma/adapter-pg"
+import { withSerializableRetry } from "../../../src/server/middleware/with-retry"
 
 const TEST_DATABASE_PREFIX = "permoney_test_"
 const DEFAULT_ADMIN_DATABASE_URL = "postgres://permoney@localhost:5433/postgres"
@@ -128,7 +129,7 @@ export async function createIntegrationHarness(
       }
     },
     withFamily: async (familyId, callback) => {
-      return await prisma.$transaction(async (tx) => {
+      return await withSerializableRetry(prisma, async (tx) => {
         await tx.$executeRaw`SELECT set_config('app.family_id', ${familyId}, true)`
         return await callback(tx)
       })

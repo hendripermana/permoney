@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client"
 import { auditLog, createAuditContext } from "./middleware/audit"
 import { setTenantGuc } from "./middleware/with-family"
+import { withSerializableRetry } from "./middleware/with-retry"
 
 interface LockedOnboardingUser {
   email: string
@@ -22,7 +23,7 @@ export async function initializeOnboardingForUser(
     user: { id: userId, familyId: null },
   })
 
-  return await client.$transaction(async (tx) => {
+  return await withSerializableRetry(client, async (tx) => {
     const user = await lockUserForOnboarding(tx, userId)
 
     if (!user) {

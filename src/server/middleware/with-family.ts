@@ -1,4 +1,8 @@
 import type { Prisma } from "@prisma/client"
+import {
+  withSerializableRetry,
+  type SerializableRetryOptions,
+} from "./with-retry"
 
 // Re-export middleware from session.ts for ergonomic import
 export { authMiddleware, familyMiddleware } from "./session"
@@ -17,11 +21,7 @@ export type TenantTransactionClient = Prisma.TransactionClient
 // RLS: transaction-scoped GUC helpers
 // ============================================================================
 
-interface ScopedTenantTransactionOptions {
-  isolationLevel?: Prisma.TransactionIsolationLevel
-  maxWait?: number
-  timeout?: number
-}
+type ScopedTenantTransactionOptions = SerializableRetryOptions
 
 export async function setTenantGuc(
   tx: TenantTransactionClient,
@@ -39,8 +39,12 @@ export async function scopedTenantTransaction<T>(
   options?: ScopedTenantTransactionOptions
 ): Promise<T> {
   const { prisma } = await import("../db.server")
-  return prisma.$transaction(async (tx) => {
-    await setTenantGuc(tx, familyId)
-    return await fn(tx)
-  }, options)
+  return await withSerializableRetry(
+    prisma,
+    async (tx) => {
+      await setTenantGuc(tx, familyId)
+      return await fn(tx)
+    },
+    options
+  )
 }
