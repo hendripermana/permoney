@@ -2,6 +2,7 @@ import { createCollection } from "@tanstack/react-db"
 import { queryCollectionOptions } from "@tanstack/query-db-collection"
 import { decodeMoney, encodeMoney, type Money } from "./money"
 import { getQueryClient } from "./query-client"
+import { createUuidV7 } from "./uuid-v7"
 import {
   createTransactionFn,
   deleteTransactionFn,
@@ -189,6 +190,7 @@ export const transactionCollection = createCollection(
         await updateTransactionFn({
           data: {
             id: payload.id as string,
+            idempotencyKey: createUuidV7(),
             type: payload.type as "expense" | "income" | "transfer",
             amount: encodeMoney(payload.amount as Money),
             description: payload.description as string,
@@ -238,7 +240,7 @@ export const transactionCollection = createCollection(
       try {
         const id = transaction.mutations[0].original.id
         await deleteTransactionFn({
-          data: { id: id as string },
+          data: { id: id as string, idempotencyKey: createUuidV7() },
         })
         // WAJIB: Sync ulang setelah hapus agar UI konsisten dengan server
         await transactionCollection.utils.refetch()

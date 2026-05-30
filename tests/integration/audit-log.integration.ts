@@ -133,6 +133,7 @@ describe("AuditLog Integration & Security Tests", () => {
   }) {
     return {
       id,
+      idempotencyKey: factories.createIdempotencyKey(),
       accountId,
       amount,
       categoryId,
@@ -162,7 +163,7 @@ describe("AuditLog Integration & Security Tests", () => {
   }) {
     return {
       id,
-      ...(idempotencyKey ? { idempotencyKey } : {}),
+      idempotencyKey: idempotencyKey ?? factories.createIdempotencyKey(),
       accountId,
       amount,
       currency: "IDR",
@@ -360,8 +361,9 @@ describe("AuditLog Integration & Security Tests", () => {
 
     const logs = await orderedAuditLogsSince(owner.family.id, baselineIds)
 
-    // Ekspektasikan 2 audit log: 1 untuk Account/update dan 1 untuk Transaction/update
-    expect(logs).toHaveLength(2)
+    // PER-93: update is represented as Account/update, old Transaction
+    // soft_delete, and replacement Transaction/create.
+    expect(logs).toHaveLength(3)
 
     const accountLog = logs[0]!
     expect(accountLog.entityType).toBe("Account")
@@ -371,9 +373,14 @@ describe("AuditLog Integration & Security Tests", () => {
 
     const transactionLog = logs[1]!
     expect(transactionLog.entityType).toBe("Transaction")
-    expect(transactionLog.action).toBe("update")
+    expect(transactionLog.action).toBe("soft_delete")
     expect((transactionLog.beforeJson as JsonObj).amount).toBe("-10000")
-    expect((transactionLog.afterJson as JsonObj).amount).toBe("-15000")
+    expect((transactionLog.afterJson as JsonObj).deletedAt).not.toBeNull()
+
+    const replacementLog = logs[2]!
+    expect(replacementLog.entityType).toBe("Transaction")
+    expect(replacementLog.action).toBe("create")
+    expect((replacementLog.afterJson as JsonObj).amount).toBe("-15000")
   })
 
   test("3. deleteTransactionFn writes soft_delete audit logs and Account balance revert", async () => {
@@ -401,6 +408,7 @@ describe("AuditLog Integration & Security Tests", () => {
     // Jalankan soft delete secara langsung
     await deleteTransactionForFamily({
       id: txId,
+      idempotencyKey: factories.createIdempotencyKey(),
       familyId: owner.family.id,
       user: owner.user,
     })
@@ -434,6 +442,7 @@ describe("AuditLog Integration & Security Tests", () => {
 
     await deleteTransactionForFamily({
       id: transferTransactionId,
+      idempotencyKey: factories.createIdempotencyKey(),
       familyId: owner.family.id,
       user: owner.user,
     })
@@ -474,7 +483,7 @@ describe("AuditLog Integration & Security Tests", () => {
     expect((afterJson.inflowTransaction as JsonObj).deletedAt).not.toBeNull()
   })
 
-  test("transfer update keeps Transfer audit identity stable", async () => {
+  test("transfer update audits old Transfer soft-delete and replacement create", async () => {
     const {
       destinationAccount,
       owner,
@@ -490,7 +499,7 @@ describe("AuditLog Integration & Security Tests", () => {
     })
     const baselineIds = await auditLogBaseline(owner.family.id)
 
-    await updateTransactionForFamily({
+    const updatedTransfer = await updateTransactionForFamily({
       data: transferPayload({
         id: transferTransactionId,
         accountId: sourceAccount.id,
@@ -502,28 +511,35 @@ describe("AuditLog Integration & Security Tests", () => {
       user: owner.user,
     })
 
-    const [transferAfterUpdate, logsAfterUpdate] = await Promise.all([
-      harness.withFamily(owner.family.id, (tx) =>
-        tx.transfer.findFirstOrThrow({
-          where: { outflowTransactionId: transferTransactionId },
-        })
-      ),
-      harness.withFamily(owner.family.id, (tx) =>
-        tx.auditLog.findMany({
-          where: {
-            action: "update",
-            entityId: transfer.id,
-            entityType: "Transfer",
-          },
-        })
-      ),
-    ])
+    const [oldTransferAfterUpdate, replacementTransfer, logsAfterUpdate] =
+      await Promise.all([
+        harness.withFamily(owner.family.id, (tx) =>
+          tx.transfer.findUniqueOrThrow({
+            where: { id: transfer.id },
+          })
+        ),
+        harness.withFamily(owner.family.id, (tx) =>
+          tx.transfer.findFirstOrThrow({
+            where: { outflowTransactionId: updatedTransfer.id },
+          })
+        ),
+        harness.withFamily(owner.family.id, (tx) =>
+          tx.auditLog.findMany({
+            where: {
+              entityType: "Transfer",
+            },
+            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          })
+        ),
+      ])
     const newLogs = logsSince(logsAfterUpdate, baselineIds)
 
-    expect(transferAfterUpdate.id).toBe(transfer.id)
-    expect(newLogs).toHaveLength(1)
+    expect(oldTransferAfterUpdate.deletedAt).not.toBeNull()
+    expect(replacementTransfer.id).not.toBe(transfer.id)
+    expect(newLogs.map((log) => log.action)).toEqual(["soft_delete", "create"])
     expect((newLogs[0]!.beforeJson as JsonObj).id).toBe(transfer.id)
-    expect((newLogs[0]!.afterJson as JsonObj).id).toBe(transfer.id)
+    expect((newLogs[0]!.afterJson as JsonObj).deletedAt).not.toBeNull()
+    expect((newLogs[1]!.afterJson as JsonObj).id).toBe(replacementTransfer.id)
   })
 
   test("bulk transaction helpers audit create, update, and soft_delete paths", async () => {

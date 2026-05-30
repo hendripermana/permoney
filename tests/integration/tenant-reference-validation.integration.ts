@@ -327,6 +327,7 @@ describe("App-level tenant reference validation (PER-94)", () => {
             date: new Date("2026-03-07T00:00:00.000Z"),
             description: "Cross-tenant accountId on update",
             isSplit: false,
+            idempotencyKey: getFactories().createIdempotencyKey(),
             status: "CLEARED",
             type: "expense",
           },
