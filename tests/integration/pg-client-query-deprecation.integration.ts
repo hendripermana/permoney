@@ -74,6 +74,7 @@ describe("pg client query usage", () => {
     const deleteWarnings = await capturePgOverlappingQueryWarnings(async () => {
       await deleteTransactionForFamily({
         id: transactionId,
+        idempotencyKey: factories.createIdempotencyKey(),
         familyId: owner.family.id,
         user: owner.user,
       })

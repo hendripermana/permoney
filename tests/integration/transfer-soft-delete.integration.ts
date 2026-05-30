@@ -65,6 +65,7 @@ describe("PER-20 — Transfer soft-delete symmetry", () => {
     await deleteTransactionForFamily({
       familyId: fixture.owner.family.id,
       id: fixture.outflowTransactionId,
+      idempotencyKey: getFactories().createIdempotencyKey(),
       user: fixture.owner.user,
     })
 
@@ -104,6 +105,7 @@ describe("PER-20 — Transfer soft-delete symmetry", () => {
     await deleteTransactionForFamily({
       familyId: fixture.owner.family.id,
       id: fixture.inflowTransactionId,
+      idempotencyKey: getFactories().createIdempotencyKey(),
       user: fixture.owner.user,
     })
 
@@ -158,6 +160,7 @@ describe("PER-20 — Transfer soft-delete symmetry", () => {
     await deleteTransactionForFamily({
       familyId: owner.family.id,
       id: transferA.outflowTransactionId,
+      idempotencyKey: getFactories().createIdempotencyKey(),
       user: owner.user,
     })
 
@@ -174,10 +177,12 @@ describe("PER-20 — Transfer soft-delete symmetry", () => {
 
   test("soft-delete is idempotent: replay does not double-reverse balances", async () => {
     const fixture = await createTransferFixture()
+    const idempotencyKey = getFactories().createIdempotencyKey()
 
     await deleteTransactionForFamily({
       familyId: fixture.owner.family.id,
       id: fixture.outflowTransactionId,
+      idempotencyKey,
       user: fixture.owner.user,
     })
     const balancesAfterFirstDelete = await readBalances(fixture)
@@ -186,6 +191,7 @@ describe("PER-20 — Transfer soft-delete symmetry", () => {
       deleteTransactionForFamily({
         familyId: fixture.owner.family.id,
         id: fixture.outflowTransactionId,
+        idempotencyKey,
         user: fixture.owner.user,
       })
     ).resolves.toBeDefined()
@@ -287,7 +293,7 @@ describe("PER-20 — Transfer soft-delete symmetry", () => {
       toAccountId: originalDest.id,
     })
 
-    await updateTransactionForFamily({
+    const updated = await updateTransactionForFamily({
       data: {
         accountId: sourceAccount.id,
         amount: 75_000n,
@@ -295,6 +301,7 @@ describe("PER-20 — Transfer soft-delete symmetry", () => {
         date: TEST_DATE,
         description: "Updated transfer",
         id: fixture.outflowTransactionId,
+        idempotencyKey: getFactories().createIdempotencyKey(),
         isSplit: false,
         status: "CLEARED",
         toAccountId: replacementDest.id,
@@ -304,16 +311,21 @@ describe("PER-20 — Transfer soft-delete symmetry", () => {
       user: owner.user,
     })
 
-    // The Transfer row tied to the old transactions must be gone (hard-deleted
-    // as part of the reversal phase). A new Transfer row points at the new
-    // outflow + inflow Transactions.
+    // PER-93 keeps the old Transfer as soft-deleted history and creates a new
+    // Transfer row for the replacement legs.
     const transfersAfter = await getHarness().withFamily(
       owner.family.id,
       (tx) => tx.transfer.findMany({})
     )
-    expect(transfersAfter).toHaveLength(1)
-    const newTransfer = transfersAfter[0]
-    expect(newTransfer?.outflowTransactionId).toBe(fixture.outflowTransactionId)
+    expect(transfersAfter).toHaveLength(2)
+    const oldTransfer = transfersAfter.find(
+      (row) => row.id === fixture.transferId
+    )
+    const newTransfer = transfersAfter.find(
+      (row) => row.id !== fixture.transferId
+    )
+    expect(oldTransfer?.deletedAt).not.toBeNull()
+    expect(newTransfer?.outflowTransactionId).toBe(updated.id)
     expect(newTransfer?.inflowTransactionId).not.toBe(
       fixture.inflowTransactionId
     )

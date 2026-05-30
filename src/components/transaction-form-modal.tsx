@@ -1466,6 +1466,8 @@ function useTransactionFormModalController({
             ...payload,
             id: optimisticId,
             idempotencyKey,
+            supersededBy: null,
+            supersedes: null,
             createdAt: new Date(),
             familyId: "",
             // splitEntries di optimistic payload adalah versi ringkas (tanpa relasi Prisma)

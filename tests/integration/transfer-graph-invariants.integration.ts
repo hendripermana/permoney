@@ -208,6 +208,7 @@ describe("PER-103 — Transfer graph DB invariants", () => {
       deleteTransactionForFamily({
         familyId: fx.familyId,
         id: outflowId,
+        idempotencyKey: getFactories().createIdempotencyKey(),
         user: fx.user,
       })
     ).resolves.toBeDefined()
@@ -219,7 +220,7 @@ describe("PER-103 — Transfer graph DB invariants", () => {
     expect(transfers[0]?.deletedAt).not.toBeNull()
   })
 
-  test("update transfer reversal-and-replace passes the deferred trigger at commit", async () => {
+  test("update transfer soft-delete supersession passes the deferred trigger at commit", async () => {
     const fx = await createAccountsFixture({ sourceBalance: 200_000n })
     const replacementDest = await getFactories().createAccount({
       balance: 0n,
@@ -254,6 +255,7 @@ describe("PER-103 — Transfer graph DB invariants", () => {
           date: TEST_DATE,
           description: "Updated transfer",
           id: outflowId,
+          idempotencyKey: getFactories().createIdempotencyKey(),
           isSplit: false,
           status: "CLEARED",
           toAccountId: replacementDest.id,
@@ -267,7 +269,10 @@ describe("PER-103 — Transfer graph DB invariants", () => {
     const transfers = await getHarness().withFamily(fx.familyId, (tx) =>
       tx.transfer.findMany()
     )
-    expect(transfers).toHaveLength(1)
+    expect(transfers).toHaveLength(2)
+    expect(
+      transfers.filter((transfer) => transfer.deletedAt === null)
+    ).toHaveLength(1)
   })
 })
 

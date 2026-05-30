@@ -194,8 +194,14 @@ model Transaction {
 
   // Soft Delete (GAAP Compliance): Transaksi tidak pernah benar-benar dihapus
   // NULL = aktif, ada timestamp = soft-deleted (audit trail tetap ada)
-  deletedAt DateTime?
-  idempotencyKey String?
+  deletedAt               DateTime?
+  supersededBy            String?       @unique
+  supersededByTransaction Transaction?  @relation("TransactionSupersededBy", fields: [supersededBy], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  supersedes              String?       @unique
+  supersedesTransaction   Transaction?  @relation("TransactionSupersedes", fields: [supersedes], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  supersededTransactions  Transaction[] @relation("TransactionSupersedes")
+  supersedingTransactions Transaction[] @relation("TransactionSupersededBy")
+  idempotencyKey          String?
 
   merchantId String?
   merchant   Merchant? @relation(fields: [merchantId, familyId], references: [id, familyId], onDelete: Restrict, onUpdate: Cascade, map: "Transaction_merchantId_familyId_fkey")

@@ -330,6 +330,7 @@ describe("ledger concurrency and retry policy (PER-18)", () => {
             currency: "IDR",
             date: new Date("2026-05-30T00:03:01.000Z"),
             description: "Updated transfer during delete",
+            idempotencyKey: factories.createIdempotencyKey(),
             isSplit: false,
             status: "CLEARED",
             toAccountId: fixture.destinationTwo.id,
@@ -340,6 +341,7 @@ describe("ledger concurrency and retry policy (PER-18)", () => {
         }),
         deleteTransactionForFamily({
           id: transfer.id,
+          idempotencyKey: factories.createIdempotencyKey(),
           familyId: fixture.owner.family.id,
           user: fixture.owner.user,
         }),
