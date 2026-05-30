@@ -386,32 +386,40 @@ describe("Tenant composite FK invariants (PER-104)", () => {
       name: "B Cash",
     })
 
-    const outflowTransaction = await getFactories().createTransaction({
-      accountId: accountA.id,
-      amount: -10_000n,
-      familyId: familyA.family.id,
-      type: "transfer",
-      userId: familyA.user.id,
-    })
-    const inflowTransaction = await getFactories().createTransaction({
-      accountId: accountB.id,
-      amount: 10_000n,
-      familyId: familyB.family.id,
-      type: "transfer",
-      userId: familyB.user.id,
-    })
-
+    // PER-103 makes a standalone transfer-typed Transaction illegal (the
+    // deferred pairing trigger fires at COMMIT). So the two legs and the
+    // cross-family Transfer are inserted in one privileged transaction: the
+    // PER-104 leg-pair trigger (DEFERRABLE INITIALLY IMMEDIATE) rejects on the
+    // Transfer insert, before COMMIT, which is exactly the invariant under test.
     await expect(
       withPrivilegedDatabase(getHarness().databaseName, async (client) => {
-        await client.query(
-          `INSERT INTO "Transfer" (id, "outflowTransactionId", "inflowTransactionId")
-           VALUES ($1, $2, $3)`,
-          [
-            "per-104-cross-family-transfer",
-            outflowTransaction.id,
-            inflowTransaction.id,
-          ]
-        )
+        await client.query("BEGIN")
+        try {
+          await client.query(
+            `INSERT INTO "Transaction"
+               (id, amount, type, currency, status, date, description,
+                "accountId", "userId", "familyId", "createdAt", "updatedAt")
+             VALUES ('per-104-xfam-out', -10000, 'transfer', 'IDR', 'CLEARED',
+                     now(), 'cross-family outflow', $1, $2, $3, now(), now())`,
+            [accountA.id, familyA.user.id, familyA.family.id]
+          )
+          await client.query(
+            `INSERT INTO "Transaction"
+               (id, amount, type, currency, status, date, description,
+                "accountId", "userId", "familyId", "createdAt", "updatedAt")
+             VALUES ('per-104-xfam-in', 10000, 'transfer', 'IDR', 'CLEARED',
+                     now(), 'cross-family inflow', $1, $2, $3, now(), now())`,
+            [accountB.id, familyB.user.id, familyB.family.id]
+          )
+          await client.query(
+            `INSERT INTO "Transfer" (id, "outflowTransactionId", "inflowTransactionId")
+             VALUES ('per-104-cross-family-transfer', 'per-104-xfam-out', 'per-104-xfam-in')`
+          )
+          await client.query("COMMIT")
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined)
+          throw error
+        }
       })
     ).rejects.toThrow(TENANT_FK_REJECTION)
   })

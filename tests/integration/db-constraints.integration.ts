@@ -439,7 +439,7 @@ describe("M2 data-integrity database constraints", () => {
       }),
     ])
 
-    const [expense, income, transfer, validSplit] = await Promise.all([
+    const [expense, income, validSplit] = await Promise.all([
       factories.createTransaction({
         accountId: assetAccount.id,
         amount: -1_000n,
@@ -454,22 +454,6 @@ describe("M2 data-integrity database constraints", () => {
         type: "income",
         userId: owner.user.id,
       }),
-      harness.withFamily(owner.family.id, (tx) =>
-        tx.transaction.create({
-          data: {
-            accountId: assetAccount.id,
-            amount: -1_000n,
-            currency: "IDR",
-            description: "Valid multi-currency transfer",
-            destinationAmount: 100n,
-            destinationCurrency: "USD",
-            familyId: owner.family.id,
-            toAccountId: creditAccount.id,
-            type: "transfer",
-            userId: owner.user.id,
-          },
-        })
-      ),
       harness.withFamily(owner.family.id, async (tx) => {
         const transaction = await tx.transaction.create({
           data: {
@@ -502,6 +486,47 @@ describe("M2 data-integrity database constraints", () => {
         return transaction
       }),
     ])
+
+    // PER-103: a transfer is a pair of transfer-typed Transactions linked by a
+    // Transfer row; the deferred pairing trigger fires at COMMIT, so both legs
+    // and the Transfer are created in one transaction. Run sequentially (not in
+    // the Promise.all above) so the multi-account writes do not serialize-
+    // conflict with the concurrent fixtures touching the same asset account.
+    const transfer = await harness.withFamily(owner.family.id, async (tx) => {
+      const outflow = await tx.transaction.create({
+        data: {
+          accountId: assetAccount.id,
+          amount: -1_000n,
+          currency: "IDR",
+          description: "Valid multi-currency transfer",
+          destinationAmount: 100n,
+          destinationCurrency: "USD",
+          familyId: owner.family.id,
+          toAccountId: creditAccount.id,
+          type: "transfer",
+          userId: owner.user.id,
+        },
+      })
+      const inflow = await tx.transaction.create({
+        data: {
+          accountId: creditAccount.id,
+          amount: 100n,
+          currency: "USD",
+          description: "Valid multi-currency transfer",
+          familyId: owner.family.id,
+          toAccountId: assetAccount.id,
+          type: "transfer",
+          userId: owner.user.id,
+        },
+      })
+      await tx.transfer.create({
+        data: {
+          inflowTransactionId: inflow.id,
+          outflowTransactionId: outflow.id,
+        },
+      })
+      return outflow
+    })
 
     expect(expense.amount).toBe(-1_000n)
     expect(income.amount).toBe(1_000n)
