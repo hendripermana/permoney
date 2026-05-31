@@ -864,25 +864,42 @@ describe("AuditLog Integration & Security Tests", () => {
   })
 
   test("10. onboarding writes a family create audit log", async () => {
+    const idempotencyKey = factories.createIdempotencyKey()
     const user = await factories.createUser({
       email: "onboard-audit@permoney.local",
       familyId: null,
       name: "Audit Onboarding",
     })
 
-    const result = await initializeOnboardingForUser(harness.prisma, user.id)
+    const result = await initializeOnboardingForUser(harness.prisma, user.id, {
+      idempotencyKey,
+    })
 
     // Cari audit log yang dicatat saat onboarding dengan scoped GUC familyId
     const logs = await harness.withFamily(result.familyId, (tx) =>
       tx.auditLog.findMany({
         where: { familyId: result.familyId },
+        orderBy: { entityType: "asc" },
       })
     )
 
-    expect(logs).toHaveLength(1)
-    const log = logs[0]!
-    expect(log.entityType).toBe("Family")
-    expect(log.action).toBe("create")
-    expect(log.entityId).toBe(result.familyId)
+    expect(logs.map((log) => log.entityType)).toEqual([
+      "Account",
+      "Family",
+      "Transaction",
+    ])
+    expect(logs.every((log) => log.action === "create")).toBe(true)
+    expect(logs.every((log) => log.idempotencyKey === idempotencyKey)).toBe(
+      true
+    )
+    expect(logs.find((log) => log.entityType === "Family")?.entityId).toBe(
+      result.familyId
+    )
+    expect(logs.find((log) => log.entityType === "Account")?.entityId).toBe(
+      result.accountId
+    )
+    expect(logs.find((log) => log.entityType === "Transaction")?.entityId).toBe(
+      result.sampleTransactionId
+    )
   })
 })
