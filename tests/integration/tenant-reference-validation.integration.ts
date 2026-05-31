@@ -360,13 +360,15 @@ describe("App-level tenant reference validation (PER-94)", () => {
       try {
         await bulkCreateTransactionsForFamily({
           data: {
+            idempotencyKey: getFactories().createIdempotencyKey(),
             transactions: [
               {
                 accountId: ownerAccount.id,
                 amount: 5_000n,
                 date: new Date("2026-03-08T00:00:00.000Z"),
                 description: "Legitimate row",
-                id: "per-94-bulk-ok",
+                id: getFactories().createIdempotencyKey(),
+                idempotencyKey: getFactories().createIdempotencyKey(),
                 status: "CLEARED",
                 type: "expense",
               },
@@ -375,7 +377,8 @@ describe("App-level tenant reference validation (PER-94)", () => {
                 amount: 7_000n,
                 date: new Date("2026-03-08T00:00:00.000Z"),
                 description: "Cross-tenant merchant row",
-                id: "per-94-bulk-bad",
+                id: getFactories().createIdempotencyKey(),
+                idempotencyKey: getFactories().createIdempotencyKey(),
                 merchantId: intruderMerchant.id,
                 status: "CLEARED",
                 type: "expense",
@@ -426,6 +429,7 @@ describe("App-level tenant reference validation (PER-94)", () => {
         await bulkUpdateTransactionsForFamily({
           data: {
             ids: [targetTx.id],
+            idempotencyKey: getFactories().createIdempotencyKey(),
             categoryId: intruderCategory.id,
           },
           familyId: owner.family.id,

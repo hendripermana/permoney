@@ -46,6 +46,7 @@ import {
   bulkCreateTransactionsFn,
 } from "@/server/transactions"
 import { formatCurrency } from "@/lib/currency"
+import { createUuidV7 } from "@/lib/uuid-v7"
 
 export const Route = createFileRoute("/import")({
   component: ImportPage,
@@ -57,6 +58,7 @@ export const Route = createFileRoute("/import")({
 // === INTERFACES ===
 interface ParsedRow {
   id: string
+  idempotencyKey: string
   date: Date
   description: string
   amount: number
@@ -66,6 +68,25 @@ interface ParsedRow {
   merchantId?: string
   // For preview info
   assignedByRule?: boolean
+}
+
+type SmartRule = Awaited<ReturnType<typeof getSmartRulesFn>>[number]
+
+function applyRules(description: string, rulesList: readonly SmartRule[]) {
+  const lowerDesc = description.toLowerCase()
+
+  // Evaluasi keyword rule yang dipisah koma terhadap deskripsi transaksi.
+  for (const rule of rulesList) {
+    const keywords = rule.keyword
+      .split(",")
+      .map((keyword: string) => keyword.trim().toLowerCase())
+    for (const keyword of keywords) {
+      if (keyword && lowerDesc.includes(keyword)) {
+        return { categoryId: rule.categoryId, merchantId: rule.merchantId }
+      }
+    }
+  }
+  return { categoryId: null, merchantId: null }
 }
 
 function ImportPage() {
@@ -107,7 +128,12 @@ function ImportPage() {
     mutationFn: (
       data: Parameters<typeof bulkCreateTransactionsFn>[0]["data"]
     ) => bulkCreateTransactionsFn({ data }),
-    onSuccess: () => {
+    onSuccess: async () => {
+      const [{ transactionCollection }] = await Promise.all([
+        import("@/lib/collections"),
+        queryClient.invalidateQueries({ queryKey: ["transactions_live"] }),
+      ])
+      await transactionCollection.utils.refetch()
       toast.success("Transactions imported successfully!")
       void router.navigate({ to: "/transactions" })
     },
@@ -127,24 +153,6 @@ function ImportPage() {
   const [targetAccountId, setTargetAccountId] = React.useState("")
   const [isParsing, setIsParsing] = React.useState(false)
 
-  // Function to apply Rules Engine on strings
-  const applyRules = (description: string, rulesList: typeof rules) => {
-    const lowerDesc = description.toLowerCase()
-
-    // Evaluate if any rule's keyword comma-split fragments match the description
-    for (const rule of rulesList) {
-      const keywords = rule.keyword
-        .split(",")
-        .map((k: string) => k.trim().toLowerCase())
-      for (const kw of keywords) {
-        if (kw && lowerDesc.includes(kw)) {
-          return { categoryId: rule.categoryId, merchantId: rule.merchantId }
-        }
-      }
-    }
-    return { categoryId: null, merchantId: null }
-  }
-
   // File Upload Handler
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -162,7 +170,7 @@ function ImportPage() {
       complete: (results) => {
         const rows: ParsedRow[] = []
 
-        results.data.forEach((row: any, index: number) => {
+        results.data.forEach((row: any) => {
           // This relies on generic standard columns.
           // You may customize these mappings based on typical banking CSV exports.
           const rawDate = row["Date"] || row["Tanggal"] || row.date
@@ -196,7 +204,8 @@ function ImportPage() {
           const matched = applyRules(rawDesc, rules)
 
           rows.push({
-            id: `row-${index}-${Date.now()}`,
+            id: createUuidV7(),
+            idempotencyKey: createUuidV7(),
             date: new Date(rawDate),
             description: String(rawDesc),
             amount: Math.abs(finalAmount),
@@ -225,7 +234,10 @@ function ImportPage() {
 
   const handleInjectToLedger = () => {
     if (parsedRows.length === 0) return
-    bulkCreateMutation.mutate({ transactions: parsedRows })
+    bulkCreateMutation.mutate({
+      idempotencyKey: createUuidV7(),
+      transactions: parsedRows,
+    })
   }
 
   return (
@@ -340,6 +352,7 @@ function ImportPage() {
                             IF "{rule.keyword}"
                           </span>
                           <button
+                            type="button"
                             onClick={() => deleteRuleMutation.mutate(rule.id)}
                             className="text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:text-red-600"
                           >

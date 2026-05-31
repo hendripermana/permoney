@@ -249,6 +249,7 @@ describe("AuditLog Integration & Security Tests", () => {
   }) {
     return {
       id,
+      idempotencyKey: factories.createIdempotencyKey(),
       accountId,
       amount,
       categoryId,
@@ -556,6 +557,7 @@ describe("AuditLog Integration & Security Tests", () => {
 
     await bulkCreateTransactionsForFamily({
       data: {
+        idempotencyKey: factories.createIdempotencyKey(),
         transactions: [
           bulkExpensePayload({
             id: firstId,
@@ -586,23 +588,30 @@ describe("AuditLog Integration & Security Tests", () => {
 
     const baselineAfterCreateIds = await auditLogBaseline(owner.family.id)
 
-    await bulkUpdateTransactionsForFamily({
+    const bulkUpdateResult = await bulkUpdateTransactionsForFamily({
       data: {
         ids: [firstId, secondId],
+        idempotencyKey: factories.createIdempotencyKey(),
         categoryId: secondCategory.id,
       },
       familyId: owner.family.id,
       user: owner.user,
     })
 
-    const updateLogs = await harness.withFamily(owner.family.id, (tx) =>
-      tx.auditLog.findMany({
-        where: { action: "update" },
-      })
+    const logsAfterUpdate = await harness.withFamily(owner.family.id, (tx) =>
+      tx.auditLog.findMany()
     )
-    const newUpdateLogs = logsSince(updateLogs, baselineAfterCreateIds)
+    const newUpdateLogs = logsSince(logsAfterUpdate, baselineAfterCreateIds)
     expect(
-      newUpdateLogs.filter((log) => log.entityType === "Transaction")
+      newUpdateLogs.filter(
+        (log) =>
+          log.action === "soft_delete" && log.entityType === "Transaction"
+      )
+    ).toHaveLength(2)
+    expect(
+      newUpdateLogs.filter(
+        (log) => log.action === "create" && log.entityType === "Transaction"
+      )
     ).toHaveLength(2)
     expect(newUpdateLogs.some((log) => log.entityType === "Account")).toBe(
       false
@@ -611,7 +620,8 @@ describe("AuditLog Integration & Security Tests", () => {
     const baselineAfterUpdateIds = await auditLogBaseline(owner.family.id)
 
     await bulkDeleteTransactionsForFamily({
-      ids: [firstId, secondId],
+      ids: bulkUpdateResult.replacements.map((row) => row.replacementId),
+      idempotencyKey: factories.createIdempotencyKey(),
       familyId: owner.family.id,
       user: owner.user,
     })
@@ -630,7 +640,7 @@ describe("AuditLog Integration & Security Tests", () => {
       newDeleteLogs.filter(
         (log) => log.action === "update" && log.entityType === "Account"
       )
-    ).toHaveLength(1)
+    ).toHaveLength(2)
   })
 
   test("smart rule create and delete write audit rows", async () => {

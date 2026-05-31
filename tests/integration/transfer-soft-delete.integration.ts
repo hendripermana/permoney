@@ -250,6 +250,7 @@ describe("PER-20 — Transfer soft-delete symmetry", () => {
 
     await bulkDeleteTransactionsForFamily({
       familyId: owner.family.id,
+      idempotencyKey: getFactories().createIdempotencyKey(),
       ids: transfers.map((tr) => tr.outflowTransactionId),
       user: owner.user,
     })
