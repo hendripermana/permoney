@@ -278,8 +278,12 @@ describe("bulk mutation parity with single ledger invariants (PER-95)", () => {
 
     expect(replay).toEqual(result)
     expect(result.replacements).toHaveLength(2)
-    expect(result.replacements.map((row) => row.id).sort()).toEqual(
-      [first.id, second.id].sort()
+    expect(
+      result.replacements
+        .map((row) => row.id)
+        .sort((left, right) => left.localeCompare(right))
+    ).toEqual(
+      [first.id, second.id].sort((left, right) => left.localeCompare(right))
     )
 
     const originalRows = await readTransactionStates(fixture.owner.family.id, [
