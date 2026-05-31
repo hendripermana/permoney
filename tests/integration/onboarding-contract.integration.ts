@@ -58,35 +58,122 @@ describe("onboarding contract", () => {
   })
 
   test("onboarding initialization creates one family and replay returns it", async () => {
+    const idempotencyKey = factories.createIdempotencyKey()
     const user = await factories.createUser({
       email: "onboarding-replay@permoney.local",
       familyId: null,
       name: "Onboarding Replay",
     })
 
-    const first = await initializeOnboardingForUser(harness.prisma, user.id)
+    const first = await initializeOnboardingForUser(harness.prisma, user.id, {
+      idempotencyKey,
+    })
     const storedAfterFirst = await harness.prisma.user.findFirstOrThrow({
       where: { familyId: first.familyId, id: user.id },
     })
     const second = await initializeOnboardingForUser(
       harness.prisma,
-      storedAfterFirst.id
+      storedAfterFirst.id,
+      { idempotencyKey }
     )
 
-    const [storedUser, families] = await Promise.all([
-      harness.prisma.user.findUniqueOrThrow({ where: { id: user.id } }),
-      harness.prisma.family.findMany(),
-    ])
+    const storedUser = await harness.prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+    })
+    const families = await harness.prisma.family.findMany()
+    const scopedRows = await harness.withFamily(first.familyId, async (tx) => {
+      const accounts = await tx.account.findMany({
+        where: { familyId: first.familyId },
+      })
+      const transactions = await tx.transaction.findMany({
+        where: { familyId: first.familyId },
+      })
+      const auditLogs = await tx.auditLog.findMany({
+        where: { familyId: first.familyId },
+        orderBy: { entityType: "asc" },
+      })
+      const idempotencyRecords = await tx.idempotencyRecord.findMany({
+        where: {
+          endpoint: "initializeOnboardingForUser",
+          familyId: first.familyId,
+          key: idempotencyKey,
+        },
+      })
+      return { accounts, auditLogs, idempotencyRecords, transactions }
+    })
 
     expect(first.created).toBe(true)
-    expect(second.created).toBe(false)
-    expect(second.familyId).toBe(first.familyId)
+    expect(second).toEqual(first)
     expect(storedUser.familyId).toBe(first.familyId)
     expect(families).toHaveLength(1)
     expect(families[0]?.name).toBe("Onboarding Replay's Family")
+
+    expect(scopedRows.accounts).toHaveLength(1)
+    expect(scopedRows.transactions).toHaveLength(1)
+    expect(scopedRows.idempotencyRecords).toHaveLength(1)
+
+    const account = scopedRows.accounts[0]!
+    const transaction = scopedRows.transactions[0]!
+
+    expect(first.accountId).toBe(account.id)
+    expect(first.sampleTransactionId).toBe(transaction.id)
+    expect(account.familyId).toBe(first.familyId)
+    expect(transaction.familyId).toBe(first.familyId)
+    expect(transaction.accountId).toBe(account.id)
+    expect(transaction.userId).toBe(user.id)
+    expect(transaction.type).toBe("expense")
+    expect(transaction.amount).toBeLessThan(0n)
+    expect(transaction.idempotencyKey).toBe(idempotencyKey)
+    expect(transaction.accountBalanceAfter).toBe(account.balance)
+
+    const replayRows = await harness.withFamily(first.familyId, async (tx) => {
+      const accountAfterReplay = await tx.account.findUniqueOrThrow({
+        where: { id: account.id },
+      })
+      const transactionCount = await tx.transaction.count({
+        where: { familyId: first.familyId },
+      })
+      const auditCount = await tx.auditLog.count({
+        where: { familyId: first.familyId },
+      })
+      return { accountAfterReplay, auditCount, transactionCount }
+    })
+
+    expect(replayRows.accountAfterReplay.balance).toBe(account.balance)
+    expect(replayRows.transactionCount).toBe(1)
+    expect(replayRows.auditCount).toBe(3)
+
+    expect(
+      scopedRows.auditLogs.map((log) => ({
+        action: log.action,
+        entityId: log.entityId,
+        entityType: log.entityType,
+        idempotencyKey: log.idempotencyKey,
+      }))
+    ).toEqual([
+      {
+        action: "create",
+        entityId: account.id,
+        entityType: "Account",
+        idempotencyKey,
+      },
+      {
+        action: "create",
+        entityId: first.familyId,
+        entityType: "Family",
+        idempotencyKey,
+      },
+      {
+        action: "create",
+        entityId: transaction.id,
+        entityType: "Transaction",
+        idempotencyKey,
+      },
+    ])
   })
 
   test("concurrent onboarding initialization does not duplicate families", async () => {
+    const idempotencyKey = factories.createIdempotencyKey()
     const user = await factories.createUser({
       email: "onboarding-concurrent@permoney.local",
       familyId: null,
@@ -94,19 +181,52 @@ describe("onboarding contract", () => {
     })
 
     const [first, second] = await Promise.all([
-      initializeOnboardingForUser(harness.prisma, user.id),
-      initializeOnboardingForUser(harness.prisma, user.id),
-    ])
-
-    const [storedUser, familyCount] = await Promise.all([
-      harness.prisma.user.findFirstOrThrow({
-        where: { familyId: first.familyId, id: user.id },
+      initializeOnboardingForUser(harness.prisma, user.id, {
+        idempotencyKey,
       }),
-      harness.prisma.family.count(),
+      initializeOnboardingForUser(harness.prisma, user.id, {
+        idempotencyKey,
+      }),
     ])
 
-    expect(first.familyId).toBe(second.familyId)
+    const storedUser = await harness.prisma.user.findFirstOrThrow({
+      where: { familyId: first.familyId, id: user.id },
+    })
+    const familyCount = await harness.prisma.family.count()
+    const scopedCounts = await harness.withFamily(
+      first.familyId,
+      async (tx) => {
+        const accountCount = await tx.account.count({
+          where: { familyId: first.familyId },
+        })
+        const transactionCount = await tx.transaction.count({
+          where: { familyId: first.familyId },
+        })
+        const auditCount = await tx.auditLog.count({
+          where: { familyId: first.familyId },
+        })
+        const idempotencyRecordCount = await tx.idempotencyRecord.count({
+          where: {
+            endpoint: "initializeOnboardingForUser",
+            familyId: first.familyId,
+            key: idempotencyKey,
+          },
+        })
+        return {
+          accountCount,
+          auditCount,
+          idempotencyRecordCount,
+          transactionCount,
+        }
+      }
+    )
+
+    expect(second).toEqual(first)
     expect(storedUser.familyId).toBe(first.familyId)
     expect(familyCount).toBe(1)
+    expect(scopedCounts.accountCount).toBe(1)
+    expect(scopedCounts.transactionCount).toBe(1)
+    expect(scopedCounts.auditCount).toBe(3)
+    expect(scopedCounts.idempotencyRecordCount).toBe(1)
   })
 })

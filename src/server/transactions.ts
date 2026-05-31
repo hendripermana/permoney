@@ -19,6 +19,14 @@ import {
   validateTenantReferences,
 } from "./validation/tenant-references"
 import { VersionDriftError } from "./middleware/with-retry"
+import {
+  IDEMPOTENCY_RECORD_TTL_MS,
+  IdempotencyConflictError,
+  hashCanonicalPayload,
+  toCanonicalJson,
+} from "./idempotency"
+
+export { IdempotencyConflictError } from "./idempotency"
 
 /**
  * BACKEND FUNCTION: Fetch reference data for the Transaction Form Dropdowns
@@ -741,15 +749,6 @@ interface CreateTransactionForFamilyArgs {
   user: { id: string }
 }
 
-export class IdempotencyConflictError extends Error {
-  statusCode = 409
-
-  constructor(message = "Idempotency key reused with a different payload") {
-    super(message)
-    this.name = "IdempotencyConflictError"
-  }
-}
-
 export class TransactionGoneError extends Error {
   statusCode = 410
 
@@ -759,7 +758,6 @@ export class TransactionGoneError extends Error {
   }
 }
 
-const IDEMPOTENCY_RECORD_TTL_MS = 24 * 60 * 60 * 1000
 const UPDATE_TRANSACTION_ENDPOINT = "updateTransactionFn"
 const DELETE_TRANSACTION_ENDPOINT = "deleteTransactionFn"
 const BULK_CREATE_TRANSACTIONS_ENDPOINT = "bulkCreateTransactionsFn"
@@ -796,35 +794,6 @@ interface BulkUpdateTransactionsResult {
 interface BulkDeleteTransactionsResult {
   count: number
   success: boolean
-}
-
-async function hashCanonicalPayload(payload: unknown): Promise<string> {
-  const bytes = new TextEncoder().encode(
-    JSON.stringify(toCanonicalJson(payload))
-  )
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes)
-  return Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0")
-  ).join("")
-}
-
-function toCanonicalJson(value: unknown): unknown {
-  if (value === null || value === undefined) return null
-  if (typeof value === "bigint") return value.toString()
-  if (value instanceof Date) return value.toISOString()
-  if (Array.isArray(value)) return value.map((item) => toCanonicalJson(item))
-  if (typeof value === "object") {
-    const source = value as Record<string, unknown>
-    const result: Record<string, unknown> = {}
-    for (const key of Object.keys(source).sort()) {
-      const item = source[key]
-      if (item !== undefined) {
-        result[key] = toCanonicalJson(item)
-      }
-    }
-    return result
-  }
-  return value
 }
 
 async function replayIdempotentEndpointResponse<TResponse>(
