@@ -455,7 +455,7 @@ describe("idempotent update/delete ledger mutations (PER-93)", () => {
     expect([80_000n, 100_000n]).toContain(balances.get(fixture.account.id))
   })
 
-  test("existing bulk update path remains compatible until PER-95 redesigns bulk parity", async () => {
+  test("bulk update path uses PER-95 replacement parity with idempotent replay", async () => {
     const fixture = await createExpenseFixture()
     const secondCategory = await factories.createCategory({
       familyId: fixture.owner.family.id,
@@ -470,29 +470,66 @@ describe("idempotent update/delete ledger mutations (PER-93)", () => {
       amount: 7_000n,
       description: "Bulk update second",
     })
+    const idempotencyKey = factories.createIdempotencyKey()
 
-    await bulkUpdateTransactionsForFamily({
+    const result = await bulkUpdateTransactionsForFamily({
       data: {
         ids: [first.id, second.id],
+        idempotencyKey,
+        categoryId: secondCategory.id,
+      },
+      familyId: fixture.owner.family.id,
+      user: fixture.owner.user,
+    })
+    const replay = await bulkUpdateTransactionsForFamily({
+      data: {
+        ids: [first.id, second.id],
+        idempotencyKey,
         categoryId: secondCategory.id,
       },
       familyId: fixture.owner.family.id,
       user: fixture.owner.user,
     })
 
+    expect(replay).toEqual(result)
+
     await expectAccountBalances(fixture.owner.family.id, {
       [fixture.account.id]: 88_000n,
     })
-    const categories = await harness.withFamily(fixture.owner.family.id, (tx) =>
-      tx.transaction.findMany({
-        where: { id: { in: [first.id, second.id] } },
-        select: { categoryId: true },
-      })
-    )
-    expect(categories.map((row) => row.categoryId)).toEqual([
-      secondCategory.id,
-      secondCategory.id,
+    const replacementIds = result.replacements.map((row) => row.replacementId)
+    const [originals, replacements] = await Promise.all([
+      harness.withFamily(fixture.owner.family.id, (tx) =>
+        tx.transaction.findMany({
+          where: { id: { in: [first.id, second.id] } },
+          select: { deletedAt: true, id: true, supersededBy: true },
+        })
+      ),
+      harness.withFamily(fixture.owner.family.id, (tx) =>
+        tx.transaction.findMany({
+          where: { id: { in: replacementIds } },
+          select: { categoryId: true, deletedAt: true, supersedes: true },
+        })
+      ),
     ])
+    expect(originals.every((row) => row.deletedAt instanceof Date)).toBe(true)
+    expect(
+      originals
+        .map((row) => row.supersededBy)
+        .sort((left, right) => String(left).localeCompare(String(right)))
+    ).toEqual(replacementIds.sort((left, right) => left.localeCompare(right)))
+    expect(
+      replacements
+        .map((row) => row.categoryId)
+        .sort((left, right) => String(left).localeCompare(String(right)))
+    ).toEqual([secondCategory.id, secondCategory.id])
+    expect(replacements.every((row) => row.deletedAt === null)).toBe(true)
+    expect(
+      replacements
+        .map((row) => row.supersedes)
+        .sort((left, right) => String(left).localeCompare(String(right)))
+    ).toEqual(
+      [first.id, second.id].sort((left, right) => left.localeCompare(right))
+    )
   })
 
   async function createExpenseFixture() {

@@ -55,6 +55,7 @@ import {
   transactionSearchSchema,
 } from "@/lib/transaction-filters"
 import { useMountEffect } from "@/hooks/use-mount-effect"
+import { createUuidV7 } from "@/lib/uuid-v7"
 
 // ═══════════════════════════════════════════════════════════════
 // TYPE DERIVATION: End-to-End Type Safety dari Server Function
@@ -178,7 +179,10 @@ function TransactionsPage() {
   )
   //Konversi tipe yang diperlukan: useLiveQuery mengembalikan tipe generik dari basis data TanStack;
   // Konversi ke TransactionData mempertahankan tipe lengkap dengan relasi Prisma.
-  const safeTransactions = (transactions ?? []) as Array<TransactionData>
+  const safeTransactions = React.useMemo(
+    () => (transactions ?? []) as Array<TransactionData>,
+    [transactions]
+  )
 
   // === 3. DEBOUNCED SEARCH ===
   // Input langsung update lokal (instant feedback), tapi URL di-update setelah 300ms.
@@ -247,7 +251,9 @@ function TransactionsPage() {
     if (!confirmed) return
 
     try {
-      await bulkDeleteTransactionsFn({ data: { ids } })
+      await bulkDeleteTransactionsFn({
+        data: { ids, idempotencyKey: createUuidV7() },
+      })
       await transactionCollection.utils.refetch()
       setRowSelection({})
     } catch (err) {
@@ -263,7 +269,9 @@ function TransactionsPage() {
     if (!confirmed) return
 
     try {
-      await bulkDeleteTransactionsFn({ data: { ids: [id] } })
+      await bulkDeleteTransactionsFn({
+        data: { ids: [id], idempotencyKey: createUuidV7() },
+      })
       await transactionCollection.utils.refetch()
       if (rowSelection[id]) {
         setRowSelection((prev) => {
@@ -314,10 +322,11 @@ function TransactionsPage() {
       // 2. Typed bulk update payload (zero `any`)
       const updatePayload: {
         ids: Array<string>
+        idempotencyKey: string
         categoryId?: string
         merchantId?: string
         accountId?: string
-      } = { ids }
+      } = { ids, idempotencyKey: createUuidV7() }
       if (field === "categoryId") updatePayload.categoryId = value
       else if (field === "merchantId") updatePayload.merchantId = value
       else updatePayload.accountId = value
@@ -811,6 +820,7 @@ function TransactionRow({
             {/* Expand/collapse toggle for split transactions */}
             {hasSplits ? (
               <button
+                type="button"
                 onClick={() => setIsExpanded((prev) => !prev)}
                 className="text-muted-foreground transition-colors hover:text-foreground"
                 aria-label={
@@ -954,6 +964,7 @@ function TransactionRow({
         {/* Actions column */}
         <div className="flex w-20 shrink-0 items-start justify-center gap-1 pt-0.5">
           <button
+            type="button"
             onClick={() =>
               onEdit({
                 id: trx.id,
@@ -989,6 +1000,7 @@ function TransactionRow({
             <IconEdit size={15} />
           </button>
           <button
+            type="button"
             onClick={() => onDelete(trx.id)}
             className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/40 dark:hover:text-red-400"
             title="Delete Transaction"

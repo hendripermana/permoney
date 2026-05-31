@@ -397,8 +397,10 @@ describe("ledger concurrency and retry policy (PER-18)", () => {
     await Promise.all([
       bulkCreateTransactionsForFamily({
         data: {
+          idempotencyKey: factories.createIdempotencyKey(),
           transactions: Array.from({ length: 50 }, (_, index) => ({
             id: factories.createIdempotencyKey(),
+            idempotencyKey: factories.createIdempotencyKey(),
             accountId: account.id,
             amount: 1_000n,
             categoryId: category.id,
