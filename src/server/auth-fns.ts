@@ -5,6 +5,7 @@ import {
   getPostAuthRedirectPath,
   hasFamilyIdValue,
 } from "./onboarding-contract"
+import { initializeOnboardingInputSchema } from "./onboarding-input"
 
 export { signupSchema, loginSchema }
 
@@ -101,28 +102,32 @@ export const logoutFn = createServerFn({ method: "POST" }).handler(async () => {
 /**
  * M1-7: Guided onboarding initializer.
  *
- * Callable when the session exists. If the user already has a family, this is
- * an idempotent replay and returns the existing familyId.
+ * Callable when the session exists with a client-supplied idempotency key. If
+ * the user already has a family, matching replays return the stored response.
  *
  * Inside one Prisma $transaction:
  *   1. Lock the User row so concurrent onboarding requests serialize.
  *   2. Create a Family row with a safe default name if familyId is still null.
  *   3. Set the Postgres app.family_id GUC on the same transaction client.
  *   4. Update User.familyId to the new Family's id.
+ *   5. Create the starter Account, sample Transaction, idempotency record, and
+ *      audit rows in the same transaction.
  *
  * Returns the new familyId so the client can redirect to the dashboard.
  */
-export const onboardFn = createServerFn({ method: "POST" }).handler(
-  async () => {
+export const onboardFn = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) =>
+    initializeOnboardingInputSchema.parse(data)
+  )
+  .handler(async ({ data }) => {
     const [{ user }, { prisma }, { initializeOnboardingForUser }] =
       await Promise.all([
         requireSession(),
         import("./db.server"),
         import("./onboarding-service"),
       ])
-    return await initializeOnboardingForUser(prisma, user.id)
-  }
-)
+    return await initializeOnboardingForUser(prisma, user.id, data)
+  })
 
 function readAuthFamilyId(user: unknown): string | null {
   if (typeof user !== "object" || user === null || !("familyId" in user)) {
