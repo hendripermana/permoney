@@ -91,22 +91,28 @@ export async function seedAppTenant(
         tx.account.createMany({
           data: [
             {
+              accountClass: "ASSET",
+              accountSubtype: "checking",
+              accountType: "DEPOSITORY",
               name: "BCA Utama",
-              type: "DEPOSITORY",
               balance: 1_500_000_000n,
               familyId: family.id,
               color: "#0066AE",
             },
             {
+              accountClass: "ASSET",
+              accountSubtype: "cash",
+              accountType: "CASH",
               name: "Dompet Cash",
-              type: "DEPOSITORY",
               balance: 50_000_000n,
               familyId: family.id,
               color: "#22C55E",
             },
             {
+              accountClass: "ASSET",
+              accountSubtype: "receivable",
+              accountType: "RECEIVABLE",
               name: "Piutang Teman",
-              type: "RECEIVABLE",
               balance: 0n,
               familyId: family.id,
               color: "#F59E0B",

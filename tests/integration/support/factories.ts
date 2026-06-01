@@ -13,14 +13,13 @@ import type {
 import { betterAuth } from "better-auth"
 import { testUtils } from "better-auth/plugins"
 import { tanstackStartCookies } from "better-auth/tanstack-start"
+import {
+  normalizeAccountTaxonomy,
+  type AccountClass,
+  type AccountType,
+} from "../../../src/lib/accounts"
 import type { IntegrationHarness } from "./database"
 
-type AccountType =
-  | "DEPOSITORY"
-  | "CREDIT"
-  | "LOAN"
-  | "RECEIVABLE"
-  | "INVESTMENT"
 type CategoryType = "expense" | "income"
 type TransactionType = "expense" | "income" | "transfer"
 
@@ -58,13 +57,15 @@ interface CreateUserInput {
 }
 
 interface CreateAccountInput {
+  accountClass?: AccountClass
+  accountSubtype?: string | null
+  accountType?: AccountType
   balance?: bigint
   color?: string | null
   currency?: string
   familyId: string
   name?: string
   status?: string
-  type?: AccountType
 }
 
 interface CreateCategoryInput {
@@ -196,16 +197,24 @@ export function createTestFactories(
     }
 
   const createAccount = async (input: CreateAccountInput): Promise<Account> => {
+    const taxonomy = normalizeAccountTaxonomy({
+      accountClass: input.accountClass,
+      accountSubtype: input.accountSubtype,
+      accountType: input.accountType ?? "DEPOSITORY",
+    })
+
     return await harness.withFamily(input.familyId, async (tx) => {
       return await tx.account.create({
         data: {
+          accountClass: taxonomy.accountClass,
+          accountSubtype: taxonomy.accountSubtype,
+          accountType: taxonomy.accountType,
           balance: input.balance ?? 0n,
           color: input.color ?? "#2563eb",
           currency: input.currency ?? "IDR",
           familyId: input.familyId,
           name: input.name ?? nextValue("Test account"),
           status: input.status ?? "active",
-          type: input.type ?? "DEPOSITORY",
         },
       })
     })

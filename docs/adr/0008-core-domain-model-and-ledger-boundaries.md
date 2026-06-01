@@ -80,8 +80,9 @@ core domain entity, but it is not a separate transaction ledger.
 - `Account.balance` is a durable materialized state updated by canonical
   `Transaction` mutations.
 - `Account.version` protects concurrent balance updates.
-- Account type, currency, display name, and institution metadata describe where
-  transactions post.
+- Account class/type/subtype, currency, display name, and institution metadata
+  describe where transactions post. The taxonomy contract lives in
+  [`docs/account-taxonomy.md`](../account-taxonomy.md).
 
 No code path may compute a new balance from memory and save it as a shortcut.
 Balances change through atomic increments/decrements in the same transaction

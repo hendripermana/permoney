@@ -97,6 +97,10 @@ All Prisma + Node-only modules use the **`.server.ts` hard fence** convention en
 
 `Transaction` is the canonical ledger center. Metadata, import staging, AI enrichment, valuation snapshots, reconciliation records, and derived views attach to the ledger; they do not replace it. See [`docs/adr/0008-core-domain-model-and-ledger-boundaries.md`](./docs/adr/0008-core-domain-model-and-ledger-boundaries.md).
 
+### Account Taxonomy
+
+Accounts use explicit `accountClass`, `accountType`, and `accountSubtype` fields so new financial products usually fit as subtype/capability metadata instead of new ledger semantics. See [`docs/account-taxonomy.md`](./docs/account-taxonomy.md).
+
 ### Reactive Ledger
 
 - Server functions (`createServerFn`) are the only way to mutate persistent data.

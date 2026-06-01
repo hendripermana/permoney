@@ -351,11 +351,16 @@ async function findTransactionsWithTransferOutAndSplitEntries(
 }
 
 function accountListRelation(account: {
+  accountType: string
   color: string | null
   name: string
-  type: string
 }) {
-  return { name: account.name, type: account.type, color: account.color }
+  return {
+    accountType: account.accountType,
+    color: account.color,
+    name: account.name,
+    type: account.accountType,
+  }
 }
 
 function categoryListRelation(category: {
@@ -422,7 +427,7 @@ export async function findLedgerTransactionsForFamily(
         accountIds.size > 0
           ? tx.account.findMany({
               where: { id: { in: Array.from(accountIds) } },
-              select: { id: true, name: true, type: true, color: true },
+              select: { id: true, name: true, accountType: true, color: true },
             })
           : Promise.resolve([]),
       () =>
@@ -1350,8 +1355,8 @@ export async function createTransactionForFamily({
             throw new Error("Destination account not found or access denied!")
 
           let kind = "funds_movement"
-          if (toAccount.type === "CREDIT") kind = "cc_payment"
-          else if (toAccount.type === "LOAN") kind = "loan_payment"
+          if (toAccount.accountType === "CREDIT") kind = "cc_payment"
+          else if (toAccount.accountType === "LOAN") kind = "loan_payment"
 
           const [oldSrcAcc, oldDstAcc] =
             await runTenantTransactionQueriesInOrder([
@@ -1975,8 +1980,8 @@ async function replaceTransactionWithinTenantTransaction(
     })
     if (!toAccount)
       throw new Error("Destination account not found or access denied!")
-    if (toAccount.type === "CREDIT") kind = "cc_payment"
-    else if (toAccount.type === "LOAN") kind = "loan_payment"
+    if (toAccount.accountType === "CREDIT") kind = "cc_payment"
+    else if (toAccount.accountType === "LOAN") kind = "loan_payment"
 
     const inAmount = data.destinationAmount ?? data.amount
     const inCurrency = data.destinationCurrency ?? data.currency
