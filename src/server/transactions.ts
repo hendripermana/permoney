@@ -1,6 +1,12 @@
 import { createServerFn } from "@tanstack/react-start"
 import type { Prisma } from "@prisma/client"
 import { z } from "zod"
+import {
+  deriveTransferKindForAccounts,
+  isLiabilityCostKind,
+  parseAccountType,
+  TRANSACTION_KIND_VALUES,
+} from "@/lib/liability-semantics"
 import { absMoney, encodeMoney, negateMoney, type Money } from "@/lib/money"
 import { assertSplitParity } from "@/lib/split-parity"
 import {
@@ -619,6 +625,7 @@ const splitEntrySchema = z.object({
 const transactionInputSchema = z.object({
   id: z.string().min(1).optional(), // ID pre-generated di client untuk sinkronisasi optimistic
   type: z.enum(["expense", "income", "transfer"]),
+  kind: z.enum(TRANSACTION_KIND_VALUES).optional().default("standard"),
   amount: positiveMoneyInputSchema,
   description: z.string().min(1),
   accountId: z.string().min(1),
@@ -760,6 +767,54 @@ export class TransactionGoneError extends Error {
   constructor(message = "Transaction has been deleted and cannot be mutated") {
     super(message)
     this.name = "TransactionGoneError"
+  }
+}
+
+function assertManualTransactionKindShape(data: {
+  kind: string
+  toAccountId?: string | null
+  type: "expense" | "income" | "transfer"
+}): void {
+  if (data.type === "transfer") {
+    if (data.kind !== "standard") {
+      throw new Error("Transfer kind is derived from account direction")
+    }
+    return
+  }
+
+  if (data.type === "income" && data.kind !== "standard") {
+    throw new Error("Income transactions must use kind standard")
+  }
+
+  if (
+    data.type === "expense" &&
+    !["standard", "liability_interest", "liability_fee"].includes(data.kind)
+  ) {
+    throw new Error(`Expense transactions cannot use kind ${data.kind}`)
+  }
+
+  if (isLiabilityCostKind(data.kind) && !data.toAccountId) {
+    throw new Error(`${data.kind} requires a liability toAccountId`)
+  }
+}
+
+async function assertLiabilityCostTarget(
+  tx: TenantTransactionClient,
+  familyId: string,
+  data: {
+    kind: string
+    toAccountId?: string | null
+  }
+): Promise<void> {
+  if (!isLiabilityCostKind(data.kind)) return
+
+  const target = await tx.account.findFirst({
+    where: { familyId, id: data.toAccountId ?? "" },
+    select: { accountClass: true, id: true },
+  })
+
+  if (!target || target.accountClass !== "LIABILITY") {
+    throw new Error(`${data.kind} must point at a liability account`)
   }
 }
 
@@ -948,6 +1003,7 @@ function canonicalRequestPayload(data: CreateTransactionInput) {
     destinationAmount: canonicalMoney(data.destinationAmount),
     destinationCurrency: data.destinationCurrency ?? null,
     isSplit: data.isSplit,
+    kind: data.type === "transfer" ? null : data.kind,
     merchantId: data.isSplit ? null : (data.merchantId ?? null),
     notes: data.notes ?? null,
     splitEntries: data.isSplit
@@ -1069,6 +1125,7 @@ function canonicalPersistedPayload(tx: PersistedTransactionForIdempotency) {
     destinationAmount: canonicalMoney(tx.destinationAmount),
     destinationCurrency: tx.destinationCurrency,
     isSplit: tx.isSplit,
+    kind: tx.type === "transfer" ? null : tx.kind,
     merchantId: tx.isSplit ? null : tx.merchantId,
     notes: tx.notes,
     splitEntries: tx.isSplit ? canonicalSplitEntries(tx.splitEntries) : [],
@@ -1340,23 +1397,13 @@ export async function createTransactionForFamily({
         // UI validation is a convenience; THIS is the authoritative check.
         // Throws inside `$transaction` → automatic rollback if violated.
         assertSplitParity(data)
+        assertManualTransactionKindShape(data)
 
         // A. HANDLE TRANSFER (DOUBLE-ENTRY)
         if (data.type === "transfer") {
           if (!data.toAccountId)
             throw new Error("Transfer requires a destination account!")
           const toAccountId = data.toAccountId
-
-          // Tenant-safe: verify account ownership via familyId
-          const toAccount = await tx.account.findFirst({
-            where: { id: toAccountId, familyId },
-          })
-          if (!toAccount)
-            throw new Error("Destination account not found or access denied!")
-
-          let kind = "funds_movement"
-          if (toAccount.accountType === "CREDIT") kind = "cc_payment"
-          else if (toAccount.accountType === "LOAN") kind = "loan_payment"
 
           const [oldSrcAcc, oldDstAcc] =
             await runTenantTransactionQueriesInOrder([
@@ -1369,6 +1416,10 @@ export async function createTransactionForFamily({
                   where: { id: toAccountId },
                 }),
             ] as const)
+          const kind = deriveTransferKindForAccounts({
+            fromAccountType: parseAccountType(oldSrcAcc.accountType),
+            toAccountType: parseAccountType(oldDstAcc.accountType),
+          })
 
           const sourceMutation = await applyAccountBalanceDelta(tx, {
             accountId: data.accountId,
@@ -1473,6 +1524,7 @@ export async function createTransactionForFamily({
         }
 
         // B. HANDLE STANDARD EXPENSE / INCOME
+        await assertLiabilityCostTarget(tx, familyId, data)
         const amountSign: Money =
           data.type === "expense"
             ? negateMoney(absMoney(data.amount))
@@ -1498,6 +1550,7 @@ export async function createTransactionForFamily({
           data: {
             ...(data.id ? { id: data.id } : {}),
             type: data.type,
+            kind: data.kind,
             amount: amountSign,
             description: data.description,
             date: data.date,
@@ -1897,6 +1950,7 @@ async function replaceTransactionWithinTenantTransaction(
   })
 
   assertSplitParity(data)
+  assertManualTransactionKindShape(data)
 
   // Ambil snapshot graph lengkap sebelum mutasi dilakukan.
   let oldTx = await findTransactionAuditGraph(tx, data.id)
@@ -1974,14 +2028,18 @@ async function replaceTransactionWithinTenantTransaction(
     if (!data.toAccountId)
       throw new Error("Transfer requires a destination account!")
     const toAccountId = data.toAccountId
-    let kind = "funds_movement"
-    const toAccount = await tx.account.findFirst({
-      where: { id: toAccountId, familyId },
-    })
+    const fromAccount = oldAccounts.find(
+      (account) => account.id === data.accountId
+    )
+    const toAccount = oldAccounts.find((account) => account.id === toAccountId)
+    if (!fromAccount)
+      throw new Error("Source account not found or access denied!")
     if (!toAccount)
       throw new Error("Destination account not found or access denied!")
-    if (toAccount.accountType === "CREDIT") kind = "cc_payment"
-    else if (toAccount.accountType === "LOAN") kind = "loan_payment"
+    const kind = deriveTransferKindForAccounts({
+      fromAccountType: parseAccountType(fromAccount.accountType),
+      toAccountType: parseAccountType(toAccount.accountType),
+    })
 
     const inAmount = data.destinationAmount ?? data.amount
     const inCurrency = data.destinationCurrency ?? data.currency
@@ -2069,6 +2127,7 @@ async function replaceTransactionWithinTenantTransaction(
     resultTransaction = outflowTx
     createdInflowTx = inflowTx
   } else {
+    await assertLiabilityCostTarget(tx, familyId, data)
     const amountSign: Money =
       data.type === "expense"
         ? negateMoney(absMoney(data.amount))
@@ -2088,6 +2147,7 @@ async function replaceTransactionWithinTenantTransaction(
     const newTx = await tx.transaction.create({
       data: {
         type: data.type,
+        kind: data.kind,
         amount: amountSign,
         description: data.description,
         date: data.date,

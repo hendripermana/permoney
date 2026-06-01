@@ -87,6 +87,7 @@ describe("Tenant composite FK invariants (PER-104)", () => {
             date: new Date("2026-02-02T00:00:00.000Z"),
             description: "Cross-tenant transfer destination",
             familyId: owner.family.id,
+            kind: "funds_movement",
             status: "CLEARED",
             toAccountId: intruderAccount.id,
             type: "transfer",
@@ -397,17 +398,17 @@ describe("Tenant composite FK invariants (PER-104)", () => {
         try {
           await client.query(
             `INSERT INTO "Transaction"
-               (id, amount, type, currency, status, date, description,
+               (id, amount, type, kind, currency, status, date, description,
                 "accountId", "userId", "familyId", "createdAt", "updatedAt")
-             VALUES ('per-104-xfam-out', -10000, 'transfer', 'IDR', 'CLEARED',
+             VALUES ('per-104-xfam-out', -10000, 'transfer', 'funds_movement', 'IDR', 'CLEARED',
                      now(), 'cross-family outflow', $1, $2, $3, now(), now())`,
             [accountA.id, familyA.user.id, familyA.family.id]
           )
           await client.query(
             `INSERT INTO "Transaction"
-               (id, amount, type, currency, status, date, description,
+               (id, amount, type, kind, currency, status, date, description,
                 "accountId", "userId", "familyId", "createdAt", "updatedAt")
-             VALUES ('per-104-xfam-in', 10000, 'transfer', 'IDR', 'CLEARED',
+             VALUES ('per-104-xfam-in', 10000, 'transfer', 'funds_movement', 'IDR', 'CLEARED',
                      now(), 'cross-family inflow', $1, $2, $3, now(), now())`,
             [accountB.id, familyB.user.id, familyB.family.id]
           )

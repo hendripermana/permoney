@@ -101,6 +101,8 @@ All Prisma + Node-only modules use the **`.server.ts` hard fence** convention en
 
 Accounts use explicit `accountClass`, `accountType`, and `accountSubtype` fields so new financial products usually fit as subtype/capability metadata instead of new ledger semantics. See [`docs/account-taxonomy.md`](./docs/account-taxonomy.md).
 
+Liability accounts use explicit payment, borrowing, interest, and fee semantics so credit-card payments and loan principal repayments are not reported as ordinary spending. See [`docs/liability-semantics.md`](./docs/liability-semantics.md).
+
 ### Reactive Ledger
 
 - Server functions (`createServerFn`) are the only way to mutate persistent data.

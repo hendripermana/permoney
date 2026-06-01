@@ -9,7 +9,9 @@ Permoney accounts use a three-layer taxonomy:
 
 This document is the public schema/API contract for account classification. It
 extends the core domain boundary in
-[`ADR-0008`](./adr/0008-core-domain-model-and-ledger-boundaries.md).
+[`ADR-0008`](./adr/0008-core-domain-model-and-ledger-boundaries.md). Liability
+payment, borrowing, interest, and fee semantics live in
+[`docs/liability-semantics.md`](./liability-semantics.md).
 
 ## Schema Fields
 
@@ -125,7 +127,10 @@ balance         <= 0
 ```
 
 Payments toward the loan move the balance toward zero. Transfers into a `LOAN`
-account are classified as `loan_payment`.
+account are classified as `loan_payment`. New borrowing from a loan into an
+asset account is classified as `liability_draw`. Interest and fees are separate
+expense rows with `liability_interest` or `liability_fee` and `toAccountId`
+pointing at the loan.
 
 ### Gold, vehicle, or real estate tracking
 
@@ -149,6 +154,9 @@ transaction occurs.
 - The database is the backstop: class domain, type domain, class/type
   consistency, normal-balance sign, subtype shape, due-day ranges, credit-limit
   sign, and archive/status consistency are enforced by checks.
+- Liability semantics are part of the ledger contract. Credit-card payments and
+  loan principal payments are transfer kinds, not ordinary spending. Interest
+  and fees are expense kinds linked to the liability account.
 - Import providers and AI enrichment may suggest institution metadata,
   provider IDs, masks, limits, rates, and subtype refinements. The final account
   write still uses the canonical account API and database constraints.
