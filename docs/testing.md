@@ -21,6 +21,24 @@ the fast default unit path. The default suite is intentionally scoped to
 `src/**/*.test.*` and `scripts/**/*.test.mjs`; local agent/cache worktrees such
 as `.kilo/**` and `.kilocode/**` are excluded.
 
+## Test Stack Roles
+
+Each layer has a different source-of-truth boundary:
+
+- Vite+/Vitest unit tests cover fast pure logic and finance-domain helpers.
+- Real Postgres integration tests cover ledger, RLS, idempotency, balance,
+  audit, and database-constraint invariants.
+- Playwright covers deterministic browser E2E flows: routing, auth,
+  onboarding, hydration, TanStack DB preload, and browser-bundle safety.
+- TestSprite, or an equivalent AI test generator, is supplemental exploratory
+  automation. It may discover regression candidates, but it is not a coverage
+  gate and is not proof that Permoney is correct.
+
+Generated or exploratory test output must never replace the deterministic
+tests above. A PR may cite TestSprite findings as discovery evidence, but the
+merge-blocking evidence must be a committed unit, integration, or Playwright
+test that reviewers can run with Vite+.
+
 ## Coverage Gates
 
 Vitest coverage runs through Vite+ with the V8 provider:
@@ -203,3 +221,48 @@ vp run test:e2e
 Browser E2E tests should stay in `tests/e2e/**/*.e2e.ts`. Keep this suite small
 enough for PR confidence, deterministic enough for CI, and strict enough to
 catch auth-route, hydration, TanStack DB preload, and browser-bundle regressions.
+
+## Supplemental TestSprite Workflow
+
+TestSprite can be used to explore the app and propose candidate browser flows.
+Use it as a discovery tool with this workflow:
+
+1. Run TestSprite against a disposable local or preview environment, never
+   against production data.
+2. Save the prompt, app URL, app state, generated steps, and failure output in
+   the related Linear issue or PR notes.
+3. Triage each finding against Permoney's test boundaries:
+   - browser-only route, hydration, and interaction issues become Playwright
+     candidates;
+   - ledger, RLS, idempotency, balance, audit, and database-law issues become
+     real Postgres integration candidates;
+   - pure formatting, parsing, money, or filter issues become unit-test
+     candidates.
+4. An engineer or agent must review the generated flow against the relevant
+   invariant before committing any test.
+5. Commit only deterministic exported tests or hand-written equivalents in the
+   repo. Proprietary TestSprite output must not be required for CI unless it has
+   been converted into a deterministic test that runs through Vite+.
+
+Example: TestSprite explores signup, onboarding, and first navigation to
+`/transactions`, then reports that a reload after onboarding shows a blank page.
+Treat that as a candidate route/hydration regression, not as proof. Review the
+flow against the onboarding contract in this document, then add or update a
+Playwright test under `tests/e2e/**/*.e2e.ts` that:
+
+- signs up through the UI;
+- completes guided onboarding;
+- reloads `/transactions`;
+- asserts the page is usable and protected-route redirects are correct; and
+- fails on known server-client boundary console errors.
+
+If the same exploratory run also claims that account balances are wrong after a
+transaction mutation, do not encode that as a shallow browser assertion alone.
+Map it to the ledger invariant and add a real Postgres integration test that
+proves the balance, audit, idempotency, and tenant-scoping behavior at the
+database boundary.
+
+Agents must not claim test coverage is complete just because TestSprite or any
+AI-generated test suite ran successfully. The claim is only valid when the
+relevant deterministic Vite+/Vitest, real Postgres integration, or Playwright
+test has been committed and verified.
