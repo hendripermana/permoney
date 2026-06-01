@@ -118,7 +118,8 @@
       "vitest": "npm:@voidzero-dev/vite-plus-test@latest",
       "@tanstack/react-router": "$@tanstack/react-router",
       "@tanstack/react-start": "$@tanstack/react-start",
-      "@tanstack/start-server-core": "1.169.8"
+      "@tanstack/start-server-core": "1.169.8",
+      "kysely": "0.28.17"
     },
     "onlyBuiltDependencies": [
       "@prisma/engines",
