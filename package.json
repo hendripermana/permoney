@@ -107,7 +107,7 @@
     "vite": "npm:@voidzero-dev/vite-plus-core@^0.1.21",
     "vite-plus": "latest",
     "vitest": "npm:@voidzero-dev/vite-plus-test@^0.1.21",
-    "web-vitals": "^5.2.0",
+    "web-vitals": "^5.3.0",
     "youch": "^4.1.1",
     "youch-core": "^0.3.3"
   },
