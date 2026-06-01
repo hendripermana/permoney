@@ -1355,6 +1355,34 @@ function useTransactionFormModalController({
           value.destinationAmount != null && destCurrency
             ? toMoney(value.destinationAmount, destCurrency)
             : null
+        const selectedAccount = formData?.accounts.find(
+          (a) => a.id === value.accountId
+        )
+        const selectedToAccount =
+          value.toAccountId && value.type === "transfer"
+            ? formData?.accounts.find((a) => a.id === value.toAccountId)
+            : null
+        const accountRelation = selectedAccount
+          ? {
+              accountType: selectedAccount.accountType,
+              color: selectedAccount.color,
+              name: selectedAccount.name,
+              type: selectedAccount.accountType,
+            }
+          : {
+              accountType: "",
+              color: null,
+              name: "...",
+              type: "",
+            }
+        const toAccountRelation = selectedToAccount
+          ? {
+              accountType: selectedToAccount.accountType,
+              color: selectedToAccount.color,
+              name: selectedToAccount.name,
+              type: selectedToAccount.accountType,
+            }
+          : null
 
         const payload = {
           type: value.type,
@@ -1397,15 +1425,8 @@ function useTransactionFormModalController({
           attachmentUrl: value.attachmentUrl || null,
           deletedAt: null,
           userId: "",
-          account: formData?.accounts.find((a) => a.id === value.accountId) ?? {
-            name: "...",
-            type: "",
-            color: null,
-          },
-          toAccount: value.toAccountId
-            ? (formData?.accounts.find((a) => a.id === value.toAccountId) ??
-              null)
-            : null,
+          account: accountRelation,
+          toAccount: toAccountRelation,
           // Jika split, category di parent null
           category:
             !isSplit && value.categoryId

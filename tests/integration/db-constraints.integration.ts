@@ -216,7 +216,9 @@ describe("M2 data-integrity database constraints", () => {
             familyId: owner.family.id,
             name: "Invalid account type",
             status: "active",
-            type: "VAULT",
+            accountClass: "ASSET",
+            accountSubtype: "checking",
+            accountType: "VAULT",
           },
         })
       )
@@ -232,14 +234,119 @@ describe("M2 data-integrity database constraints", () => {
             familyId: owner.family.id,
             name: "Invalid account status",
             status: "archived",
-            type: "DEPOSITORY",
+            accountClass: "ASSET",
+            accountSubtype: "checking",
+            accountType: "DEPOSITORY",
           },
         })
       )
     )
   })
 
-  test("rejects negative balances for non-credit account types", async () => {
+  test("rejects malformed account taxonomy and normal-balance drift", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+
+    await expectDatabaseRejection(() =>
+      harness.withFamily(
+        owner.family.id,
+        (tx) =>
+          tx.$executeRaw`
+          INSERT INTO "Account" (
+            id,
+            name,
+            "accountClass",
+            "accountType",
+            "accountSubtype",
+            balance,
+            currency,
+            color,
+            status,
+            "familyId"
+          )
+          VALUES (
+            'invalid-account-class',
+            'Invalid account class',
+            'EXPENSE',
+            'DEPOSITORY',
+            'checking',
+            0,
+            'IDR',
+            '#2563eb',
+            'active',
+            ${owner.family.id}
+          )
+        `
+      )
+    )
+
+    await expectDatabaseRejection(() =>
+      harness.withFamily(
+        owner.family.id,
+        (tx) =>
+          tx.$executeRaw`
+          INSERT INTO "Account" (
+            id,
+            name,
+            "accountClass",
+            "accountType",
+            "accountSubtype",
+            balance,
+            currency,
+            color,
+            status,
+            "familyId"
+          )
+          VALUES (
+            'invalid-account-class-type-pair',
+            'Invalid account class type pair',
+            'ASSET',
+            'CREDIT',
+            'credit_card',
+            0,
+            'IDR',
+            '#2563eb',
+            'active',
+            ${owner.family.id}
+          )
+        `
+      )
+    )
+
+    await expectDatabaseRejection(() =>
+      harness.withFamily(
+        owner.family.id,
+        (tx) =>
+          tx.$executeRaw`
+          INSERT INTO "Account" (
+            id,
+            name,
+            "accountClass",
+            "accountType",
+            "accountSubtype",
+            balance,
+            currency,
+            color,
+            status,
+            "familyId"
+          )
+          VALUES (
+            'invalid-positive-liability-balance',
+            'Invalid positive liability balance',
+            'LIABILITY',
+            'LOAN',
+            'personal_loan',
+            100,
+            'IDR',
+            '#2563eb',
+            'active',
+            ${owner.family.id}
+          )
+        `
+      )
+    )
+  })
+
+  test("rejects negative balances for asset account classes", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
 
     await expectDatabaseRejection(() =>
@@ -252,7 +359,9 @@ describe("M2 data-integrity database constraints", () => {
             familyId: owner.family.id,
             name: "Invalid negative depository",
             status: "active",
-            type: "DEPOSITORY",
+            accountClass: "ASSET",
+            accountSubtype: "checking",
+            accountType: "DEPOSITORY",
           },
         })
       )
@@ -272,7 +381,9 @@ describe("M2 data-integrity database constraints", () => {
             familyId: owner.family.id,
             name: "Invalid account currency",
             status: "active",
-            type: "DEPOSITORY",
+            accountClass: "ASSET",
+            accountSubtype: "checking",
+            accountType: "DEPOSITORY",
           },
         })
       )
@@ -426,16 +537,16 @@ describe("M2 data-integrity database constraints", () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
     const [assetAccount, creditAccount] = await Promise.all([
       factories.createAccount({
+        accountType: "DEPOSITORY",
         balance: 10_000n,
         familyId: owner.family.id,
         name: "Valid asset account",
-        type: "DEPOSITORY",
       }),
       factories.createAccount({
+        accountType: "CREDIT",
         balance: -10_000n,
         familyId: owner.family.id,
         name: "Valid credit account",
-        type: "CREDIT",
       }),
     ])
 

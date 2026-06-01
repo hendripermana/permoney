@@ -89,8 +89,12 @@ model Account {
   id   String @id @default(cuid())
   name String
 
-  // Tipe makin pro: "DEPOSITORY" (Bank/Dompet), "CREDIT" (Kartu Kredit), "LOAN" (Hutang), "RECEIVABLE" (Piutang/Uang dipinjam orang), "INVESTMENT" (Saham)
-  type             String
+  // Taxonomy contract: class controls normal balance, type controls ledger
+  // capabilities, subtype describes product family without rewriting ledger
+  // semantics. See docs/account-taxonomy.md.
+  accountClass   String
+  accountType    String
+  accountSubtype String
   // Stored in MINOR UNITS (sen for IDR, cents for USD, satoshi for BTC).
   // Per-currency scale is driven by `CURRENCIES[code].minorUnitConversion`
   // in src/lib/data/currencies.ts. See docs/adr/0001-money-type-migration.md.
@@ -100,8 +104,21 @@ model Account {
   currencyRegistry Iso4217Currency @relation("AccountCurrency", fields: [currency], references: [code], onDelete: Restrict, onUpdate: Cascade, map: "account_currency_is_iso_4217")
 
   // Fitur Enterprise: Visual & Status
-  color  String? // Hex color misal "#3b82f6"
-  status String  @default("active") // "active" atau "closed"
+  color      String? // Hex color misal "#3b82f6"
+  status     String    @default("active") // "active" atau "closed"
+  archivedAt DateTime?
+
+  // Optional provider/capability metadata. These fields describe integrations
+  // and product behaviour; they do not change ledger semantics.
+  institutionName   String?
+  externalProvider  String?
+  externalAccountId String?
+  mask              String?
+  isImportable      Boolean @default(false)
+  creditLimit       BigInt?
+  statementDay      Int?
+  dueDay            Int?
+  interestRateBps   Int?
 
   familyId String
   family   Family @relation(fields: [familyId], references: [id])
@@ -113,6 +130,9 @@ model Account {
   // ADR-0004 lands; cheap to add now). See ADR-0003.
   @@unique([id, familyId], map: "Account_id_familyId_key")
   @@index([familyId])
+  @@index([familyId, accountClass, accountType])
+  @@index([familyId, status])
+  @@index([familyId, externalProvider, externalAccountId])
 }
 
 model Merchant {

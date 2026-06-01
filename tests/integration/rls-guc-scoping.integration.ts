@@ -113,7 +113,9 @@ describe("transaction-scoped RLS GUC", () => {
             familyId: familyB.family.id,
             name: "Illegal cross-tenant insert",
             status: "active",
-            type: "DEPOSITORY",
+            accountClass: "ASSET",
+            accountSubtype: "checking",
+            accountType: "DEPOSITORY",
           },
         })
       )
@@ -166,7 +168,9 @@ describe("transaction-scoped RLS GUC", () => {
             familyId: owner.family.id,
             name: "Single connection account",
             status: "active",
-            type: "DEPOSITORY",
+            accountClass: "ASSET",
+            accountSubtype: "checking",
+            accountType: "DEPOSITORY",
           },
         })
         const selected = await tx.account.findUniqueOrThrow({

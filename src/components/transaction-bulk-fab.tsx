@@ -30,9 +30,9 @@ interface MerchantOption {
 }
 
 interface AccountOption {
+  accountType: string
   id: string
   name: string
-  type: string
 }
 
 interface TransactionBulkFABProps {
@@ -169,7 +169,7 @@ export function TransactionBulkFAB({
                 <div className="flex flex-col">
                   <span className="text-sm font-medium">{a.name}</span>
                   <span className="text-xs text-muted-foreground uppercase">
-                    {a.type}
+                    {a.accountType}
                   </span>
                 </div>
               </DropdownMenuItem>

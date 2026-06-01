@@ -267,6 +267,8 @@ Transactions are the heart of Permoney. This is not a CRUD module. It is the can
 
 The canonical domain boundary is documented in [`docs/adr/0008-core-domain-model-and-ledger-boundaries.md`](./docs/adr/0008-core-domain-model-and-ledger-boundaries.md). Read it before adding or changing import staging, valuation snapshots, AI enrichment, reconciliation, asset tracking, or other systems that touch money-shaped data.
 
+The account taxonomy contract is documented in [`docs/account-taxonomy.md`](./docs/account-taxonomy.md). Use `accountClass`, `accountType`, and `accountSubtype` for account classification; do not introduce new ledger behavior through ad hoc account product strings.
+
 ### A. Data Integrity & Double-Entry (Server-Side)
 
 - **ACID Transactions**: Every financial mutation (create/update/delete/bulk/import/onboarding demo data) MUST be wrapped in an interactive `prisma.$transaction(async (tx) => ...)` block so reads, writes, RLS GUC setup, balance updates, idempotency checks, and audit logs share the same transaction.

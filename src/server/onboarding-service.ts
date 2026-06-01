@@ -89,13 +89,15 @@ export async function initializeOnboardingForUser(
 
     const account = await tx.account.create({
       data: {
+        accountClass: "ASSET",
+        accountSubtype: "checking",
+        accountType: "DEPOSITORY",
         balance: STARTER_ACCOUNT_OPENING_BALANCE,
         color: STARTER_ACCOUNT_COLOR,
         currency: family.currency,
         familyId: scopedFamilyId,
         name: STARTER_ACCOUNT_NAME,
         status: "active",
-        type: "DEPOSITORY",
       },
     })
 
