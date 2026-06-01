@@ -66,7 +66,7 @@
     "better-auth": "^1.6.11",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "date-fns": "^4.3.0",
+    "date-fns": "^4.4.0",
     "lucide-react": "^1.17.0",
     "next-themes": "^0.4.6",
     "nitro": "3.0.260415-beta",
@@ -107,7 +107,7 @@
     "vite": "npm:@voidzero-dev/vite-plus-core@^0.1.21",
     "vite-plus": "latest",
     "vitest": "npm:@voidzero-dev/vite-plus-test@^0.1.21",
-    "web-vitals": "^5.2.0",
+    "web-vitals": "^5.3.0",
     "youch": "^4.1.1",
     "youch-core": "^0.3.3"
   },
