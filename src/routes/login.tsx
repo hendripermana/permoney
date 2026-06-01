@@ -1,23 +1,19 @@
 import { createFileRoute, redirect } from "@tanstack/react-router"
-import { LoginForm } from "@/components/login-form"
+import { LoginRouteShell } from "@/components/blocks/login-route-shell"
 import { getSessionGuardFn } from "@/server/auth-fns"
 import { getPublicAuthRouteRedirect } from "@/server/onboarding-contract"
 
 export const Route = createFileRoute("/login")({
+  // PER-107: keep the auth shell in the critical route module. In dev SSR the
+  // server can render while `beforeLoad` is pending, while hydration may already
+  // have the guard result. Rendering the same shell for both states prevents a
+  // route Suspense fallback from becoming the hydratable server tree.
+  codeSplitGroupings: [],
+  pendingComponent: LoginRouteShell,
   beforeLoad: async () => {
     const guard = await getSessionGuardFn()
     const redirectTo = getPublicAuthRouteRedirect(guard)
     if (redirectTo) throw redirect({ to: redirectTo })
   },
-  component: RouteComponent,
+  component: LoginRouteShell,
 })
-
-function RouteComponent() {
-  return (
-    <div className="flex min-h-svh flex-col items-center justify-center bg-zinc-100 p-6 md:p-10">
-      <div className="w-full max-w-sm md:max-w-4xl">
-        <LoginForm />
-      </div>
-    </div>
-  )
-}
