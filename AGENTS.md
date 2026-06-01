@@ -265,6 +265,8 @@ When adding a community component, always follow the Vite+ pattern:
 
 Transactions are the heart of Permoney. This is not a CRUD module. It is the canonical financial ledger that every future feature depends on: accounts, budgets, reports, bank imports, smart rules, AI enrichment, audit trails, and reconciliation. If a shortcut makes transaction history, balances, tenant isolation, or auditability weaker, the shortcut is wrong even when the UI works and the build is green.
 
+The canonical domain boundary is documented in [`docs/adr/0008-core-domain-model-and-ledger-boundaries.md`](./docs/adr/0008-core-domain-model-and-ledger-boundaries.md). Read it before adding or changing import staging, valuation snapshots, AI enrichment, reconciliation, asset tracking, or other systems that touch money-shaped data.
+
 ### A. Data Integrity & Double-Entry (Server-Side)
 
 - **ACID Transactions**: Every financial mutation (create/update/delete/bulk/import/onboarding demo data) MUST be wrapped in an interactive `prisma.$transaction(async (tx) => ...)` block so reads, writes, RLS GUC setup, balance updates, idempotency checks, and audit logs share the same transaction.

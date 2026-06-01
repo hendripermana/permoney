@@ -93,6 +93,10 @@ docs/
 
 All Prisma + Node-only modules use the **`.server.ts` hard fence** convention enforced by TanStack Start's `import-protection` plugin. See [`AGENTS.md` §6](./AGENTS.md) for the full contract.
 
+### Core Domain Boundary
+
+`Transaction` is the canonical ledger center. Metadata, import staging, AI enrichment, valuation snapshots, reconciliation records, and derived views attach to the ledger; they do not replace it. See [`docs/adr/0008-core-domain-model-and-ledger-boundaries.md`](./docs/adr/0008-core-domain-model-and-ledger-boundaries.md).
+
 ### Reactive Ledger
 
 - Server functions (`createServerFn`) are the only way to mutate persistent data.
@@ -102,7 +106,7 @@ All Prisma + Node-only modules use the **`.server.ts` hard fence** convention en
 
 ### Money Type — BigInt
 
-All monetary fields (`amount`, `balance`) use integer minor units (BigInt cents/sen) per ISO 4217 to prevent precision loss. See [`docs/adr/0002-migrate-amount-to-bigint.md`](./docs/adr/0002-migrate-amount-to-bigint.md).
+All monetary fields (`amount`, `balance`) use integer minor units (BigInt cents/sen) per ISO 4217 to prevent precision loss. See [`docs/adr/0001-money-type-migration.md`](./docs/adr/0001-money-type-migration.md).
 
 ## Contributing
 
