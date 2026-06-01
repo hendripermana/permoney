@@ -16,7 +16,6 @@ import { useLiveQuery } from "@tanstack/react-db"
 import { useQuery } from "@tanstack/react-query"
 import {
   createFileRoute,
-  redirect,
   type ErrorComponentProps,
 } from "@tanstack/react-router"
 import { getCoreRowModel, useReactTable } from "@tanstack/react-table"
@@ -46,7 +45,6 @@ import {
   bulkUpdateTransactionsFn,
   getTransactionFormData,
 } from "@/server/transactions"
-import { getSessionGuardFn } from "@/server/auth-fns"
 import { formatCurrency } from "@/lib/currency"
 import { ZERO_MONEY, type Money } from "@/lib/money"
 import {
@@ -75,21 +73,15 @@ type VirtualRow =
 type TransactionArray = Array<TransactionData>
 type GroupedRecord = Record<string, TransactionArray>
 
-export const Route = createFileRoute("/transactions")({
+export const Route = createFileRoute("/_protected/transactions")({
   // URL search params divalidasi otomatis oleh Zod via TanStack Router.
   // PENTING: validateSearch HARUS dideklarasikan SEBELUM loader agar
   // search params sudah ter-validasi saat loader dijalankan.
   validateSearch: zodValidator(transactionSearchSchema),
   // TanStack DB (useLiveQuery) hanya hidup di browser, tidak bisa di-render di server.
   ssr: false,
-  // === AUTH GUARD: redirect sebelum loader jalan ===
-  // Tanpa ini, unauthenticated user langsung hit transactionCollection.preload()
-  // → getTransactionsFn → familyMiddleware → server error (bukan redirect).
-  beforeLoad: async () => {
-    const guard = await getSessionGuardFn()
-    if (!guard.authenticated) throw redirect({ to: "/login" })
-    if (!guard.hasFamilyId) throw redirect({ to: "/onboarding" })
-  },
+  // Auth guard lives in /_protected so SSR redirects run before this
+  // client-only TanStack DB route can render its pending collection UI.
   // === PRELOAD COLLECTION DURING NAVIGATION ===
   // Wajib per skill `@tanstack/db/skills/meta-framework`: tanpa preload,
   // `startSyncImmediate()` di dalam `useLiveQuery` akan fire saat render,

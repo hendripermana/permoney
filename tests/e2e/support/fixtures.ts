@@ -1,6 +1,7 @@
 import { test as base } from "@playwright/test"
 
 const FORBIDDEN_CONSOLE_FRAGMENTS = [
+  "Hydration failed because the server rendered HTML didn't match the client",
   "react-dom/server.browser.js",
   "renderRouterToString",
   "node:stream/web",

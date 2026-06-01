@@ -48,7 +48,7 @@ import {
 import { formatCurrency } from "@/lib/currency"
 import { createUuidV7 } from "@/lib/uuid-v7"
 
-export const Route = createFileRoute("/import")({
+export const Route = createFileRoute("/_protected/import")({
   component: ImportPage,
   staticData: {
     title: "Import & Rules Engine",
