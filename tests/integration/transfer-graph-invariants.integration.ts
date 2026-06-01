@@ -339,16 +339,18 @@ async function insertLeg(
     fx: AccountsFixture
   }
 ): Promise<void> {
+  const kind = input.type === "transfer" ? "funds_movement" : "standard"
   await client.query(
     `INSERT INTO "Transaction"
-       (id, amount, type, currency, status, date, description,
+       (id, amount, type, kind, currency, status, date, description,
         "accountId", "userId", "familyId", "createdAt", "updatedAt")
-     VALUES ($1, $2, $3, 'IDR', 'CLEARED', $4, 'per103 bare leg',
-             $5, $6, $7, now(), now())`,
+     VALUES ($1, $2, $3, $4, 'IDR', 'CLEARED', $5, 'per103 bare leg',
+             $6, $7, $8, now(), now())`,
     [
       input.id,
       input.amount,
       input.type,
+      kind,
       TEST_DATE,
       input.accountId,
       input.fx.userId,

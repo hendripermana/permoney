@@ -1,5 +1,6 @@
 import { createCollection } from "@tanstack/react-db"
 import { queryCollectionOptions } from "@tanstack/query-db-collection"
+import type { TransactionKind } from "./liability-semantics"
 import { decodeMoney, encodeMoney, type Money } from "./money"
 import { getQueryClient } from "./query-client"
 import { createUuidV7 } from "./uuid-v7"
@@ -139,6 +140,10 @@ export const transactionCollection = createCollection(
             id: payload.id as string,
             idempotencyKey: payload.idempotencyKey as string,
             type: payload.type as "expense" | "income" | "transfer",
+            kind:
+              payload.type === "transfer"
+                ? undefined
+                : (payload.kind as TransactionKind | undefined),
             amount: encodeMoney(payload.amount as Money),
             description: payload.description as string,
             accountId: payload.accountId as string,
@@ -192,6 +197,10 @@ export const transactionCollection = createCollection(
             id: payload.id as string,
             idempotencyKey: createUuidV7(),
             type: payload.type as "expense" | "income" | "transfer",
+            kind:
+              payload.type === "transfer"
+                ? undefined
+                : (payload.kind as TransactionKind | undefined),
             amount: encodeMoney(payload.amount as Money),
             description: payload.description as string,
             accountId: payload.accountId as string,
