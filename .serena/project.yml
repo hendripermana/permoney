@@ -111,7 +111,12 @@ added_modes:
 
 # initial prompt for the project. It will always be given to the LLM upon activating the project
 # (contrary to the memories, which are loaded on demand).
-initial_prompt: ""
+initial_prompt: >-
+  Read mem:core first. Treat AGENTS.md and docs/agents/ as mandatory repository
+  guidance, then read the complete current Linear ticket and relevant accepted
+  ADRs before implementation. Serena memories are concise retrieval aids, not
+  policy overrides; canonical database constraints, ADRs, repository rules,
+  and ticket acceptance criteria take precedence.
 
 # time budget (seconds) per tool call for the retrieval of additional symbol information
 # such as docstrings or parameter information.

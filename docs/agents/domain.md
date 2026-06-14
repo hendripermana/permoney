@@ -3,6 +3,8 @@
 Permoney is a single-context repository. The canonical context is the
 financial system as a whole; frontend, server, database, imports, automation,
 and AI integrations are delivery boundaries, not separate business contexts.
+Cross-agent guidance ownership and precedence are defined in
+`docs/agents/agent-harness.md`.
 
 ## Read Before Exploring
 

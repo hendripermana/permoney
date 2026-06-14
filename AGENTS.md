@@ -83,6 +83,10 @@ Linear uses the five canonical agent triage labels without aliases. See `docs/ag
 
 Permoney is a single-context repository with system-wide ADRs under `docs/adr/`. See `docs/agents/domain.md`.
 
+### Agent harness
+
+Agent context is portable across coding tools through versioned repository guidance, Serena memories, and local/remote-managed CommandCode Taste. Follow the precedence and bootstrap contract in `docs/agents/agent-harness.md`; Taste is advisory and must never override durable project guidance.
+
 ## Review Checklist for Agents
 
 - [ ] Run `vp install` after pulling remote changes and before getting started.

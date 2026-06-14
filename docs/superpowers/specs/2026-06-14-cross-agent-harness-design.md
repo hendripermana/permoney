@@ -35,11 +35,12 @@ ledger invariant.
 continuously. Committing auto-learned files would create persistent worktree
 noise and allow unreviewed probabilistic preferences to enter pull requests.
 
-Project Taste is bootstrapped from the repository and existing agent sessions,
-then synchronized through the authenticated CommandCode profile:
+Project Taste is bootstrapped from existing Codex, Claude Code, and other
+supported agent sessions, then synchronized through the authenticated
+CommandCode profile:
 
 ```bash
-cmd taste learn .
+cmd learn-taste
 cmd taste lint --all
 cmd taste push --all
 ```
