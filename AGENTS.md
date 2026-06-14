@@ -69,10 +69,30 @@ These commands map to their corresponding tools. For example, `vp dev --port 300
 - **Import JavaScript modules from `vite-plus`:** Instead of importing from `vite` or `vitest`, all modules should be imported from the project's `vite-plus` dependency. For example, `import { defineConfig } from 'vite-plus';` or `import { expect, test, vi } from 'vite-plus/test';`. You must not install `vitest` to import test utilities.
 - **Type-Aware Linting:** There is no need to install `oxlint-tsgolint`, `vp lint --type-aware` works out of the box.
 
+## Agent skills
+
+### Issue tracker
+
+Issues, PRDs, milestones, and implementation tickets are tracked in Linear under the `Permana` team. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Linear uses the five canonical agent triage labels without aliases. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Permoney is a single-context repository with system-wide ADRs under `docs/adr/`. See `docs/agents/domain.md`.
+
+### Agent harness
+
+Agent context is portable across coding tools through versioned repository guidance, Serena memories, and local/remote-managed CommandCode Taste. Follow the precedence and bootstrap contract in `docs/agents/agent-harness.md`; Taste is advisory and must never override durable project guidance.
+
 ## Review Checklist for Agents
 
 - [ ] Run `vp install` after pulling remote changes and before getting started.
+- [ ] If `vp` is not installed or `vp install` fails, stop and report the exact error. Do not substitute `npm`, `pnpm`, or `yarn` commands unless the user explicitly asks for that fallback.
 - [ ] Run `vp check` and `vp test` to validate changes.
+- [ ] If `vp check` or `vp test` fails, stop and report the first failing command and error excerpt. Do not claim the task is done until the failure is fixed or the user explicitly approves a partial workaround.
 
 ## Long-Horizon Engineering Standard For Agents
 
@@ -92,25 +112,37 @@ concurrency, future integrations, and framework evolution.
 
 Future agents must work with this mindset:
 
-- Build core paths so they can survive framework, auth provider, database, AI,
-  bank-sync, and deployment changes without rewriting the financial model.
-- Keep irreversible financial meaning in durable server/database invariants,
-  not in UI convention or request timing.
-- Make state transitions explicit. Examples: authenticated-but-not-onboarded,
-  tenant-scoped, transaction-scoped, replayed idempotency key, soft-deleted
-  ledger row, and audited mutation.
-- Prefer a smaller, stricter contract over a broad ambiguous one. Ambiguity is
-  technical debt, especially in money movement and tenant isolation.
-- Test the real boundary that can fail: real Postgres for data integrity, real
-  browser E2E for routing/hydration/client-bundle safety, and targeted unit
-  tests for pure logic.
-- Never hide architectural uncertainty behind passing tests. If the design
-  tradeoff is material, document the decision and why it keeps Permoney more
-  adaptable.
-- Do not choose the easiest implementation because it is easy. Choose the
-  implementation whose boundaries would still make sense if Permoney is far
-  larger, integrated with more providers, or maintained by a different team
-  years from now.
+- **Framework & Infrastructure Agnostic:** Build core paths so they can survive framework, auth provider, database, AI, bank-sync, and deployment changes without rewriting the financial model.
+- **Durable Invariants:** Keep irreversible financial meaning in durable server/database invariants, not in UI convention or request timing.
+- **Explicit State Transitions:** Make state transitions explicit (e.g., authenticated-but-not-onboarded, tenant-scoped, transaction-scoped, replayed idempotency key, soft-deleted ledger row, and audited mutation).
+- **Strict Contracts:** Prefer a smaller, stricter contract over a broad ambiguous one. Ambiguity is technical debt, especially in money movement and tenant isolation.
+- **Real Boundary Testing:** Test the real boundary that can fail: real Postgres for data integrity, real browser E2E for routing/hydration/client-bundle safety, and targeted unit tests for pure logic.
+- **Document Tradeoffs:** Never hide architectural uncertainty behind passing tests. If the design tradeoff is material, document the decision and why it keeps Permoney more adaptable.
+- **Scalable Architecture:** Do not choose the easiest implementation because it is easy. Choose the implementation whose boundaries would still make sense if Permoney is far larger, integrated with more providers, or maintained by a different team years from now.
+
+## AI AGENT OPERATIONAL WORKFLOW (ANTI-DUMB ZONE & HANDOFF)
+
+To maintain maximum engineering intelligence and avoid the LLM "Dumb Zone" (>120k tokens), all agents executing tasks on Permoney must strictly manage their session lifecycle using this operational workflow.
+
+### A. The Context Budget & Smart Zone Guardrails
+
+- **Token Awareness:** Keep track of the active token count in the current session. The "Smart Zone" resides below 120k tokens. Beyond this boundary, the agent becomes prone to hallucinations, repetitive bugs, and breaking invariants.
+- **Proactive Interrogation (`grill_me`):** At the start of a fresh session for a new Milestone or Ticket, the agent MUST look at the current codebase, read the specific Linear ticket definition, and invoke the `grill_me` skill. The agent must interview the developer relentlessly one question at a time to build a shared design concept before generating any code.
+- **Never Vibe-Code:** Do not push huge lines of code blindly based on vague prompts. Use the context provided by Linear tickets to establish explicit boundaries and definition of done.
+- **Fallback for missing context:** If no Linear ticket definition or acceptance criteria are available, ask the user for the ticket ID or required behavior before changing code. If `grill_me` is unavailable or the ticket context cannot be read, ask the user for the missing context instead of continuing with guessed assumptions.
+
+### B. The /handoff & Session Reset Protocol
+
+- **When to Handoff:** If the current session is approaching the 120k token limit (Dumb Zone) OR if a critical out-of-scope refactoring/bug opportunity is discovered mid-task, the agent MUST halt implementation.
+- **Execution:** Do not attempt to force-compact the session endlessly within the same chat graph. Instead, generate a clean, temporary, and disposable markdown handoff artifact summarizing the core focus of the task, the current delta of files modified, precise next steps, and suggested skills (e.g., `grill_me`, `prototype`).
+- **Storage Invariant:** Save the handoff file ONLY to the user operating system's temporary directory (`/tmp` or equivalent). Never commit handoff markdown logs into the main repository workspace to prevent "Dock Rot" (rotting documentation that pollutes future agents' context).
+- **The Memento Reset:** Once the handoff document is created, the user will wipe the context and spin up a 100% fresh chat session (Fresh Smart Zone). The agent in the new session will accept the handoff artifact, instantly regain the accurate "tattoo of memory", and resume coding with peak efficiency.
+
+### C. Vertical Slices & Deep Modules (The Swiss Army Knife Pattern)
+
+- **Tracer Bullets Principle:** When breaking a feature down into implementation issues, agents are strictly forbidden from coding horizontally (layer-by-layer: e.g., writing all database code first, then all server functions, then all UI). Always implement features in "Vertical Slices" (Tracer Bullets) that cut through all layers in a single cycle to guarantee instant architectural feedback loops via `vp check` and `vp test` before adding polish.
+- **Deep Modules Over Fragmentation:** Build code structure following the "Swiss Army Knife" philosophy (Deep Modules). Avoid creating a chaotic scatter of tiny files, premature custom hooks, or excessive micro-folders for a single feature. Keep the public interface minimal and simple on the outside, while encapsulating the complex execution flows deeply inside a self-contained service file (e.g., `src/services/account.ts` or `src/server/transactions.server.ts`).
+- **No Closed-Loop Cheating:** Never let the agent review its own massive code within the same bloated session. Implementation happens AFK, but code review and critical validation must occur either through a fresh agent session using a higher-tier model (e.g., Opus/DeepSeek) or through strict human code-review.
 
 ## TanStack Intent — Agent Skills Discovery
 
@@ -219,7 +251,7 @@ As an AI Agent, you MUST follow these architectural rules for the Permoney proje
 
 ## 1. THE `useEffect` BAN (Declarative & Predictable Logic)
 
-**Do NOT call `useEffect` directly.** To maintain a predictable and performant application, direct usage of `useEffect` is strictly forbidden unless it is the absolute only option.
+**Do NOT call `useEffect` directly.** Use `useEffect` only when there is no declarative replacement from the no-use-effect skill, such as subscribing to a browser event or integrating with an external library that requires a side effect.
 
 **MANDATORY:** You MUST consult and strictly follow the [no-use-effect skill](.agents/skills/no-use-effect/SKILL.md) whenever you are dealing with state synchronization or side effects. The skill document provides the exact five replacement patterns required and the specific `useMountEffect` escape hatch.
 
@@ -243,7 +275,6 @@ All UI components MUST remain strictly consistent with the overarching design gu
   - For **TanStack Form**, utilize primitives from `@/components/ui/form.tsx`.
 - **Language Standards**:
   - **Code & UI**: All user-facing text, variable names, and logic must be in **English**.
-  - **Communication**: Inline code comments and chat explanations should be in **Indonesian** to serve as learning markers.
 
 ## Approved Community Registries
 
@@ -323,17 +354,61 @@ The account taxonomy contract is documented in [`docs/account-taxonomy.md`](./do
 
 ## 6. THE SERVER/CLIENT BOUNDARY (TanStack Start)
 
-Permoney uses **TanStack Start**, NOT Next.js / Remix / React Server Components. Violating the server/client boundary crashes the app at runtime via the security trap in `src/server/db.server.ts` with message `🚨 SECURITY BREACH`, OR fails the build with `Calling 'require' for '.prisma/client/index-browser' in an environment that doesn't expose the 'require' function`. The following rules are non-negotiable because the cost of getting them wrong is shipping the Prisma client + `DATABASE_URL` into the user's browser.
+Permoney uses **TanStack Start**, NOT Next.js / Remix / React Server Components. The server/client boundary is a hard safety fence: shipping `@prisma/client` or `DATABASE_URL` to the browser is a security and build failure.
 
-### A. Directives — Hard Bans
+For every new server file, the model must obey these rules:
 
-- **BANNED: `"use server"`** at the top of any file. This is a React Server Components / Next.js directive. TanStack Start does NOT understand it; worse, its presence **disables** the `createServerFn` splitter on that file, causing `import { prisma } from "./db.server"` to ship to the browser. Source: `node_modules/@tanstack/start-client-core/skills/start-core/server-functions/SKILL.md` explicitly forbids it.
-- **BANNED: `getServerSideProps`, `getStaticProps`, RSC `async` components.** These are Next.js patterns.
-- **TOLERATED (no-op): `"use client"`.** Harmless shadcn boilerplate — TanStack Start ignores it. Do not add new ones, but do not churn existing files to remove them either.
+- **MUST NOT** add `"use server"` at the top of any file. It disables the `createServerFn` splitter and leaks server code into the client bundle.
+- **MUST** wrap every database access, secret API key read, and filesystem operation in `createServerFn(...).handler(...)`. Do not perform those operations in route loaders, because loaders are isomorphic during navigation.
+- **MUST** validate server function input with `.inputValidator(z.object({...}))` and derive client-side types from `Awaited<ReturnType<typeof serverFn>>`. Do not import Prisma model types into UI code.
+- **MUST** use the `*.server.ts` suffix for any module that imports `@prisma/client`, secrets, Node built-ins, or filesystem APIs. Consumers must import it with the explicit `.server` suffix.
+- **MUST** keep `*.server.ts` top-level code side-effect free. Do not call `new PrismaClient(...)`, `new PrismaLibSql(...)`, `throw new Error(...)`, or assign to `globalThis` at module scope.
 
-### B. Server Function Authoring Rules
+### A. Server Function Authoring Rules
 
-- **EVERY database access, secret API key read, and filesystem operation MUST be wrapped in `createServerFn(...).handler(...)`** — never in a route `loader`, never at module top-level of a shared file. Route loaders are **isomorphic** (run on BOTH server and client during navigation); putting `prisma.x` in a loader leaks it.
+```ts
+// src/server/db.server.ts — HARD FENCE + SIDE-EFFECT FREE
+import { PrismaClient } from "@prisma/client"
+import { PrismaLibSql } from "@prisma/adapter-libsql"
+
+const globalForPrisma = globalThis as unknown as {
+  prisma: PrismaClient | undefined
+}
+
+function createPrismaClient(): PrismaClient {
+  if (typeof window !== "undefined") {
+    throw new Error("🚨 SECURITY BREACH: db.server.ts leaked to client bundle.")
+  }
+  const adapter = new PrismaLibSql({ url: process.env.DATABASE_URL! })
+  const client = new PrismaClient({ adapter })
+  if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = client
+  return client
+}
+
+export const prisma: PrismaClient = /* @__PURE__ */ new Proxy(
+  {} as PrismaClient,
+  {
+    get(_t, prop) {
+      const client = globalForPrisma.prisma ?? createPrismaClient()
+      const value = Reflect.get(client, prop) as unknown
+      return typeof value === "function"
+        ? (value as (...a: Array<unknown>) => unknown).bind(client)
+        : value
+    },
+  }
+)
+```
+
+Consumed in server-function wrappers like:
+
+```ts
+// src/server/transactions.ts — createServerFn wrappers
+import { createServerFn } from "@tanstack/react-start"
+import { prisma } from "./db.server" // <-- explicit .server suffix
+```
+
+### F. The `import-protection` Warning — Expected Behavior, Not a Bug
+
 - **Input validation is mandatory.** Use `.inputValidator(z.object({...}))` with Zod. Never trust a client-sent `id`, `amount`, or `userId`.
 - **Return values are the type contract.** Derive client-side types via `Awaited<ReturnType<typeof serverFn>>` — NEVER import Prisma model types directly into UI code. Example pattern:
 
@@ -412,83 +487,4 @@ Past AI-introduced regressions that triggered the security trap (documented so f
 4. **Importing Prisma model types into UI.** Couples the client to `@prisma/client`. Use `Awaited<ReturnType<typeof serverFn>>` instead.
 5. **Naming the db module `db.ts` instead of `db.server.ts`.** Without the `.server.ts` suffix, Vite's `optimizeDeps` follows the static import edge `import { prisma } from "./db"` BEFORE TanStack Start's splitter runs. Pre-bundling sees `@prisma/client`, resolves its `"browser"` package.json field to `index-browser.js` (CJS with `require()`), and Rolldown crashes the dev server with `Calling 'require' for '.prisma/client/index-browser'`. The Proxy + `@__PURE__` pattern is insufficient on its own; the suffix is required. Fixed by renaming `src/server/db.ts` → `src/server/db.server.ts` and updating all importers from `"./db"` to `"./db.server"`.
 
-### F. The `import-protection` Warning — Expected Behavior, Not a Bug
-
-When dev server logs:
-
-```
-[vite+] (client) warning: [import-protection] Import denied in client environment
-  Denied by file pattern: **/*.server.*
-  Importer: src/server/transactions.ts:3:24
-  Import: "./db.server"
-```
-
-**This warning is EXPECTED and the app is SAFE.** Do not refactor or panic.
-
-**Mechanism (verified by reading `node_modules/@tanstack/start-plugin-core/dist/esm/import-protection/{defaults,analysis}.js`):**
-
-1. The `import-protection` plugin performs **source-level static analysis** in client environment. It denies any runtime import of files matching `**/*.server.*`.
-2. `analysis.js:44` explicitly skips `import type` (`if (node.importKind !== "type")`), so type-only imports are exempt — that's why our `import type { Prisma } from "@prisma/client"` does not warn.
-3. The plugin warns at SOURCE level. It does NOT know about other plugins running later in the pipeline.
-4. **TanStack Start's `createServerFn` splitter** strips the `.handler(body)` content from client bundles, removing every reference to `prisma`.
-5. **Rolldown tree-shaking** then drops the now-unused top-level `import { prisma } from "./db.server"`.
-6. **The `**/_.server._`rule** still replaces`db.server.ts` with an empty module in the client graph.
-7. Final client bundle: zero Prisma, zero `db.server` content. Verified by inspecting `dist/_build/assets/*.js` — no `PrismaClient`, no `index-browser.js`, no `require()`.
-
-**The plugin warns defensively** because it cannot statically prove the splitter+tree-shake will eliminate the import. That's fine — defense-in-depth is the point of the rule. The warning is informational, not a build error.
-
-**When to ACT on this warning (vs. ignore):**
-
-- **IGNORE** if: warning fires only on `*.functions.ts`-style files (i.e. files containing `createServerFn(...).handler(...)` wrappers). These are RPC stub generators; the splitter handles them.
-- **ACT** if: warning fires on a route file, component file, hook file, or any file NOT containing `createServerFn` wrappers. That means real server code is leaking.
-
-**To silence the warning at the cost of refactor (optional, for very mature server modules):**
-
-Split into the canonical TanStack Start file pair:
-
-```
-src/server/
-├── transactions.functions.ts    # createServerFn wrappers (no direct prisma import)
-└── transactions.server.ts       # server-only helpers using prisma
-```
-
-Then `transactions.functions.ts` calls helpers from `.server.ts` indirectly via the splitter:
-
-```ts
-// transactions.functions.ts — wrappers only
-import { createServerFn } from "@tanstack/react-start"
-import { findAllTransactions } from "./transactions.server"
-
-export const getTransactionsFn = createServerFn().handler(async () => {
-  return findAllTransactions()
-})
-```
-
-The plugin still flags `import { findAllTransactions } from "./transactions.server"` per `**/*.server.*`. So even the canonical split does NOT fully silence the warning — it just moves it. **The warning is a permanent informational signal, not something to chase.**
-
-### G. Review Checklist Before Touching Server Code
-
-- [ ] No `"use server"` / `"use client"` added to server files.
-- [ ] All `prisma.x` access is inside `createServerFn(...).handler(...)` bodies, never at module scope, never in loaders.
-- [ ] Any new module that imports `@prisma/client`, reads secrets, or uses Node-only APIs is named `*.server.ts` AND consumers import it with the explicit `.server` suffix in the path.
-- [ ] `src/server/db.server.ts` remains a lazy Proxy with `/* @__PURE__ */` annotation and zero module-level side effects.
-- [ ] Client-side types derive from `Awaited<ReturnType<typeof fn>>`, not from `@prisma/client`.
-- [ ] `vp check` and `vp test` pass; `/transactions` loads in dev and preview without `🚨 SECURITY BREACH`, `Calling 'require' for '.prisma/client/index-browser'`, missing export, or browser module-resolution errors.
-
-## 7. DEV RUNTIME STABILITY (M1.5)
-
-### A. React/TanStack/Vite+ Compatibility
-
-During the M1.5 phase, we encountered `react-dom/server.browser.js` export errors during dev in TanStack Start (specifically on routes fetching data).
-
-**Root Cause (accurate)**:
-
-The `/transactions` route already had `ssr: false`. The error appeared when an **unauthenticated user** hit the route: the loader called `transactionCollection.preload()` → `getTransactionsFn` → `familyMiddleware` → threw `UNAUTHENTICATED`. TanStack Start's error-handling path for a client-only route attempted to render the error through a server-side rendering pipeline (`react-dom/server.browser.js`), which is not exported in the browser environment. The issue is **not** a missing `ssr: false` — it is a missing auth guard before the loader.
-
-**Resolution**:
-
-- **Do NOT** suppress the errors by adding Vite `optimizeDeps` hacks (like including/excluding `react-dom/server.browser.js` or `react-server-dom-webpack`). This will break the production build.
-- **Do NOT** use the generic `@tanstack/react-start-plugin` interop mode or manual aliases.
-- **The True Fix**: Add a `beforeLoad` guard that calls a lightweight session-check server function (`getSessionGuardFn`) and redirects to `/login` or `/onboarding` before the loader ever runs. This prevents the error path from triggering in the first place. The `ssr: false` flag is still required (TanStack DB is client-only) but is not the fix for the auth error.
-- **Upstream note**: TanStack Start/Router should not attempt to resolve `react-dom/server.browser.js` in the client graph when rendering error boundaries for `ssr: false` routes. This is worth a minimal reproduction and upstream issue, but the app-level fix (auth guard) is the correct defense regardless.
-- Verify stability by running the M1.5 dev smoke check (`node scripts/smoke-check.mjs`) and verifying preview parity (`vp build` then `vp preview`).
+###
