@@ -38,6 +38,19 @@ export const ACCOUNT_SUBTYPE_VALUES = [
 
 export type AccountSubtype = (typeof ACCOUNT_SUBTYPE_VALUES)[number]
 
+/**
+ * Whether an account's balance is driven by transaction flow (cash-like) or by
+ * point-in-time valuations (tracked asset). This is the M2.5-4 cash-like vs
+ * tracked-asset distinction (PER-75/PER-143). It is derived from `accountType`
+ * so it can never drift from the ledger capability family: a `TRACKED_ASSET`
+ * (property, vehicle, collectible) is valuation-driven; everything else posts
+ * its balance from canonical `Transaction` rows. See docs/account-taxonomy.md
+ * and ADR-0008 §6 (valuation snapshots).
+ */
+export const BALANCE_SOURCE_VALUES = ["transaction_flow", "valuation"] as const
+
+export type BalanceSource = (typeof BALANCE_SOURCE_VALUES)[number]
+
 export type AccountNormalBalance = {
   balanceSign: "negative" | "positive"
   side: "CREDIT" | "DEBIT"
@@ -47,6 +60,7 @@ export type AccountTaxonomy = {
   accountClass: AccountClass
   accountSubtype: string
   accountType: AccountType
+  balanceSource: BalanceSource
 }
 
 export type AccountTaxonomyInput = {
@@ -93,6 +107,8 @@ const DEFAULT_ACCOUNT_SUBTYPE_BY_TYPE = {
   TRACKED_ASSET: "generic_asset",
 } as const satisfies Record<AccountType, AccountSubtype>
 
+const TRACKED_ASSET_ACCOUNT_TYPE: AccountType = "TRACKED_ASSET"
+
 const NORMAL_BALANCE_BY_CLASS = {
   ASSET: {
     balanceSign: "positive",
@@ -120,6 +136,23 @@ export function getDefaultAccountSubtype(
   accountType: AccountType
 ): AccountSubtype {
   return DEFAULT_ACCOUNT_SUBTYPE_BY_TYPE[accountType]
+}
+
+/**
+ * Cash-like accounts post their balance from transaction flow; tracked assets
+ * derive it from valuations. Derived from `accountType` so the flag is a pure
+ * function of the ledger capability family and can never drift.
+ */
+export function getBalanceSourceForType(
+  accountType: AccountType
+): BalanceSource {
+  return accountType === TRACKED_ASSET_ACCOUNT_TYPE
+    ? "valuation"
+    : "transaction_flow"
+}
+
+export function isCashLikeAccount(accountType: AccountType): boolean {
+  return getBalanceSourceForType(accountType) === "transaction_flow"
 }
 
 export function isLiabilityAccountType(accountType: AccountType): boolean {
@@ -151,5 +184,6 @@ export function normalizeAccountTaxonomy(
     accountClass: expectedClass,
     accountSubtype,
     accountType: input.accountType,
+    balanceSource: getBalanceSourceForType(input.accountType),
   }
 }
