@@ -4,12 +4,16 @@ import {
   type ErrorComponentProps,
 } from "@tanstack/react-router"
 import { useLiveQuery } from "@tanstack/react-db"
+import { useQuery } from "@tanstack/react-query"
 import {
   Archive,
   Landmark,
   Pencil,
   Plus,
   RotateCcw,
+  Scale,
+  TrendingUp,
+  TriangleAlert,
   Wallet,
 } from "lucide-react"
 
@@ -46,7 +50,9 @@ import {
 import { cn } from "@/lib/utils"
 import {
   accountCollection,
+  balanceDriftCollection,
   type AccountRecord,
+  type DriftRecord,
 } from "@/lib/account-collections"
 import {
   ACCOUNT_SUBTYPE_VALUES,
@@ -57,7 +63,7 @@ import {
   type AccountType,
 } from "@/lib/accounts"
 import { formatCurrency } from "@/lib/currency"
-import { toMinorUnits } from "@/lib/money"
+import { negateMoney, toMinorUnits } from "@/lib/money"
 import type { CurrencyCode } from "@/lib/data/currencies"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import {
@@ -66,6 +72,8 @@ import {
   reactivateAccountFn,
   updateAccountFn,
 } from "@/server/accounts"
+import { createTransactionFn } from "@/server/transactions"
+import { createValuationFn, getAccountBalanceFn } from "@/server/valuations"
 
 export const Route = createFileRoute("/_protected/accounts")({
   // TanStack DB collections are browser-only; SSR would hang on the pending sync.
@@ -73,7 +81,10 @@ export const Route = createFileRoute("/_protected/accounts")({
   // Preload the collection during navigation so `useLiveQuery` never kicks off
   // `startSyncImmediate()` mid-render. See AGENTS.md §5.B route contract.
   loader: async () => {
-    await accountCollection.preload()
+    await Promise.all([
+      accountCollection.preload(),
+      balanceDriftCollection.preload(),
+    ])
     return null
   },
   staticData: { title: "Accounts & Wallets" },
@@ -134,11 +145,15 @@ function AccountsErrorComponent({ error }: ErrorComponentProps) {
 type DialogState =
   | { mode: "create" }
   | { mode: "edit"; account: AccountRecord }
+  | { mode: "valuation"; account: AccountRecord }
   | null
 
 function AccountsPage() {
   const { data: accounts } = useLiveQuery((q) =>
     q.from({ a: accountCollection })
+  )
+  const { data: driftRows } = useLiveQuery((q) =>
+    q.from({ d: balanceDriftCollection })
   )
   const [dialog, setDialog] = React.useState<DialogState>(null)
   const [busyId, setBusyId] = React.useState<string | null>(null)
@@ -147,6 +162,18 @@ function AccountsPage() {
     () => accounts ?? [],
     [accounts]
   )
+
+  // accountId → its drift entries, so each card can show a badge without an
+  // N+1 query. Memoized off the live drift collection.
+  const driftByAccount = React.useMemo(() => {
+    const map = new Map<string, DriftRecord[]>()
+    for (const row of driftRows ?? []) {
+      const bucket = map.get(row.accountId) ?? []
+      bucket.push(row)
+      map.set(row.accountId, bucket)
+    }
+    return map
+  }, [driftRows])
 
   // Group by class, then sort active-before-archived and alphabetically. Memoized
   // so the grouping is not recomputed on unrelated re-renders.
@@ -170,7 +197,10 @@ function AccountsPage() {
   }, [safeAccounts])
 
   async function refreshAfterMutation() {
-    await accountCollection.utils.refetch()
+    await Promise.all([
+      accountCollection.utils.refetch(),
+      balanceDriftCollection.utils.refetch(),
+    ])
   }
 
   async function handleArchive(account: AccountRecord) {
@@ -244,8 +274,12 @@ function AccountsPage() {
                           <AccountCard
                             key={account.id}
                             account={account}
+                            drift={driftByAccount.get(account.id) ?? []}
                             busy={busyId === account.id}
                             onEdit={() => setDialog({ mode: "edit", account })}
+                            onValuation={() =>
+                              setDialog({ mode: "valuation", account })
+                            }
                             onArchive={() => handleArchive(account)}
                             onReactivate={() => handleReactivate(account)}
                           />
@@ -260,7 +294,18 @@ function AccountsPage() {
         </SidebarInset>
       </SidebarProvider>
 
-      {dialog ? (
+      {dialog && dialog.mode === "valuation" ? (
+        <ValuationActionDialog
+          // Remount per account so the fetched balance view + inputs reset.
+          key={`valuation-${dialog.account.id}`}
+          account={dialog.account}
+          onClose={() => setDialog(null)}
+          onSaved={async () => {
+            await refreshAfterMutation()
+            setDialog(null)
+          }}
+        />
+      ) : dialog ? (
         <AccountFormDialog
           // Remount on each open so the form's internal state initializes
           // cleanly from the target account (singleton edit pattern).
@@ -299,20 +344,30 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
 
 function AccountCard({
   account,
+  drift,
   busy,
   onEdit,
+  onValuation,
   onArchive,
   onReactivate,
 }: {
   account: AccountRecord
+  drift: ReadonlyArray<DriftRecord>
   busy: boolean
   onEdit: () => void
+  onValuation: () => void
   onArchive: () => void
   onReactivate: () => void
 }) {
   const archived = account.status !== "active"
   const cashLike = account.balanceSource === "transaction_flow"
   const Icon = account.accountClass === "LIABILITY" ? Landmark : Wallet
+  // Surface the worst drift: a materialization error outranks a reconciliation
+  // warning. Read-only — the badge never mutates anything (ADR-0034 §7).
+  const hasError = drift.some((d) => d.severity === "error")
+  const driftEntry = hasError
+    ? drift.find((d) => d.severity === "error")
+    : drift[0]
   return (
     <Card className={cn(archived && "opacity-60")}>
       <CardHeader>
@@ -332,6 +387,20 @@ function AccountCard({
           <Badge variant={cashLike ? "default" : "outline"}>
             {cashLike ? "Cash-like" : "Tracked asset"}
           </Badge>
+          {driftEntry ? (
+            <Badge
+              variant={hasError ? "destructive" : "outline"}
+              className={cn(
+                !hasError &&
+                  "border-amber-500/50 text-amber-600 dark:text-amber-400"
+              )}
+            >
+              <TriangleAlert className="size-3" />
+              {driftEntry.kind === "MATERIALIZATION"
+                ? "Balance drift"
+                : `Needs reconcile (${formatCurrency(driftEntry.drift, account.currency)})`}
+            </Badge>
+          ) : null}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex items-end justify-between gap-2">
@@ -342,6 +411,21 @@ function AccountCard({
           </p>
         </div>
         <div className="flex gap-1">
+          {!archived ? (
+            <Button
+              size="icon"
+              variant="ghost"
+              disabled={busy}
+              onClick={onValuation}
+              aria-label={cashLike ? "Reconcile account" : "Update value"}
+            >
+              {cashLike ? (
+                <Scale className="size-4" />
+              ) : (
+                <TrendingUp className="size-4" />
+              )}
+            </Button>
+          ) : null}
           <Button
             size="icon"
             variant="ghost"
@@ -601,6 +685,177 @@ function AccountFormDialog({
             </Button>
             <Button type="submit" disabled={submitting || name.trim() === ""}>
               {submitting ? "Saving…" : editing ? "Save changes" : "Create"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// PER-146 / ADR-0034 §10 UI slice. Tracked assets "Update value" → a market
+// valuation that re-materializes the balance. Cash accounts "Reconcile" → record
+// the observed balance as a reconciliation valuation and post an explicit
+// `balance_adjustment` transaction for the gap, so the correction stays in the
+// ledger (§4) and the drift badge clears.
+function ValuationActionDialog({
+  account,
+  onClose,
+  onSaved,
+}: {
+  account: AccountRecord
+  onClose: () => void
+  onSaved: () => Promise<void>
+}) {
+  const cashLike = account.balanceSource === "transaction_flow"
+  const isLiability = account.accountClass === "LIABILITY"
+  const [valueInput, setValueInput] = React.useState("")
+  const [error, setError] = React.useState<string | null>(null)
+  const [submitting, setSubmitting] = React.useState(false)
+
+  // current / available / held come from the canonical server fn (computed, not
+  // stored). Fetched declaratively — no useEffect (no-use-effect rule).
+  const { data: balanceView } = useQuery({
+    queryKey: ["account_balance_view", account.id],
+    queryFn: async () =>
+      await getAccountBalanceFn({ data: { accountId: account.id } }),
+  })
+
+  const currentMinor = BigInt(account.balance)
+  const targetMagnitude =
+    valueInput.trim() === ""
+      ? null
+      : toMinorUnits(valueInput.trim(), account.currency as CurrencyCode)
+  const signedTarget =
+    targetMagnitude === null
+      ? null
+      : isLiability
+        ? negateMoney(targetMagnitude)
+        : targetMagnitude
+  const driftMinor = signedTarget === null ? null : signedTarget - currentMinor
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault()
+    setError(null)
+    if (targetMagnitude === null) {
+      setError("Enter a value.")
+      return
+    }
+    setSubmitting(true)
+    try {
+      await createValuationFn({
+        data: {
+          accountId: account.id,
+          value: targetMagnitude.toString(),
+          type: cashLike ? "reconciliation" : "market",
+          idempotencyKey: createUuidV7(),
+        },
+      })
+      // Cash: the valuation is only an observation; the gap is corrected by an
+      // explicit, audited adjustment transaction (ADR-0034 §4).
+      if (cashLike && driftMinor !== null && driftMinor !== 0n) {
+        await createTransactionFn({
+          data: {
+            type: driftMinor > 0n ? "income" : "expense",
+            kind: "balance_adjustment",
+            amount: (driftMinor > 0n ? driftMinor : -driftMinor).toString(),
+            description: "Reconciliation adjustment",
+            accountId: account.id,
+            date: new Date(),
+            idempotencyKey: createUuidV7(),
+          },
+        })
+      }
+      await onSaved()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught))
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
+      <DialogContent>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <DialogHeader>
+            <DialogTitle>
+              {cashLike ? "Reconcile account" : "Update value"}
+            </DialogTitle>
+            <DialogDescription>
+              {cashLike
+                ? "Enter the real-world balance. The difference is posted as an audited balance-adjustment transaction; your transaction history is never rewritten."
+                : "Record the latest market value. The balance follows this valuation."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid grid-cols-3 gap-3 rounded-md bg-muted/50 p-3 text-sm">
+            <div>
+              <p className="text-xs text-muted-foreground">Current</p>
+              <p className="font-medium tabular-nums">
+                {formatCurrency(account.balance, account.currency)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Available</p>
+              <p className="font-medium tabular-nums">
+                {balanceView?.available == null
+                  ? "—"
+                  : formatCurrency(balanceView.available, account.currency)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Held</p>
+              <p className="font-medium tabular-nums">
+                {formatCurrency(balanceView?.held ?? "0", account.currency)}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="valuation-value">
+              {cashLike
+                ? `Real balance (${account.currency})`
+                : `New value (${account.currency})`}
+            </Label>
+            <Input
+              id="valuation-value"
+              inputMode="decimal"
+              value={valueInput}
+              onChange={(e) => setValueInput(e.target.value)}
+              placeholder="0"
+              autoFocus
+            />
+            {cashLike && driftMinor !== null && driftMinor !== 0n ? (
+              <p className="text-xs text-muted-foreground">
+                Adjustment of{" "}
+                <span className="font-medium tabular-nums">
+                  {formatCurrency(driftMinor.toString(), account.currency)}
+                </span>{" "}
+                will be posted to reconcile this account.
+              </p>
+            ) : null}
+          </div>
+
+          {error ? (
+            <p className="text-sm text-destructive" role="alert">
+              {error}
+            </p>
+          ) : null}
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={onClose}
+              disabled={submitting}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              disabled={submitting || valueInput.trim() === ""}
+            >
+              {submitting ? "Saving…" : cashLike ? "Reconcile" : "Update value"}
             </Button>
           </DialogFooter>
         </form>
