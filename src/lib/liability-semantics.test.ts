@@ -18,6 +18,7 @@ describe("liability semantics", () => {
       "liability_draw",
       "liability_interest",
       "liability_fee",
+      "balance_adjustment",
     ])
   })
 

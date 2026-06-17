@@ -8,6 +8,7 @@
 | **Deciders**      | Hendri Permana |
 | **Supersedes**    | —              |
 | **Superseded by** | —              |
+| **Amended by**    | ADR-0034       |
 
 ## Context
 
@@ -324,5 +325,6 @@ boundary.
 - ADR-0031 (Transfer graph database invariants)
 - ADR-0032 (Idempotent update/delete semantics)
 - ADR-0033 (Bulk mutation parity)
+- ADR-0034 (Valuation primitive and balance-derivation rules — amends §2 and §6)
 - `AGENTS.md` §5, The Transaction Core Architecture
 - `prisma/schema.prisma`

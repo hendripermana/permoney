@@ -12,6 +12,9 @@ export const TRANSACTION_KIND_VALUES = [
   "liability_draw",
   "liability_interest",
   "liability_fee",
+  // Cash reconciliation correction posted when a reconciliation valuation
+  // reveals drift (PER-146 / ADR-0034 §4). An ordinary income/expense row.
+  "balance_adjustment",
 ] as const
 
 export type TransactionKind = (typeof TRANSACTION_KIND_VALUES)[number]

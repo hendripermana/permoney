@@ -29,9 +29,11 @@ import {
 //
 // Accounts are never hard-deleted. "Archive" is a soft close (status="closed",
 // archivedAt=now); "reactivate" restores it. Balances and history are never
-// erased. Opening balance is captured at creation as the initial materialized
-// balance; the F2 valuation primitive (PER-146) will own opening-balance and
-// balance-rebuild semantics — here the rebuild is intentionally stubbed.
+// erased. Opening balance is captured at creation both as the initial
+// materialized `Account.balance` AND as the first `Valuation` row of
+// type="opening" (PER-146 / ADR-0034 §3), written in the same transaction so the
+// starting number is auditable history and the balance-rebuild anchor. The
+// rebuild + drift + valuation primitives themselves live in `valuations.ts`.
 // =============================================================================
 
 const CREATE_ACCOUNT_ENDPOINT = "createAccountFn"
@@ -282,12 +284,40 @@ export async function createAccountForFamily({
         },
       })
 
+      // ADR-0034 §3: the opening balance is the first ledger valuation. It is the
+      // rebuild anchor for cash accounts and the initial value for tracked ones.
+      const opening = await tx.valuation.create({
+        data: {
+          accountId: account.id,
+          familyId,
+          value: signedOpeningBalance,
+          currency,
+          valuationDate: new Date(),
+          type: "opening",
+          source: "manual",
+          normalBalance:
+            taxonomy.accountClass === "LIABILITY" ? "NEGATIVE" : "POSITIVE",
+          createdById: user.id,
+        },
+      })
+
       const serialized = serializeAccount(account)
       await auditLog(tx, auditCtx, {
         action: "create",
         entityType: "Account",
         entityId: account.id,
         after: serialized,
+      })
+      await auditLog(tx, auditCtx, {
+        action: "create",
+        entityType: "Valuation",
+        entityId: opening.id,
+        after: {
+          accountId: opening.accountId,
+          value: opening.value.toString(),
+          currency: opening.currency,
+          type: opening.type,
+        },
       })
       await persistIdempotentEndpointResponse(tx, {
         endpoint: CREATE_ACCOUNT_ENDPOINT,

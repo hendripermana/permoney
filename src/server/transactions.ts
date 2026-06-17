@@ -782,13 +782,21 @@ function assertManualTransactionKindShape(data: {
     return
   }
 
-  if (data.type === "income" && data.kind !== "standard") {
+  if (
+    data.type === "income" &&
+    !["standard", "balance_adjustment"].includes(data.kind)
+  ) {
     throw new Error("Income transactions must use kind standard")
   }
 
   if (
     data.type === "expense" &&
-    !["standard", "liability_interest", "liability_fee"].includes(data.kind)
+    ![
+      "standard",
+      "liability_interest",
+      "liability_fee",
+      "balance_adjustment",
+    ].includes(data.kind)
   ) {
     throw new Error(`Expense transactions cannot use kind ${data.kind}`)
   }

@@ -20,6 +20,7 @@ model Iso4217Currency {
   families                         Family[]      @relation("FamilyCurrency")
   transactionCurrencies            Transaction[] @relation("TransactionCurrency")
   transactionDestinationCurrencies Transaction[] @relation("TransactionDestinationCurrency")
+  valuationCurrencies              Valuation[]   @relation("ValuationCurrency")
 
   @@map("iso_4217_currency")
 }
@@ -40,6 +41,7 @@ model Family {
   smartRules   SmartRule[]
   transactions Transaction[]
   idempotencyRecords IdempotencyRecord[]
+  valuations   Valuation[]
 }
 
 model User {
@@ -131,6 +133,7 @@ model Account {
 
   transactionsFrom Transaction[] @relation("FromAccount")
   transactionsTo   Transaction[] @relation("ToAccount")
+  valuations       Valuation[]
 
   // Tenant-scoped fetch (every Account read is filtered by familyId once
   // ADR-0004 lands; cheap to add now). See ADR-0003.
@@ -270,7 +273,7 @@ model Transaction {
   @@index([familyId, deletedAt, date(sort: Desc)])
   @@index([categoryId])
   @@index([merchantId])
-  @@unique([familyId, idempotencyKey], name: "tx_family_idempotency")
+  @@unique([familyId, idempotencyKey], name: "tx_family_idempotency", map: "tx_family_idempotency")
 }
 
 model IdempotencyRecord {
@@ -402,6 +405,64 @@ model AuthAccount {
 
   @@index([userId])
   @@map("AuthAccount")
+}
+
+// ==========================================
+// Valuation primitive (PER-146 / ADR-0034)
+// ==========================================
+// A dated, audited snapshot of an account's value, sitting alongside
+// `Transaction` in the ledger. Three roles: (1) opening balance as auditable
+// history, (2) tracked/non-cash asset value that changes without transactions,
+// (3) reconciliation anchors feeding the read-only drift detector.
+//
+// Balance derivation (ADR-0034 §4/§5):
+//   - transaction_flow (cash-like): balance = opening valuation + Σ transactions
+//     since the opening date; non-opening valuations are observations that feed
+//     the drift detector only and never move Account.balance.
+//   - valuation (tracked): balance = latest valuation value (no transaction sum).
+//
+// `value` is SIGNED minor units of `currency`, same convention as
+// `Account.balance` (ASSET/TRACKED_ASSET >= 0, LIABILITY <= 0). A table CHECK
+// cannot join to Account, so `normalBalance` is denormalized at write time and
+// CHECKed here, mirroring how `balanceSource` is denormalized onto Account.
+// See ADR-0034 §9. Append-only history: soft-delete only, never hard delete.
+model Valuation {
+  id String @id @default(cuid())
+
+  // SIGNED, MINOR UNITS of `currency`. See src/lib/money.ts for arithmetic.
+  value            BigInt
+  currency         String
+  currencyRegistry Iso4217Currency @relation("ValuationCurrency", fields: [currency], references: [code], onDelete: Restrict, onUpdate: Cascade, map: "valuation_currency_is_iso_4217")
+
+  // Date-only "as-of" of the valuation (not a wall-clock timestamp).
+  valuationDate DateTime @db.Date
+
+  // Domain: "opening" | "reconciliation" | "market" | "manual" (CHECK in migration).
+  type   String
+  source String  @default("manual")
+  note   String?
+
+  // Denormalized normal-balance discriminator: "POSITIVE" | "NEGATIVE", copied
+  // from the account at write time so the value-sign rule is a pure table CHECK.
+  normalBalance String
+
+  // Soft-delete tombstone; valuation history is never hard deleted.
+  deletedAt DateTime?
+
+  // Actor stored as a plain id with no relation, mirroring AuditLog.userId.
+  createdById String
+  createdAt   DateTime @default(now())
+
+  accountId String
+  account   Account @relation(fields: [accountId, familyId], references: [id, familyId], onDelete: Restrict, onUpdate: Cascade, map: "Valuation_accountId_familyId_fkey")
+
+  familyId String
+  family   Family @relation(fields: [familyId], references: [id])
+
+  // Latest-valuation-per-account (tracked balance + rebuild) and
+  // type lookups (opening anchor / reconciliation drift).
+  @@index([familyId, accountId, valuationDate(sort: Desc)])
+  @@index([familyId, accountId, type])
 }
 
 model Verification {
