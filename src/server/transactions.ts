@@ -31,6 +31,11 @@ import {
   hashCanonicalPayload,
   toCanonicalJson,
 } from "./idempotency"
+import {
+  isUniqueConstraintError,
+  uuidV7Schema,
+  type RunInTenantTransaction,
+} from "./mutation-kit"
 
 export { IdempotencyConflictError } from "./idempotency"
 
@@ -648,15 +653,6 @@ const transactionInputSchema = z.object({
   attachmentUrl: z.string().nullable().optional(),
 })
 
-const uuidV7Schema = z
-  .string()
-  .trim()
-  .regex(
-    /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-    "idempotencyKey must be a UUIDv7"
-  )
-  .transform((value) => value.toLowerCase())
-
 const createTransactionTransportInputSchema = transactionInputSchema.extend({
   idempotencyKey: uuidV7Schema.optional(),
 })
@@ -749,10 +745,6 @@ type BulkUpdateTransactionsInput = z.infer<
 type BulkDeleteTransactionsInput = z.infer<
   typeof bulkDeleteTransactionsInputSchema
 >
-type RunInTenantTransaction = <T>(
-  familyId: string,
-  callback: (tx: TenantTransactionClient) => Promise<T>
-) => Promise<T>
 
 interface CreateTransactionForFamilyArgs {
   data: unknown
@@ -1252,15 +1244,6 @@ async function replayIdempotentTransaction(
 
   assertIdempotentPayloadMatches(data, existing)
   return serializePersistedReplay(existing)
-}
-
-function isUniqueConstraintError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null || !("code" in error)) {
-    return false
-  }
-
-  const code = (error as { code?: unknown }).code
-  return code === "P2002"
 }
 
 async function readIdempotencyHeader(): Promise<string | null> {

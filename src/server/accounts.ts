@@ -10,13 +10,17 @@ import { auditLog, createAuditContext } from "./middleware/audit"
 import {
   familyMiddleware,
   scopedTenantTransaction,
-  type TenantTransactionClient,
 } from "./middleware/with-family"
 import { hashCanonicalPayload } from "./idempotency"
 import {
   persistIdempotentEndpointResponse,
   replayIdempotentEndpointResponse,
 } from "./idempotency-records"
+import {
+  isUniqueConstraintError,
+  uuidV7Schema,
+  type RunInTenantTransaction,
+} from "./mutation-kit"
 
 // =============================================================================
 // PER-143 — Account manual UX vertical slice (CRUD, archive, cash-vs-tracked).
@@ -53,15 +57,6 @@ export class AccountNotFoundError extends Error {
     super(`Account ${accountId} not found for this family`)
   }
 }
-
-const uuidV7Schema = z
-  .string()
-  .trim()
-  .regex(
-    /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-    "idempotencyKey must be a UUIDv7"
-  )
-  .transform((value) => value.toLowerCase())
 
 // Kept transform-free so the schema's input and output shapes match (the server
 // function validator and the `*ForFamily` callers share one type). Defaulting
@@ -167,20 +162,6 @@ function serializeAccount(account: Account): SerializedAccount {
     interestRateBps: account.interestRateBps,
   }
 }
-
-function isUniqueConstraintError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "P2002"
-  )
-}
-
-type RunInTenantTransaction = <T>(
-  familyId: string,
-  fn: (tx: TenantTransactionClient) => Promise<T>
-) => Promise<T>
 
 interface ServerUser {
   id: string

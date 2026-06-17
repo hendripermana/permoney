@@ -21,6 +21,11 @@ import {
   persistIdempotentEndpointResponse,
   replayIdempotentEndpointResponse,
 } from "./idempotency-records"
+import {
+  isUniqueConstraintError,
+  uuidV7Schema,
+  type RunInTenantTransaction,
+} from "./mutation-kit"
 import { validateTenantReferences } from "./validation/tenant-references"
 
 // =============================================================================
@@ -63,15 +68,6 @@ export class ValuationError extends Error {
     super(message)
   }
 }
-
-const uuidV7Schema = z
-  .string()
-  .trim()
-  .regex(
-    /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-    "idempotencyKey must be a UUIDv7"
-  )
-  .transform((value) => value.toLowerCase())
 
 const currencySchema = z
   .string()
@@ -172,11 +168,6 @@ export interface BalanceDriftReport {
   asOf: string
 }
 
-type RunInTenantTransaction = <T>(
-  familyId: string,
-  fn: (tx: TenantTransactionClient) => Promise<T>
-) => Promise<T>
-
 interface ServerActor {
   id: string
 }
@@ -201,15 +192,6 @@ const ACCOUNT_BALANCE_SELECT = {
   currency: true,
   creditLimit: true,
 } as const
-
-function isUniqueConstraintError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "P2002"
-  )
-}
 
 function normalBalanceForClass(accountClass: string): "POSITIVE" | "NEGATIVE" {
   return accountClass === "LIABILITY" ? "NEGATIVE" : "POSITIVE"
