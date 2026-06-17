@@ -64,6 +64,8 @@ import {
 } from "@/lib/accounts"
 import { formatCurrency } from "@/lib/currency"
 import { negateMoney, toMinorUnits } from "@/lib/money"
+import { convertMinor } from "@/lib/fx"
+import { getFxOverviewFn } from "@/server/fx"
 import type { CurrencyCode } from "@/lib/data/currencies"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import {
@@ -256,6 +258,10 @@ function AccountsPage() {
                 New account
               </Button>
             </div>
+
+            {safeAccounts.length > 0 ? (
+              <NetWorthInBaseCard accounts={safeAccounts} />
+            ) : null}
 
             {safeAccounts.length === 0 ? (
               <EmptyState onCreate={() => setDialog({ mode: "create" })} />
@@ -861,5 +867,75 @@ function ValuationActionDialog({
         </form>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// PER-147 / ADR-0035 §8 — read-side proof of base-currency normalization. Sums
+// each active account's native balance converted to the family base via the
+// latest FX snapshot. Accounts whose currency has no rate are flagged, not
+// silently dropped, so the figure is never quietly wrong.
+function NetWorthInBaseCard({
+  accounts,
+}: {
+  accounts: ReadonlyArray<AccountRecord>
+}) {
+  const overview = useQuery({
+    queryKey: ["fx-overview"],
+    queryFn: async () => await getFxOverviewFn(),
+  })
+
+  const base = overview.data?.baseCurrency
+  const { total, unconverted } = React.useMemo(() => {
+    if (!base) return { total: 0n, unconverted: 0 }
+    // rates are sorted asOfDate DESC, so the first per `fromCurrency` is latest.
+    const latest = new Map<string, bigint>()
+    for (const rate of overview.data?.rates ?? []) {
+      if (rate.toCurrency !== base) continue
+      if (!latest.has(rate.fromCurrency)) {
+        latest.set(rate.fromCurrency, BigInt(rate.rateScaled))
+      }
+    }
+    let sum = 0n
+    let pending = 0
+    for (const account of accounts) {
+      if (account.status !== "active") continue
+      const native = BigInt(account.balance)
+      if (account.currency === base) {
+        sum += native
+        continue
+      }
+      const rateScaled = latest.get(account.currency)
+      if (rateScaled === undefined) {
+        pending += 1
+        continue
+      }
+      sum += convertMinor(
+        native,
+        account.currency as CurrencyCode,
+        base as CurrencyCode,
+        rateScaled
+      )
+    }
+    return { total: sum, unconverted: pending }
+  }, [accounts, base, overview.data?.rates])
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardDescription>Total net worth in base currency</CardDescription>
+        <CardTitle className="text-3xl tabular-nums">
+          {base ? formatCurrency(total.toString(), base) : "—"}
+        </CardTitle>
+      </CardHeader>
+      {unconverted > 0 ? (
+        <CardContent className="pt-0">
+          <Badge variant="outline" className="gap-1 text-muted-foreground">
+            <TriangleAlert className="size-3" aria-hidden />
+            {unconverted} account{unconverted === 1 ? "" : "s"} unconverted —
+            add a rate in Currencies &amp; FX
+          </Badge>
+        </CardContent>
+      ) : null}
+    </Card>
   )
 }

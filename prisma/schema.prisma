@@ -20,7 +20,11 @@ model Iso4217Currency {
   families                         Family[]      @relation("FamilyCurrency")
   transactionCurrencies            Transaction[] @relation("TransactionCurrency")
   transactionDestinationCurrencies Transaction[] @relation("TransactionDestinationCurrency")
+  transactionBaseCurrencies        Transaction[] @relation("TransactionBaseCurrency")
   valuationCurrencies              Valuation[]   @relation("ValuationCurrency")
+  valuationBaseCurrencies          Valuation[]   @relation("ValuationBaseCurrency")
+  fxFromCurrencies                 FxRateSnapshot[] @relation("FxRateFromCurrency")
+  fxToCurrencies                   FxRateSnapshot[] @relation("FxRateToCurrency")
 
   @@map("iso_4217_currency")
 }
@@ -42,6 +46,7 @@ model Family {
   transactions Transaction[]
   idempotencyRecords IdempotencyRecord[]
   valuations   Valuation[]
+  fxRateSnapshots FxRateSnapshot[]
 }
 
 model User {
@@ -208,6 +213,17 @@ model Transaction {
   destinationCurrency         String?
   destinationCurrencyRegistry Iso4217Currency? @relation("TransactionDestinationCurrency", fields: [destinationCurrency], references: [code], onDelete: Restrict, onUpdate: Cascade, map: "destination_currency_is_iso_4217")
 
+  // Base-currency projection (ADR-0035 §4). Derived, rebuildable; materialized at
+  // write time from a dated FxRateSnapshot. All-three-or-none: present when
+  // converted, NULL when "FX-pending" (native != base and no rate resolved).
+  // `fxRateScaled` is the 1e12-scaled rate used (IDENTITY_RATE when native==base).
+  // `fxRateSnapshotId` is a provenance pointer (plain id, no FK — like createdById).
+  baseAmount       BigInt?
+  baseCurrency     String?
+  baseCurrencyRegistry Iso4217Currency? @relation("TransactionBaseCurrency", fields: [baseCurrency], references: [code], onDelete: Restrict, onUpdate: Cascade, map: "transaction_base_currency_is_iso_4217")
+  fxRateScaled     BigInt?
+  fxRateSnapshotId String?
+
   date DateTime @default(now())
 
   description String
@@ -253,6 +269,8 @@ model Transaction {
   // Relasi ke Transfer (Hanya terisi jika type == "transfer")
   transferOut Transfer? @relation("OutflowTransaction")
   transferIn  Transfer? @relation("InflowTransaction")
+  // This row is the FX fee leg of a transfer (kind == "fx_fee"); ADR-0035 §6.
+  feeForTransfer Transfer? @relation("FxFeeTransaction")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
@@ -323,6 +341,18 @@ model Transfer {
   // Transaksi Uang Masuk (Tujuan)
   inflowTransactionId String      @unique
   inflowTransaction   Transaction @relation("InflowTransaction", fields: [inflowTransactionId], references: [id], onDelete: Restrict)
+
+  // Cross-currency rate recorded on the canonical pairing record (ADR-0035 §5).
+  // Implied source->dest rate, 1e12-scaled, DERIVED from the two native legs.
+  // NULL for same-currency transfers. `fromCurrency`/`toCurrency` are audit
+  // denormalizations mirroring the legs (shape-CHECKed, no FK).
+  fxRateScaled BigInt?
+  fromCurrency String?
+  toCurrency   String?
+
+  // Optional FX fee leg (kind == "fx_fee", a standalone expense row). ADR-0035 §6.
+  feeTransactionId String?      @unique
+  feeTransaction   Transaction? @relation("FxFeeTransaction", fields: [feeTransactionId], references: [id], onDelete: Restrict)
 
   // Soft-delete shadow (PER-20 / ADR-0012). A transfer is one money movement;
   // when either Transaction leg is soft-deleted, this column is set in the
@@ -446,6 +476,14 @@ model Valuation {
   // from the account at write time so the value-sign rule is a pure table CHECK.
   normalBalance String
 
+  // Base-currency projection (ADR-0035 §4/§7), keyed off `valuationDate`. Same
+  // all-three-or-none, rebuildable, FX-pending-tolerant rules as Transaction.
+  baseValue        BigInt?
+  baseCurrency     String?
+  baseCurrencyRegistry Iso4217Currency? @relation("ValuationBaseCurrency", fields: [baseCurrency], references: [code], onDelete: Restrict, onUpdate: Cascade, map: "valuation_base_currency_is_iso_4217")
+  fxRateScaled     BigInt?
+  fxRateSnapshotId String?
+
   // Soft-delete tombstone; valuation history is never hard deleted.
   deletedAt DateTime?
 
@@ -463,6 +501,40 @@ model Valuation {
   // type lookups (opening anchor / reconciliation drift).
   @@index([familyId, accountId, valuationDate(sort: Desc)])
   @@index([familyId, accountId, type])
+}
+
+// Dated FX rate snapshot (ADR-0035 §2). Tenant-scoped, directed `from -> to`
+// (canonical use is `foreign -> base`). Resolution = greatest `asOfDate <= date`.
+// `rateScaled` is a 1e12-scaled major->major quote (see src/lib/fx.ts). One rate
+// per (family, from, to, date); `source` is non-key provenance. Idempotent upsert
+// by the natural key. RLS-isolated like Account/Transaction/Valuation.
+model FxRateSnapshot {
+  id String @id @default(cuid())
+
+  fromCurrency         String
+  fromCurrencyRegistry Iso4217Currency @relation("FxRateFromCurrency", fields: [fromCurrency], references: [code], onDelete: Restrict, onUpdate: Cascade, map: "fx_from_currency_is_iso_4217")
+  toCurrency           String
+  toCurrencyRegistry   Iso4217Currency @relation("FxRateToCurrency", fields: [toCurrency], references: [code], onDelete: Restrict, onUpdate: Cascade, map: "fx_to_currency_is_iso_4217")
+
+  // 1e12-scaled rate; CHECK (> 0) in migration.
+  rateScaled BigInt
+
+  // Date-only "as-of" (not wall-clock). Step-function resolution, no interpolation.
+  asOfDate DateTime @db.Date
+
+  // Domain: "manual" | "seed" | "provider" (CHECK in migration).
+  source String @default("manual")
+
+  // Actor as a plain id with no relation, mirroring Valuation.createdById.
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
+
+  familyId String
+  family   Family @relation(fields: [familyId], references: [id])
+
+  @@unique([familyId, fromCurrency, toCurrency, asOfDate], name: "fx_rate_snapshot_unique", map: "fx_rate_snapshot_unique")
+  @@index([familyId, fromCurrency, toCurrency, asOfDate(sort: Desc)])
 }
 
 model Verification {

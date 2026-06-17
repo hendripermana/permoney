@@ -15,6 +15,10 @@ export const TRANSACTION_KIND_VALUES = [
   // Cash reconciliation correction posted when a reconciliation valuation
   // reveals drift (PER-146 / ADR-0034 §4). An ordinary income/expense row.
   "balance_adjustment",
+  // FX conversion fee on a cross-currency transfer (PER-147 / ADR-0035 §6). An
+  // expense finance-cost row created alongside the transfer; never ordinary
+  // spending. Naturally exempt from the liability cost-target trigger.
+  "fx_fee",
 ] as const
 
 export type TransactionKind = (typeof TRANSACTION_KIND_VALUES)[number]

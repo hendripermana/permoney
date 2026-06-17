@@ -3,6 +3,7 @@
 import * as React from "react"
 import {
   IconChartBar,
+  IconCoin,
   IconDashboard,
   IconDatabase,
   IconSettings,
@@ -56,6 +57,11 @@ const data = {
       title: "Budgets",
       url: "#",
       icon: IconChartBar,
+    },
+    {
+      title: "Currencies & FX",
+      url: "/currencies",
+      icon: IconCoin,
     },
   ],
   navSecondary: [

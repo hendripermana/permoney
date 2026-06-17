@@ -1491,6 +1491,13 @@ function useTransactionFormModalController({
             supersedes: null,
             createdAt: new Date(),
             familyId: "",
+            // FX base projection (PER-147) is materialized server-side; the
+            // optimistic row is "FX-pending" until the post-mutation refetch
+            // backfills it from the server source of truth.
+            baseAmount: null,
+            baseCurrency: null,
+            fxRateScaled: null,
+            fxRateSnapshotId: null,
             // splitEntries di optimistic payload adalah versi ringkas (tanpa relasi Prisma)
             splitEntries:
               payload.splitEntries as TransactionRecord["splitEntries"],

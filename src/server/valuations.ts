@@ -9,6 +9,7 @@ import {
   toMoney,
   type Money,
 } from "@/lib/money"
+import { computeBaseProjectionForAmount, getFamilyBaseCurrency } from "./fx"
 import { auditLog, createAuditContext } from "./middleware/audit"
 import {
   familyMiddleware,
@@ -378,18 +379,33 @@ export async function createValuationForFamily({
         magnitude
       )
 
+      // Base-currency projection (PER-147 / ADR-0035 §4/§7), keyed off the
+      // valuation date so historical net worth stays stable.
+      const valuationDate = data.valuationDate ?? new Date()
+      const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
+      const projection = await computeBaseProjectionForAmount(tx, familyId, {
+        amount: signedValue,
+        currency,
+        date: valuationDate,
+        baseCurrency,
+      })
+
       const valuation = await tx.valuation.create({
         data: {
           accountId: account.id,
           familyId,
           value: signedValue,
           currency,
-          valuationDate: data.valuationDate ?? new Date(),
+          valuationDate,
           type: valuationType,
           source: data.source ?? "manual",
           note: data.note ?? null,
           normalBalance: normalBalanceForClass(account.accountClass),
           createdById: user.id,
+          baseValue: projection.baseAmount,
+          baseCurrency: projection.baseCurrency,
+          fxRateScaled: projection.fxRateScaled,
+          fxRateSnapshotId: projection.fxRateSnapshotId,
         },
       })
       const serialized = serializeValuation(valuation)
