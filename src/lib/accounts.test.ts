@@ -3,9 +3,12 @@ import {
   ACCOUNT_CLASS_VALUES,
   ACCOUNT_SUBTYPE_VALUES,
   ACCOUNT_TYPE_VALUES,
+  BALANCE_SOURCE_VALUES,
   getAccountClassForType,
   getAccountNormalBalance,
+  getBalanceSourceForType,
   getDefaultAccountSubtype,
+  isCashLikeAccount,
   isLiabilityAccountType,
   normalizeAccountTaxonomy,
 } from "./accounts"
@@ -65,6 +68,52 @@ describe("account taxonomy", () => {
       accountClass: "LIABILITY",
       accountSubtype: "mortgage",
       accountType: "LOAN",
+      balanceSource: "transaction_flow",
+    })
+  })
+
+  test("derives the cash-like vs tracked-asset balance source from type", () => {
+    expect(BALANCE_SOURCE_VALUES).toEqual(["transaction_flow", "valuation"])
+
+    // Cash-like: balance is driven by transaction flow.
+    expect(getBalanceSourceForType("CASH")).toBe("transaction_flow")
+    expect(getBalanceSourceForType("DEPOSITORY")).toBe("transaction_flow")
+    expect(getBalanceSourceForType("E_WALLET")).toBe("transaction_flow")
+    expect(getBalanceSourceForType("CREDIT")).toBe("transaction_flow")
+    expect(getBalanceSourceForType("LOAN")).toBe("transaction_flow")
+    expect(getBalanceSourceForType("INVESTMENT")).toBe("transaction_flow")
+    expect(getBalanceSourceForType("RECEIVABLE")).toBe("transaction_flow")
+
+    // Tracked asset: balance is driven by valuations (property, vehicle, etc.).
+    expect(getBalanceSourceForType("TRACKED_ASSET")).toBe("valuation")
+
+    expect(isCashLikeAccount("DEPOSITORY")).toBe(true)
+    expect(isCashLikeAccount("CREDIT")).toBe(true)
+    expect(isCashLikeAccount("TRACKED_ASSET")).toBe(false)
+  })
+
+  test("normalizes the balance source alongside class and subtype", () => {
+    expect(
+      normalizeAccountTaxonomy({
+        accountSubtype: "vehicle",
+        accountType: "TRACKED_ASSET",
+      })
+    ).toEqual({
+      accountClass: "ASSET",
+      accountSubtype: "vehicle",
+      accountType: "TRACKED_ASSET",
+      balanceSource: "valuation",
+    })
+
+    expect(
+      normalizeAccountTaxonomy({
+        accountType: "DEPOSITORY",
+      })
+    ).toEqual({
+      accountClass: "ASSET",
+      accountSubtype: "checking",
+      accountType: "DEPOSITORY",
+      balanceSource: "transaction_flow",
     })
   })
 
