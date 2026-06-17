@@ -209,6 +209,7 @@ export function createTestFactories(
           accountClass: taxonomy.accountClass,
           accountSubtype: taxonomy.accountSubtype,
           accountType: taxonomy.accountType,
+          balanceSource: taxonomy.balanceSource,
           balance: input.balance ?? 0n,
           color: input.color ?? "#2563eb",
           currency: input.currency ?? "IDR",

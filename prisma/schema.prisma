@@ -95,6 +95,12 @@ model Account {
   accountClass   String
   accountType    String
   accountSubtype String
+  // Cash-like vs tracked-asset distinction (M2.5-4 / PER-143). "transaction_flow"
+  // means the balance is posted by canonical Transaction rows; "valuation" means
+  // it is driven by point-in-time valuations (TRACKED_ASSET only). Derived from
+  // accountType and enforced consistent by a DB CHECK so it can never drift.
+  // See docs/account-taxonomy.md and ADR-0008 §6.
+  balanceSource  String @default("transaction_flow")
   // Stored in MINOR UNITS (sen for IDR, cents for USD, satoshi for BTC).
   // Per-currency scale is driven by `CURRENCIES[code].minorUnitConversion`
   // in src/lib/data/currencies.ts. See docs/adr/0001-money-type-migration.md.

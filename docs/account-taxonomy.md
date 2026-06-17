@@ -15,21 +15,22 @@ payment, borrowing, interest, and fee semantics live in
 
 ## Schema Fields
 
-| Field               | Required | Purpose                                                                 |
-| ------------------- | -------- | ----------------------------------------------------------------------- |
-| `accountClass`      | Yes      | Normal-balance class: `ASSET` or `LIABILITY`.                           |
-| `accountType`       | Yes      | Ledger capability family such as `DEPOSITORY`, `CREDIT`, or `LOAN`.     |
-| `accountSubtype`    | Yes      | Product family label such as `checking`, `bnpl`, `mortgage`, or `gold`. |
-| `institutionName`   | No       | Human-readable bank, lender, broker, provider, or custodian name.       |
-| `externalProvider`  | No       | Integration provider key, for example a future bank API connector.      |
-| `externalAccountId` | No       | Provider-side account identifier.                                       |
-| `mask`              | No       | Non-sensitive account mask, such as the final 4 digits.                 |
-| `isImportable`      | Yes      | Whether this account may receive provider/import feed data.             |
-| `creditLimit`       | No       | Product limit in minor units for cards, BNPL, or credit lines.          |
-| `statementDay`      | No       | Statement cycle day, 1 through 31.                                      |
-| `dueDay`            | No       | Payment due day, 1 through 31.                                          |
-| `interestRateBps`   | No       | Interest rate in basis points.                                          |
-| `archivedAt`        | No       | Archive timestamp. If present, `status` must be `closed`.               |
+| Field               | Required | Purpose                                                                                    |
+| ------------------- | -------- | ------------------------------------------------------------------------------------------ |
+| `accountClass`      | Yes      | Normal-balance class: `ASSET` or `LIABILITY`.                                              |
+| `accountType`       | Yes      | Ledger capability family such as `DEPOSITORY`, `CREDIT`, or `LOAN`.                        |
+| `accountSubtype`    | Yes      | Product family label such as `checking`, `bnpl`, `mortgage`, or `gold`.                    |
+| `balanceSource`     | Yes      | `transaction_flow` (cash-like) or `valuation` (tracked asset). Derived from `accountType`. |
+| `institutionName`   | No       | Human-readable bank, lender, broker, provider, or custodian name.                          |
+| `externalProvider`  | No       | Integration provider key, for example a future bank API connector.                         |
+| `externalAccountId` | No       | Provider-side account identifier.                                                          |
+| `mask`              | No       | Non-sensitive account mask, such as the final 4 digits.                                    |
+| `isImportable`      | Yes      | Whether this account may receive provider/import feed data.                                |
+| `creditLimit`       | No       | Product limit in minor units for cards, BNPL, or credit lines.                             |
+| `statementDay`      | No       | Statement cycle day, 1 through 31.                                                         |
+| `dueDay`            | No       | Payment due day, 1 through 31.                                                             |
+| `interestRateBps`   | No       | Interest rate in basis points.                                                             |
+| `archivedAt`        | No       | Archive timestamp. If present, `status` must be `closed`.                                  |
 
 Provider and capability metadata never changes ledger semantics by itself. It
 helps imports, reminders, reconciliation, and UI workflows decide what the
@@ -91,6 +92,24 @@ The database enforces subtype shape as lowercase snake case. It does not enforce
 a closed subtype enum. This is deliberate: adding `student_loan`, `term_deposit`,
 or `kpr_subsidized` should not require a ledger migration as long as the product
 fits an existing `accountType`.
+
+## Cash-like vs Tracked Assets
+
+`balanceSource` records whether an account's balance is driven by transaction
+flow or by point-in-time valuations. It is a pure function of `accountType`, so
+it can never drift from the ledger capability family:
+
+| `accountType`                                                                  | `balanceSource`    | Meaning                                                 |
+| ------------------------------------------------------------------------------ | ------------------ | ------------------------------------------------------- |
+| `CASH`, `DEPOSITORY`, `E_WALLET`, `CREDIT`, `LOAN`, `INVESTMENT`, `RECEIVABLE` | `transaction_flow` | Balance is posted by canonical `Transaction` rows.      |
+| `TRACKED_ASSET`                                                                | `valuation`        | Balance is driven by valuations (PER-146, ADR-0008 §6). |
+
+The flag is persisted on `Account` and enforced consistent with `accountType` by
+a database CHECK. `src/lib/accounts.ts` exposes `getBalanceSourceForType` and
+`isCashLikeAccount`; `normalizeAccountTaxonomy` returns `balanceSource` alongside
+class and subtype. Opening balance and balance rebuild for tracked assets are
+owned by the F2 valuation primitive (PER-146); F1 (PER-143) captures the opening
+balance as the initial materialized balance only.
 
 ## Normal-Balance Examples
 

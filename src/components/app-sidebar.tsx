@@ -44,7 +44,7 @@ const data = {
     },
     {
       title: "Accounts & Wallets",
-      url: "#",
+      url: "/accounts",
       icon: IconDatabase,
     },
     {
