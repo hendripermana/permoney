@@ -77,6 +77,9 @@ export async function initializeOnboardingForUser(
     const family = await tx.family.create({
       data: {
         name: deriveDefaultFamilyName(user),
+        // Base reporting currency, chosen at onboarding and immutable after
+        // (ADR-0035). The starter account below inherits it via family.currency.
+        currency: data.currency,
       },
     })
 

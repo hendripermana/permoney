@@ -6,6 +6,7 @@ import { Coins, Plus, RefreshCw } from "lucide-react"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
+import { TooltipProvider } from "@/components/ui/tooltip"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -27,7 +28,6 @@ import {
 import {
   getFxOverviewFn,
   rebuildFxProjectionsFn,
-  setBaseCurrencyFn,
   upsertFxRateSnapshotFn,
 } from "@/server/fx"
 
@@ -55,108 +55,72 @@ function CurrenciesPage() {
     queryClient.invalidateQueries({ queryKey: FX_OVERVIEW_KEY })
 
   return (
-    <SidebarProvider
-      style={
-        {
-          "--sidebar-width": "calc(var(--spacing) * 72)",
-        } as React.CSSProperties
-      }
-    >
-      <AppSidebar variant="inset" />
-      <SidebarInset>
-        <SiteHeader />
-        <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
-          <div className="flex items-center gap-3">
-            <Coins className="size-6 text-yellow-500" aria-hidden />
-            <div>
-              <h1 className="text-xl font-semibold">
-                Currencies &amp; FX rates
-              </h1>
-              <p className="text-sm text-muted-foreground">
-                Reporting is normalized to your base currency using dated rate
-                snapshots. Native account and transaction amounts never change.
-              </p>
+    <TooltipProvider>
+      <SidebarProvider
+        style={
+          {
+            "--sidebar-width": "calc(var(--spacing) * 72)",
+          } as React.CSSProperties
+        }
+      >
+        <AppSidebar variant="inset" />
+        <SidebarInset>
+          <SiteHeader />
+          <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
+            <div className="flex items-center gap-3">
+              <Coins className="size-6 text-yellow-500" aria-hidden />
+              <div>
+                <h1 className="text-xl font-semibold">
+                  Currencies &amp; FX rates
+                </h1>
+                <p className="text-sm text-muted-foreground">
+                  Reporting is normalized to your base currency using dated rate
+                  snapshots. Native account and transaction amounts never
+                  change.
+                </p>
+              </div>
             </div>
+
+            <BaseCurrencyCard baseCurrency={baseCurrency} />
+
+            <AddRateCard baseCurrency={baseCurrency} onAdded={invalidate} />
+
+            <RatesTableCard
+              baseCurrency={baseCurrency}
+              rates={overview.data?.rates ?? []}
+              isLoading={overview.isLoading}
+            />
           </div>
-
-          <BaseCurrencyCard
-            baseCurrency={baseCurrency}
-            onChanged={invalidate}
-          />
-
-          <AddRateCard baseCurrency={baseCurrency} onAdded={invalidate} />
-
-          <RatesTableCard
-            baseCurrency={baseCurrency}
-            rates={overview.data?.rates ?? []}
-            isLoading={overview.isLoading}
-          />
-        </div>
-      </SidebarInset>
-    </SidebarProvider>
+        </SidebarInset>
+      </SidebarProvider>
+    </TooltipProvider>
   )
 }
 
-function BaseCurrencyCard({
-  baseCurrency,
-  onChanged,
-}: {
-  baseCurrency: string
-  onChanged: () => void
-}) {
-  const [next, setNext] = React.useState("")
-  const mutation = useMutation({
-    mutationFn: async (currency: string) =>
-      await setBaseCurrencyFn({ data: { currency } }),
-    onSuccess: () => {
-      setNext("")
-      onChanged()
-    },
-  })
-
+function BaseCurrencyCard({ baseCurrency }: { baseCurrency: string }) {
+  // The base reporting currency is chosen once at onboarding and is immutable
+  // (ADR-0035): it anchors every historical report and the materialized base
+  // projection, so changing it would re-denominate all history. Per-account
+  // currencies remain unrestricted.
   return (
     <Card>
       <CardHeader>
         <CardTitle>Base reporting currency</CardTitle>
         <CardDescription>
-          Current base is{" "}
-          <span className="font-mono font-medium">{baseCurrency}</span>.
-          Changing it rebuilds every base-currency projection; native amounts
-          are untouched.
+          Everything is reported in this currency. It was set when your
+          workspace was created and is fixed for the life of the ledger — native
+          account and transaction amounts are always kept in their own currency.
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form
-          className="flex flex-wrap items-end gap-3"
-          onSubmit={(event) => {
-            event.preventDefault()
-            const code = next.trim().toUpperCase()
-            if (code) mutation.mutate(code)
-          }}
-        >
-          <div className="grid gap-1.5">
-            <Label htmlFor="base-currency">New base currency</Label>
-            <Input
-              id="base-currency"
-              placeholder="e.g. USD"
-              value={next}
-              maxLength={5}
-              className="w-40 uppercase"
-              onChange={(event) => setNext(event.target.value)}
-            />
-          </div>
-          <Button
-            type="submit"
-            disabled={mutation.isPending || next.trim() === ""}
-          >
-            {mutation.isPending ? "Rebuilding…" : "Change base"}
-          </Button>
-          {mutation.isError ? (
-            <p className="text-sm text-destructive">
-              {(mutation.error as Error).message}
-            </p>
-          ) : null}
-        </form>
+        <div className="flex items-center gap-3">
+          <span className="rounded-md border bg-muted px-3 py-1.5 font-mono text-lg font-semibold">
+            {baseCurrency}
+          </span>
+          <span className="text-sm text-muted-foreground">
+            Set at onboarding · locked
+          </span>
+        </div>
       </CardContent>
     </Card>
   )

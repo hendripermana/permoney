@@ -41,19 +41,21 @@ describe("onboarding idempotency replay", () => {
     const first = await initializeOnboardingForUser(
       harness.prisma,
       signedUpUser.user.id,
-      { idempotencyKey }
+      { idempotencyKey, currency: "USD" }
     )
     const sequentialReplay = await initializeOnboardingForUser(
       harness.prisma,
       signedUpUser.user.id,
-      { idempotencyKey }
+      { idempotencyKey, currency: "USD" }
     )
     const parallelReplays = await Promise.all([
       initializeOnboardingForUser(harness.prisma, signedUpUser.user.id, {
         idempotencyKey,
+        currency: "USD",
       }),
       initializeOnboardingForUser(harness.prisma, signedUpUser.user.id, {
         idempotencyKey,
+        currency: "USD",
       }),
     ])
 
@@ -137,6 +139,7 @@ describe("onboarding idempotency replay", () => {
     await expect(
       initializeOnboardingForUser(harness.prisma, conflictingUser.id, {
         idempotencyKey,
+        currency: "USD",
       })
     ).rejects.toBeInstanceOf(IdempotencyConflictError)
 

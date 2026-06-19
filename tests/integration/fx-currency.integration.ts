@@ -12,6 +12,7 @@ import { createAccountForFamily } from "@/server/accounts"
 import {
   createTransactionForFamily,
   deleteTransactionForFamily,
+  updateTransactionForFamily,
 } from "@/server/transactions"
 import {
   listFxRateSnapshotsForFamily,
@@ -520,5 +521,168 @@ describe("currency + FX snapshots + cross-currency transfers (PER-147 / ADR-0035
       user: owner.user,
     })
     expect(result.transactionsUpdated).toBe(0)
+  })
+
+  // ---- currency is derived from the account, never the client ---------------
+
+  test("stores the account's native currency even when the client lies about it", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await forceBase(owner, "IDR")
+    const usd = await makeAccount(owner, {
+      currency: "USD",
+      openingBalance: "100000",
+    })
+    await seedRate(owner, "USD", "IDR", "16250", "2026-01-01")
+
+    // The browser sends `currency: "IDR"` (the old default) for a USD account.
+    // The server must IGNORE it and persist the account's real currency, so the
+    // row can never silently become IDR. This is the PER-147 root-cause guard.
+    const created = await createTransactionForFamily({
+      data: {
+        type: "expense",
+        amount: 5_000n,
+        currency: "IDR",
+        accountId: usd.id,
+        description: "client lied about currency",
+        date: new Date("2026-06-01"),
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+    const row = await readTx(owner, created.id)
+    expect(row.currency).toBe("USD")
+    // Base projection is computed from the derived (USD) currency, not "IDR".
+    expect(row.baseCurrency).toBe("IDR")
+    expect(row.fxRateScaled).toBe(encodeRate("16250"))
+    expect(row.baseAmount).toBe(-81_250_000n)
+  })
+
+  // ---- update/supersede path materializes everything inline -----------------
+
+  test("the update path stores the account currency and materializes the base projection inline", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await forceBase(owner, "IDR")
+    const usd = await makeAccount(owner, {
+      currency: "USD",
+      openingBalance: "100000",
+    })
+    await seedRate(owner, "USD", "IDR", "16250", "2026-01-01")
+
+    const created = await expense(owner, usd.id, 5_000n, "USD", "2026-06-01")
+
+    // Edit the amount. The superseding row must (a) keep the USD currency and
+    // (b) carry a materialized base projection WITHOUT any rebuild call.
+    const updated = await updateTransactionForFamily({
+      data: {
+        id: created.id,
+        type: "expense",
+        amount: 8_000n,
+        currency: "IDR", // client default — must be ignored in favour of USD
+        accountId: usd.id,
+        description: "edited amount",
+        date: new Date("2026-06-01"),
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+    const row = await readTx(owner, updated.id)
+    expect(row.currency).toBe("USD")
+    expect(row.amount).toBe(-8_000n)
+    expect(row.baseCurrency).toBe("IDR")
+    expect(row.fxRateScaled).toBe(encodeRate("16250"))
+    expect(row.baseAmount).toBe(
+      convertMinor(-8_000n, "USD", "IDR", encodeRate("16250"))
+    )
+    expect(row.baseAmount).toBe(-130_000_000n)
+
+    // No rebuild was run; a follow-up rebuild must be a no-op (already current).
+    const rebuilt = await rebuildFxProjectionsForFamily({
+      data: {},
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+    expect(rebuilt.transactionsUpdated).toBe(0)
+  })
+
+  test("editing a cross-currency transfer re-derives leg currencies and records the implied rate inline", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await forceBase(owner, "IDR")
+    const usd = await makeAccount(owner, {
+      name: "USD",
+      currency: "USD",
+      openingBalance: "100000",
+    })
+    const idr = await makeAccount(owner, {
+      name: "IDR",
+      currency: "IDR",
+      openingBalance: "0",
+    })
+    await seedRate(owner, "USD", "IDR", "16250", "2026-01-01")
+
+    const created = await createTransactionForFamily({
+      data: {
+        type: "transfer",
+        amount: 10_000n,
+        currency: "USD",
+        accountId: usd.id,
+        toAccountId: idr.id,
+        destinationAmount: 162_500_000n,
+        destinationCurrency: "IDR",
+        description: "cross-currency transfer",
+        date: new Date("2026-06-01"),
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+    // Edit the transferred amount; destination scaled proportionally.
+    const updated = await updateTransactionForFamily({
+      data: {
+        id: created.id,
+        type: "transfer",
+        amount: 20_000n, // $200.00
+        currency: "USD",
+        accountId: usd.id,
+        toAccountId: idr.id,
+        destinationAmount: 325_000_000n, // Rp 3,250,000.00
+        destinationCurrency: "IDR",
+        description: "edited cross-currency transfer",
+        date: new Date("2026-06-01"),
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+    const transfer = await readTransferByOutflow(owner, updated.id)
+    expect(transfer.fromCurrency).toBe("USD")
+    expect(transfer.toCurrency).toBe("IDR")
+    expect(transfer.fxRateScaled).toBe(encodeRate("16250"))
+
+    const outflow = await readTx(owner, transfer.outflowTransactionId)
+    const inflow = await readTx(owner, transfer.inflowTransactionId)
+    expect(outflow.currency).toBe("USD")
+    expect(outflow.amount).toBe(-20_000n)
+    expect(outflow.baseAmount).toBe(
+      convertMinor(-20_000n, "USD", "IDR", encodeRate("16250"))
+    )
+    expect(inflow.currency).toBe("IDR")
+    expect(inflow.amount).toBe(325_000_000n)
+    // IDR is the base currency → identity projection on the inflow leg.
+    expect(inflow.baseCurrency).toBe("IDR")
+    expect(inflow.baseAmount).toBe(325_000_000n)
+
+    // No rebuild needed: projections were materialized inline on update.
+    const rebuilt = await rebuildFxProjectionsForFamily({
+      data: {},
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+    expect(rebuilt.transactionsUpdated).toBe(0)
   })
 })

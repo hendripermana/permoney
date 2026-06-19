@@ -67,6 +67,7 @@ describe("onboarding contract", () => {
 
     const first = await initializeOnboardingForUser(harness.prisma, user.id, {
       idempotencyKey,
+      currency: "USD",
     })
     const storedAfterFirst = await harness.prisma.user.findFirstOrThrow({
       where: { familyId: first.familyId, id: user.id },
@@ -74,7 +75,7 @@ describe("onboarding contract", () => {
     const second = await initializeOnboardingForUser(
       harness.prisma,
       storedAfterFirst.id,
-      { idempotencyKey }
+      { idempotencyKey, currency: "USD" }
     )
 
     const storedUser = await harness.prisma.user.findUniqueOrThrow({
@@ -183,9 +184,11 @@ describe("onboarding contract", () => {
     const [first, second] = await Promise.all([
       initializeOnboardingForUser(harness.prisma, user.id, {
         idempotencyKey,
+        currency: "USD",
       }),
       initializeOnboardingForUser(harness.prisma, user.id, {
         idempotencyKey,
+        currency: "USD",
       }),
     ])
 
