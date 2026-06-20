@@ -1,14 +1,14 @@
 # ADR-0008 — Core domain model and ledger boundaries
 
-|                   |                    |
-| ----------------- | ------------------ |
-| **Status**        | Accepted           |
-| **Date**          | 2026-06-01         |
-| **Accepted**      | 2026-06-01         |
-| **Deciders**      | Hendri Permana     |
-| **Supersedes**    | —                  |
-| **Superseded by** | —                  |
-| **Amended by**    | ADR-0034; ADR-0036 |
+|                   |                              |
+| ----------------- | ---------------------------- |
+| **Status**        | Accepted                     |
+| **Date**          | 2026-06-01                   |
+| **Accepted**      | 2026-06-01                   |
+| **Deciders**      | Hendri Permana               |
+| **Supersedes**    | —                            |
+| **Superseded by** | —                            |
+| **Amended by**    | ADR-0034; ADR-0036; ADR-0037 |
 
 ## Context
 
@@ -322,6 +322,17 @@ the database layer (a second `app.user_id` GUC plus an
 and role changes are idempotent, audited mutations subject to the same ledger
 invariants as money movement. See
 [`0036-family-membership-and-role-authorization.md`](./0036-family-membership-and-role-authorization.md).
+
+## Amendment — Budget period model and progress (ADR-0037)
+
+This ADR named budgets as derived/cache data (§7) without fixing their boundary.
+**ADR-0037** locks it: a `Budget` is a concrete, tenant-scoped _period instance_
+whose only durable money is the per-category `allocatedAmount` (base-currency
+minor units, §3 metadata). Actual/remaining/over are **derived read-side** from
+the canonical ledger (§7), normalized via each transaction's materialized
+`baseAmount` (ADR-0035) — never stored, never re-resolved at read time. It also
+adds the `budget:write` capability to ADR-0036 §2. See
+[`0037-budget-period-model-and-progress.md`](./0037-budget-period-model-and-progress.md).
 
 ## References
 

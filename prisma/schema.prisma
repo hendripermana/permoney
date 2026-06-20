@@ -25,6 +25,7 @@ model Iso4217Currency {
   valuationBaseCurrencies          Valuation[]   @relation("ValuationBaseCurrency")
   fxFromCurrencies                 FxRateSnapshot[] @relation("FxRateFromCurrency")
   fxToCurrencies                   FxRateSnapshot[] @relation("FxRateToCurrency")
+  budgetCurrencies                 Budget[]      @relation("BudgetCurrency")
 
   @@map("iso_4217_currency")
 }
@@ -48,6 +49,7 @@ model Family {
   idempotencyRecords IdempotencyRecord[]
   valuations   Valuation[]
   fxRateSnapshots FxRateSnapshot[]
+  budgets      Budget[]
 }
 
 // ADR-0036: first-class family membership + role authorization.
@@ -227,6 +229,7 @@ model Category {
   transactions Transaction[]
   splitEntries SplitEntry[]
   smartRules   SmartRule[]
+  budgetCategories BudgetCategory[]
 
   // Tenant scoping (see ADR-0003). `familyId` is nullable for system
   // categories; the index still helps the common per-family scan.
@@ -575,6 +578,72 @@ model FxRateSnapshot {
 
   @@unique([familyId, fromCurrency, toCurrency, asOfDate], name: "fx_rate_snapshot_unique", map: "fx_rate_snapshot_unique")
   @@index([familyId, fromCurrency, toCurrency, asOfDate(sort: Desc)])
+}
+
+// ADR-0037 (PER-148) — Budget period model.
+//
+// A `Budget` is a CONCRETE, tenant-scoped PERIOD INSTANCE (e.g. "June 2026"),
+// not a recurring template. Its only durable money is the per-category
+// `allocatedAmount` on `BudgetCategory`; actual/remaining/over are derived
+// read-side from the canonical ledger (ADR-0008 §7) normalized via each
+// transaction's materialized `baseAmount` (ADR-0035). `periodKind` is reserved
+// for weekly/custom; only `monthly` is built in this slice. Date-only anchors
+// are interpreted in the family timezone. See ADR-0037.
+model Budget {
+  id          String    @id @default(cuid())
+  familyId    String
+  family      Family    @relation(fields: [familyId], references: [id], onDelete: Cascade)
+
+  name        String
+  periodKind  String    @default("monthly") // 'monthly' | 'weekly' | 'custom' (DB CHECK)
+  periodStart DateTime  @db.Date
+  periodEnd   DateTime  @db.Date
+
+  // Captured = Family.currency (base) at creation; allocations are stored in
+  // this currency's minor units. Base is immutable post-onboarding (ADR-0035).
+  currency         String
+  currencyRegistry Iso4217Currency @relation("BudgetCurrency", fields: [currency], references: [code], onDelete: Restrict, onUpdate: Cascade, map: "budget_currency_is_iso_4217")
+
+  archivedAt  DateTime?
+  createdById String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now()) @updatedAt
+
+  categories  BudgetCategory[]
+
+  // One budget per family per period kind per start (idempotent upsert target).
+  @@unique([familyId, periodKind, periodStart], name: "budget_family_period_unique", map: "budget_family_period_unique")
+  // Composite-FK target so BudgetCategory can never point at another family's
+  // budget even with a forged budgetId (ADR-0010 pattern).
+  @@unique([id, familyId], map: "Budget_id_familyId_key")
+  @@index([familyId, archivedAt, periodStart(sort: Desc)])
+}
+
+model BudgetCategory {
+  id         String @id @default(cuid())
+  // Denormalized for the composite tenant FK + RLS guard.
+  familyId   String
+  budgetId   String
+  budget     Budget @relation(fields: [budgetId, familyId], references: [id, familyId], onDelete: Cascade, onUpdate: Cascade, map: "budget_category_budget_family_fkey")
+
+  // System (isSystem, familyId NULL) or tenant-owned category; cross-tenant
+  // protection is app-layer validation (ADR-0011), since a composite FK is
+  // impossible against nullable-family system categories.
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  // Stored in MINOR UNITS of the parent Budget.currency (base). CHECK (>= 0).
+  allocatedAmount BigInt
+  // 'none' | 'carryover' (DB CHECK). Reserved: stored, not computed this slice.
+  rolloverPolicy String @default("none")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  // One allocation per category per budget.
+  @@unique([budgetId, categoryId], name: "budget_category_unique", map: "budget_category_unique")
+  @@index([familyId])
+  @@index([categoryId])
 }
 
 model Verification {
