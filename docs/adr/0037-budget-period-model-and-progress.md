@@ -81,7 +81,16 @@ allocation is durable, audited metadata; progress is a rebuildable projection.**
   `@@unique([familyId, periodKind, periodStart])`. Re-creating the same period
   is an idempotent upsert of allocations, not a duplicate row.
 - A `Budget` may be **archived** (`archivedAt`); archived budgets are excluded
-  from the active list but retained as history (no hard delete).
+  from the active **list** but retained as history (no hard delete). A direct
+  **period read** still returns an archived budget (so it can be viewed and
+  reactivated); editing its allocations reactivates it, and that `archivedAt`
+  transition is recorded in the `AuditLog` before/after snapshot — never a
+  silent un-archive.
+- **Default period:** when a read requests no month, the server resolves the
+  current month in the **family timezone** (`Family.timezone`), never the
+  browser/server clock, and returns the resolved `month` so the UI can anchor
+  its selector to it. This keeps the default period consistent with how spend is
+  bucketed.
 
 ### 2. Rollover / carryover — reserved, not computed this slice
 

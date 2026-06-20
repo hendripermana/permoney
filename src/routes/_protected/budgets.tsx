@@ -1,7 +1,7 @@
 import * as React from "react"
 import { createFileRoute } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { PiggyBank, TriangleAlert } from "lucide-react"
+import { PiggyBank, RefreshCw, TriangleAlert } from "lucide-react"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
@@ -44,11 +44,6 @@ export const Route = createFileRoute("/_protected/budgets")({
   component: BudgetsPage,
 })
 
-function currentMonth(): string {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
-}
-
 function formatWire(wire: string, currency: string): string {
   return formatMoney(decodeMoney(wire), currency as CurrencyCode)
 }
@@ -60,16 +55,35 @@ function spendPercent(actualWire: string, allocatedWire: string): number {
 }
 
 function BudgetsPage() {
-  const [month, setMonth] = React.useState<string>(currentMonth)
+  // null = let the server pick the current month in the FAMILY timezone, so the
+  // default period never depends on the browser's clock (ADR-0037 §1).
+  const [selectedMonth, setSelectedMonth] = React.useState<string | null>(null)
 
-  const { data: progress, isLoading } = useQuery({
-    queryKey: ["budget", month],
-    queryFn: async () => await getBudgetForPeriodFn({ data: { month } }),
+  const {
+    data: progress,
+    isLoading,
+    isError,
+    error,
+    refetch,
+    isFetching,
+  } = useQuery({
+    queryKey: ["budget", selectedMonth ?? "current"],
+    queryFn: async () =>
+      await getBudgetForPeriodFn({
+        data: selectedMonth ? { month: selectedMonth } : {},
+      }),
   })
-  const { data: categories } = useQuery({
+  const {
+    data: categories,
+    isError: isCategoriesError,
+    error: categoriesError,
+  } = useQuery({
     queryKey: ["budget-expense-categories"],
     queryFn: async () => await listExpenseCategoriesFn(),
   })
+
+  // Until the user picks one, mirror the month the server resolved.
+  const month = selectedMonth ?? progress?.month ?? ""
 
   return (
     <TooltipProvider>
@@ -101,23 +115,34 @@ function BudgetsPage() {
                   id="budget-month"
                   type="month"
                   value={month}
+                  disabled={isLoading}
                   className="w-44"
-                  onChange={(event) => setMonth(event.target.value)}
+                  onChange={(event) => setSelectedMonth(event.target.value)}
                 />
               </div>
             </div>
 
-            {isLoading || !progress ? (
+            {isLoading ? (
               <p className="text-sm text-muted-foreground">Loading budget…</p>
+            ) : isError || !progress ? (
+              <BudgetErrorCard
+                message={
+                  error instanceof Error
+                    ? error.message
+                    : "Something went wrong loading this budget."
+                }
+                isRetrying={isFetching}
+                onRetry={() => void refetch()}
+              />
             ) : (
               <>
                 <SummaryCard progress={progress} />
                 <ProgressCard progress={progress} />
                 <BudgetEditor
-                  key={`${month}:${progress.budgetId ?? "new"}`}
-                  month={month}
+                  key={`${progress.month}:${progress.budgetId ?? "new"}`}
                   currency={progress.currency}
-                  categories={categories ?? []}
+                  categories={categories}
+                  categoriesError={isCategoriesError ? categoriesError : null}
                   progress={progress}
                 />
               </>
@@ -126,6 +151,46 @@ function BudgetsPage() {
         </SidebarInset>
       </SidebarProvider>
     </TooltipProvider>
+  )
+}
+
+function BudgetErrorCard({
+  message,
+  isRetrying,
+  onRetry,
+}: {
+  message: string
+  isRetrying: boolean
+  onRetry: () => void
+}) {
+  return (
+    <Card className="border-destructive/50">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-destructive">
+          <TriangleAlert className="size-5" aria-hidden />
+          Couldn&apos;t load this budget
+        </CardTitle>
+        <CardDescription>
+          The budget data failed to load. If you just pulled this branch, make
+          sure the database migrations have run (<code>vp run db:migrate</code>
+          ).
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <p className="rounded-md bg-destructive/10 p-3 font-mono text-sm text-destructive">
+          {message}
+        </p>
+        <Button
+          variant="outline"
+          className="w-fit"
+          disabled={isRetrying}
+          onClick={onRetry}
+        >
+          <RefreshCw className="size-4" aria-hidden />
+          {isRetrying ? "Retrying…" : "Retry"}
+        </Button>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -291,17 +356,18 @@ function ProgressCard({ progress }: { progress: SerializedBudgetProgress }) {
 }
 
 function BudgetEditor({
-  month,
   currency,
   categories,
+  categoriesError,
   progress,
 }: {
-  month: string
   currency: string
-  categories: SerializedExpenseCategory[]
+  categories: SerializedExpenseCategory[] | undefined
+  categoriesError: unknown
   progress: SerializedBudgetProgress
 }) {
   const queryClient = useQueryClient()
+  const month = progress.month
   // Initialized once per period (the parent re-keys this component on month
   // change), so no effect is needed to sync from the query — see no-use-effect.
   const [inputs, setInputs] = React.useState<Record<string, string>>(() => {
@@ -322,7 +388,7 @@ function BudgetEditor({
   const mutation = useMutation({
     mutationFn: async () => {
       const allocations: { categoryId: string; allocatedAmount: string }[] = []
-      for (const category of categories) {
+      for (const category of categories ?? []) {
         const raw = (inputs[category.id] ?? "").trim()
         if (raw === "") continue
         const parsed = parseUserInput(raw, currency as CurrencyCode)
@@ -358,7 +424,16 @@ function BudgetEditor({
         </CardDescription>
       </CardHeader>
       <CardContent>
-        {categories.length === 0 ? (
+        {categoriesError ? (
+          <p className="text-sm text-destructive">
+            Couldn&apos;t load categories:{" "}
+            {categoriesError instanceof Error
+              ? categoriesError.message
+              : "unknown error"}
+          </p>
+        ) : !categories ? (
+          <p className="text-sm text-muted-foreground">Loading categories…</p>
+        ) : categories.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             No expense categories yet. Create categories first.
           </p>

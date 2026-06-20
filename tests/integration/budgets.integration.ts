@@ -548,6 +548,79 @@ describe("budgets vertical slice (PER-148)", () => {
   })
 
   // -------------------------------------------------------------------------
+  // Period default + archive lifecycle (P1 review fixes)
+  // -------------------------------------------------------------------------
+  test("reading with no month resolves to the family-timezone current month", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const expected = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Jakarta",
+      year: "numeric",
+      month: "2-digit",
+    }).format(new Date())
+
+    const progress = await getBudgetForPeriodForFamily({
+      data: {},
+      familyId: owner.family.id,
+      userId: owner.user.id,
+      runInTenantTransaction: runner(owner.user.id),
+    })
+    expect(progress.month).toBe(expected)
+  })
+
+  test("editing an archived period reactivates it with an audited transition", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const food = await factories.createCategory({
+      familyId: owner.family.id,
+      type: "expense",
+    })
+    const set = async (amount: string) =>
+      await setBudgetAllocationsForFamily({
+        data: {
+          month: MONTH,
+          allocations: [{ categoryId: food.id, allocatedAmount: amount }],
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        userId: owner.user.id,
+        runInTenantTransaction: runner(owner.user.id),
+      })
+
+    await set("100000")
+    await archiveBudgetForFamily({
+      data: { month: MONTH, idempotencyKey: factories.createIdempotencyKey() },
+      familyId: owner.family.id,
+      userId: owner.user.id,
+      runInTenantTransaction: runner(owner.user.id),
+    })
+    // Editing the archived period reactivates it.
+    await set("120000")
+
+    const budgets = await harness.withMember(
+      owner.family.id,
+      owner.user.id,
+      (tx) => tx.budget.findMany()
+    )
+    expect(budgets[0]?.archivedAt).toBeNull()
+
+    // The reactivating edit recorded the archivedAt transition (not silent).
+    const audits = await harness.withMember(
+      owner.family.id,
+      owner.user.id,
+      (tx) =>
+        tx.auditLog.findMany({
+          where: { entityType: "Budget", action: "update" },
+          orderBy: { createdAt: "desc" },
+        })
+    )
+    const before = audits[0]?.beforeJson as {
+      archivedAt?: string | null
+    } | null
+    const after = audits[0]?.afterJson as { archivedAt?: string | null } | null
+    expect(before?.archivedAt).toBeTruthy()
+    expect(after?.archivedAt).toBeNull()
+  })
+
+  // -------------------------------------------------------------------------
   // Database CHECK constraints (the law, independent of zod)
   // -------------------------------------------------------------------------
   test("DB rejects a negative allocation, bad periodKind, and inverted period", async () => {

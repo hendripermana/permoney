@@ -98,6 +98,15 @@ function defaultBudgetName(month: string): string {
   }).format(period.periodStart)
 }
 
+/** Current month (YYYY-MM) resolved in the family's timezone, not the server's. */
+function currentMonthInZone(timezone: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+  }).format(new Date())
+}
+
 // ---------------------------------------------------------------------------
 // Serialization
 // ---------------------------------------------------------------------------
@@ -117,6 +126,8 @@ export interface SerializedBudgetCategoryProgress {
 export interface SerializedBudgetProgress {
   budgetId: string | null
   name: string
+  /** Resolved period as YYYY-MM (family-tz current month when none requested). */
+  month: string
   periodKind: string
   periodStart: string
   periodEnd: string
@@ -156,6 +167,7 @@ function serializeProgress(
   meta: {
     budgetId: string | null
     name: string
+    month: string
     periodKind: string
     periodStart: string
     periodEnd: string
@@ -169,6 +181,7 @@ function serializeProgress(
   return {
     budgetId: meta.budgetId,
     name: meta.name,
+    month: meta.month,
     periodKind: meta.periodKind,
     periodStart: meta.periodStart,
     periodEnd: meta.periodEnd,
@@ -304,15 +317,18 @@ async function fetchPeriodLedgerRows(
 async function computePeriodProgress(
   tx: TenantTransactionClient,
   familyId: string,
-  month: string
+  requestedMonth: string | undefined
 ): Promise<SerializedBudgetProgress> {
-  const period = monthlyPeriod(month)
   // Serialized, not Promise.all: an interactive tx is one pg connection and
-  // overlapping queries are rejected (see with-family.ts).
+  // overlapping queries are rejected (see with-family.ts). Read the family
+  // first so the default period is anchored to the FAMILY timezone, not the
+  // caller's clock (ADR-0037 §1).
   const family = await tx.family.findUniqueOrThrow({
     where: { id: familyId },
     select: { currency: true, timezone: true },
   })
+  const month = requestedMonth ?? currentMonthInZone(family.timezone)
+  const period = monthlyPeriod(month)
   const baseCurrency = family.currency
   const budget = await loadBudgetRow(tx, familyId, period.periodStart)
 
@@ -343,6 +359,7 @@ async function computePeriodProgress(
   return serializeProgress(progress, {
     budgetId: budget?.id ?? null,
     name: budget?.name ?? defaultBudgetName(month),
+    month,
     periodKind: PERIOD_KIND_MONTHLY,
     periodStart: period.start,
     periodEnd: period.end,
@@ -358,7 +375,11 @@ async function computePeriodProgress(
 // READ — budget progress for a period
 // ===========================================================================
 
-const getBudgetForPeriodInputSchema = z.object({ month: monthSchema })
+const getBudgetForPeriodInputSchema = z.object({
+  // Optional: when omitted the server resolves the current month in the family
+  // timezone, so the default period never depends on the browser's clock.
+  month: monthSchema.optional(),
+})
 type GetBudgetForPeriodInput = z.infer<typeof getBudgetForPeriodInputSchema>
 
 export async function getBudgetForPeriodForFamily({
@@ -380,8 +401,8 @@ export async function getBudgetForPeriodForFamily({
 
 export const getBudgetForPeriodFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: GetBudgetForPeriodInput) =>
-    getBudgetForPeriodInputSchema.parse(data)
+  .inputValidator((data: GetBudgetForPeriodInput | undefined) =>
+    getBudgetForPeriodInputSchema.parse(data ?? {})
   )
   .handler(async ({ data, context }) => {
     return await getBudgetForPeriodForFamily({
@@ -603,6 +624,7 @@ export async function setBudgetAllocationsForFamily({
       const beforeSnapshot = existing
         ? {
             name: existing.name,
+            archivedAt: existing.archivedAt?.toISOString() ?? null,
             allocations: existing.categories.map((category) => ({
               categoryId: category.categoryId,
               allocatedAmount: category.allocatedAmount.toString(),
@@ -620,6 +642,9 @@ export async function setBudgetAllocationsForFamily({
             periodStart: period.periodStart,
           },
         },
+        // Editing a period's allocations reactivates it if it was archived;
+        // the transition is captured in the audit before/after below so it is
+        // never a silent un-archive (ADR-0037 §1).
         update: {
           name: data.name ?? defaultBudgetName(data.month),
           archivedAt: null,
@@ -672,6 +697,7 @@ export async function setBudgetAllocationsForFamily({
         before: beforeSnapshot,
         after: {
           name: data.name ?? defaultBudgetName(data.month),
+          archivedAt: null,
           periodKind: PERIOD_KIND_MONTHLY,
           periodStart: period.start,
           periodEnd: period.end,
