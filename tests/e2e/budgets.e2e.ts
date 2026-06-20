@@ -56,14 +56,17 @@ test.describe("budgets route", () => {
     await page.goto("/budgets")
     await waitForHydration(page)
 
-    await expect(page.getByRole("heading", { name: "Budgets" })).toBeVisible()
-    // The bug this guards: an errored query left the page on "Loading budget…".
-    await expect(page.getByText("Loading budget…")).toHaveCount(0)
+    // Unique page-body content (the "Budgets" h1 also appears in the site
+    // header, so assert on the intro copy + section titles instead).
     await expect(
-      page.getByRole("heading", { name: "Set allocations" })
+      page.getByText("Set what you plan to spend per category", {
+        exact: false,
+      })
     ).toBeVisible()
-    await expect(
-      page.getByRole("heading", { name: "Couldn't load this budget" })
-    ).toHaveCount(0)
+    // Proof the data resolved and the body rendered, not a stuck/errored loader.
+    await expect(page.getByText("Set allocations")).toBeVisible()
+    await expect(page.getByText("By category")).toBeVisible()
+    await expect(page.getByText("Loading budget…")).toHaveCount(0)
+    await expect(page.getByText("Couldn't load this budget")).toHaveCount(0)
   })
 })
