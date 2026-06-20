@@ -873,6 +873,7 @@ describe("AuditLog Integration & Security Tests", () => {
 
     const result = await initializeOnboardingForUser(harness.prisma, user.id, {
       idempotencyKey,
+      currency: "USD",
     })
 
     // Cari audit log yang dicatat saat onboarding dengan scoped GUC familyId

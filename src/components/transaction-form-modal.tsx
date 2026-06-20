@@ -91,6 +91,11 @@ const transactionSchema = z.object({
   // Enterprise: Multi-Currency Transfer (Implied Rate Architecture)
   // destinationAmount hanya diisi saat transfer antar akun dengan mata uang berbeda
   destinationAmount: z.number().positive().optional(),
+  // PER-147 / ADR-0035 §6: optional FX fee charged on a cross-currency transfer.
+  // Denominated in the SOURCE account currency; posts a separate `fx_fee`
+  // expense row server-side. Optional category for that expense.
+  fxFeeAmount: z.number().nonnegative().optional(),
+  fxFeeCategoryId: z.string().optional(),
   // Enterprise: Proof of Purchase (URL struk dari S3/R2)
   attachmentUrl: z.string().optional(),
 })
@@ -639,6 +644,106 @@ function DestinationAmountField({
                     {dstAccount.currency}
                   </p>
                 )}
+              </div>
+            )}
+          </form.Field>
+        )
+      }}
+    </form.Subscribe>
+  )
+}
+
+function FxFeeField({
+  activeTab,
+  form,
+  formData,
+}: Pick<TransactionFormSectionProps, "activeTab" | "form" | "formData">) {
+  if (activeTab !== "transfer") return null
+
+  return (
+    <form.Subscribe
+      selector={(state) => ({
+        accountId: state.values.accountId,
+        toAccountId: state.values.toAccountId,
+      })}
+    >
+      {({ accountId, toAccountId }) => {
+        const srcAccount = formData?.accounts.find((a) => a.id === accountId)
+        const dstAccount = formData?.accounts.find((a) => a.id === toAccountId)
+        const isCrossCurrency =
+          srcAccount &&
+          dstAccount &&
+          srcAccount.currency !== dstAccount.currency
+
+        // The fx_fee contract (ADR-0035 §6) is scoped to cross-currency
+        // transfers: the bank/exchange spread is a real, separate cost.
+        if (!isCrossCurrency) return null
+
+        return (
+          <form.Field name="fxFeeAmount">
+            {(field) => (
+              <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50/40 p-3 dark:border-amber-800 dark:bg-amber-950/20">
+                <Label
+                  htmlFor="fx-fee-amount"
+                  className="flex items-center gap-1.5 text-sm font-semibold text-amber-700 dark:text-amber-400"
+                >
+                  <IconArrowsExchange className="size-4" />
+                  FX / transfer fee ({srcAccount.currency})
+                  <span className="text-xs font-normal text-muted-foreground">
+                    (Optional)
+                  </span>
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  The bank or exchange spread charged on this conversion. Posted
+                  as a separate expense on the source account — it never
+                  distorts the transferred amounts.
+                </p>
+                <div className="relative">
+                  <span className="absolute top-2.5 left-3 text-sm font-medium text-muted-foreground">
+                    {getCurrencySymbol(srcAccount.currency)}
+                  </span>
+                  <Input
+                    id="fx-fee-amount"
+                    name="fx-fee-amount"
+                    type="number"
+                    className="pl-8 font-semibold"
+                    placeholder="0"
+                    value={field.state.value ?? ""}
+                    onBlur={field.handleBlur}
+                    onChange={(e) =>
+                      field.handleChange(
+                        e.target.value ? Number(e.target.value) : undefined
+                      )
+                    }
+                  />
+                </div>
+                <form.Field name="fxFeeCategoryId">
+                  {(categoryField) => (
+                    <div className="space-y-1.5">
+                      <Label
+                        htmlFor="fx-fee-category"
+                        className="text-xs text-muted-foreground"
+                      >
+                        Fee category (optional)
+                      </Label>
+                      <select
+                        id="fx-fee-category"
+                        name="fx-fee-category"
+                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                        value={categoryField.state.value ?? ""}
+                        onChange={(e) =>
+                          categoryField.handleChange(e.target.value)
+                        }
+                      >
+                        <option value="">-- No category --</option>
+                        <CategoryOptions
+                          categories={formData?.categories}
+                          type="expense"
+                        />
+                      </select>
+                    </div>
+                  )}
+                </form.Field>
               </div>
             )}
           </form.Field>
@@ -1254,6 +1359,8 @@ function useTransactionFormModalController({
         notes: editData.notes ?? "",
         status: "CLEARED" as const,
         destinationAmount: undefined,
+        fxFeeAmount: undefined,
+        fxFeeCategoryId: "",
         attachmentUrl: "",
       }
     : {
@@ -1269,6 +1376,8 @@ function useTransactionFormModalController({
         notes: "",
         status: "CLEARED" as const,
         destinationAmount: undefined,
+        fxFeeAmount: undefined,
+        fxFeeCategoryId: "",
         attachmentUrl: "",
       }
 
@@ -1355,6 +1464,17 @@ function useTransactionFormModalController({
           value.destinationAmount != null && destCurrency
             ? toMoney(value.destinationAmount, destCurrency)
             : null
+        // FX fee (ADR-0035 §6): only meaningful on a cross-currency transfer.
+        // Denominated in the source account currency; the server posts it as a
+        // separate fx_fee expense leg linked to the Transfer.
+        const fxFeeMoney: Money | null =
+          value.type === "transfer" &&
+          destCurrency != null &&
+          destCurrency !== sourceCurrency &&
+          value.fxFeeAmount != null &&
+          value.fxFeeAmount > 0
+            ? toMoney(value.fxFeeAmount, sourceCurrency)
+            : null
         const selectedAccount = formData?.accounts.find(
           (a) => a.id === value.accountId
         )
@@ -1421,6 +1541,13 @@ function useTransactionFormModalController({
             }
             return null
           })(),
+          // FX-fee inputs are write-only ledger inputs (not collection columns).
+          // They ride along on the optimistic insert so `onInsert` can forward
+          // them to the server; the post-mutation refetch then surfaces the
+          // server-posted fx_fee expense as its own ledger row.
+          fxFeeAmount: fxFeeMoney,
+          fxFeeAccountId: fxFeeMoney ? value.accountId : null,
+          fxFeeCategoryId: fxFeeMoney ? value.fxFeeCategoryId || null : null,
           accountBalanceAfter: null, // Computed server-side
           attachmentUrl: value.attachmentUrl || null,
           deletedAt: null,
@@ -1491,6 +1618,13 @@ function useTransactionFormModalController({
             supersedes: null,
             createdAt: new Date(),
             familyId: "",
+            // FX base projection (PER-147) is materialized server-side; the
+            // optimistic row is "FX-pending" until the post-mutation refetch
+            // backfills it from the server source of truth.
+            baseAmount: null,
+            baseCurrency: null,
+            fxRateScaled: null,
+            fxRateSnapshotId: null,
             // splitEntries di optimistic payload adalah versi ringkas (tanpa relasi Prisma)
             splitEntries:
               payload.splitEntries as TransactionRecord["splitEntries"],
@@ -1643,6 +1777,7 @@ export function TransactionFormModal({
             form={form}
             formData={formData}
           />
+          <FxFeeField activeTab={activeTab} form={form} formData={formData} />
           <DateTimeFields form={form} />
           <MerchantField
             activeTab={activeTab}

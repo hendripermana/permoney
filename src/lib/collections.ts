@@ -134,6 +134,11 @@ export const transactionCollection = createCollection(
     onInsert: async ({ transaction }) => {
       try {
         const payload = transaction.mutations[0].changes
+        // FX-fee inputs ride along as write-only ephemeral fields (see the
+        // transaction form modal); they are not collection columns, so read them
+        // off the raw change set and forward to the server (ADR-0035 §6).
+        const feeFields = payload as Record<string, unknown>
+        const fxFeeAmount = feeFields.fxFeeAmount as Money | null | undefined
 
         await createTransactionFn({
           data: {
@@ -176,6 +181,11 @@ export const transactionCollection = createCollection(
             destinationCurrency:
               (payload.destinationCurrency as string | null | undefined) ??
               null,
+            fxFeeAmount: fxFeeAmount ? encodeMoney(fxFeeAmount) : null,
+            fxFeeAccountId:
+              (feeFields.fxFeeAccountId as string | null | undefined) ?? null,
+            fxFeeCategoryId:
+              (feeFields.fxFeeCategoryId as string | null | undefined) ?? null,
             attachmentUrl:
               (payload.attachmentUrl as string | null | undefined) ?? null,
           },

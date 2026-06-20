@@ -9,6 +9,24 @@ import { CURRENCIES, type CurrencyCode } from "./data/currencies"
  * Contoh: "IDR" → "Rp", "USD" → "$", "JPY" → "¥", "EUR" → "€"
  * Menggunakan `narrowSymbol` agar simbol selalu pendek ($ bukan US$).
  */
+export interface CurrencyOption {
+  readonly code: string
+  readonly name: string
+}
+
+/**
+ * Full ISO currency list (global — Permoney covers the whole earth), sorted by
+ * priority then code. Computed once and shared by every currency picker
+ * (onboarding base currency, account creation, etc.) so the list never drifts
+ * between screens.
+ */
+export const CURRENCY_OPTIONS: ReadonlyArray<CurrencyOption> = Object.entries(
+  CURRENCIES
+)
+  .map(([code, def]) => ({ code, name: def.name, priority: def.priority }))
+  .sort((a, b) => a.priority - b.priority || a.code.localeCompare(b.code))
+  .map(({ code, name }) => ({ code, name }))
+
 export function getCurrencySymbol(currencyCode: string): string {
   try {
     return (

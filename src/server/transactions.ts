@@ -8,7 +8,9 @@ import {
   TRANSACTION_KIND_VALUES,
 } from "@/lib/liability-semantics"
 import { absMoney, encodeMoney, negateMoney, type Money } from "@/lib/money"
+import { deriveTransferFx } from "@/lib/fx"
 import { assertSplitParity } from "@/lib/split-parity"
+import { computeBaseProjectionForAmount, getFamilyBaseCurrency } from "./fx"
 import {
   familyMiddleware,
   scopedTenantTransaction,
@@ -148,6 +150,8 @@ function serializeTransaction<
     amount: bigint
     destinationAmount?: bigint | null
     accountBalanceAfter?: bigint | null
+    baseAmount?: bigint | null
+    fxRateScaled?: bigint | null
     splitEntries?: Array<{ amount: bigint }>
   },
 >(tx: T): Serialized<T> {
@@ -157,6 +161,9 @@ function serializeTransaction<
     tx.destinationAmount == null ? null : encodeMoney(tx.destinationAmount)
   out.accountBalanceAfter =
     tx.accountBalanceAfter == null ? null : encodeMoney(tx.accountBalanceAfter)
+  // FX base projection (PER-147): BigInt wire fields must be encoded to strings.
+  out.baseAmount = tx.baseAmount == null ? null : encodeMoney(tx.baseAmount)
+  out.fxRateScaled = tx.fxRateScaled == null ? null : tx.fxRateScaled.toString()
   if (tx.splitEntries) {
     out.splitEntries = tx.splitEntries.map((e) => ({
       ...e,
@@ -651,6 +658,13 @@ const transactionInputSchema = z.object({
   destinationAmount: positiveMoneyInputSchema.nullable().optional(),
   destinationCurrency: z.string().nullable().optional(),
   attachmentUrl: z.string().nullable().optional(),
+  // Optional FX fee on a cross-currency transfer (PER-147 / ADR-0035 §6). When
+  // present, a standalone `fx_fee` expense row is posted on `fxFeeAccountId`
+  // (default: the source account) in that account's currency, linked to the
+  // Transfer. Ignored for non-transfer transactions.
+  fxFeeAmount: positiveMoneyInputSchema.nullable().optional(),
+  fxFeeAccountId: z.string().nullable().optional(),
+  fxFeeCategoryId: z.string().nullable().optional(),
 })
 
 const createTransactionTransportInputSchema = transactionInputSchema.extend({
@@ -796,6 +810,88 @@ function assertManualTransactionKindShape(data: {
   if (isLiabilityCostKind(data.kind) && !data.toAccountId) {
     throw new Error(`${data.kind} requires a liability toAccountId`)
   }
+}
+
+/**
+ * Create the optional FX-fee leg of a cross-currency transfer (PER-147 /
+ * ADR-0035 §6). A standalone `fx_fee` expense posted on `fxFeeAccountId`
+ * (default: the source account) in that account's native currency, with its own
+ * atomic balance delta, base projection, and audit. Returns the new fee
+ * transaction id, or null when no fee was requested. The caller links it onto
+ * the `Transfer` row.
+ */
+async function createFxFeeLegIfRequested(
+  tx: TenantTransactionClient,
+  {
+    data,
+    familyId,
+    user,
+    baseCurrency,
+    auditCtx,
+  }: {
+    data: CreateTransactionInput
+    familyId: string
+    user: { id: string }
+    baseCurrency: string
+    auditCtx: Awaited<ReturnType<typeof createAuditContext>>
+  }
+): Promise<string | null> {
+  if (!data.fxFeeAmount) return null
+
+  const feeAccountId = data.fxFeeAccountId ?? data.accountId
+  await validateTenantReferences(tx, familyId, {
+    accountId: feeAccountId,
+    categoryId: data.fxFeeCategoryId,
+  })
+
+  const oldFeeAccount = await tx.account.findUniqueOrThrow({
+    where: { id: feeAccountId },
+  })
+  const feeAmount = negateMoney(absMoney(data.fxFeeAmount))
+  const feeMutation = await applyAccountBalanceDelta(tx, {
+    accountId: feeAccountId,
+    delta: feeAmount,
+    familyId,
+    notFoundMessage: "FX fee account not found or access denied!",
+  })
+  const feeProjection = await computeBaseProjectionForAmount(tx, familyId, {
+    amount: feeAmount,
+    currency: oldFeeAccount.currency,
+    date: data.date,
+    baseCurrency,
+  })
+
+  const feeTx = await tx.transaction.create({
+    data: {
+      type: "expense",
+      kind: "fx_fee",
+      amount: feeAmount,
+      currency: oldFeeAccount.currency,
+      description: `FX fee: ${data.description}`,
+      date: data.date,
+      notes: data.notes || null,
+      accountId: feeAccountId,
+      categoryId: data.fxFeeCategoryId || null,
+      userId: user.id,
+      familyId,
+      status: data.status,
+      baseAmount: feeProjection.baseAmount,
+      baseCurrency: feeProjection.baseCurrency,
+      fxRateScaled: feeProjection.fxRateScaled,
+      fxRateSnapshotId: feeProjection.fxRateSnapshotId,
+      accountBalanceAfter: feeMutation.after.balance,
+    },
+  })
+
+  const newFeeAccount = await tx.account.findUniqueOrThrow({
+    where: { id: feeAccountId },
+  })
+  await auditLogs(tx, auditCtx, [
+    ...accountBalanceAuditEntries([oldFeeAccount], [newFeeAccount]),
+    ...createdAuditEntries("Transaction", [feeTx]),
+  ])
+
+  return feeTx.id
 }
 
 async function assertLiabilityCostTarget(
@@ -1390,6 +1486,10 @@ export async function createTransactionForFamily({
         assertSplitParity(data)
         assertManualTransactionKindShape(data)
 
+        // Base reporting currency for the family; each posted row materializes
+        // its base projection at write time (PER-147 / ADR-0035 §4).
+        const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
+
         // A. HANDLE TRANSFER (DOUBLE-ENTRY)
         if (data.type === "transfer") {
           if (!data.toAccountId)
@@ -1422,7 +1522,15 @@ export async function createTransactionForFamily({
 
           // Multi-currency: gunakan destinationAmount jika tersedia, fallback ke amount
           const inAmount = data.destinationAmount ?? data.amount
-          const inCurrency = data.destinationCurrency ?? data.currency
+          // CURRENCY IS DERIVED FROM THE ACCOUNT, NOT THE CLIENT (PER-147).
+          // Each leg is denominated in its own account's native currency. This
+          // is the durable, global-correct invariant: a USD account's leg is
+          // always stored as USD regardless of what the browser sent, so the
+          // row can never silently default to the family currency. The
+          // client-sent `currency`/`destinationCurrency` remain advisory display
+          // hints only.
+          const outCurrency = oldSrcAcc.currency
+          const inCurrency = oldDstAcc.currency
 
           const destMutation = await applyAccountBalanceDelta(tx, {
             accountId: toAccountId,
@@ -1432,13 +1540,36 @@ export async function createTransactionForFamily({
           })
           const destBalanceAfter = destMutation.after.balance
 
+          const outflowAmount = negateMoney(absMoney(data.amount))
+          const inflowAmount = absMoney(inAmount)
+          const outflowProjection = await computeBaseProjectionForAmount(
+            tx,
+            familyId,
+            {
+              amount: outflowAmount,
+              currency: outCurrency,
+              date: data.date,
+              baseCurrency,
+            }
+          )
+          const inflowProjection = await computeBaseProjectionForAmount(
+            tx,
+            familyId,
+            {
+              amount: inflowAmount,
+              currency: inCurrency,
+              date: data.date,
+              baseCurrency,
+            }
+          )
+
           const outflowTx = await tx.transaction.create({
             data: {
               ...(data.id ? { id: data.id } : {}),
               type: "transfer",
               kind,
-              currency: data.currency,
-              amount: negateMoney(absMoney(data.amount)),
+              currency: outCurrency,
+              amount: outflowAmount,
               description: data.description,
               date: data.date,
               notes: data.notes || null,
@@ -1451,6 +1582,10 @@ export async function createTransactionForFamily({
               status: data.status,
               destinationAmount: data.destinationAmount,
               destinationCurrency: data.destinationCurrency,
+              baseAmount: outflowProjection.baseAmount,
+              baseCurrency: outflowProjection.baseCurrency,
+              fxRateScaled: outflowProjection.fxRateScaled,
+              fxRateSnapshotId: outflowProjection.fxRateSnapshotId,
               accountBalanceAfter: sourceBalanceAfter,
               attachmentUrl: data.attachmentUrl,
               idempotencyKey: data.idempotencyKey,
@@ -1462,7 +1597,7 @@ export async function createTransactionForFamily({
               type: "transfer",
               kind,
               currency: inCurrency,
-              amount: absMoney(inAmount),
+              amount: inflowAmount,
               description: data.description,
               date: data.date,
               notes: data.notes || null,
@@ -1475,18 +1610,37 @@ export async function createTransactionForFamily({
               status: data.status,
               destinationAmount: data.destinationAmount,
               destinationCurrency: data.destinationCurrency,
+              baseAmount: inflowProjection.baseAmount,
+              baseCurrency: inflowProjection.baseCurrency,
+              fxRateScaled: inflowProjection.fxRateScaled,
+              fxRateSnapshotId: inflowProjection.fxRateSnapshotId,
               accountBalanceAfter: destBalanceAfter,
               attachmentUrl: data.attachmentUrl,
             },
           })
 
+          // Cross-rate recorded on the canonical pairing record, derived from the
+          // two native legs (ADR-0035 §5). NULL for same-currency transfers.
+          const transferFx = deriveTransferFx(
+            outflowAmount,
+            outCurrency as Parameters<typeof deriveTransferFx>[1],
+            inflowAmount,
+            inCurrency as Parameters<typeof deriveTransferFx>[3]
+          )
+
           const createdTransfer = await tx.transfer.create({
             data: {
               outflowTransactionId: outflowTx.id,
               inflowTransactionId: inflowTx.id,
+              fxRateScaled: transferFx.fxRateScaled,
+              fromCurrency: transferFx.fromCurrency,
+              toCurrency: transferFx.toCurrency,
             },
           })
 
+          // Re-fetch + audit the transfer legs' account balances BEFORE the fee
+          // leg, so the fee's own delta (it may post on the source account) is
+          // never folded into the transfer-leg balance audit.
           const [newSrcAcc, newDstAcc] =
             await runTenantTransactionQueriesInOrder([
               () =>
@@ -1507,6 +1661,23 @@ export async function createTransactionForFamily({
             ...createdAuditEntries("Transaction", [outflowTx, inflowTx]),
             ...createdAuditEntries("Transfer", [createdTransfer]),
           ])
+
+          // Optional FX fee leg (ADR-0035 §6): a standalone fx_fee expense on the
+          // fee account (default: source) in that account's native currency,
+          // linked back onto the Transfer. Fully audited inside the helper.
+          const feeTransactionId = await createFxFeeLegIfRequested(tx, {
+            data,
+            familyId,
+            user,
+            baseCurrency,
+            auditCtx,
+          })
+          if (feeTransactionId) {
+            await tx.transfer.update({
+              where: { id: createdTransfer.id },
+              data: { feeTransactionId },
+            })
+          }
 
           return serializeTransaction({
             ...outflowTx,
@@ -1537,12 +1708,31 @@ export async function createTransactionForFamily({
           ] as const)
         const accountBalanceAfter = accountMutation.after.balance
 
+        // Native currency is the ACCOUNT's currency, derived server-side — never
+        // the client-sent `data.currency` (which previously defaulted to "IDR"
+        // and silently mislabelled foreign-account rows). Permoney is global:
+        // the account is the single source of truth for what money this is.
+        const standardCurrency = oldAccount.currency
+        const standardProjection = await computeBaseProjectionForAmount(
+          tx,
+          familyId,
+          {
+            amount: amountSign,
+            currency: standardCurrency,
+            date: data.date,
+            baseCurrency,
+          }
+        )
+
         const newTransaction = await tx.transaction.create({
           data: {
             ...(data.id ? { id: data.id } : {}),
             type: data.type,
             kind: data.kind,
             amount: amountSign,
+            // Persist the account's native currency so the materialized base
+            // projection and the stored row always agree (PER-147).
+            currency: standardCurrency,
             description: data.description,
             date: data.date,
             notes: data.notes || null,
@@ -1555,6 +1745,10 @@ export async function createTransactionForFamily({
             userId: user.id,
             familyId,
             status: data.status,
+            baseAmount: standardProjection.baseAmount,
+            baseCurrency: standardProjection.baseCurrency,
+            fxRateScaled: standardProjection.fxRateScaled,
+            fxRateSnapshotId: standardProjection.fxRateSnapshotId,
             accountBalanceAfter: accountBalanceAfter,
             attachmentUrl: data.attachmentUrl,
             idempotencyKey: data.idempotencyKey,
@@ -1687,9 +1881,21 @@ async function softDeleteTransactionWithinTenantTransaction(
         )
       : null
 
+  // FX fee leg (PER-147 / ADR-0035 §6): a transfer's optional fx_fee expense is
+  // reversed and soft-deleted symmetrically with its legs.
+  const feeTx = oldTransferGraph?.feeTransactionId
+    ? await findOptionalTransactionWithSplitEntries(
+        tx,
+        oldTransferGraph.feeTransactionId
+      )
+    : null
+
   const affectedAccountIds = [oldTx.accountId]
   if (inflowTx) {
     affectedAccountIds.push(inflowTx.accountId)
+  }
+  if (feeTx) {
+    affectedAccountIds.push(feeTx.accountId)
   }
   const oldAccounts = await tx.account.findMany({
     where: { id: { in: affectedAccountIds } },
@@ -1710,6 +1916,16 @@ async function softDeleteTransactionWithinTenantTransaction(
         delta: negateMoney(absMoney(inflowTx.amount)),
         familyId,
         notFoundMessage: "Destination account not found or access denied!",
+      })
+    }
+
+    // Reverse the fee expense: add back its magnitude on the fee account.
+    if (feeTx && feeTx.deletedAt === null) {
+      await applyAccountBalanceDelta(tx, {
+        accountId: feeTx.accountId,
+        delta: absMoney(feeTx.amount),
+        familyId,
+        notFoundMessage: "FX fee account not found or access denied!",
       })
     }
   } else {
@@ -1740,6 +1956,14 @@ async function softDeleteTransactionWithinTenantTransaction(
       data: { deletedAt },
     })
     if (transferUpdate.count !== 1) throw new TransactionGoneError()
+
+    if (feeTx && feeTx.deletedAt === null) {
+      const feeUpdate = await tx.transaction.updateMany({
+        where: { id: feeTx.id, familyId, deletedAt: null },
+        data: { deletedAt },
+      })
+      if (feeUpdate.count !== 1) throw new TransactionGoneError()
+    }
   } else {
     const update = await tx.transaction.updateMany({
       where: { id: oldTx.id, familyId, deletedAt: null },
@@ -1793,6 +2017,17 @@ async function softDeleteTransactionWithinTenantTransaction(
             entityId: oldTransferGraph.id,
             before: oldTransferGraph,
             after: updatedTransferGraph,
+          },
+        ]
+      : []),
+    ...(feeTx
+      ? [
+          {
+            action: "soft_delete" as const,
+            entityType: "Transaction",
+            entityId: feeTx.id,
+            before: feeTx,
+            after: await findTransactionWithSplitEntries(tx, feeTx.id),
           },
         ]
       : []),
@@ -1987,6 +2222,12 @@ async function replaceTransactionWithinTenantTransaction(
     where: { id: { in: Array.from(touchedAccountIds) } },
   })
 
+  // Base reporting currency for the replacement rows. The superseding row is a
+  // brand-new ledger entry, so it must materialize its base projection inline
+  // (PER-147 / ADR-0035 §4) exactly like the create path — never leaving it for
+  // a later rebuild to backfill.
+  const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
+
   const accountDeltas: AccountDeltaMap = {}
   if (oldTx.type === "transfer" && oldTx.transferOut) {
     if (!oldInflowTx) {
@@ -2033,7 +2274,12 @@ async function replaceTransactionWithinTenantTransaction(
     })
 
     const inAmount = data.destinationAmount ?? data.amount
-    const inCurrency = data.destinationCurrency ?? data.currency
+    // Each leg is denominated in its own account's native currency, derived
+    // server-side (PER-147) — not the client-sent currency, which previously
+    // went unset on this path and silently defaulted every replacement row to
+    // the family currency ("IDR").
+    const outCurrency = fromAccount.currency
+    const inCurrency = toAccount.currency
 
     addAccountDelta(
       accountDeltas,
@@ -2060,12 +2306,35 @@ async function replaceTransactionWithinTenantTransaction(
       )
     ).balance
 
+    const outflowAmount = negateMoney(absMoney(data.amount))
+    const inflowAmount = absMoney(inAmount)
+    const outflowProjection = await computeBaseProjectionForAmount(
+      tx,
+      familyId,
+      {
+        amount: outflowAmount,
+        currency: outCurrency,
+        date: data.date,
+        baseCurrency,
+      }
+    )
+    const inflowProjection = await computeBaseProjectionForAmount(
+      tx,
+      familyId,
+      {
+        amount: inflowAmount,
+        currency: inCurrency,
+        date: data.date,
+        baseCurrency,
+      }
+    )
+
     const outflowTx = await tx.transaction.create({
       data: {
         type: "transfer",
         kind,
-        currency: data.currency,
-        amount: negateMoney(absMoney(data.amount)),
+        currency: outCurrency,
+        amount: outflowAmount,
         description: data.description,
         date: data.date,
         notes: data.notes || null,
@@ -2078,6 +2347,10 @@ async function replaceTransactionWithinTenantTransaction(
         status: data.status,
         destinationAmount: data.destinationAmount,
         destinationCurrency: data.destinationCurrency,
+        baseAmount: outflowProjection.baseAmount,
+        baseCurrency: outflowProjection.baseCurrency,
+        fxRateScaled: outflowProjection.fxRateScaled,
+        fxRateSnapshotId: outflowProjection.fxRateSnapshotId,
         accountBalanceAfter: sourceBalanceAfter,
         attachmentUrl: data.attachmentUrl,
         supersedes: oldTx.id,
@@ -2089,7 +2362,7 @@ async function replaceTransactionWithinTenantTransaction(
         type: "transfer",
         kind,
         currency: inCurrency,
-        amount: absMoney(inAmount),
+        amount: inflowAmount,
         description: data.description,
         date: data.date,
         notes: data.notes || null,
@@ -2102,16 +2375,33 @@ async function replaceTransactionWithinTenantTransaction(
         status: data.status,
         destinationAmount: data.destinationAmount,
         destinationCurrency: data.destinationCurrency,
+        baseAmount: inflowProjection.baseAmount,
+        baseCurrency: inflowProjection.baseCurrency,
+        fxRateScaled: inflowProjection.fxRateScaled,
+        fxRateSnapshotId: inflowProjection.fxRateSnapshotId,
         accountBalanceAfter: destBalanceAfter,
         attachmentUrl: data.attachmentUrl,
         ...(oldInflowTx ? { supersedes: oldInflowTx.id } : {}),
       },
     })
 
+    // Record the implied cross-rate on the canonical pairing record so an edited
+    // cross-currency transfer keeps the same FX contract as a freshly created
+    // one (ADR-0035 §5). NULL for same-currency transfers.
+    const transferFx = deriveTransferFx(
+      outflowAmount,
+      outCurrency as Parameters<typeof deriveTransferFx>[1],
+      inflowAmount,
+      inCurrency as Parameters<typeof deriveTransferFx>[3]
+    )
+
     createdTransfer = await tx.transfer.create({
       data: {
         outflowTransactionId: outflowTx.id,
         inflowTransactionId: inflowTx.id,
+        fxRateScaled: transferFx.fxRateScaled,
+        fromCurrency: transferFx.fromCurrency,
+        toCurrency: transferFx.toCurrency,
       },
     })
 
@@ -2135,11 +2425,29 @@ async function replaceTransactionWithinTenantTransaction(
       )
     ).balance
 
+    // Native currency comes from the account, derived server-side (PER-147).
+    const targetAccount = oldAccounts.find(
+      (account) => account.id === data.accountId
+    )
+    if (!targetAccount) throw new Error("Account not found or access denied!")
+    const standardCurrency = targetAccount.currency
+    const standardProjection = await computeBaseProjectionForAmount(
+      tx,
+      familyId,
+      {
+        amount: amountSign,
+        currency: standardCurrency,
+        date: data.date,
+        baseCurrency,
+      }
+    )
+
     const newTx = await tx.transaction.create({
       data: {
         type: data.type,
         kind: data.kind,
         amount: amountSign,
+        currency: standardCurrency,
         description: data.description,
         date: data.date,
         notes: data.notes || null,
@@ -2151,6 +2459,10 @@ async function replaceTransactionWithinTenantTransaction(
         userId: user.id,
         familyId,
         status: data.status,
+        baseAmount: standardProjection.baseAmount,
+        baseCurrency: standardProjection.baseCurrency,
+        fxRateScaled: standardProjection.fxRateScaled,
+        fxRateSnapshotId: standardProjection.fxRateSnapshotId,
         accountBalanceAfter: accountBalanceAfter,
         attachmentUrl: data.attachmentUrl,
         supersedes: oldTx.id,
