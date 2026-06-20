@@ -12,10 +12,10 @@ jobs:
   react-doctor:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
-      - uses: millionco/react-doctor@6216430f93404489f6a56b4d0a7c196beb86623a
+      - uses: millionco/react-doctor@f4e8e4bd5f318dc307200dcf2f38a7235f086e6f
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
