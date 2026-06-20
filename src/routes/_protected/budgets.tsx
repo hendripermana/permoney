@@ -62,16 +62,14 @@ function spendPercent(actualWire: string, allocatedWire: string): number {
 function BudgetsPage() {
   const [month, setMonth] = React.useState<string>(currentMonth)
 
-  const budgetQuery = useQuery({
+  const { data: progress, isLoading } = useQuery({
     queryKey: ["budget", month],
     queryFn: async () => await getBudgetForPeriodFn({ data: { month } }),
   })
-  const categoriesQuery = useQuery({
+  const { data: categories } = useQuery({
     queryKey: ["budget-expense-categories"],
     queryFn: async () => await listExpenseCategoriesFn(),
   })
-
-  const progress = budgetQuery.data
 
   return (
     <TooltipProvider>
@@ -109,7 +107,7 @@ function BudgetsPage() {
               </div>
             </div>
 
-            {budgetQuery.isLoading || !progress ? (
+            {isLoading || !progress ? (
               <p className="text-sm text-muted-foreground">Loading budget…</p>
             ) : (
               <>
@@ -119,7 +117,7 @@ function BudgetsPage() {
                   key={`${month}:${progress.budgetId ?? "new"}`}
                   month={month}
                   currency={progress.currency}
-                  categories={categoriesQuery.data ?? []}
+                  categories={categories ?? []}
                   progress={progress}
                 />
               </>
