@@ -124,11 +124,14 @@ export function decodeRate(rateScaled: bigint): string {
   const whole = rateScaled / RATE_SCALE
   const fraction = rateScaled % RATE_SCALE
   if (fraction === 0n) return whole.toString()
-  const fractionStr = fraction
-    .toString()
-    .padStart(RATE_DECIMALS, "0")
-    .replace(/0+$/, "")
-  return `${whole.toString()}.${fractionStr}`
+  // Strip trailing zeros from the fixed-width fraction WITHOUT a regex. The
+  // input is bounded (exactly RATE_DECIMALS digits) so a regex was never a real
+  // ReDoS risk, but an index walk is clearer and avoids the regex engine
+  // entirely. `fraction !== 0n` here guarantees a non-empty result.
+  const padded = fraction.toString().padStart(RATE_DECIMALS, "0")
+  let end = padded.length
+  while (end > 0 && padded[end - 1] === "0") end--
+  return `${whole.toString()}.${padded.slice(0, end)}`
 }
 
 /**
