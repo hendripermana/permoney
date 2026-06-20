@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client"
 import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
 import {
-  familyMiddleware,
+  requireCapability,
   scopedTenantTransaction,
 } from "./middleware/with-family"
 
@@ -90,7 +90,7 @@ export async function getAuditLogForFamily({
  * Dilindungi oleh familyMiddleware dan berjalan dalam context scopedTenantTransaction.
  */
 export const getAuditLogFn = createServerFn({ method: "GET" })
-  .middleware([familyMiddleware])
+  .middleware([requireCapability("audit:read")])
   .inputValidator((data: z.infer<typeof getAuditLogInputSchema>) =>
     getAuditLogInputSchema.parse(data)
   )

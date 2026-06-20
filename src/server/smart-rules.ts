@@ -3,6 +3,7 @@ import { z } from "zod"
 import { auditLog, createAuditContext } from "./middleware/audit"
 import {
   familyMiddleware,
+  requireCapability,
   scopedTenantTransaction,
 } from "./middleware/with-family"
 import { validateTenantReferences } from "./validation/tenant-references"
@@ -119,7 +120,7 @@ export async function deleteSmartRuleForFamily({
 }
 
 export const createSmartRuleFn = createServerFn({ method: "POST" })
-  .middleware([familyMiddleware])
+  .middleware([requireCapability("ledger:write")])
   .inputValidator((data: z.infer<typeof createRuleSchema>) =>
     createRuleSchema.parse(data)
   )
@@ -135,7 +136,7 @@ export const createSmartRuleFn = createServerFn({ method: "POST" })
  * 3. DELETE RULE — tenant-scoped via familyMiddleware + scopedTenantTransaction
  */
 export const deleteSmartRuleFn = createServerFn({ method: "POST" })
-  .middleware([familyMiddleware])
+  .middleware([requireCapability("ledger:write")])
   .inputValidator(z.object({ id: z.string() }))
   .handler(async ({ data, context }) => {
     return await deleteSmartRuleForFamily({

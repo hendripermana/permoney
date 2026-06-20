@@ -9,6 +9,7 @@ import {
 import { auditLog, createAuditContext } from "./middleware/audit"
 import {
   familyMiddleware,
+  requireCapability,
   scopedTenantTransaction,
 } from "./middleware/with-family"
 import { hashCanonicalPayload } from "./idempotency"
@@ -338,7 +339,7 @@ export async function createAccountForFamily({
 }
 
 export const createAccountFn = createServerFn({ method: "POST" })
-  .middleware([familyMiddleware])
+  .middleware([requireCapability("account:write")])
   .inputValidator((data: z.input<typeof createAccountInputSchema>) =>
     createAccountInputSchema.parse(data)
   )
@@ -463,7 +464,7 @@ export async function updateAccountForFamily({
 }
 
 export const updateAccountFn = createServerFn({ method: "POST" })
-  .middleware([familyMiddleware])
+  .middleware([requireCapability("account:write")])
   .inputValidator((data: z.input<typeof updateAccountInputSchema>) =>
     updateAccountInputSchema.parse(data)
   )
@@ -618,7 +619,7 @@ export async function reactivateAccountForFamily({
 }
 
 export const archiveAccountFn = createServerFn({ method: "POST" })
-  .middleware([familyMiddleware])
+  .middleware([requireCapability("account:write")])
   .inputValidator((data: z.input<typeof accountIdActionInputSchema>) =>
     accountIdActionInputSchema.parse(data)
   )
@@ -631,7 +632,7 @@ export const archiveAccountFn = createServerFn({ method: "POST" })
   })
 
 export const reactivateAccountFn = createServerFn({ method: "POST" })
-  .middleware([familyMiddleware])
+  .middleware([requireCapability("account:write")])
   .inputValidator((data: z.input<typeof accountIdActionInputSchema>) =>
     accountIdActionInputSchema.parse(data)
   )

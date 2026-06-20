@@ -5,6 +5,7 @@ import { IDENTITY_RATE, convertMinor, decodeRate, encodeRate } from "@/lib/fx"
 import { auditLog, createAuditContext } from "./middleware/audit"
 import {
   familyMiddleware,
+  requireCapability,
   scopedTenantTransaction,
   type TenantTransactionClient,
 } from "./middleware/with-family"
@@ -323,7 +324,7 @@ export async function upsertFxRateSnapshotForFamily({
 }
 
 export const upsertFxRateSnapshotFn = createServerFn({ method: "POST" })
-  .middleware([familyMiddleware])
+  .middleware([requireCapability("settings:write")])
   .inputValidator((data: z.input<typeof upsertFxRateSnapshotInputSchema>) =>
     upsertFxRateSnapshotInputSchema.parse(data)
   )
@@ -564,7 +565,7 @@ export async function rebuildFxProjectionsForFamily({
 }
 
 export const rebuildFxProjectionsFn = createServerFn({ method: "POST" })
-  .middleware([familyMiddleware])
+  .middleware([requireCapability("settings:write")])
   .inputValidator((data: z.infer<typeof rebuildFxProjectionsInputSchema>) =>
     rebuildFxProjectionsInputSchema.parse(data)
   )
@@ -634,7 +635,7 @@ export async function setBaseCurrencyForFamily({
 }
 
 export const setBaseCurrencyFn = createServerFn({ method: "POST" })
-  .middleware([familyMiddleware])
+  .middleware([requireCapability("settings:write")])
   .inputValidator((data: z.infer<typeof setBaseCurrencyInputSchema>) =>
     setBaseCurrencyInputSchema.parse(data)
   )

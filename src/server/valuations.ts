@@ -13,6 +13,7 @@ import { computeBaseProjectionForAmount, getFamilyBaseCurrency } from "./fx"
 import { auditLog, createAuditContext } from "./middleware/audit"
 import {
   familyMiddleware,
+  requireCapability,
   scopedTenantTransaction,
   type TenantTransactionClient,
 } from "./middleware/with-family"
@@ -470,7 +471,7 @@ export async function createValuationForFamily({
 }
 
 export const createValuationFn = createServerFn({ method: "POST" })
-  .middleware([familyMiddleware])
+  .middleware([requireCapability("ledger:write")])
   .inputValidator((data: z.input<typeof createValuationInputSchema>) =>
     createValuationInputSchema.parse(data)
   )
@@ -574,7 +575,7 @@ export async function rebuildFamilyBalances({
 }
 
 export const rebuildAccountBalanceFn = createServerFn({ method: "POST" })
-  .middleware([familyMiddleware])
+  .middleware([requireCapability("ledger:write")])
   .inputValidator((data: z.infer<typeof rebuildAccountBalanceInputSchema>) =>
     rebuildAccountBalanceInputSchema.parse(data)
   )

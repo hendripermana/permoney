@@ -13,6 +13,7 @@ import { assertSplitParity } from "@/lib/split-parity"
 import { computeBaseProjectionForAmount, getFamilyBaseCurrency } from "./fx"
 import {
   familyMiddleware,
+  requireCapability,
   scopedTenantTransaction,
   type TenantTransactionClient,
 } from "./middleware/with-family"
@@ -1820,7 +1821,7 @@ export async function createTransactionForFamily({
  * BACKEND FUNCTION: Create Transaction & Update Balances (ACID Compliant)
  */
 export const createTransactionFn = createServerFn({ method: "POST" })
-  .middleware([familyMiddleware])
+  .middleware([requireCapability("ledger:write")])
   .inputValidator(
     (data: z.input<typeof createTransactionTransportInputSchema>) =>
       createTransactionTransportInputSchema.parse(data)
@@ -2149,7 +2150,7 @@ export async function deleteTransactionForFamily({
  * Transaksi tidak pernah benar-benar dihapus; hanya ditandai dengan deletedAt.
  */
 export const deleteTransactionFn = createServerFn({ method: "POST" })
-  .middleware([familyMiddleware])
+  .middleware([requireCapability("ledger:write")])
   .inputValidator(
     (data: z.input<typeof deleteTransactionTransportInputSchema>) =>
       deleteTransactionTransportInputSchema.parse(data)
@@ -2687,7 +2688,7 @@ export async function updateTransactionForFamily({
  * BACKEND FUNCTION: Update Transaction (soft-delete + new-row supersession)
  */
 export const updateTransactionFn = createServerFn({ method: "POST" })
-  .middleware([familyMiddleware])
+  .middleware([requireCapability("ledger:write")])
   .inputValidator(
     (data: z.input<typeof updateTransactionTransportInputSchema>) =>
       updateTransactionTransportInputSchema.parse(data)
@@ -2861,7 +2862,7 @@ export async function bulkDeleteTransactionsForFamily({
  * BACKEND FUNCTION: Bulk Delete Transactions (Soft Delete — GAAP Compliance)
  */
 export const bulkDeleteTransactionsFn = createServerFn({ method: "POST" })
-  .middleware([familyMiddleware])
+  .middleware([requireCapability("ledger:write")])
   .inputValidator(
     (data: z.input<typeof bulkDeleteTransactionsTransportInputSchema>) =>
       bulkDeleteTransactionsTransportInputSchema.parse(data)
@@ -2995,7 +2996,7 @@ export async function bulkUpdateTransactionsForFamily({
  * BACKEND FUNCTION: Bulk Update Transactions
  */
 export const bulkUpdateTransactionsFn = createServerFn({ method: "POST" })
-  .middleware([familyMiddleware])
+  .middleware([requireCapability("ledger:write")])
   .inputValidator(
     (data: z.input<typeof bulkUpdateTransactionsTransportInputSchema>) =>
       bulkUpdateTransactionsTransportInputSchema.parse(data)
@@ -3163,7 +3164,7 @@ export async function bulkCreateTransactionsForFamily({
  * BACKEND FUNCTION: Bulk Create Transactions
  */
 export const bulkCreateTransactionsFn = createServerFn({ method: "POST" })
-  .middleware([familyMiddleware])
+  .middleware([requireCapability("ledger:write")])
   .inputValidator(
     (data: z.input<typeof bulkCreateTransactionsTransportInputSchema>) =>
       bulkCreateTransactionsTransportInputSchema.parse(data)
