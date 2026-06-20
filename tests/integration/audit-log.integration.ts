@@ -215,7 +215,7 @@ describe("AuditLog Integration & Security Tests", () => {
         toAccountId: destinationAccount.id,
       }),
       familyId: owner.family.id,
-      runInTenantTransaction: harness.withFamily,
+      runInTenantTransaction: harness.withMember,
       user: owner.user,
     })
 
@@ -296,7 +296,7 @@ describe("AuditLog Integration & Security Tests", () => {
         description: "Audit test expense",
       }),
       familyId: owner.family.id,
-      runInTenantTransaction: harness.withFamily,
+      runInTenantTransaction: harness.withMember,
       user: owner.user,
     })
 
@@ -340,7 +340,7 @@ describe("AuditLog Integration & Security Tests", () => {
         description: "Initial expense",
       }),
       familyId: owner.family.id,
-      runInTenantTransaction: harness.withFamily,
+      runInTenantTransaction: harness.withMember,
       user: owner.user,
     })
 
@@ -399,7 +399,7 @@ describe("AuditLog Integration & Security Tests", () => {
         description: "To be deleted",
       }),
       familyId: owner.family.id,
-      runInTenantTransaction: harness.withFamily,
+      runInTenantTransaction: harness.withMember,
       user: owner.user,
     })
 
@@ -718,7 +718,7 @@ describe("AuditLog Integration & Security Tests", () => {
     await createTransactionForFamily({
       data: payload,
       familyId: owner.family.id,
-      runInTenantTransaction: harness.withFamily,
+      runInTenantTransaction: harness.withMember,
       user: owner.user,
     })
 
@@ -726,7 +726,7 @@ describe("AuditLog Integration & Security Tests", () => {
     await createTransactionForFamily({
       data: payload,
       familyId: owner.family.id,
-      runInTenantTransaction: harness.withFamily,
+      runInTenantTransaction: harness.withMember,
       user: owner.user,
     })
 
@@ -830,6 +830,7 @@ describe("AuditLog Integration & Security Tests", () => {
     const page1 = await getAuditLogForFamily({
       data: { limit: 3 },
       familyId: owner.family.id,
+      userId: owner.user.id,
     })
 
     expect(page1.items).toHaveLength(3)
@@ -843,6 +844,7 @@ describe("AuditLog Integration & Security Tests", () => {
         cursor: page1.nextCursor!,
       },
       familyId: owner.family.id,
+      userId: owner.user.id,
     })
 
     expect(page2.items).toHaveLength(2) // Total 5 data, page 1 ambil 3, page 2 ambil sisa 2
@@ -856,6 +858,7 @@ describe("AuditLog Integration & Security Tests", () => {
         entityType: "TypeEven",
       },
       familyId: owner.family.id,
+      userId: owner.user.id,
     })
     expect(filtered.items).toHaveLength(2) // item 2 & 4
     expect(

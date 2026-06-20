@@ -396,6 +396,7 @@ describe("currency + FX snapshots + cross-currency transfers (PER-147 / ADR-0035
     const bRates = await listFxRateSnapshotsForFamily({
       data: {},
       familyId: b.family.id,
+      userId: b.user.id,
     })
     expect(bRates).toHaveLength(0)
 
@@ -426,6 +427,7 @@ describe("currency + FX snapshots + cross-currency transfers (PER-147 / ADR-0035
     let rows = await listFxRateSnapshotsForFamily({
       data: {},
       familyId: owner.family.id,
+      userId: owner.user.id,
     })
     expect(rows).toHaveLength(1)
     expect((await readTx(owner, created.id)).baseAmount).toBe(-80_000_000n)
@@ -435,6 +437,7 @@ describe("currency + FX snapshots + cross-currency transfers (PER-147 / ADR-0035
     rows = await listFxRateSnapshotsForFamily({
       data: {},
       familyId: owner.family.id,
+      userId: owner.user.id,
     })
     expect(rows).toHaveLength(1)
     expect((await readTx(owner, created.id)).baseAmount).toBe(-82_500_000n)

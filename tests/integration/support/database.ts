@@ -40,6 +40,11 @@ export interface IntegrationHarness {
     familyId: string,
     callback: (tx: IntegrationTx) => Promise<T>
   ) => Promise<T>
+  withMember: <T>(
+    familyId: string,
+    userId: string,
+    callback: (tx: IntegrationTx) => Promise<T>
+  ) => Promise<T>
 }
 
 interface CreateIntegrationHarnessOptions {
@@ -128,9 +133,32 @@ export async function createIntegrationHarness(
         }
       }
     },
+    // ADR-0036: tenant tables now require BOTH `app.family_id` and an
+    // `app.user_id` that maps to an active member. withFamily auto-resolves the
+    // family's active owner and acts as them — the common "act as this family"
+    // intent. Negative/non-member tests use withMember to set an explicit actor.
+    // The FamilyMember read below runs after app.family_id is set and before
+    // app.user_id, which is fine because FamilyMember's own RLS is plain
+    // tenant isolation (familyId = GUC), not membership-guarded.
     withFamily: async (familyId, callback) => {
       return await withSerializableRetry(prisma, async (tx) => {
         await tx.$executeRaw`SELECT set_config('app.family_id', ${familyId}, true)`
+        const owner = await tx.familyMember.findFirst({
+          where: { familyId, status: "active", role: "owner" },
+          select: { userId: true },
+          orderBy: { joinedAt: "asc" },
+        })
+        await tx.$executeRaw`SELECT set_config('app.user_id', ${owner?.userId ?? ""}, true)`
+        return await callback(tx)
+      })
+    },
+    withMember: async (familyId, userId, callback) => {
+      return await withSerializableRetry(prisma, async (tx) => {
+        await tx.$executeRaw`
+          SELECT
+            set_config('app.family_id', ${familyId}, true),
+            set_config('app.user_id', ${userId}, true)
+        `
         return await callback(tx)
       })
     },

@@ -261,7 +261,7 @@ export async function upsertFxRateSnapshotForFamily({
   const auditCtx = await createAuditContext({ user: { id: user.id, familyId } })
   const source = data.source ?? "manual"
 
-  return await runInTenantTransaction(familyId, async (tx) => {
+  return await runInTenantTransaction(familyId, user.id, async (tx) => {
     const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
 
     const existing = await tx.fxRateSnapshot.findUnique({
@@ -342,13 +342,15 @@ export const upsertFxRateSnapshotFn = createServerFn({ method: "POST" })
 export async function listFxRateSnapshotsForFamily({
   data,
   familyId,
+  userId,
   runInTenantTransaction = scopedTenantTransaction,
 }: {
   data: z.infer<typeof listFxRateSnapshotsInputSchema>
   familyId: string
+  userId: string
   runInTenantTransaction?: RunInTenantTransaction
 }): Promise<SerializedFxRateSnapshot[]> {
-  return await runInTenantTransaction(familyId, async (tx) => {
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
     const rows = await tx.fxRateSnapshot.findMany({
       where: {
         familyId,
@@ -374,6 +376,7 @@ export const listFxRateSnapshotsFn = createServerFn({ method: "GET" })
     return await listFxRateSnapshotsForFamily({
       data,
       familyId: context.familyId,
+      userId: context.user.id,
     })
   })
 
@@ -384,12 +387,14 @@ export interface FxOverview {
 
 export async function getFxOverviewForFamily({
   familyId,
+  userId,
   runInTenantTransaction = scopedTenantTransaction,
 }: {
   familyId: string
+  userId: string
   runInTenantTransaction?: RunInTenantTransaction
 }): Promise<FxOverview> {
-  return await runInTenantTransaction(familyId, async (tx) => {
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
     const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
     const rows = await tx.fxRateSnapshot.findMany({
       where: { familyId },
@@ -406,7 +411,10 @@ export async function getFxOverviewForFamily({
 export const getFxOverviewFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
   .handler(async ({ context }) => {
-    return await getFxOverviewForFamily({ familyId: context.familyId })
+    return await getFxOverviewForFamily({
+      familyId: context.familyId,
+      userId: context.user.id,
+    })
   })
 
 // =============================================================================
@@ -540,7 +548,7 @@ export async function rebuildFxProjectionsForFamily({
   runInTenantTransaction?: RunInTenantTransaction
 }): Promise<FxRebuildResult> {
   const auditCtx = await createAuditContext({ user: { id: user.id, familyId } })
-  return await runInTenantTransaction(familyId, async (tx) => {
+  return await runInTenantTransaction(familyId, user.id, async (tx) => {
     const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
     return await rebuildProjectionsWithinTx(
       tx,
@@ -586,7 +594,7 @@ export async function setBaseCurrencyForFamily({
   const parsed = setBaseCurrencyInputSchema.parse(data)
   const auditCtx = await createAuditContext({ user: { id: user.id, familyId } })
 
-  return await runInTenantTransaction(familyId, async (tx) => {
+  return await runInTenantTransaction(familyId, user.id, async (tx) => {
     const previousCurrency = await getFamilyBaseCurrency(tx, familyId)
     if (previousCurrency === parsed.currency) {
       const rebuilt = await rebuildProjectionsWithinTx(

@@ -1,14 +1,14 @@
 # ADR-0008 — Core domain model and ledger boundaries
 
-|                   |                |
-| ----------------- | -------------- |
-| **Status**        | Accepted       |
-| **Date**          | 2026-06-01     |
-| **Accepted**      | 2026-06-01     |
-| **Deciders**      | Hendri Permana |
-| **Supersedes**    | —              |
-| **Superseded by** | —              |
-| **Amended by**    | ADR-0034       |
+|                   |                    |
+| ----------------- | ------------------ |
+| **Status**        | Accepted           |
+| **Date**          | 2026-06-01         |
+| **Accepted**      | 2026-06-01         |
+| **Deciders**      | Hendri Permana     |
+| **Supersedes**    | —                  |
+| **Superseded by** | —                  |
+| **Amended by**    | ADR-0034; ADR-0036 |
 
 ## Context
 
@@ -309,6 +309,19 @@ boundary.
 5. **Make reports the primary source for balances.** Rejected. Reports are
    projections. `Transaction` plus atomic `Account.balance` updates and audit
    evidence remain the authoritative model.
+
+## Amendment — Family membership and role authorization (ADR-0036)
+
+This ADR originally treated family authorization as a single implicit owner
+(`User.familyId`). **ADR-0036** supersedes that assumption: `FamilyMember`
+becomes the authoritative membership + role record (`owner / admin / member /
+viewer`), `User.familyId` is demoted to an "active family" pointer, and tenant
+access is driven by membership at both the app layer (`requireCapability`) and
+the database layer (a second `app.user_id` GUC plus an
+`app_is_active_member(...)` guard on every tenant-table RLS policy). Membership
+and role changes are idempotent, audited mutations subject to the same ledger
+invariants as money movement. See
+[`0036-family-membership-and-role-authorization.md`](./0036-family-membership-and-role-authorization.md).
 
 ## References
 

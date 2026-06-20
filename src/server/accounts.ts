@@ -173,12 +173,14 @@ interface ServerUser {
 
 export async function getAccountsForFamily({
   familyId,
+  userId,
   runInTenantTransaction = scopedTenantTransaction,
 }: {
   familyId: string
+  userId: string
   runInTenantTransaction?: RunInTenantTransaction
 }): Promise<SerializedAccount[]> {
-  return await runInTenantTransaction(familyId, async (tx) => {
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
     const accounts = await tx.account.findMany({
       where: { familyId },
       orderBy: [{ status: "asc" }, { accountClass: "asc" }, { name: "asc" }],
@@ -190,7 +192,10 @@ export async function getAccountsForFamily({
 export const getAccountsFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
   .handler(async ({ context }) => {
-    return await getAccountsForFamily({ familyId: context.familyId })
+    return await getAccountsForFamily({
+      familyId: context.familyId,
+      userId: context.user.id,
+    })
   })
 
 // ============================================================================
@@ -236,7 +241,7 @@ export async function createAccountForFamily({
     taxonomy.accountClass === "LIABILITY" ? -openingMagnitude : openingMagnitude
 
   const runOnce = async () =>
-    await runInTenantTransaction(familyId, async (tx) => {
+    await runInTenantTransaction(familyId, user.id, async (tx) => {
       const replay = await replayIdempotentEndpointResponse<SerializedAccount>(
         tx,
         {
@@ -316,13 +321,16 @@ export async function createAccountForFamily({
     // A concurrent request with the same key may win the IdempotencyRecord
     // unique race; resolve it by replaying the stored response.
     if (!isUniqueConstraintError(error)) throw error
-    const replay = await scopedTenantTransaction(familyId, async (tx) =>
-      replayIdempotentEndpointResponse<SerializedAccount>(tx, {
-        endpoint: CREATE_ACCOUNT_ENDPOINT,
-        familyId,
-        key: data.idempotencyKey,
-        requestHash,
-      })
+    const replay = await scopedTenantTransaction(
+      familyId,
+      user.id,
+      async (tx) =>
+        replayIdempotentEndpointResponse<SerializedAccount>(tx, {
+          endpoint: CREATE_ACCOUNT_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+        })
     )
     if (replay) return replay
     throw error
@@ -372,7 +380,7 @@ export async function updateAccountForFamily({
   )
 
   const runOnce = async () =>
-    await runInTenantTransaction(familyId, async (tx) => {
+    await runInTenantTransaction(familyId, user.id, async (tx) => {
       const replay = await replayIdempotentEndpointResponse<SerializedAccount>(
         tx,
         {
@@ -438,13 +446,16 @@ export async function updateAccountForFamily({
     return await runOnce()
   } catch (error) {
     if (!isUniqueConstraintError(error)) throw error
-    const replay = await scopedTenantTransaction(familyId, async (tx) =>
-      replayIdempotentEndpointResponse<SerializedAccount>(tx, {
-        endpoint: UPDATE_ACCOUNT_ENDPOINT,
-        familyId,
-        key: data.idempotencyKey,
-        requestHash,
-      })
+    const replay = await scopedTenantTransaction(
+      familyId,
+      user.id,
+      async (tx) =>
+        replayIdempotentEndpointResponse<SerializedAccount>(tx, {
+          endpoint: UPDATE_ACCOUNT_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+        })
     )
     if (replay) return replay
     throw error
@@ -490,7 +501,7 @@ async function setAccountActiveState({
   )
 
   const runOnce = async () =>
-    await runInTenantTransaction(familyId, async (tx) => {
+    await runInTenantTransaction(familyId, user.id, async (tx) => {
       const replay = await replayIdempotentEndpointResponse<SerializedAccount>(
         tx,
         { endpoint, familyId, key: data.idempotencyKey, requestHash }
@@ -546,13 +557,16 @@ async function setAccountActiveState({
     return await runOnce()
   } catch (error) {
     if (!isUniqueConstraintError(error)) throw error
-    const replay = await scopedTenantTransaction(familyId, async (tx) =>
-      replayIdempotentEndpointResponse<SerializedAccount>(tx, {
-        endpoint,
-        familyId,
-        key: data.idempotencyKey,
-        requestHash,
-      })
+    const replay = await scopedTenantTransaction(
+      familyId,
+      user.id,
+      async (tx) =>
+        replayIdempotentEndpointResponse<SerializedAccount>(tx, {
+          endpoint,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+        })
     )
     if (replay) return replay
     throw error

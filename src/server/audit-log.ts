@@ -25,11 +25,13 @@ const getAuditLogInputSchema = z.object({
 export async function getAuditLogForFamily({
   data,
   familyId,
+  userId,
 }: {
   data: z.infer<typeof getAuditLogInputSchema>
   familyId: string
+  userId: string
 }) {
-  return await scopedTenantTransaction(familyId, async (tx) => {
+  return await scopedTenantTransaction(familyId, userId, async (tx) => {
     const limit = Math.min(data.limit ?? 50, 100)
 
     // Definisikan filter pencarian dengan tipe data Prisma yang aman
@@ -96,5 +98,6 @@ export const getAuditLogFn = createServerFn({ method: "GET" })
     return await getAuditLogForFamily({
       data,
       familyId: context.familyId,
+      userId: context.user.id,
     })
   })

@@ -13,13 +13,17 @@ import { validateTenantReferences } from "./validation/tenant-references"
 export const getSmartRulesFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
   .handler(async ({ context }) => {
-    return scopedTenantTransaction(context.familyId, async (tx) => {
-      return tx.smartRule.findMany({
-        where: { familyId: context.familyId },
-        include: { category: true, merchant: true },
-        orderBy: { createdAt: "desc" },
-      })
-    })
+    return scopedTenantTransaction(
+      context.familyId,
+      context.user.id,
+      async (tx) => {
+        return tx.smartRule.findMany({
+          where: { familyId: context.familyId },
+          include: { category: true, merchant: true },
+          orderBy: { createdAt: "desc" },
+        })
+      }
+    )
   })
 
 /**
@@ -41,7 +45,7 @@ export async function createSmartRuleForFamily({
   user: { id: string; familyId?: string | null }
 }) {
   const auditCtx = await createAuditContext({ user })
-  return scopedTenantTransaction(familyId, async (tx) => {
+  return scopedTenantTransaction(familyId, user.id, async (tx) => {
     // The three awaits below run sequentially by design:
     //   1. `validateTenantReferences(tx, ...)` — queries through `tx`.
     //   2. `tx.smartRule.create(...)` — must wait for validation to pass and
@@ -90,7 +94,7 @@ export async function deleteSmartRuleForFamily({
   user: { id: string; familyId?: string | null }
 }) {
   const auditCtx = await createAuditContext({ user })
-  return scopedTenantTransaction(familyId, async (tx) => {
+  return scopedTenantTransaction(familyId, user.id, async (tx) => {
     const oldRule = await tx.smartRule.findFirst({
       where: { id, familyId },
     })

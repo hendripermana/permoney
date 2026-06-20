@@ -73,10 +73,13 @@ describe("transaction-scoped RLS GUC", () => {
       name: "Visible with scoped GUC",
     })
 
-    const visible = await scopedTenantTransaction(owner.family.id, (tx) =>
-      tx.account.findUniqueOrThrow({
-        where: { id: account.id },
-      })
+    const visible = await scopedTenantTransaction(
+      owner.family.id,
+      owner.user.id,
+      (tx) =>
+        tx.account.findUniqueOrThrow({
+          where: { id: account.id },
+        })
     )
 
     expect(visible.id).toBe(account.id)
@@ -95,6 +98,7 @@ describe("transaction-scoped RLS GUC", () => {
 
     const crossTenantRead = await scopedTenantTransaction(
       familyA.family.id,
+      familyA.user.id,
       (tx) =>
         tx.account.findFirst({
           where: { id: familyBAccount.id },
@@ -104,7 +108,7 @@ describe("transaction-scoped RLS GUC", () => {
     expect(crossTenantRead).toBeNull()
 
     await expect(
-      scopedTenantTransaction(familyA.family.id, (tx) =>
+      scopedTenantTransaction(familyA.family.id, familyA.user.id, (tx) =>
         tx.account.create({
           data: {
             balance: 0n,
@@ -138,11 +142,15 @@ describe("transaction-scoped RLS GUC", () => {
       }),
     ])
 
-    const visibleToA = await scopedTenantTransaction(familyA.family.id, (tx) =>
-      tx.account.findMany({ orderBy: { name: "asc" } })
+    const visibleToA = await scopedTenantTransaction(
+      familyA.family.id,
+      familyA.user.id,
+      (tx) => tx.account.findMany({ orderBy: { name: "asc" } })
     )
-    const visibleToB = await scopedTenantTransaction(familyB.family.id, (tx) =>
-      tx.account.findMany({ orderBy: { name: "asc" } })
+    const visibleToB = await scopedTenantTransaction(
+      familyB.family.id,
+      familyB.user.id,
+      (tx) => tx.account.findMany({ orderBy: { name: "asc" } })
     )
     const [setting] = await appPrisma.$queryRaw<CurrentSettingRow[]>`
       SELECT NULLIF(current_setting('app.family_id', true), '') AS family_id
@@ -158,6 +166,7 @@ describe("transaction-scoped RLS GUC", () => {
 
     const result = await scopedTenantTransaction(
       owner.family.id,
+      owner.user.id,
       async (tx) => {
         const firstPid = await readBackendPid(tx)
         const account = await tx.account.create({
@@ -205,7 +214,7 @@ describe("transaction-scoped RLS GUC", () => {
     })
 
     await expect(
-      scopedTenantTransaction(owner.family.id, () =>
+      scopedTenantTransaction(owner.family.id, owner.user.id, () =>
         appPrisma.account.findFirstOrThrow({
           where: { id: account.id },
         })

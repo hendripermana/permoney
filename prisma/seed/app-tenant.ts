@@ -61,7 +61,38 @@ export async function seedAppTenant(
     await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.family_id', ${family.id}, true)`
 
-      // Clean stale tenant rows scoped to this family (children first). Only
+      // ADR-0036: the demo user must be an ACTIVE OWNER before any guarded
+      // tenant write/delete, and `app.user_id` must point at them so the RLS
+      // membership guard passes. User is not RLS-protected; FamilyMember's own
+      // policy is plain tenant isolation (familyId = GUC), so both upserts work
+      // before app.user_id is set.
+      const demoUser = await tx.user.upsert({
+        where: { email: DEMO_USER_EMAIL },
+        update: { name: "Hendri", passwordHash, familyId: family.id },
+        create: {
+          email: DEMO_USER_EMAIL,
+          name: "Hendri",
+          passwordHash,
+          familyId: family.id,
+        },
+      })
+      await tx.familyMember.upsert({
+        where: {
+          familyId_userId: { familyId: family.id, userId: demoUser.id },
+        },
+        update: { role: "owner", status: "active", revokedAt: null },
+        create: {
+          familyId: family.id,
+          userId: demoUser.id,
+          role: "owner",
+          status: "active",
+          joinedAt: new Date(),
+        },
+      })
+      await tx.$executeRaw`SELECT set_config('app.user_id', ${demoUser.id}, true)`
+
+      // Clean stale tenant rows scoped to this family (children first), now that
+      // the owner membership is active so RLS lets us see and delete them. Only
       // tenant-owned categories — system rows are out of this phase's scope and
       // its RLS policies cannot touch them anyway.
       await tx.splitEntry.deleteMany({
@@ -74,20 +105,9 @@ export async function seedAppTenant(
         tx.category.deleteMany({
           where: { familyId: family.id, isSystem: false },
         }),
-        tx.user.deleteMany({ where: { familyId: family.id } }),
       ])
 
       await Promise.all([
-        tx.user.upsert({
-          where: { email: DEMO_USER_EMAIL },
-          update: { name: "Hendri", passwordHash, familyId: family.id },
-          create: {
-            email: DEMO_USER_EMAIL,
-            name: "Hendri",
-            passwordHash,
-            familyId: family.id,
-          },
-        }),
         tx.account.createMany({
           data: [
             {

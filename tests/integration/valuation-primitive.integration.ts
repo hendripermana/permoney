@@ -412,7 +412,10 @@ describe("valuation primitive + balance rebuild & drift (PER-146 / ADR-0034)", (
   // --------------------------------------------------------------------------
   describe("detectBalanceDriftForFamily", () => {
     const detect = (owner: AuthenticatedOnboardedUser) =>
-      detectBalanceDriftForFamily({ familyId: owner.family.id })
+      detectBalanceDriftForFamily({
+        familyId: owner.family.id,
+        userId: owner.user.id,
+      })
 
     test("reports no drift for a clean family", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
@@ -496,7 +499,11 @@ describe("valuation primitive + balance rebuild & drift (PER-146 / ADR-0034)", (
   // --------------------------------------------------------------------------
   describe("getAccountBalanceForFamily (current / available / held)", () => {
     const view = (owner: AuthenticatedOnboardedUser, accountId: string) =>
-      getAccountBalanceForFamily({ accountId, familyId: owner.family.id })
+      getAccountBalanceForFamily({
+        accountId,
+        familyId: owner.family.id,
+        userId: owner.user.id,
+      })
 
     test("cash: held = pending magnitude, available = current - held (unclamped)", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()

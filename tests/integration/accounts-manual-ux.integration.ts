@@ -269,7 +269,10 @@ describe("accounts manual UX vertical slice (PER-143)", () => {
         name: "Theirs",
       })
 
-      const mine = await getAccountsForFamily({ familyId: owner.family.id })
+      const mine = await getAccountsForFamily({
+        familyId: owner.family.id,
+        userId: owner.user.id,
+      })
       expect(mine.every((a) => a.name !== "Theirs")).toBe(true)
       expect(mine.some((a) => a.name === "Mine")).toBe(true)
     })

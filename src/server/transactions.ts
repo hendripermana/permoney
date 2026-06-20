@@ -48,29 +48,33 @@ export { IdempotencyConflictError } from "./idempotency"
 export const getTransactionFormData = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
   .handler(async ({ context }) => {
-    return scopedTenantTransaction(context.familyId, async (tx) => {
-      const [accounts, categories, merchants] =
-        await runTenantTransactionQueriesInOrder([
-          () =>
-            tx.account.findMany({
-              where: { familyId: context.familyId },
-              orderBy: { name: "asc" },
-            }),
-          () =>
-            tx.category.findMany({
-              where: {
-                OR: [{ isSystem: true }, { familyId: context.familyId }],
-              },
-              orderBy: { name: "asc" },
-            }),
-          () =>
-            tx.merchant.findMany({
-              where: { familyId: context.familyId },
-              orderBy: { name: "asc" },
-            }),
-        ] as const)
-      return { accounts, categories, merchants }
-    })
+    return scopedTenantTransaction(
+      context.familyId,
+      context.user.id,
+      async (tx) => {
+        const [accounts, categories, merchants] =
+          await runTenantTransactionQueriesInOrder([
+            () =>
+              tx.account.findMany({
+                where: { familyId: context.familyId },
+                orderBy: { name: "asc" },
+              }),
+            () =>
+              tx.category.findMany({
+                where: {
+                  OR: [{ isSystem: true }, { familyId: context.familyId }],
+                },
+                orderBy: { name: "asc" },
+              }),
+            () =>
+              tx.merchant.findMany({
+                where: { familyId: context.familyId },
+                orderBy: { name: "asc" },
+              }),
+          ] as const)
+        return { accounts, categories, merchants }
+      }
+    )
   })
 
 // =============================================================================
@@ -1463,6 +1467,7 @@ export async function createTransactionForFamily({
   const createOrReplay = async () =>
     await runInTenantTransaction(
       familyId,
+      user.id,
       async (tx: TenantTransactionClient) => {
         const replay = await replayIdempotentTransaction(tx, familyId, data)
         if (replay) return replay
@@ -1801,6 +1806,7 @@ export async function createTransactionForFamily({
 
     const replay = await runInTenantTransaction(
       familyId,
+      user.id,
       async (tx: TenantTransactionClient) =>
         await replayIdempotentTransaction(tx, familyId, data)
     )
@@ -2041,24 +2047,28 @@ async function softDeleteTransactionWithinTenantTransaction(
 export const getTransactionsFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
   .handler(async ({ context }) => {
-    return scopedTenantTransaction(context.familyId, async (tx) => {
-      const transactions = await findLedgerTransactionsForFamily(
-        tx,
-        context.familyId
-      )
+    return scopedTenantTransaction(
+      context.familyId,
+      context.user.id,
+      async (tx) => {
+        const transactions = await findLedgerTransactionsForFamily(
+          tx,
+          context.familyId
+        )
 
-      // The MAP logic: Ubah array yang didapat dari DB.
-      // Amounts are stored signed (negative for expense) but the UI consumes
-      // them as positive magnitudes; sign is communicated via `type`.
-      // Wire-encode bigint → string at this boundary; client revives via
-      // TanStack DB collection `select` callback (see src/lib/collections.ts).
-      return transactions.map((tx) =>
-        serializeTransaction({
-          ...tx,
-          amount: absMoney(tx.amount),
-        })
-      )
-    })
+        // The MAP logic: Ubah array yang didapat dari DB.
+        // Amounts are stored signed (negative for expense) but the UI consumes
+        // them as positive magnitudes; sign is communicated via `type`.
+        // Wire-encode bigint → string at this boundary; client revives via
+        // TanStack DB collection `select` callback (see src/lib/collections.ts).
+        return transactions.map((tx) =>
+          serializeTransaction({
+            ...tx,
+            amount: absMoney(tx.amount),
+          })
+        )
+      }
+    )
   })
 
 export async function deleteTransactionForFamily({
@@ -2081,6 +2091,7 @@ export async function deleteTransactionForFamily({
   const deleteOrReplay = async () =>
     await scopedTenantTransaction(
       familyId,
+      user.id,
       async (tx: TenantTransactionClient) => {
         const replay = await replayIdempotentEndpointResponse<{
           success: boolean
@@ -2118,6 +2129,7 @@ export async function deleteTransactionForFamily({
 
     const replay = await scopedTenantTransaction(
       familyId,
+      user.id,
       async (tx: TenantTransactionClient) =>
         await replayIdempotentEndpointResponse<{ success: boolean }>(tx, {
           endpoint: DELETE_TRANSACTION_ENDPOINT,
@@ -2613,6 +2625,7 @@ export async function updateTransactionForFamily({
   const updateOrReplay = async () =>
     await scopedTenantTransaction(
       familyId,
+      user.id,
       async (tx: TenantTransactionClient) => {
         const replay =
           await replayIdempotentEndpointResponse<SerializedTransactionResult>(
@@ -2652,6 +2665,7 @@ export async function updateTransactionForFamily({
 
     const replay = await scopedTenantTransaction(
       familyId,
+      user.id,
       async (tx: TenantTransactionClient) =>
         await replayIdempotentEndpointResponse<SerializedTransactionResult>(
           tx,
@@ -2776,6 +2790,7 @@ export async function bulkDeleteTransactionsForFamily({
   const deleteOrReplay = async () =>
     await scopedTenantTransaction(
       familyId,
+      user.id,
       async (tx: TenantTransactionClient) => {
         const replay =
           await replayIdempotentEndpointResponse<BulkDeleteTransactionsResult>(
@@ -2824,6 +2839,7 @@ export async function bulkDeleteTransactionsForFamily({
 
     const replay = await scopedTenantTransaction(
       familyId,
+      user.id,
       async (tx: TenantTransactionClient) =>
         await replayIdempotentEndpointResponse<BulkDeleteTransactionsResult>(
           tx,
@@ -2880,6 +2896,7 @@ export async function bulkUpdateTransactionsForFamily({
   const updateOrReplay = async () =>
     await scopedTenantTransaction(
       familyId,
+      user.id,
       async (tx: TenantTransactionClient) => {
         const replay =
           await replayIdempotentEndpointResponse<BulkUpdateTransactionsResult>(
@@ -2956,6 +2973,7 @@ export async function bulkUpdateTransactionsForFamily({
 
     const replay = await scopedTenantTransaction(
       familyId,
+      user.id,
       async (tx: TenantTransactionClient) =>
         await replayIdempotentEndpointResponse<BulkUpdateTransactionsResult>(
           tx,
@@ -3018,6 +3036,7 @@ export async function bulkCreateTransactionsForFamily({
   const createOrReplay = async () =>
     await scopedTenantTransaction(
       familyId,
+      user.id,
       async (tx: TenantTransactionClient) => {
         const replay =
           await replayIdempotentEndpointResponse<BulkCreateTransactionsResult>(
@@ -3122,6 +3141,7 @@ export async function bulkCreateTransactionsForFamily({
 
     const replay = await scopedTenantTransaction(
       familyId,
+      user.id,
       async (tx: TenantTransactionClient) =>
         await replayIdempotentEndpointResponse<BulkCreateTransactionsResult>(
           tx,
