@@ -193,17 +193,25 @@ export function createTestFactories(
     role?: FamilyRole
     status?: "active" | "invited" | "revoked"
   }): Promise<FamilyMember> => {
-    return await harness.withFamily(input.familyId, async (tx) => {
-      return await tx.familyMember.create({
-        data: {
-          familyId: input.familyId,
-          userId: input.userId,
-          role: input.role ?? "member",
-          status: input.status ?? "active",
-          joinedAt: new Date(),
-        },
-      })
-    })
+    // withMember (not withFamily) so we don't run withFamily's owner
+    // auto-resolve scan of FamilyMember — that extra Serializable read makes
+    // parallel member creation across families false-conflict. The insert only
+    // needs app.family_id (FamilyMember RLS is plain tenant isolation).
+    return await harness.withMember(
+      input.familyId,
+      input.userId,
+      async (tx) => {
+        return await tx.familyMember.create({
+          data: {
+            familyId: input.familyId,
+            userId: input.userId,
+            role: input.role ?? "member",
+            status: input.status ?? "active",
+            joinedAt: new Date(),
+          },
+        })
+      }
+    )
   }
 
   const createAuthenticatedOnboardedUser =

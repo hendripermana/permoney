@@ -76,16 +76,22 @@ FROM "User" u
 WHERE u."familyId" IS NOT NULL
 ON CONFLICT ("familyId", "userId") DO NOTHING;
 
--- 3. Membership predicate helper.
---    STABLE / SECURITY INVOKER is sufficient and recursion-free: it is always
---    called with `fam = current_setting('app.family_id')`, and FamilyMember's
---    own RLS policy is plain tenant isolation (`familyId = app.family_id`,
---    step 4) which never calls back into this function or any data table.
---    NULL `usr` (unset `app.user_id` GUC) yields false -> fail closed.
+-- 3. Membership predicate helper. SECURITY DEFINER so it can read "FamilyMember"
+--    regardless of the CALLER's table privileges: every tenant-table policy
+--    calls this, including writes by roles that have no grant on FamilyMember
+--    (e.g. the permoney_system_maintainer seeding a system Category). With
+--    SECURITY INVOKER those roles hit "permission denied for table FamilyMember"
+--    when the policy expression is evaluated. Recursion-free because
+--    FamilyMember's own RLS is plain tenant isolation (step 4) and the function
+--    is always called with `fam = current_setting('app.family_id')`. NULL `usr`
+--    (unset `app.user_id` GUC) yields false -> fail closed. `search_path` is
+--    pinned (SECURITY DEFINER hardening).
 CREATE OR REPLACE FUNCTION app_is_active_member(fam text, usr text)
 RETURNS boolean
 LANGUAGE sql
 STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, public
 AS $$
   SELECT EXISTS (
     SELECT 1

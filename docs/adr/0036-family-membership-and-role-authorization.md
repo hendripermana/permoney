@@ -161,17 +161,22 @@ upgraded so the **database independently enforces membership** (defense in depth
 - A **second transaction-scoped GUC `app.user_id`** is set alongside
   `app.family_id` in `setTenantGuc(tx, familyId, userId)`. `RunInTenantTransaction`
   / `scopedTenantTransaction` thread `userId`; all callers pass `context.user.id`.
-- A `STABLE` (`SECURITY INVOKER`) SQL helper centralizes the membership
-  predicate. It is recursion-free **without** `SECURITY DEFINER` because it is
-  always called with `fam = current_setting('app.family_id')` and
+- A `STABLE SECURITY DEFINER` SQL helper centralizes the membership predicate.
+  `SECURITY DEFINER` is required because every tenant-table policy calls this
+  function, including writes by roles that hold **no grant on `FamilyMember`**
+  (e.g. `permoney_system_maintainer` inserting a system `Category`). Under
+  `SECURITY INVOKER` those roles hit `permission denied for table FamilyMember`
+  when the policy expression evaluates. It stays recursion-free because
   `FamilyMember`'s own RLS is plain tenant isolation (`familyId = app.family_id`,
-  below) — that policy never references a data table or calls back into this
-  function. A NULL `usr` (unset `app.user_id` GUC) yields `false`, so any path
-  that sets `family_id` but not `user_id` fails closed:
+  below) and the function is always called with
+  `fam = current_setting('app.family_id')`. A NULL `usr` (unset `app.user_id`
+  GUC) yields `false`, so any path that sets `family_id` but not `user_id` fails
+  closed. `search_path` is pinned as `SECURITY DEFINER` hardening:
 
   ```sql
   CREATE FUNCTION app_is_active_member(fam text, usr text)
-  RETURNS boolean LANGUAGE sql STABLE AS $$
+  RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public AS $$
     SELECT EXISTS (
       SELECT 1 FROM "FamilyMember" m
       WHERE m."familyId" = fam AND m."userId" = usr AND m.status = 'active'
@@ -310,9 +315,11 @@ slice small (no `preload()` / `ssr:false` ceremony).
   membership guard fail closed (queries return nothing) — caught by the
   integration tests below.
 - RLS recursion is a real hazard; the mitigation is keeping `FamilyMember`'s
-  own policy plain tenant isolation so `app_is_active_member()` can be a plain
-  `STABLE` helper. Adding a membership sub-guard to `FamilyMember` itself would
-  reintroduce recursion and break the bootstrap.
+  own policy plain tenant isolation so `app_is_active_member()` stays simple.
+  Adding a membership sub-guard to `FamilyMember` itself would reintroduce
+  recursion and break the bootstrap. The helper is `SECURITY DEFINER` so roles
+  without a `FamilyMember` grant (the system-category maintainer) don't hit
+  `permission denied` when a guarded-table policy evaluates it.
 
 ## Testing (real Postgres — mandatory)
 
