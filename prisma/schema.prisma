@@ -39,6 +39,7 @@ model Family {
   currencyRegistry Iso4217Currency @relation("FamilyCurrency", fields: [currency], references: [code], onDelete: Restrict, onUpdate: Cascade, map: "family_currency_is_iso_4217")
 
   users        User[]
+  members      FamilyMember[]
   accounts     Account[]
   merchants    Merchant[]
   categories   Category[]
@@ -47,6 +48,43 @@ model Family {
   idempotencyRecords IdempotencyRecord[]
   valuations   Valuation[]
   fxRateSnapshots FxRateSnapshot[]
+}
+
+// ADR-0036: first-class family membership + role authorization.
+//
+// Authoritative record of WHO belongs to a family and with WHAT role.
+// `User.familyId` is demoted to a denormalized "active family" pointer;
+// this table is the source of truth for membership and capability.
+//
+// `role`/`status` are String + DB CHECK domains (house convention, not Prisma
+// enums — mirrors Account.status / Transaction.kind). One row per
+// (familyId, userId); removal soft-revokes and re-add reactivates the same row,
+// so the simple @@unique holds without a partial index.
+//
+// Tenant access is driven by an `active` row here at BOTH layers:
+//   - app: familyMiddleware resolves role -> requireCapability(cap)
+//   - db:  app_is_active_member() guard on every tenant-table RLS policy
+// See migration 20260620_000000_family_membership for the SQL contract.
+model FamilyMember {
+  id          String    @id @default(cuid())
+  familyId    String
+  userId      String
+  role        String    @default("member") // 'owner' | 'admin' | 'member' | 'viewer' (DB CHECK)
+  status      String    @default("active") // 'active' | 'invited' | 'revoked' (DB CHECK)
+  invitedById String?
+  invitedAt   DateTime?
+  joinedAt    DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  family    Family @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  user      User   @relation("FamilyMembership", fields: [userId], references: [id], onDelete: Cascade)
+  invitedBy User?  @relation("FamilyMemberInvitedBy", fields: [invitedById], references: [id], onDelete: SetNull)
+
+  @@unique([familyId, userId])
+  @@index([familyId, status])
+  @@index([userId])
 }
 
 model User {
@@ -61,6 +99,8 @@ model User {
 
   familyId      String?
   family        Family?       @relation(fields: [familyId], references: [id])
+  memberships   FamilyMember[] @relation("FamilyMembership")
+  invitedMembers FamilyMember[] @relation("FamilyMemberInvitedBy")
   transactions  Transaction[]
   sessions      Session[]
   emailVerified Boolean       @default(false)

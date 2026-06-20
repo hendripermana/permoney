@@ -35,8 +35,11 @@ export function isUniqueConstraintError(error: unknown): boolean {
 }
 
 // A tenant-scoped interactive transaction runner. Production callers default to
-// `scopedTenantTransaction`; tests inject a harness-scoped runner.
+// `scopedTenantTransaction`; tests inject a harness-scoped runner. `userId` is
+// the acting member, set into the `app.user_id` GUC for the RLS membership
+// guard (ADR-0036).
 export type RunInTenantTransaction = <T>(
   familyId: string,
+  userId: string,
   fn: (tx: TenantTransactionClient) => Promise<T>
 ) => Promise<T>

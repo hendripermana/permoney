@@ -134,6 +134,15 @@ describe("onboarding idempotency replay", () => {
       familyId: first.familyId,
       name: "Onboarding Replay Conflict",
     })
+    // ADR-0036: a user pointing at a family must be an active member for the
+    // onboarding replay/conflict path to read its IdempotencyRecord under the
+    // membership guard. Without this the guard hides the record and the
+    // same-key/different-payload conflict can't be detected.
+    await factories.createFamilyMember({
+      familyId: first.familyId,
+      userId: conflictingUser.id,
+      role: "member",
+    })
     const beforeConflictSummary = summarizeState(state)
 
     await expect(

@@ -123,8 +123,18 @@ export function isRetryableConcurrencyError(error: unknown): boolean {
   const message = readStringProperty(error, "message")
   if (
     message?.includes("40001") ||
-    message?.includes("serialization_failure")
+    message?.includes("serialization_failure") ||
+    // The @prisma/adapter-pg driver surfaces a serialization/40001 conflict as
+    // "TransactionWriteConflict" instead of the raw SQLSTATE. It is the same
+    // retryable condition (a Serializable false-positive that re-runs cleanly).
+    message?.includes("TransactionWriteConflict") ||
+    message?.includes("write conflict")
   ) {
+    return true
+  }
+
+  const name = readStringProperty(error, "name")
+  if (name === "TransactionWriteConflict") {
     return true
   }
 

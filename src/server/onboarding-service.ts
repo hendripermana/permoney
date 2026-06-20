@@ -59,7 +59,7 @@ export async function initializeOnboardingForUser(
     }
 
     if (user.familyId) {
-      const scopedFamilyId = await setTenantGuc(tx, user.familyId)
+      const scopedFamilyId = await setTenantGuc(tx, user.familyId, user.id)
       const replay = await replayOnboardingResponse(tx, {
         familyId: scopedFamilyId,
         key: data.idempotencyKey,
@@ -83,11 +83,26 @@ export async function initializeOnboardingForUser(
       },
     })
 
-    const scopedFamilyId = await setTenantGuc(tx, family.id)
+    const scopedFamilyId = await setTenantGuc(tx, family.id, user.id)
 
     await tx.user.update({
       where: { id: user.id },
       data: { familyId: scopedFamilyId },
+    })
+
+    // ADR-0036 bootstrap: the first owner must exist BEFORE any data-table write
+    // below, because every tenant-table RLS policy now requires an active
+    // membership (app_is_active_member guard) for app.user_id. FamilyMember's
+    // own policy is plain tenant isolation, so this insert passes WITH CHECK
+    // (familyId = GUC) for the family we just created in this same transaction.
+    await tx.familyMember.create({
+      data: {
+        familyId: scopedFamilyId,
+        userId: user.id,
+        role: "owner",
+        status: "active",
+        joinedAt: new Date(),
+      },
     })
 
     const account = await tx.account.create({

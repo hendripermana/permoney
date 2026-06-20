@@ -4,12 +4,14 @@ import type {
   Account,
   Category,
   Family,
+  FamilyMember,
   Merchant,
   PrismaClient,
   Session,
   Transaction,
   User,
 } from "@prisma/client"
+import type { FamilyRole } from "../../../src/server/middleware/authz"
 import { betterAuth } from "better-auth"
 import { testUtils } from "better-auth/plugins"
 import { tanstackStartCookies } from "better-auth/tanstack-start"
@@ -103,6 +105,12 @@ export interface TestFactories {
   createAuthenticatedUserWithoutFamily: () => Promise<AuthenticatedUserWithoutFamily>
   createCategory: (input: CreateCategoryInput) => Promise<Category>
   createFamily: (input?: CreateFamilyInput) => Promise<Family>
+  createFamilyMember: (input: {
+    familyId: string
+    userId: string
+    role?: FamilyRole
+    status?: "active" | "invited" | "revoked"
+  }) => Promise<FamilyMember>
   createIdempotencyKey: () => string
   createMerchant: (input: CreateMerchantInput) => Promise<Merchant>
   createTransaction: (input: CreateTransactionInput) => Promise<Transaction>
@@ -174,10 +182,47 @@ export function createTestFactories(
     }
   }
 
+  // ADR-0036: a family is only usable once it has an active owner. The real
+  // path is onboarding-service; this factory bypasses it, so it must seed the
+  // owner membership itself (otherwise the RLS membership guard blocks every
+  // tenant write). The insert runs inside withFamily so FamilyMember's
+  // tenant-isolation WITH CHECK (familyId = GUC) passes.
+  const createFamilyMember = async (input: {
+    familyId: string
+    userId: string
+    role?: FamilyRole
+    status?: "active" | "invited" | "revoked"
+  }): Promise<FamilyMember> => {
+    // withMember (not withFamily) so we don't run withFamily's owner
+    // auto-resolve scan of FamilyMember — that extra Serializable read makes
+    // parallel member creation across families false-conflict. The insert only
+    // needs app.family_id (FamilyMember RLS is plain tenant isolation).
+    return await harness.withMember(
+      input.familyId,
+      input.userId,
+      async (tx) => {
+        return await tx.familyMember.create({
+          data: {
+            familyId: input.familyId,
+            userId: input.userId,
+            role: input.role ?? "member",
+            status: input.status ?? "active",
+            joinedAt: new Date(),
+          },
+        })
+      }
+    )
+  }
+
   const createAuthenticatedOnboardedUser =
     async (): Promise<AuthenticatedOnboardedUser> => {
       const family = await createFamily()
       const user = await createUser({ familyId: family.id })
+      await createFamilyMember({
+        familyId: family.id,
+        userId: user.id,
+        role: "owner",
+      })
       const authenticated = await authenticateUser(user)
       return {
         family,
@@ -280,6 +325,7 @@ export function createTestFactories(
     createAuthenticatedUserWithoutFamily,
     createCategory,
     createFamily,
+    createFamilyMember,
     createIdempotencyKey,
     createMerchant,
     createTransaction,

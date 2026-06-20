@@ -13,6 +13,7 @@ import { computeBaseProjectionForAmount, getFamilyBaseCurrency } from "./fx"
 import { auditLog, createAuditContext } from "./middleware/audit"
 import {
   familyMiddleware,
+  requireCapability,
   scopedTenantTransaction,
   type TenantTransactionClient,
 } from "./middleware/with-family"
@@ -346,7 +347,7 @@ export async function createValuationForFamily({
   )
 
   const runOnce = async () =>
-    await runInTenantTransaction(familyId, async (tx) => {
+    await runInTenantTransaction(familyId, user.id, async (tx) => {
       const replay =
         await replayIdempotentEndpointResponse<SerializedValuation>(tx, {
           endpoint: CREATE_VALUATION_ENDPOINT,
@@ -453,13 +454,16 @@ export async function createValuationForFamily({
     return await runOnce()
   } catch (error) {
     if (!isUniqueConstraintError(error)) throw error
-    const replay = await scopedTenantTransaction(familyId, async (tx) =>
-      replayIdempotentEndpointResponse<SerializedValuation>(tx, {
-        endpoint: CREATE_VALUATION_ENDPOINT,
-        familyId,
-        key: data.idempotencyKey,
-        requestHash,
-      })
+    const replay = await scopedTenantTransaction(
+      familyId,
+      user.id,
+      async (tx) =>
+        replayIdempotentEndpointResponse<SerializedValuation>(tx, {
+          endpoint: CREATE_VALUATION_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+        })
     )
     if (replay) return replay
     throw error
@@ -467,7 +471,7 @@ export async function createValuationForFamily({
 }
 
 export const createValuationFn = createServerFn({ method: "POST" })
-  .middleware([familyMiddleware])
+  .middleware([requireCapability("ledger:write")])
   .inputValidator((data: z.input<typeof createValuationInputSchema>) =>
     createValuationInputSchema.parse(data)
   )
@@ -532,7 +536,7 @@ export async function rebuildAccountBalanceForFamily({
   runInTenantTransaction?: RunInTenantTransaction
 }): Promise<BalanceRebuildResult> {
   const auditCtx = await createAuditContext({ user: { id: user.id, familyId } })
-  return await runInTenantTransaction(familyId, async (tx) => {
+  return await runInTenantTransaction(familyId, user.id, async (tx) => {
     const account = await fetchAccountFacts(tx, familyId, accountId)
     if (!account) {
       throw new ValuationError(`Account ${accountId} not found`)
@@ -551,7 +555,7 @@ export async function rebuildFamilyBalances({
   runInTenantTransaction?: RunInTenantTransaction
 }): Promise<BalanceRebuildResult[]> {
   const auditCtx = await createAuditContext({ user: { id: user.id, familyId } })
-  return await runInTenantTransaction(familyId, async (tx) => {
+  return await runInTenantTransaction(familyId, user.id, async (tx) => {
     const accounts = await tx.account.findMany({
       where: { familyId },
       select: ACCOUNT_BALANCE_SELECT,
@@ -571,7 +575,7 @@ export async function rebuildFamilyBalances({
 }
 
 export const rebuildAccountBalanceFn = createServerFn({ method: "POST" })
-  .middleware([familyMiddleware])
+  .middleware([requireCapability("ledger:write")])
   .inputValidator((data: z.infer<typeof rebuildAccountBalanceInputSchema>) =>
     rebuildAccountBalanceInputSchema.parse(data)
   )
@@ -589,12 +593,14 @@ export const rebuildAccountBalanceFn = createServerFn({ method: "POST" })
 
 export async function detectBalanceDriftForFamily({
   familyId,
+  userId,
   runInTenantTransaction = scopedTenantTransaction,
 }: {
   familyId: string
+  userId: string
   runInTenantTransaction?: RunInTenantTransaction
 }): Promise<BalanceDriftReport[]> {
-  return await runInTenantTransaction(familyId, async (tx) => {
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
     const accounts = await tx.account.findMany({
       where: { familyId },
       select: ACCOUNT_BALANCE_SELECT,
@@ -662,7 +668,10 @@ export async function detectBalanceDriftForFamily({
 export const detectBalanceDriftFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
   .handler(async ({ context }) => {
-    return await detectBalanceDriftForFamily({ familyId: context.familyId })
+    return await detectBalanceDriftForFamily({
+      familyId: context.familyId,
+      userId: context.user.id,
+    })
   })
 
 // =============================================================================
@@ -672,13 +681,15 @@ export const detectBalanceDriftFn = createServerFn({ method: "GET" })
 export async function getAccountBalanceForFamily({
   accountId,
   familyId,
+  userId,
   runInTenantTransaction = scopedTenantTransaction,
 }: {
   accountId: string
   familyId: string
+  userId: string
   runInTenantTransaction?: RunInTenantTransaction
 }): Promise<AccountBalanceView> {
-  return await runInTenantTransaction(familyId, async (tx) => {
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
     const account = await fetchAccountFacts(tx, familyId, accountId)
     if (!account) {
       throw new ValuationError(`Account ${accountId} not found`)
@@ -747,5 +758,6 @@ export const getAccountBalanceFn = createServerFn({ method: "GET" })
     return await getAccountBalanceForFamily({
       accountId: data.accountId,
       familyId: context.familyId,
+      userId: context.user.id,
     })
   })

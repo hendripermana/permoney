@@ -52,19 +52,19 @@ describe("transaction idempotency", () => {
       createTransactionForFamily({
         data: payload,
         familyId: owner.family.id,
-        runInTenantTransaction: harness.withFamily,
+        runInTenantTransaction: harness.withMember,
         user: owner.user,
       }),
       createTransactionForFamily({
         data: payload,
         familyId: owner.family.id,
-        runInTenantTransaction: harness.withFamily,
+        runInTenantTransaction: harness.withMember,
         user: owner.user,
       }),
       createTransactionForFamily({
         data: payload,
         familyId: owner.family.id,
-        runInTenantTransaction: harness.withFamily,
+        runInTenantTransaction: harness.withMember,
         user: owner.user,
       }),
     ])
@@ -107,7 +107,7 @@ describe("transaction idempotency", () => {
         type: "expense",
       },
       familyId: owner.family.id,
-      runInTenantTransaction: harness.withFamily,
+      runInTenantTransaction: harness.withMember,
       user: owner.user,
     })
 
@@ -124,7 +124,7 @@ describe("transaction idempotency", () => {
           type: "expense",
         },
         familyId: owner.family.id,
-        runInTenantTransaction: harness.withFamily,
+        runInTenantTransaction: harness.withMember,
         user: owner.user,
       })
     ).rejects.toBeInstanceOf(IdempotencyConflictError)
@@ -146,7 +146,7 @@ describe("transaction idempotency", () => {
       createTransactionForFamily({
         data: payloadWithoutKey,
         familyId: owner.family.id,
-        runInTenantTransaction: harness.withFamily,
+        runInTenantTransaction: harness.withMember,
         user: owner.user,
       })
     ).rejects.toThrow(/idempotency/i)

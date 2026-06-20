@@ -66,7 +66,7 @@ describe("PER-74 liability semantics", () => {
         type: "transfer",
       },
       familyId: owner.family.id,
-      runInTenantTransaction: harness.withFamily,
+      runInTenantTransaction: harness.withMember,
       user: owner.user,
     })
 
@@ -124,7 +124,7 @@ describe("PER-74 liability semantics", () => {
         type: "transfer",
       },
       familyId: owner.family.id,
-      runInTenantTransaction: harness.withFamily,
+      runInTenantTransaction: harness.withMember,
       user: owner.user,
     })
 
@@ -179,7 +179,7 @@ describe("PER-74 liability semantics", () => {
         type: "transfer",
       },
       familyId: owner.family.id,
-      runInTenantTransaction: harness.withFamily,
+      runInTenantTransaction: harness.withMember,
       user: owner.user,
     })
     const interest = await createTransactionForFamily({
@@ -195,7 +195,7 @@ describe("PER-74 liability semantics", () => {
         type: "expense",
       },
       familyId: owner.family.id,
-      runInTenantTransaction: harness.withFamily,
+      runInTenantTransaction: harness.withMember,
       user: owner.user,
     })
     const fee = await createTransactionForFamily({
@@ -211,7 +211,7 @@ describe("PER-74 liability semantics", () => {
         type: "expense",
       },
       familyId: owner.family.id,
-      runInTenantTransaction: harness.withFamily,
+      runInTenantTransaction: harness.withMember,
       user: owner.user,
     })
 

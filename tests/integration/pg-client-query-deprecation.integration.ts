@@ -66,7 +66,7 @@ describe("pg client query usage", () => {
           type: "transfer",
         },
         familyId: owner.family.id,
-        runInTenantTransaction: harness.withFamily,
+        runInTenantTransaction: harness.withMember,
         user: owner.user,
       })
     })

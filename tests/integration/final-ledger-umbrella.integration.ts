@@ -91,7 +91,7 @@ describe("M2 final real-Postgres ledger umbrella suite (PER-88)", () => {
         type: "expense",
       },
       familyId: fixture.owner.family.id,
-      runInTenantTransaction: harness.withFamily,
+      runInTenantTransaction: harness.withMember,
       user: fixture.owner.user,
     })
     const income = await createTransactionForFamily({
@@ -109,7 +109,7 @@ describe("M2 final real-Postgres ledger umbrella suite (PER-88)", () => {
         type: "income",
       },
       familyId: fixture.owner.family.id,
-      runInTenantTransaction: harness.withFamily,
+      runInTenantTransaction: harness.withMember,
       user: fixture.owner.user,
     })
     const transfer = await createTransactionForFamily({
@@ -127,7 +127,7 @@ describe("M2 final real-Postgres ledger umbrella suite (PER-88)", () => {
         type: "transfer",
       },
       familyId: fixture.owner.family.id,
-      runInTenantTransaction: harness.withFamily,
+      runInTenantTransaction: harness.withMember,
       user: fixture.owner.user,
     })
     const split = await createTransactionForFamily({
@@ -160,7 +160,7 @@ describe("M2 final real-Postgres ledger umbrella suite (PER-88)", () => {
         type: "expense",
       },
       familyId: fixture.owner.family.id,
-      runInTenantTransaction: harness.withFamily,
+      runInTenantTransaction: harness.withMember,
       user: fixture.owner.user,
     })
 
@@ -663,7 +663,7 @@ describe("M2 final real-Postgres ledger umbrella suite (PER-88)", () => {
         type: "expense",
       },
       familyId: fixture.owner.family.id,
-      runInTenantTransaction: harness.withFamily,
+      runInTenantTransaction: harness.withMember,
       user: fixture.owner.user,
     })
   }
