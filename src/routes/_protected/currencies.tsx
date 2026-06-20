@@ -44,15 +44,11 @@ export const Route = createFileRoute("/_protected/currencies")({
 })
 
 function CurrenciesPage() {
-  const queryClient = useQueryClient()
-  const overview = useQuery({
+  const { data: fxOverview, isLoading: fxLoading } = useQuery({
     queryKey: FX_OVERVIEW_KEY,
     queryFn: async () => await getFxOverviewFn(),
   })
-  const baseCurrency = overview.data?.baseCurrency ?? "—"
-
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: FX_OVERVIEW_KEY })
+  const baseCurrency = fxOverview?.baseCurrency ?? "—"
 
   return (
     <TooltipProvider>
@@ -83,12 +79,12 @@ function CurrenciesPage() {
 
             <BaseCurrencyCard baseCurrency={baseCurrency} />
 
-            <AddRateCard baseCurrency={baseCurrency} onAdded={invalidate} />
+            <AddRateCard baseCurrency={baseCurrency} />
 
             <RatesTableCard
               baseCurrency={baseCurrency}
-              rates={overview.data?.rates ?? []}
-              isLoading={overview.isLoading}
+              rates={fxOverview?.rates ?? []}
+              isLoading={fxLoading}
             />
           </div>
         </SidebarInset>
@@ -126,24 +122,22 @@ function BaseCurrencyCard({ baseCurrency }: { baseCurrency: string }) {
   )
 }
 
-function AddRateCard({
-  baseCurrency,
-  onAdded,
-}: {
-  baseCurrency: string
-  onAdded: () => void
-}) {
+function AddRateCard({ baseCurrency }: { baseCurrency: string }) {
+  const queryClient = useQueryClient()
   const [fromCurrency, setFromCurrency] = React.useState("")
-  const [toCurrency, setToCurrency] = React.useState(baseCurrency)
   const [rate, setRate] = React.useState("")
-  const [asOfDate, setAsOfDate] = React.useState(todayIso())
+  // Lazy initializer so today's date is computed once, not on every render.
+  const [asOfDate, setAsOfDate] = React.useState(() => todayIso())
 
   const mutation = useMutation({
     mutationFn: async () =>
+      // The base currency is immutable, so every manual rate is `from → base`.
+      // The target is always the live base prop — never copied into state, so
+      // it can't go stale when the base finishes loading.
       await upsertFxRateSnapshotFn({
         data: {
           fromCurrency: fromCurrency.trim().toUpperCase(),
-          toCurrency: (toCurrency || baseCurrency).trim().toUpperCase(),
+          toCurrency: baseCurrency.trim().toUpperCase(),
           rate: rate.trim(),
           asOfDate,
           source: "manual",
@@ -152,7 +146,7 @@ function AddRateCard({
     onSuccess: () => {
       setFromCurrency("")
       setRate("")
-      onAdded()
+      void queryClient.invalidateQueries({ queryKey: FX_OVERVIEW_KEY })
     },
   })
 
@@ -189,11 +183,11 @@ function AddRateCard({
             <Label htmlFor="to-currency">To (base)</Label>
             <Input
               id="to-currency"
-              placeholder={baseCurrency}
-              value={toCurrency}
-              maxLength={5}
-              className="w-28 uppercase"
-              onChange={(event) => setToCurrency(event.target.value)}
+              value={baseCurrency}
+              readOnly
+              aria-readonly
+              tabIndex={-1}
+              className="w-28 text-muted-foreground uppercase"
             />
           </div>
           <div className="grid gap-1.5">

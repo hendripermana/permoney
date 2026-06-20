@@ -5,12 +5,8 @@ import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import { CURRENCIES } from "@/lib/data/currencies"
+import { CURRENCY_OPTIONS } from "@/lib/currency"
 import { onboardFn } from "@/server/auth-fns"
-
-// Full ISO list, sorted by priority then code, computed once at module load.
-const CURRENCY_OPTIONS = Object.entries(CURRENCIES)
-  .map(([code, def]) => ({ code, name: def.name, priority: def.priority }))
-  .sort((a, b) => a.priority - b.priority || a.code.localeCompare(b.code))
 
 // Country shortcuts that pre-select a base currency. The currency dropdown is
 // always the source of truth; these are just a friendly fast-path.

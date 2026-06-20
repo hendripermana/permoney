@@ -62,11 +62,11 @@ import {
   type AccountClass,
   type AccountType,
 } from "@/lib/accounts"
-import { formatCurrency } from "@/lib/currency"
+import { CURRENCY_OPTIONS, formatCurrency } from "@/lib/currency"
 import { negateMoney, toMinorUnits } from "@/lib/money"
 import { convertMinor } from "@/lib/fx"
 import { getFxOverviewFn } from "@/server/fx"
-import { CURRENCIES, type CurrencyCode } from "@/lib/data/currencies"
+import type { CurrencyCode } from "@/lib/data/currencies"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import {
   archiveAccountFn,
@@ -94,14 +94,6 @@ export const Route = createFileRoute("/_protected/accounts")({
   errorComponent: AccountsErrorComponent,
   component: AccountsPage,
 })
-
-// Full ISO currency list (global — Permoney covers the whole earth), sorted by
-// priority then code, mirroring the onboarding picker. Computed once.
-const CURRENCY_OPTIONS: ReadonlyArray<{ code: string; name: string }> =
-  Object.entries(CURRENCIES)
-    .map(([code, def]) => ({ code, name: def.name, priority: def.priority }))
-    .sort((a, b) => a.priority - b.priority || a.code.localeCompare(b.code))
-    .map(({ code, name }) => ({ code, name }))
 
 const DEFAULT_SUBTYPE_SENTINEL = "__default"
 
@@ -879,18 +871,19 @@ function NetWorthInBaseCard({
 }: {
   accounts: ReadonlyArray<AccountRecord>
 }) {
-  const overview = useQuery({
+  const { data: fxOverview } = useQuery({
     queryKey: ["fx-overview"],
     queryFn: async () => await getFxOverviewFn(),
   })
 
-  const base = overview.data?.baseCurrency
+  const base = fxOverview?.baseCurrency
+  const rates = fxOverview?.rates
   const { total, unconvertedByCurrency } = React.useMemo(() => {
     const unconvertedByCurrency = new Map<string, bigint>()
     if (!base) return { total: 0n, unconvertedByCurrency }
     // rates are sorted asOfDate DESC, so the first per `fromCurrency` is latest.
     const latest = new Map<string, bigint>()
-    for (const rate of overview.data?.rates ?? []) {
+    for (const rate of rates ?? []) {
       if (rate.toCurrency !== base) continue
       if (!latest.has(rate.fromCurrency)) {
         latest.set(rate.fromCurrency, BigInt(rate.rateScaled))
@@ -922,7 +915,7 @@ function NetWorthInBaseCard({
       )
     }
     return { total: sum, unconvertedByCurrency }
-  }, [accounts, base, overview.data?.rates])
+  }, [accounts, base, rates])
 
   const hasUnconverted = unconvertedByCurrency.size > 0
 
