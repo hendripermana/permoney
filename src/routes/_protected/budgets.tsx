@@ -28,7 +28,12 @@ import {
 } from "@/components/ui/table"
 import { cn } from "@/lib/utils"
 import type { CurrencyCode } from "@/lib/data/currencies"
-import { decodeMoney, formatMoney, parseUserInput } from "@/lib/money"
+import {
+  decodeMoney,
+  formatMoney,
+  toDisplayNumber,
+  toMinorUnits,
+} from "@/lib/money"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import {
   getBudgetForPeriodFn,
@@ -374,10 +379,17 @@ function BudgetEditor({
     const initial: Record<string, string> = {}
     for (const category of progress.categories) {
       if (Number(category.allocatedAmount) > 0) {
-        initial[category.categoryId] = formatMoney(
-          decodeMoney(category.allocatedAmount),
-          currency as CurrencyCode,
-          { showSymbol: false }
+        // Pre-fill with the canonical <input type="number"> value — a plain
+        // major-unit number (locale-immune: always "." decimal, no grouping).
+        // This is the money-input pattern mandated by ADR-0001 §Consequences
+        // and used by transaction-form-modal.tsx; do NOT pre-fill with a
+        // locale-formatted display string (formatMoney), which a number input
+        // can't hold and a parser can't round-trip (the PR113 edit-save bug).
+        initial[category.categoryId] = String(
+          toDisplayNumber(
+            decodeMoney(category.allocatedAmount),
+            currency as CurrencyCode
+          )
         )
       }
     }
@@ -385,14 +397,25 @@ function BudgetEditor({
   })
   const [error, setError] = React.useState<string | null>(null)
 
+  // Dirty-tracking: keep "Save budget" disabled until the user actually changes
+  // an allocation, so an accidental click on an untouched form can't replace the
+  // period's allocations. Lazy-init the baseline from the first-render inputs
+  // (no effect needed); reset it to the saved snapshot in onSuccess.
+  const baselineRef = React.useRef<Record<string, string> | null>(null)
+  if (baselineRef.current === null) baselineRef.current = inputs
+
   const mutation = useMutation({
     mutationFn: async () => {
       const allocations: { categoryId: string; allocatedAmount: string }[] = []
       for (const category of categories ?? []) {
         const raw = (inputs[category.id] ?? "").trim()
         if (raw === "") continue
-        const parsed = parseUserInput(raw, currency as CurrencyCode)
-        if (parsed === null) {
+        // <input type="number"> hands us a canonical decimal string ("2000000",
+        // "2000000.5") — feed it straight to toMinorUnits (ADR-0001 pattern).
+        let parsed: bigint
+        try {
+          parsed = toMinorUnits(raw, currency as CurrencyCode)
+        } catch {
           throw new Error(`Invalid amount for ${category.name}`)
         }
         if (parsed <= 0n) continue
@@ -407,12 +430,28 @@ function BudgetEditor({
     },
     onSuccess: () => {
       setError(null)
-      void queryClient.invalidateQueries({ queryKey: ["budget", month] })
+      // The just-saved values are the new clean baseline (re-disables Save until
+      // the next real edit). The first save also re-keys this component via the
+      // parent, which rebuilds the baseline from fresh data anyway.
+      baselineRef.current = { ...inputs }
+      // Invalidate by prefix so it matches both the resolved-month key
+      // (["budget","2026-06"]) and the default ["budget","current"] key the
+      // page uses before the user picks a month — otherwise the save wouldn't
+      // refresh and the user would have to reload (PR113 review feedback).
+      void queryClient.invalidateQueries({ queryKey: ["budget"] })
     },
     onError: (mutationError: unknown) => {
       setError((mutationError as Error).message)
     },
   })
+
+  // Derived during render (no effect): the form is dirty if any category's
+  // current input differs from the saved baseline.
+  const isDirty = (categories ?? []).some(
+    (category) =>
+      (inputs[category.id] ?? "").trim() !==
+      (baselineRef.current?.[category.id] ?? "").trim()
+  )
 
   return (
     <Card>
@@ -461,6 +500,9 @@ function BudgetEditor({
                   </Label>
                   <Input
                     id={`alloc-${category.id}`}
+                    type="number"
+                    min={0}
+                    step="any"
                     inputMode="decimal"
                     placeholder="0"
                     value={inputs[category.id] ?? ""}
@@ -475,7 +517,7 @@ function BudgetEditor({
               ))}
             </div>
             <div className="flex items-center gap-3">
-              <Button type="submit" disabled={mutation.isPending}>
+              <Button type="submit" disabled={mutation.isPending || !isDirty}>
                 {mutation.isPending ? "Saving…" : "Save budget"}
               </Button>
               {error ? (
