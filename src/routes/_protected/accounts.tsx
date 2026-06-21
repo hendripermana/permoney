@@ -64,7 +64,7 @@ import {
 } from "@/lib/accounts"
 import { CURRENCY_OPTIONS, formatCurrency } from "@/lib/currency"
 import { negateMoney, toMinorUnits } from "@/lib/money"
-import { convertMinor } from "@/lib/fx"
+import { normalizeNetWorthAt, type PointBalance } from "@/lib/net-worth"
 import { getFxOverviewFn } from "@/server/fx"
 import type { CurrencyCode } from "@/lib/data/currencies"
 import { createUuidV7 } from "@/lib/uuid-v7"
@@ -878,9 +878,12 @@ function NetWorthInBaseCard({
 
   const base = fxOverview?.baseCurrency
   const rates = fxOverview?.rates
-  const { total, unconvertedByCurrency } = React.useMemo(() => {
-    const unconvertedByCurrency = new Map<string, bigint>()
-    if (!base) return { total: 0n, unconvertedByCurrency }
+  const { total, unconverted } = React.useMemo(() => {
+    if (!base)
+      return {
+        total: 0n,
+        unconverted: [] as Array<{ currency: string; native: bigint }>,
+      }
     // rates are sorted asOfDate DESC, so the first per `fromCurrency` is latest.
     const latest = new Map<string, bigint>()
     for (const rate of rates ?? []) {
@@ -889,35 +892,22 @@ function NetWorthInBaseCard({
         latest.set(rate.fromCurrency, BigInt(rate.rateScaled))
       }
     }
-    let sum = 0n
-    for (const account of accounts) {
-      if (account.status !== "active") continue
-      const native = BigInt(account.balance)
-      if (account.currency === base) {
-        sum += native
-        continue
-      }
-      const rateScaled = latest.get(account.currency)
-      if (rateScaled === undefined) {
-        // No rate yet: keep the native balance visible rather than silently
-        // dropping it from the headline, so the user sees the total is partial.
-        unconvertedByCurrency.set(
-          account.currency,
-          (unconvertedByCurrency.get(account.currency) ?? 0n) + native
-        )
-        continue
-      }
-      sum += convertMinor(
-        native,
-        account.currency as CurrencyCode,
-        base as CurrencyCode,
-        rateScaled
-      )
-    }
-    return { total: sum, unconvertedByCurrency }
+    // Status-agnostic, same shared `normalizeNetWorthAt` as the net-worth series
+    // (ADR-0038 §5): this card equals the series' last point by construction.
+    const balances: PointBalance[] = accounts.map((account) => ({
+      accountClass: account.accountClass,
+      currency: account.currency,
+      native: BigInt(account.balance),
+    }))
+    const result = normalizeNetWorthAt(
+      balances,
+      (currency) => latest.get(currency) ?? null,
+      base
+    )
+    return { total: result.netWorth, unconverted: result.unconverted }
   }, [accounts, base, rates])
 
-  const hasUnconverted = unconvertedByCurrency.size > 0
+  const hasUnconverted = unconverted.length > 0
 
   return (
     <Card>
@@ -938,13 +928,11 @@ function NetWorthInBaseCard({
             Not yet converted — add a rate in Currencies &amp; FX
           </Badge>
           <ul className="space-y-0.5 text-sm text-muted-foreground">
-            {Array.from(unconvertedByCurrency.entries()).map(
-              ([code, native]) => (
-                <li key={code} className="tabular-nums">
-                  + {formatCurrency(native.toString(), code)}
-                </li>
-              )
-            )}
+            {unconverted.map(({ currency, native }) => (
+              <li key={currency} className="tabular-nums">
+                + {formatCurrency(native.toString(), currency)}
+              </li>
+            ))}
           </ul>
         </CardContent>
       ) : null}
