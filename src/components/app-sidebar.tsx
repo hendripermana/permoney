@@ -55,7 +55,7 @@ const data = {
     },
     {
       title: "Budgets",
-      url: "#",
+      url: "/budgets",
       icon: IconChartBar,
     },
     {

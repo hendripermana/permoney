@@ -8,6 +8,7 @@
 | **Deciders**      | Hendri Permana                                            |
 | **Supersedes**    | PER-98, PER-114 (design)                                  |
 | **Superseded by** | —                                                         |
+| **Amended by**    | ADR-0037 (§2 adds `budget:write`)                         |
 | **Amends**        | ADR-0008 §8; ADR-0010 (User actor); ADR-0014 (role split) |
 
 ## Context

@@ -19,6 +19,8 @@ const RESET_TABLES = [
   "IdempotencyRecord",
   "SmartRule",
   "Merchant",
+  "BudgetCategory",
+  "Budget",
   "Category",
   "Account",
   "Session",

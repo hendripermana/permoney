@@ -11,6 +11,7 @@ export type FamilyRole = "owner" | "admin" | "member" | "viewer"
 export type Capability =
   | "ledger:write"
   | "account:write"
+  | "budget:write"
   | "settings:write"
   | "member:manage"
   | "member:manage_admin"
@@ -24,6 +25,7 @@ const ROLE_CAPABILITIES: Record<FamilyRole, ReadonlySet<Capability>> = {
   owner: new Set<Capability>([
     "ledger:write",
     "account:write",
+    "budget:write",
     "settings:write",
     "member:manage",
     "member:manage_admin",
@@ -33,11 +35,16 @@ const ROLE_CAPABILITIES: Record<FamilyRole, ReadonlySet<Capability>> = {
   admin: new Set<Capability>([
     "ledger:write",
     "account:write",
+    "budget:write",
     "settings:write",
     "member:manage",
     "audit:read",
   ]),
-  member: new Set<Capability>(["ledger:write", "account:write"]),
+  member: new Set<Capability>([
+    "ledger:write",
+    "account:write",
+    "budget:write",
+  ]),
   viewer: new Set<Capability>([]),
 }
 
