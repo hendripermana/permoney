@@ -135,7 +135,11 @@ async function expectDashboardRoute(page: Page): Promise<void> {
     expect(page).toHaveURL(/\/dashboard(?:\?.*)?$/),
     waitForHydration(page),
   ])
-  await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible()
+  // The route renders the title in the SiteHeader chrome AND as the page body
+  // heading (PER-156). Scope to the header so the assertion stays unambiguous.
+  await expect(
+    page.locator("header").getByRole("heading", { name: "Dashboard" })
+  ).toBeVisible()
 }
 
 async function expectTransactionsRoute(page: Page): Promise<void> {

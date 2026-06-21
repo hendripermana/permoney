@@ -1,6 +1,5 @@
-import { randomUUID } from "node:crypto"
-import type { Page } from "@playwright/test"
 import { expect, test } from "./support/fixtures"
+import { onboard, waitForHydration } from "./support/onboarding"
 
 // PER-156 — R3 dashboard realization. Drives the real path
 // (browser -> server-fn -> react-query -> render) for the three reporting
@@ -9,46 +8,6 @@ import { expect, test } from "./support/fixtures"
 // with a non-zero opening balance (so R1 renders a real net-worth headline).
 // Asserts the page renders headline content instead of being stuck on a
 // skeleton or error.
-
-interface Identity {
-  email: string
-  fullName: string
-  password: string
-  username: string
-}
-
-function createIdentity(): Identity {
-  const suffix = randomUUID().replaceAll("-", "").slice(0, 12)
-  const password = randomUUID().replaceAll("-", "")
-  return {
-    email: `e2e-${suffix}@permoney.test`,
-    fullName: `E2E User ${suffix}`,
-    password: `${password.slice(0, 12)}A1a`,
-    username: `e2e_${suffix}`,
-  }
-}
-
-async function waitForHydration(page: Page): Promise<void> {
-  await page.waitForFunction(
-    () => document.documentElement.dataset.permoneyHydrated === "true"
-  )
-}
-
-async function onboard(page: Page): Promise<void> {
-  const identity = createIdentity()
-  await page.goto("/signup")
-  await waitForHydration(page)
-  await page.getByLabel("Full Name").fill(identity.fullName)
-  await page.getByLabel("Username").fill(identity.username)
-  await page.getByLabel("Email").fill(identity.email)
-  await page.getByLabel("Password").fill(identity.password)
-  await page.getByRole("button", { name: "Create Account" }).click()
-  await expect(page).toHaveURL(/\/onboarding(?:\?.*)?$/)
-  await waitForHydration(page)
-  await page.getByRole("button", { name: "Get Started" }).click()
-  await expect(page).toHaveURL(/\/dashboard(?:\?.*)?$/)
-  await waitForHydration(page)
-}
 
 test.describe("dashboard route", () => {
   test("onboarded user sees net worth, cash flow, top categories, and budget", async ({
