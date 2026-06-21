@@ -8,16 +8,59 @@ import {
   type NetWorthPoint,
   type NetWorthSeriesInput,
   type PointBalance,
+  type SeriesAccount,
+  type SeriesSnapshot,
+  type SeriesValuation,
 } from "./net-worth"
 
 const USD_IDR = encodeRate("16000") // 1 USD = 16,000 IDR
 
+// ---- factory helpers (keep the test literals DRY) ---------------------------
+
+const cashAccount = (id: string, currency = "IDR"): SeriesAccount => ({
+  id,
+  accountClass: "ASSET",
+  balanceSource: "transaction_flow",
+  currency,
+})
+const liabilityAccount = (id: string, currency = "IDR"): SeriesAccount => ({
+  id,
+  accountClass: "LIABILITY",
+  balanceSource: "transaction_flow",
+  currency,
+})
+const trackedAccount = (id: string, currency = "IDR"): SeriesAccount => ({
+  id,
+  accountClass: "ASSET",
+  balanceSource: "valuation",
+  currency,
+})
+const valuation = (
+  accountId: string,
+  value: bigint,
+  valuationDate: string,
+  type = "opening"
+): SeriesValuation => ({ accountId, value, valuationDate, type })
+const snapshot = (
+  fromCurrency: string,
+  rate: string,
+  asOfDate: string
+): SeriesSnapshot => ({ fromCurrency, rateScaled: encodeRate(rate), asOfDate })
+const balance = (
+  accountClass: string,
+  currency: string,
+  native: bigint
+): PointBalance => ({ accountClass, currency, native })
+const usdInIdr = (native: bigint, rate: string): bigint =>
+  convertMinor(native, "USD", "IDR", encodeRate(rate)) as bigint
+
 function pointByDate(points: NetWorthPoint[], date: string): NetWorthPoint {
   const point = points.find((p) => p.date === date)
-  if (!point)
+  if (!point) {
     throw new Error(
       `no point for ${date} in ${points.map((p) => p.date).join(",")}`
     )
+  }
   return point
 }
 
@@ -44,12 +87,15 @@ describe("normalizeNetWorthAt", () => {
   const noRate = () => null
 
   test("decomposes assets and liabilities in the base currency", () => {
-    const balances: PointBalance[] = [
-      { accountClass: "ASSET", currency: "IDR", native: 1_000_000n },
-      { accountClass: "ASSET", currency: "IDR", native: 250_000n },
-      { accountClass: "LIABILITY", currency: "IDR", native: -400_000n },
-    ]
-    const result = normalizeNetWorthAt(balances, noRate, "IDR")
+    const result = normalizeNetWorthAt(
+      [
+        balance("ASSET", "IDR", 1_000_000n),
+        balance("ASSET", "IDR", 250_000n),
+        balance("LIABILITY", "IDR", -400_000n),
+      ],
+      noRate,
+      "IDR"
+    )
     expect(result.assets).toBe(1_250_000n)
     expect(result.liabilities).toBe(400_000n)
     expect(result.netWorth).toBe(850_000n)
@@ -57,33 +103,38 @@ describe("normalizeNetWorthAt", () => {
   })
 
   test("netWorth === assets - liabilities holds by construction", () => {
-    const balances: PointBalance[] = [
-      { accountClass: "ASSET", currency: "IDR", native: 777_777n },
-      { accountClass: "ASSET", currency: "IDR", native: -120n }, // overdraft asset
-      { accountClass: "LIABILITY", currency: "IDR", native: -333_333n },
-    ]
-    const result = normalizeNetWorthAt(balances, noRate, "IDR")
+    const result = normalizeNetWorthAt(
+      [
+        balance("ASSET", "IDR", 777_777n),
+        balance("ASSET", "IDR", -120n), // overdraft asset
+        balance("LIABILITY", "IDR", -333_333n),
+      ],
+      noRate,
+      "IDR"
+    )
     expect(result.netWorth).toBe(result.assets - result.liabilities)
   })
 
   test("converts foreign balances via convertMinor with the resolved rate", () => {
-    const balances: PointBalance[] = [
-      { accountClass: "ASSET", currency: "IDR", native: 1_000_000n },
-      { accountClass: "ASSET", currency: "USD", native: 100n },
-    ]
-    const result = normalizeNetWorthAt(balances, () => USD_IDR, "IDR")
-    const expectedUsd = convertMinor(100n, "USD", "IDR", USD_IDR)
-    expect(result.assets).toBe(1_000_000n + (expectedUsd as bigint))
+    const result = normalizeNetWorthAt(
+      [balance("ASSET", "IDR", 1_000_000n), balance("ASSET", "USD", 100n)],
+      () => USD_IDR,
+      "IDR"
+    )
+    expect(result.assets).toBe(1_000_000n + usdInIdr(100n, "16000"))
     expect(result.netWorth).toBe(result.assets)
   })
 
   test("excludes unconverted foreign accounts and lists them, never zeroes", () => {
-    const balances: PointBalance[] = [
-      { accountClass: "ASSET", currency: "IDR", native: 500_000n },
-      { accountClass: "ASSET", currency: "USD", native: 100n },
-      { accountClass: "ASSET", currency: "USD", native: 25n },
-    ]
-    const result = normalizeNetWorthAt(balances, noRate, "IDR")
+    const result = normalizeNetWorthAt(
+      [
+        balance("ASSET", "IDR", 500_000n),
+        balance("ASSET", "USD", 100n),
+        balance("ASSET", "USD", 25n),
+      ],
+      noRate,
+      "IDR"
+    )
     expect(result.assets).toBe(500_000n)
     expect(result.unconverted).toEqual([{ currency: "USD", native: 125n }])
   })
@@ -135,39 +186,23 @@ describe("generateSampleDates", () => {
 // =============================================================================
 
 describe("buildNetWorthSeries", () => {
+  const txn = (accountId: string, amount: bigint, iso: string) => ({
+    accountId,
+    amount,
+    date: new Date(iso),
+  })
+
   test("cash-like balance = opening anchor + Σ flow up to each sample date", () => {
     const points = buildNetWorthSeries(
       baseInput({
         from: "2026-01-05",
         to: "2026-01-25",
         interval: "month",
-        accounts: [
-          {
-            id: "a",
-            accountClass: "ASSET",
-            balanceSource: "transaction_flow",
-            currency: "IDR",
-          },
-        ],
-        valuations: [
-          {
-            accountId: "a",
-            value: 100_000n,
-            valuationDate: "2026-01-01",
-            type: "opening",
-          },
-        ],
+        accounts: [cashAccount("a")],
+        valuations: [valuation("a", 100_000n, "2026-01-01")],
         transactions: [
-          {
-            accountId: "a",
-            amount: -30_000n,
-            date: new Date("2026-01-10T00:00:00Z"),
-          },
-          {
-            accountId: "a",
-            amount: 50_000n,
-            date: new Date("2026-01-20T00:00:00Z"),
-          },
+          txn("a", -30_000n, "2026-01-10T00:00:00Z"),
+          txn("a", 50_000n, "2026-01-20T00:00:00Z"),
         ],
       })
     )
@@ -181,27 +216,10 @@ describe("buildNetWorthSeries", () => {
         from: "2026-01-01",
         to: "2026-03-01",
         interval: "month",
-        accounts: [
-          {
-            id: "gold",
-            accountClass: "ASSET",
-            balanceSource: "valuation",
-            currency: "IDR",
-          },
-        ],
+        accounts: [trackedAccount("gold")],
         valuations: [
-          {
-            accountId: "gold",
-            value: 10_000_000n,
-            valuationDate: "2026-01-01",
-            type: "opening",
-          },
-          {
-            accountId: "gold",
-            value: 12_000_000n,
-            valuationDate: "2026-02-15",
-            type: "market",
-          },
+          valuation("gold", 10_000_000n, "2026-01-01"),
+          valuation("gold", 12_000_000n, "2026-02-15", "market"),
         ],
       })
     )
@@ -215,33 +233,10 @@ describe("buildNetWorthSeries", () => {
   test("liabilities reduce net worth (assets - liabilities)", () => {
     const points = buildNetWorthSeries(
       baseInput({
-        accounts: [
-          {
-            id: "cash",
-            accountClass: "ASSET",
-            balanceSource: "transaction_flow",
-            currency: "IDR",
-          },
-          {
-            id: "card",
-            accountClass: "LIABILITY",
-            balanceSource: "transaction_flow",
-            currency: "IDR",
-          },
-        ],
+        accounts: [cashAccount("cash"), liabilityAccount("card")],
         valuations: [
-          {
-            accountId: "cash",
-            value: 1_000_000n,
-            valuationDate: "2026-01-01",
-            type: "opening",
-          },
-          {
-            accountId: "card",
-            value: -250_000n,
-            valuationDate: "2026-01-01",
-            type: "opening",
-          },
+          valuation("cash", 1_000_000n, "2026-01-01"),
+          valuation("card", -250_000n, "2026-01-01"),
         ],
       })
     )
@@ -257,42 +252,20 @@ describe("buildNetWorthSeries", () => {
         from: "2026-01-10",
         to: "2026-01-20",
         interval: "day",
-        accounts: [
-          {
-            id: "usd",
-            accountClass: "ASSET",
-            balanceSource: "transaction_flow",
-            currency: "USD",
-          },
-        ],
-        valuations: [
-          {
-            accountId: "usd",
-            value: 100n,
-            valuationDate: "2026-01-01",
-            type: "opening",
-          },
-        ],
+        accounts: [cashAccount("usd", "USD")],
+        valuations: [valuation("usd", 100n, "2026-01-01")],
         snapshots: [
-          {
-            fromCurrency: "USD",
-            rateScaled: encodeRate("16000"),
-            asOfDate: "2026-01-05",
-          },
-          {
-            fromCurrency: "USD",
-            rateScaled: encodeRate("17000"),
-            asOfDate: "2026-01-15",
-          },
+          snapshot("USD", "16000", "2026-01-05"),
+          snapshot("USD", "17000", "2026-01-15"),
         ],
       })
     )
     // Same native balance (no transactions), different base value as the rate steps.
     expect(pointByDate(points, "2026-01-10").netWorth).toBe(
-      convertMinor(100n, "USD", "IDR", encodeRate("16000")) as bigint
+      usdInIdr(100n, "16000")
     )
     expect(pointByDate(points, "2026-01-20").netWorth).toBe(
-      convertMinor(100n, "USD", "IDR", encodeRate("17000")) as bigint
+      usdInIdr(100n, "17000")
     )
   })
 
@@ -302,39 +275,16 @@ describe("buildNetWorthSeries", () => {
         from: "2026-01-10",
         to: "2026-01-10",
         interval: "day",
-        accounts: [
-          {
-            id: "usd",
-            accountClass: "ASSET",
-            balanceSource: "transaction_flow",
-            currency: "USD",
-          },
-        ],
-        valuations: [
-          {
-            accountId: "usd",
-            value: 100n,
-            valuationDate: "2026-01-01",
-            type: "opening",
-          },
-        ],
+        accounts: [cashAccount("usd", "USD")],
+        valuations: [valuation("usd", 100n, "2026-01-01")],
         snapshots: [
-          {
-            fromCurrency: "USD",
-            rateScaled: encodeRate("16000"),
-            asOfDate: "2026-01-05",
-          },
-          // dated AFTER the sample — must be ignored.
-          {
-            fromCurrency: "USD",
-            rateScaled: encodeRate("99999"),
-            asOfDate: "2026-01-31",
-          },
+          snapshot("USD", "16000", "2026-01-05"),
+          snapshot("USD", "99999", "2026-01-31"), // dated AFTER the sample
         ],
       })
     )
     expect(pointByDate(points, "2026-01-10").netWorth).toBe(
-      convertMinor(100n, "USD", "IDR", encodeRate("16000")) as bigint
+      usdInIdr(100n, "16000")
     )
   })
 
@@ -344,41 +294,12 @@ describe("buildNetWorthSeries", () => {
         from: "2026-01-01",
         to: "2026-01-10",
         interval: "day",
-        accounts: [
-          {
-            id: "idr",
-            accountClass: "ASSET",
-            balanceSource: "transaction_flow",
-            currency: "IDR",
-          },
-          {
-            id: "usd",
-            accountClass: "ASSET",
-            balanceSource: "transaction_flow",
-            currency: "USD",
-          },
-        ],
+        accounts: [cashAccount("idr"), cashAccount("usd", "USD")],
         valuations: [
-          {
-            accountId: "idr",
-            value: 500_000n,
-            valuationDate: "2026-01-01",
-            type: "opening",
-          },
-          {
-            accountId: "usd",
-            value: 100n,
-            valuationDate: "2026-01-01",
-            type: "opening",
-          },
+          valuation("idr", 500_000n, "2026-01-01"),
+          valuation("usd", 100n, "2026-01-01"),
         ],
-        snapshots: [
-          {
-            fromCurrency: "USD",
-            rateScaled: encodeRate("16000"),
-            asOfDate: "2026-01-06",
-          },
-        ],
+        snapshots: [snapshot("USD", "16000", "2026-01-06")],
       })
     )
     const early = pointByDate(points, "2026-01-03")
@@ -387,10 +308,7 @@ describe("buildNetWorthSeries", () => {
     expect(early.netWorth).toBe(500_000n) // USD excluded, not zeroed into the total
     const later = pointByDate(points, "2026-01-10")
     expect(later.isPartial).toBe(false)
-    expect(later.netWorth).toBe(
-      500_000n +
-        (convertMinor(100n, "USD", "IDR", encodeRate("16000")) as bigint)
-    )
+    expect(later.netWorth).toBe(500_000n + usdInIdr(100n, "16000"))
   })
 
   test("an account created mid-range contributes 0 before its opening date", () => {
@@ -399,22 +317,8 @@ describe("buildNetWorthSeries", () => {
         from: "2026-01-01",
         to: "2026-02-01",
         interval: "month",
-        accounts: [
-          {
-            id: "late",
-            accountClass: "ASSET",
-            balanceSource: "transaction_flow",
-            currency: "IDR",
-          },
-        ],
-        valuations: [
-          {
-            accountId: "late",
-            value: 300_000n,
-            valuationDate: "2026-01-20",
-            type: "opening",
-          },
-        ],
+        accounts: [cashAccount("late")],
+        valuations: [valuation("late", 300_000n, "2026-01-20")],
       })
     )
     expect(pointByDate(points, "2026-01-01").netWorth).toBe(0n) // before inception
@@ -427,30 +331,10 @@ describe("buildNetWorthSeries", () => {
         from: "2026-02-01",
         to: "2026-02-01",
         interval: "day",
-        accounts: [
-          {
-            id: "a",
-            accountClass: "ASSET",
-            balanceSource: "transaction_flow",
-            currency: "IDR",
-          },
-        ],
-        valuations: [
-          {
-            accountId: "a",
-            value: 100_000n,
-            valuationDate: "2026-01-01",
-            type: "opening",
-          },
-        ],
-        transactions: [
-          // dated BEFORE `from` — must still be included in the first point.
-          {
-            accountId: "a",
-            amount: -40_000n,
-            date: new Date("2026-01-15T00:00:00Z"),
-          },
-        ],
+        accounts: [cashAccount("a")],
+        valuations: [valuation("a", 100_000n, "2026-01-01")],
+        // dated BEFORE `from` — must still be included in the first point.
+        transactions: [txn("a", -40_000n, "2026-01-15T00:00:00Z")],
       })
     )
     expect(pointByDate(points, "2026-02-01").netWorth).toBe(60_000n)
@@ -463,30 +347,10 @@ describe("buildNetWorthSeries", () => {
         from: "2026-01-10",
         to: "2026-01-11",
         interval: "day",
-        accounts: [
-          {
-            id: "a",
-            accountClass: "ASSET",
-            balanceSource: "transaction_flow",
-            currency: "IDR",
-          },
-        ],
-        valuations: [
-          {
-            accountId: "a",
-            value: 100_000n,
-            valuationDate: "2026-01-01",
-            type: "opening",
-          },
-        ],
-        transactions: [
-          // 2026-01-10T20:00Z is still 2026-01-10 in UTC but 2026-01-11 in Jakarta (+7).
-          {
-            accountId: "a",
-            amount: -10_000n,
-            date: new Date("2026-01-10T20:00:00Z"),
-          },
-        ],
+        accounts: [cashAccount("a")],
+        valuations: [valuation("a", 100_000n, "2026-01-01")],
+        // 2026-01-10T20:00Z is still 2026-01-10 in UTC but 2026-01-11 in Jakarta (+7).
+        transactions: [txn("a", -10_000n, "2026-01-10T20:00:00Z")],
       })
     const utc = buildNetWorthSeries(input("UTC"))
     expect(pointByDate(utc, "2026-01-10").netWorth).toBe(90_000n)
