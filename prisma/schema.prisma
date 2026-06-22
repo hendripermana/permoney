@@ -50,6 +50,8 @@ model Family {
   valuations   Valuation[]
   fxRateSnapshots FxRateSnapshot[]
   budgets      Budget[]
+  importBatches ImportBatch[]
+  rawImportedTransactions RawImportedTransaction[]
 }
 
 // ADR-0036: first-class family membership + role authorization.
@@ -181,6 +183,7 @@ model Account {
   transactionsFrom Transaction[] @relation("FromAccount")
   transactionsTo   Transaction[] @relation("ToAccount")
   valuations       Valuation[]
+  rawImportedTransactions RawImportedTransaction[]
 
   // Tenant-scoped fetch (every Account read is filtered by familyId once
   // ADR-0004 lands; cheap to add now). See ADR-0003.
@@ -656,4 +659,113 @@ model Verification {
 
   @@index([identifier])
   @@map("Verification")
+}
+
+// ============================================================================
+// PER-82 / ADR-0039 — Import staging (source-agnostic spine)
+//
+// Raw import data is staging data, not ledger data (ADR-0008 §5). Bank/CSV/
+// provider rows land here first; only explicitly `confirmed`, tenant-validated,
+// deduplicated rows are promoted into canonical `Transaction`s through the
+// shared ledger create core. Provider columns are reserved-nullable for
+// PER-118 / ADR-0015 — that slice only ADDS `ProviderConnection` + populates
+// them; it never redefines these tables.
+// ============================================================================
+
+model ImportBatch {
+  id          String @id @default(cuid())
+  familyId    String
+  family      Family @relation(fields: [familyId], references: [id], onDelete: Cascade)
+
+  // Acting member (User.id). Plain id, not an FK, like Transaction.userId.
+  createdById String
+
+  // 'csv_upload' | 'provider' (DB CHECK). 'provider' reserved for PER-118.
+  sourceKind  String
+  // OPTIONAL batch-level default/hint only. The AUTHORITATIVE target account is
+  // per-row on RawImportedTransaction, because one file can span many accounts.
+  accountId   String?
+  // 'pending' | 'ready_for_review' | 'partially_promoted' | 'completed' |
+  // 'failed' (DB CHECK). Coarse, derived rollup — never authoritative over row
+  // status.
+  status      String @default("pending")
+  // sha256 of the raw file/payload bytes. Per-file batch dedup (ADR-0039 §5):
+  // re-uploading the identical file returns the existing batch, no re-stage.
+  contentHash String
+  // Client UUIDv7 for the create-batch endpoint replay (ADR-0006).
+  idempotencyKey String?
+
+  // Derived rollup counters (informational).
+  totalRows     Int @default(0)
+  duplicateRows Int @default(0)
+  errorRows     Int @default(0)
+  promotedRows  Int @default(0)
+
+  // Reserved for PER-118 / ADR-0015 (NULL in PER-82).
+  providerConnectionId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  rawRows RawImportedTransaction[]
+
+  // Per-file batch dedup target (ADR-0039 §5).
+  @@unique([familyId, sourceKind, contentHash], name: "import_batch_content_dedup", map: "import_batch_content_dedup")
+  // Composite-FK target so a raw row can never point at another family's batch
+  // even with a forged batchId (ADR-0010 pattern).
+  @@unique([id, familyId], map: "ImportBatch_id_familyId_key")
+  @@index([familyId, status])
+}
+
+model RawImportedTransaction {
+  id            String @id @default(cuid())
+  familyId      String
+  family        Family @relation(fields: [familyId], references: [id], onDelete: Cascade)
+
+  importBatchId String
+  importBatch   ImportBatch @relation(fields: [importBatchId, familyId], references: [id, familyId], onDelete: Cascade, onUpdate: Cascade, map: "raw_import_batch_family_fkey")
+
+  // AUTHORITATIVE per-row target account (composite tenant FK, ADR-0010).
+  accountId String
+  account   Account @relation(fields: [accountId, familyId], references: [id, familyId], onDelete: Restrict, onUpdate: Cascade, map: "raw_import_account_family_fkey")
+
+  // (1) Lossless raw — IMMUTABLE after insert (retention/provenance evidence).
+  rawPayload Json
+
+  // (2) Normalized candidate — pipeline-filled, mutable working area.
+  externalId  String? // provider dedup key; NULL for CSV
+  type        String? // 'income' | 'expense' (DB CHECK; income/expense only)
+  amount      BigInt? // SIGNED minor units once normalized (DB CHECK by type)
+  currency    String? // resolved at normalize = account currency (part of fingerprint)
+  date        DateTime?
+  description String?
+
+  // (3) Enrichment + dedup verdict — suggestion columns; never canonical writes.
+  fingerprint              String?
+  // 'pending' | 'normalized' | 'duplicate' | 'error' | 'confirmed' | 'promoted'
+  // | 'rejected' (DB CHECK). 'promoted' is the sole irreversible terminal.
+  rowStatus                String  @default("pending")
+  possibleDuplicate        Boolean @default(false) // soft near-dup flag
+  duplicateOfTransactionId String?
+  suggestedCategoryId      String?
+  suggestedMerchantId      String?
+  matchedSmartRuleId       String?
+  errorReason              String?
+
+  // UUIDv7 (becomes Transaction.idempotencyKey, ADR-0006); minted at stage time
+  // and threaded into the canonical create so re-promotion never double-books.
+  promotionIdempotencyKey String
+  promotedTransactionId   String? // set iff rowStatus='promoted' (DB CHECK)
+
+  // Reserved for PER-118 / ADR-0015 (NULL in PER-82).
+  providerConnectionId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  // Per-row promotion idempotency (durable backstop, ADR-0039 §5/§9).
+  @@unique([familyId, promotionIdempotencyKey], name: "raw_import_promotion_key", map: "raw_import_promotion_key")
+  @@index([importBatchId, rowStatus])
+  @@index([familyId, fingerprint])
+  @@index([accountId])
 }
