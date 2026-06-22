@@ -184,10 +184,9 @@ function indexById<T extends { id: string }>(
   return new Map(items.map((item) => [item.id, item]))
 }
 
-function accountBalanceAuditEntries<T extends { id: string; balance: bigint }>(
-  oldAccounts: readonly T[],
-  newAccounts: readonly T[]
-): AuditLogEntry[] {
+export function accountBalanceAuditEntries<
+  T extends { id: string; balance: bigint },
+>(oldAccounts: readonly T[], newAccounts: readonly T[]): AuditLogEntry[] {
   const newAccountsById = indexById(newAccounts)
   return oldAccounts.flatMap((oldAccount) => {
     const newAccount = newAccountsById.get(oldAccount.id)
@@ -204,7 +203,7 @@ function accountBalanceAuditEntries<T extends { id: string; balance: bigint }>(
   })
 }
 
-function createdAuditEntries<T extends { id: string }>(
+export function createdAuditEntries<T extends { id: string }>(
   entityType: string,
   items: readonly T[]
 ): AuditLogEntry[] {
@@ -217,7 +216,7 @@ function createdAuditEntries<T extends { id: string }>(
   }))
 }
 
-type AccountDeltaMap = Record<string, bigint>
+export type AccountDeltaMap = Record<string, bigint>
 
 interface AccountBalanceVersion {
   balance: bigint
@@ -522,7 +521,7 @@ export async function findLedgerTransactionsForFamily(
   })
 }
 
-function addAccountDelta(
+export function addAccountDelta(
   accountDeltas: AccountDeltaMap,
   accountId: string,
   amount: bigint
@@ -531,7 +530,7 @@ function addAccountDelta(
   accountDeltas[accountId] += amount
 }
 
-async function applyAccountDeltas(
+export async function applyAccountDeltas(
   tx: TenantTransactionClient,
   familyId: string,
   accountDeltas: AccountDeltaMap
@@ -621,7 +620,7 @@ async function findAccountBalanceVersion(
   return account
 }
 
-function signedIncomeExpenseAmount(
+export function signedIncomeExpenseAmount(
   type: "expense" | "income",
   amount: bigint
 ): bigint {
