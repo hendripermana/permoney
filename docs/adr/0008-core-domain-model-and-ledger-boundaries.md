@@ -1,14 +1,14 @@
 # ADR-0008 — Core domain model and ledger boundaries
 
-|                   |                              |
-| ----------------- | ---------------------------- |
-| **Status**        | Accepted                     |
-| **Date**          | 2026-06-01                   |
-| **Accepted**      | 2026-06-01                   |
-| **Deciders**      | Hendri Permana               |
-| **Supersedes**    | —                            |
-| **Superseded by** | —                            |
-| **Amended by**    | ADR-0034; ADR-0036; ADR-0037 |
+|                   |                                             |
+| ----------------- | ------------------------------------------- |
+| **Status**        | Accepted                                    |
+| **Date**          | 2026-06-01                                  |
+| **Accepted**      | 2026-06-01                                  |
+| **Deciders**      | Hendri Permana                              |
+| **Supersedes**    | —                                           |
+| **Superseded by** | —                                           |
+| **Amended by**    | ADR-0034; ADR-0036; ADR-0037; ADR-0039 (§5) |
 
 ## Context
 
@@ -333,6 +333,21 @@ the canonical ledger (§7), normalized via each transaction's materialized
 `baseAmount` (ADR-0035) — never stored, never re-resolved at read time. It also
 adds the `budget:write` capability to ADR-0036 §2. See
 [`0037-budget-period-model-and-progress.md`](./0037-budget-period-model-and-progress.md).
+
+## Amendment — Import staging contract (ADR-0039)
+
+This ADR declared the import-staging **principle** (§5) — raw import data is
+staging data, not ledger data — without fixing the concrete contract. **ADR-0039**
+locks it: a source-agnostic spine (`ImportBatch` + one wide
+`RawImportedTransaction`, per-row `accountId`, provider columns reserved-nullable
+for PER-118/ADR-0015); a durable row state machine where `promoted` is the only
+irreversible terminal; deterministic fingerprint dedup (family-tz day, derived
+on-read from `Transaction`, no canonical-table column); two-surface idempotency
+(`contentHash` batch + per-row UUIDv7 `promotionIdempotencyKey`); raw-payload
+retention; enrich-only smart-rule suggestions; and promotion of `confirmed` rows
+through the **shared** canonical create core (FX projection, atomic balance
+delta, audit) in one transaction. See
+[`0039-import-staging-deduplication-and-promotion.md`](./0039-import-staging-deduplication-and-promotion.md).
 
 ## References
 
