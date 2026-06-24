@@ -103,6 +103,9 @@ export const updateAccountInputSchema = z.object({
   color: hexColorSchema.nullable().optional(),
   accountSubtype: subtypeSchema.optional(),
   institutionName: institutionNameSchema.nullable().optional(),
+  // Whether this account may receive provider/import feed data (taxonomy
+  // contract). Promotion of staged import rows requires this gate (ADR-0039 §6).
+  isImportable: z.boolean().optional(),
   idempotencyKey: uuidV7Schema,
 })
 
@@ -373,6 +376,7 @@ export async function updateAccountForFamily({
     id: data.id,
     institutionName:
       data.institutionName === undefined ? undefined : data.institutionName,
+    isImportable: data.isImportable ?? null,
     name: data.name ?? null,
   })
   const auditCtx = await createAuditContext(
@@ -402,12 +406,16 @@ export async function updateAccountForFamily({
         accountSubtype?: string
         color?: string | null
         institutionName?: string | null
+        isImportable?: boolean
         name?: string
       } = {}
       if (data.name !== undefined) updateData.name = data.name
       if (data.color !== undefined) updateData.color = data.color
       if (data.institutionName !== undefined) {
         updateData.institutionName = data.institutionName
+      }
+      if (data.isImportable !== undefined) {
+        updateData.isImportable = data.isImportable
       }
       if (data.accountSubtype !== undefined) {
         // Re-normalize against the account's existing type so a subtype edit can
