@@ -1,6 +1,8 @@
 "use client"
 
 import * as React from "react"
+import { Link } from "@tanstack/react-router"
+
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -8,16 +10,13 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
+import type { NavItem } from "@/components/nav-main"
 
 export function NavSecondary({
   items,
   ...props
 }: React.ComponentPropsWithoutRef<typeof SidebarGroup> & {
-  items: {
-    title: string
-    url: string
-    icon: any
-  }[]
+  items: NavItem[]
 }) {
   return (
     <SidebarGroup {...props}>
@@ -26,10 +25,10 @@ export function NavSecondary({
           {items.map((item) => (
             <SidebarMenuItem key={item.title}>
               <SidebarMenuButton asChild size="sm">
-                <a href={item.url}>
+                <Link to={item.url} activeProps={{ "data-active": "true" }}>
                   {item.icon && <item.icon className="size-4" />}
                   <span>{item.title}</span>
-                </a>
+                </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
           ))}
