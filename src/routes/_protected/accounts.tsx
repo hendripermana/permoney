@@ -40,6 +40,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Select,
   SelectContent,
@@ -487,6 +488,9 @@ function AccountFormDialog({
   const [institutionName, setInstitutionName] = React.useState<string>(
     editing?.institutionName ?? ""
   )
+  const [isImportable, setIsImportable] = React.useState<boolean>(
+    editing?.isImportable ?? false
+  )
   const [error, setError] = React.useState<string | null>(null)
   const [submitting, setSubmitting] = React.useState(false)
 
@@ -516,6 +520,7 @@ function AccountFormDialog({
             name: name.trim(),
             accountSubtype: resolvedSubtype,
             institutionName: institutionName.trim() || null,
+            isImportable,
             idempotencyKey: createUuidV7(),
           },
         })
@@ -665,6 +670,22 @@ function AccountFormDialog({
               placeholder="e.g. Bank Central Asia"
             />
           </div>
+
+          {editing ? (
+            <div className="flex items-start gap-3 rounded-md border p-3">
+              <Checkbox
+                id="is-importable"
+                checked={isImportable}
+                onCheckedChange={(checked) => setIsImportable(checked === true)}
+              />
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="is-importable">Allow imports</Label>
+                <p className="text-xs text-muted-foreground">
+                  Let CSV/QIF imports promote transactions into this account.
+                </p>
+              </div>
+            </div>
+          ) : null}
 
           {error ? (
             <p className="text-sm text-destructive" role="alert">
