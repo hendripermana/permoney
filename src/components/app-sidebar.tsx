@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { Link } from "@tanstack/react-router"
 import {
   IconChartBar,
   IconCoin,
@@ -12,7 +13,7 @@ import {
   IconFileSpreadsheet,
 } from "@tabler/icons-react"
 
-import { NavMain } from "@/components/nav-main"
+import { NavMain, type NavItem } from "@/components/nav-main"
 import { NavSecondary } from "@/components/nav-secondary"
 import { NavUser } from "@/components/nav-user"
 import {
@@ -26,7 +27,11 @@ import {
 } from "@/components/ui/sidebar"
 
 // Kita ubah data navigasinya khusus untuk Permoney
-const data = {
+const data: {
+  user: { name: string; email: string; avatar: string }
+  navMain: NavItem[]
+  navSecondary: NavItem[]
+} = {
   user: {
     name: "Hendri Permana",
     email: "hendripermana13@gmail.com",
@@ -66,13 +71,13 @@ const data = {
   ],
   navSecondary: [
     {
-      title: "Family Space",
-      url: "#",
+      title: "Members",
+      url: "/settings/members",
       icon: IconUsers,
     },
     {
       title: "Settings",
-      url: "#",
+      url: "/settings",
       icon: IconSettings,
     },
   ],
@@ -88,14 +93,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               asChild
               className="data-[slot=sidebar-menu-button]:p-1.5!"
             >
-              <a href="/dashboard">
+              <Link to="/dashboard">
                 <div className="flex aspect-square size-6 items-center justify-center rounded-lg bg-yellow-500 text-black">
                   <span className="text-lg font-bold">🍯</span>
                 </div>
                 <span className="text-base font-bold tracking-tight">
                   Permoney
                 </span>
-              </a>
+              </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
