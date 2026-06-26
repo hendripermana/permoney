@@ -10,6 +10,7 @@ import { QueryClientProvider } from "@tanstack/react-query"
 import { ThemeProvider } from "next-themes"
 import { getQueryClient } from "@/lib/query-client"
 import { Button } from "@/components/ui/button"
+import { Toaster } from "@/components/ui/sonner"
 import { useMountEffect } from "@/hooks/use-mount-effect"
 
 import appCss from "../styles.css?url"
@@ -127,6 +128,10 @@ function RootComponent() {
           disableTransitionOnChange
         >
           <Outlet />
+          {/* Single global toast outlet. Without this mounted, every
+              toast.success/error across the app (import, smart rules, settings)
+              is a silent no-op. */}
+          <Toaster richColors closeButton />
           {/* Render lazy devtools hanya di dev environment */}
           <React.Suspense fallback={null}>
             {/* <TanStackRouterDevtools position="bottom-right" /> */}

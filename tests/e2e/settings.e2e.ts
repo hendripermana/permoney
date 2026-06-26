@@ -44,8 +44,11 @@ test.describe("settings hub & nav cohesion", () => {
       .first()
       .click()
     await expect(page).toHaveURL(/\/settings\/members$/)
+    // "Family members" is both the site-header title and the page's own h1
+    // (header first in DOM order), so target the page heading with .last() to
+    // avoid a strict-mode double match.
     await expect(
-      page.getByRole("heading", { name: "Family members" })
+      page.getByRole("heading", { name: "Family members" }).last()
     ).toBeVisible()
 
     await page.goto("/settings")
