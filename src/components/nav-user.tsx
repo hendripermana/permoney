@@ -21,6 +21,9 @@ import {
   RiNotification3Line,
   RiLogoutBoxLine,
 } from "@remixicon/react"
+import { useRouter } from "@tanstack/react-router"
+import { useQueryClient } from "@tanstack/react-query"
+import { signOut } from "@/lib/auth-client"
 
 export function NavUser({
   user,
@@ -32,6 +35,17 @@ export function NavUser({
   }
 }) {
   const { isMobile } = useSidebar()
+  const router = useRouter()
+  const queryClient = useQueryClient()
+
+  // PER-166 — wire the previously-dead Log out item. Clear server session, drop
+  // cached tenant data, then land on the public landing at "/" (a sensible
+  // public destination now that "/" is a real branded surface).
+  async function handleLogout() {
+    await signOut()
+    await Promise.all([queryClient.invalidateQueries(), router.invalidate()])
+    await router.navigate({ to: "/" })
+  }
 
   return (
     <SidebarMenu>
@@ -91,7 +105,11 @@ export function NavUser({
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={() => {
+                void handleLogout()
+              }}
+            >
               <RiLogoutBoxLine />
               Log out
             </DropdownMenuItem>

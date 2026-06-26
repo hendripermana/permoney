@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input"
 import { useServerFn } from "@tanstack/react-start"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { loginFn } from "@/server/auth-fns"
-import { useRouter } from "@tanstack/react-router"
+import { Link, useRouter } from "@tanstack/react-router"
 
 export function LoginForm({
   className,
@@ -94,8 +94,9 @@ export function LoginForm({
               <Field className="mt-4">
                 <Button
                   type="submit"
+                  variant="wise"
                   disabled={mutation.isPending}
-                  className="w-full bg-yellow-500 font-semibold text-black hover:bg-yellow-600"
+                  className="w-full font-semibold"
                 >
                   {mutation.isPending ? "Logging in..." : "Login"}
                 </Button>
@@ -120,20 +121,20 @@ export function LoginForm({
               </Field>
               <FieldDescription className="mt-4 text-center">
                 Don&apos;t have an account?{" "}
-                <a href="/signup" className="font-medium underline">
+                <Link to="/signup" className="font-medium underline">
                   Sign up here
-                </a>
+                </Link>
               </FieldDescription>
             </FieldGroup>
           </form>
 
           {/* BAGIAN KANAN: BACKGROUND */}
-          <div className="relative hidden flex-col items-center justify-center overflow-hidden bg-zinc-900 p-10 text-white md:flex">
-            <div className="absolute inset-0 z-0 bg-gradient-to-br from-yellow-500/20 to-zinc-900/90" />
+          <div className="relative hidden flex-col items-center justify-center overflow-hidden bg-[#163300] p-10 text-white md:flex">
+            <div className="absolute inset-0 z-0 bg-gradient-to-br from-[#9fe870]/25 to-[#163300]/90" />
             <div className="relative z-10 space-y-4 text-center">
               <div className="mb-6 text-6xl">🍯</div>
               <h2 className="text-2xl font-semibold">Track. Monitor. Relax.</h2>
-              <p className="text-sm text-zinc-400">
+              <p className="text-sm text-[#cdffad]/80">
                 Track your daily expenses, cat supplies, and family dining out
                 in one unified place.
               </p>
