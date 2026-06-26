@@ -158,7 +158,7 @@ function TimezoneCard({
     const set = new Set<string>(COMMON_TIMEZONES)
     if (timezone) set.add(timezone)
     if (selected) set.add(selected)
-    return Array.from(set).sort()
+    return Array.from(set).sort((a, b) => a.localeCompare(b))
   }, [timezone, selected])
 
   const mutation = useMutation({
