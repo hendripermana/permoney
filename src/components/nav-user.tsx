@@ -23,7 +23,8 @@ import {
 } from "@remixicon/react"
 import { useRouter } from "@tanstack/react-router"
 import { useQueryClient } from "@tanstack/react-query"
-import { signOut } from "@/lib/auth-client"
+import { useServerFn } from "@tanstack/react-start"
+import { logoutFn } from "@/server/auth-fns"
 
 export function NavUser({
   user,
@@ -37,12 +38,16 @@ export function NavUser({
   const { isMobile } = useSidebar()
   const router = useRouter()
   const queryClient = useQueryClient()
+  const logout = useServerFn(logoutFn)
 
-  // PER-166 — wire the previously-dead Log out item. Clear server session, drop
-  // cached tenant data, then land on the public landing at "/" (a sensible
-  // public destination now that "/" is a real branded surface).
+  // PER-166 — wire the previously-dead Log out item. Go through the logoutFn
+  // server function (same relative, port-agnostic path as loginFn) rather than
+  // the client auth-client whose baseURL is pinned to :3006 and silently fails
+  // off that port. Clear the server session, drop cached tenant data, then land
+  // on the public landing at "/" (a sensible public destination now that "/" is
+  // a real branded surface).
   async function handleLogout() {
-    await signOut()
+    await logout()
     await Promise.all([queryClient.invalidateQueries(), router.invalidate()])
     await router.navigate({ to: "/" })
   }

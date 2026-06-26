@@ -4,13 +4,11 @@ import * as React from "react"
 import { Link } from "@tanstack/react-router"
 import {
   IconChartBar,
-  IconCoin,
   IconDashboard,
   IconDatabase,
   IconSettings,
   IconUsers,
   IconReceipt2,
-  IconFileSpreadsheet,
 } from "@tabler/icons-react"
 
 import { NavMain, type NavItem } from "@/components/nav-main"
@@ -54,20 +52,15 @@ const data: {
       icon: IconDatabase,
     },
     {
-      title: "Smart Import",
-      url: "/import",
-      icon: IconFileSpreadsheet,
-    },
-    {
       title: "Budgets",
       url: "/budgets",
       icon: IconChartBar,
     },
-    {
-      title: "Currencies & FX",
-      url: "/currencies",
-      icon: IconCoin,
-    },
+    // PER-166 follow-up: "Smart Import" (/import) and "Currencies & FX"
+    // (/currencies) intentionally live under Settings → "Related tools"
+    // (settings/index.tsx), not the primary sidebar. PER-113 surfaced them in
+    // Settings but left the duplicate top-level entries here; removed so each
+    // destination has a single home.
   ],
   navSecondary: [
     {
