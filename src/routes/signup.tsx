@@ -1,4 +1,5 @@
 import { createFileRoute, redirect } from "@tanstack/react-router"
+import { AuthShell } from "@/components/blocks/auth-shell"
 import { SignUpForm } from "@/components/signup-form"
 import { getSessionGuardFn } from "@/server/auth-fns"
 import { getPublicAuthRouteRedirect } from "@/server/onboarding-contract"
@@ -14,10 +15,8 @@ export const Route = createFileRoute("/signup")({
 
 function RouteComponent() {
   return (
-    <div className="flex min-h-svh flex-col items-center justify-center bg-zinc-100 p-6 md:p-10">
-      <div className="w-full max-w-sm md:max-w-4xl">
-        <SignUpForm />
-      </div>
-    </div>
+    <AuthShell>
+      <SignUpForm />
+    </AuthShell>
   )
 }

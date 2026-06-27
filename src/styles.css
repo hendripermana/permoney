@@ -46,6 +46,17 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+  /* PER-166 — Wise brand palette (DESIGN.md §2) as first-class tokens so the
+     public surface references the design system, not scattered hex literals.
+     These are brand accents (constant across light/dark); the canvas adapts. */
+  --color-wise-green: var(--wise-green);
+  --color-wise-dark-green: var(--wise-dark-green);
+  --color-wise-pastel: var(--wise-pastel);
+  --color-wise-mint: var(--wise-mint);
+  --color-wise-ink: var(--wise-ink);
+  --color-wise-warm-dark: var(--wise-warm-dark);
+  --color-wise-gray: var(--wise-gray);
+  --color-wise-canvas: var(--wise-canvas);
 }
 
 :root {
@@ -81,9 +92,20 @@
   --sidebar-accent-foreground: oklch(0.228 0.013 107.4);
   --sidebar-border: oklch(0.93 0.007 106.5);
   --sidebar-ring: oklch(0.737 0.021 106.9);
+  /* Wise brand palette (DESIGN.md) — see @theme inline mappings above. */
+  --wise-green: #9fe870;
+  --wise-dark-green: #163300;
+  --wise-pastel: #cdffad;
+  --wise-mint: #e2f6d5;
+  --wise-ink: #0e0f0c;
+  --wise-warm-dark: #454745;
+  --wise-gray: #868685;
+  /* Warm off-white public canvas (DESIGN.md §1) — dark mode uses near-black. */
+  --wise-canvas: #f7f6f3;
 }
 
 .dark {
+  --wise-canvas: #0e0f0c;
   --background: oklch(0.153 0.006 107.1);
   --foreground: oklch(0.988 0.003 106.5);
   --card: oklch(0.228 0.013 107.4);
@@ -126,5 +148,11 @@
   }
   html {
     @apply font-sans;
+  }
+  /* PER-166 — DESIGN.md mandates OpenType "calt" (contextual alternates) on all
+     text. Enabling it once on <body> covers the public surface and the app
+     interior, instead of sprinkling per-component arbitrary classes. */
+  body {
+    font-feature-settings: "calt";
   }
 }

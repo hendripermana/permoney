@@ -21,6 +21,11 @@ import {
   RiNotification3Line,
   RiLogoutBoxLine,
 } from "@remixicon/react"
+import { useRouter } from "@tanstack/react-router"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useServerFn } from "@tanstack/react-start"
+import { toast } from "sonner"
+import { logoutFn } from "@/server/auth-fns"
 
 export function NavUser({
   user,
@@ -32,6 +37,27 @@ export function NavUser({
   }
 }) {
   const { isMobile } = useSidebar()
+  const router = useRouter()
+  const queryClient = useQueryClient()
+  const logout = useServerFn(logoutFn)
+
+  // PER-166 — wire the previously-dead Log out item. Go through the logoutFn
+  // server function (same relative, port-agnostic path as loginFn) rather than
+  // the client auth-client whose baseURL is pinned to :3006 and silently fails
+  // off that port. On success clear the server session, drop cached tenant
+  // data, then land on the public landing at "/". On failure surface a toast
+  // instead of leaving the user in silent limbo (the failure mode this ticket
+  // exists to kill).
+  const logoutMutation = useMutation({
+    mutationFn: () => logout(),
+    onSuccess: async () => {
+      await Promise.all([queryClient.invalidateQueries(), router.invalidate()])
+      await router.navigate({ to: "/" })
+    },
+    onError: () => {
+      toast.error("Couldn't sign you out. Please try again.")
+    },
+  })
 
   return (
     <SidebarMenu>
@@ -91,9 +117,17 @@ export function NavUser({
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={logoutMutation.isPending}
+              onSelect={(event) => {
+                // Keep the menu logic simple: fire the mutation; the toast/redirect
+                // are handled in its callbacks.
+                event.preventDefault()
+                logoutMutation.mutate()
+              }}
+            >
               <RiLogoutBoxLine />
-              Log out
+              {logoutMutation.isPending ? "Signing out…" : "Log out"}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

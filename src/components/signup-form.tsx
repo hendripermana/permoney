@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input"
 import { useServerFn } from "@tanstack/react-start"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { signupFn } from "@/server/auth-fns"
-import { useRouter } from "@tanstack/react-router"
+import { Link, useRouter } from "@tanstack/react-router"
 
 export function SignUpForm({
   className,
@@ -108,8 +108,9 @@ export function SignUpForm({
               <Field className="mt-4">
                 <Button
                   type="submit"
+                  variant="wise"
                   disabled={mutation.isPending}
-                  className="w-full bg-yellow-500 font-semibold text-black hover:bg-yellow-600"
+                  className="w-full font-semibold"
                 >
                   {mutation.isPending
                     ? "Creating Account..."
@@ -118,20 +119,20 @@ export function SignUpForm({
               </Field>
               <FieldDescription className="mt-4 text-center">
                 Already have an account?{" "}
-                <a href="/login" className="font-medium underline">
+                <Link to="/login" className="font-medium underline">
                   Login here
-                </a>
+                </Link>
               </FieldDescription>
             </FieldGroup>
           </form>
-          <div className="relative hidden flex-col items-center justify-center overflow-hidden bg-zinc-900 p-10 text-white md:flex">
-            <div className="absolute inset-0 z-0 bg-gradient-to-br from-yellow-500/20 to-zinc-900/90" />
+          <div className="relative hidden flex-col items-center justify-center overflow-hidden bg-wise-dark-green p-10 text-white md:flex">
+            <div className="absolute inset-0 z-0 bg-gradient-to-br from-wise-green/25 to-wise-dark-green/90" />
             <div className="relative z-10 space-y-4 text-center">
               <div className="mb-6 text-6xl">🐝</div>
               <h2 className="text-2xl font-semibold">
                 Your Financial Journey Starts Here.
               </h2>
-              <p className="text-sm text-zinc-400">
+              <p className="text-sm text-wise-pastel/80">
                 Set up your custom categories, invite family members, and take
                 control of your wealth.
               </p>
