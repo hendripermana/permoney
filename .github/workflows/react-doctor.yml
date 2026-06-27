@@ -16,6 +16,6 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
-      - uses: millionco/react-doctor@f4e8e4bd5f318dc307200dcf2f38a7235f086e6f
+      - uses: millionco/react-doctor@e2393c4a6b842efc72d5c225273c0de918a13450
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
