@@ -35,7 +35,7 @@ test.describe("public surface & auth UX cohesion", () => {
     await waitForHydration(page)
 
     await expect(
-      page.getByRole("heading", { name: /finally makes sense/i })
+      page.getByRole("heading", { name: /always balances/i })
     ).toBeVisible()
     // The old Vite starter stub is gone.
     await expect(page.getByText("Project ready!")).toHaveCount(0)
@@ -122,7 +122,7 @@ test.describe("public surface & auth UX cohesion", () => {
     await expect(page).toHaveURL(/\/(?:\?.*)?$/)
     await waitForHydration(page)
     await expect(
-      page.getByRole("heading", { name: /finally makes sense/i })
+      page.getByRole("heading", { name: /always balances/i })
     ).toBeVisible()
   })
 })

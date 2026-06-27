@@ -8,7 +8,7 @@ export const Route = createFileRoute("/")({
   // inheriting the generic root "Permoney App" title. Merges over the root head.
   head: () => ({
     meta: [
-      { title: "Permoney — Family money that finally makes sense" },
+      { title: "Permoney — Family money that always balances" },
       {
         name: "description",
         content:
@@ -16,7 +16,7 @@ export const Route = createFileRoute("/")({
       },
       {
         property: "og:title",
-        content: "Permoney — Family money that finally makes sense",
+        content: "Permoney — Family money that always balances",
       },
       {
         property: "og:description",

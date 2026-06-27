@@ -1,41 +1,56 @@
 import { Link } from "@tanstack/react-router"
-import { BarChart3, ShieldCheck, Users, Wallet } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
-// PER-166 — public front door. A minimal, branded landing per DESIGN.md (Wise
-// theme): billboard-weight display headline (weight 900, line-height 0.85),
-// lime-green pill CTAs with dark-green text, ring-shadowed cards. Brand colors
-// come from the `wise-*` design tokens (styles.css), never raw hex. "calt" is
-// enabled globally on <body>. Full marketing content is out of scope; this is a
-// clean branded entry with working Log in / Sign up.
+// PER-166 — public front door. Per DESIGN.md (Wise theme) + frontend-design
+// pass: the page's thesis is Permoney's core invariant — a double-entry ledger
+// that ALWAYS balances. Instead of describing that with generic icon cards, the
+// hero demonstrates it: a small ledger whose figures foot exactly (Income −
+// Spending = Net), closed with the accounting double-rule (border-style: double)
+// in tabular numerals. That ledger is the single signature; everything else
+// stays quiet. Brand colors come from the `wise-*` design tokens; "calt" is on
+// <body> globally.
 
 // CTA pills opt into the DESIGN.md physical scale(1.05) hover / scale(0.95)
-// active. Kept here (not in the Button variant) because the grow only reads well
-// on auto-width pills, not full-width form submits.
-const CTA_GROW = "hover:scale-105 active:scale-95"
+// active — kept here (not in the Button variant) because the grow only reads
+// well on auto-width pills, and disabled under reduced-motion.
+const CTA_GROW =
+  "transition-transform hover:scale-105 active:scale-95 motion-reduce:hover:scale-100"
 
-interface ValueProp {
-  icon: typeof Wallet
-  title: string
-  body: string
+interface LedgerRow {
+  label: string
+  amount: string
+  tone: "in" | "out"
 }
 
-const VALUE_PROPS: ReadonlyArray<ValueProp> = [
+// Figures foot exactly: 12,400,000 − 8,250,000 = 4,150,000. A finance app should
+// never show a demo ledger that doesn't reconcile.
+const LEDGER_ROWS: ReadonlyArray<LedgerRow> = [
+  { label: "Income", amount: "+ Rp 12,400,000", tone: "in" },
+  { label: "Spending", amount: "− Rp 8,250,000", tone: "out" },
+]
+const LEDGER_NET = "+ Rp 4,150,000"
+
+interface Pillar {
+  term: string
+  detail: string
+}
+
+const PILLARS: ReadonlyArray<Pillar> = [
   {
-    icon: Wallet,
-    title: "One honest ledger",
-    body: "Every account, transfer, and split in a single double-entry ledger that always balances.",
+    term: "Double-entry",
+    detail:
+      "Every transaction has two sides, so the books can't silently drift.",
   },
   {
-    icon: Users,
-    title: "Built for families",
-    body: "Shared categories, members, and budgets — so the whole household sees the same picture.",
+    term: "Shared by the family",
+    detail:
+      "One reconciled picture for the whole household, not scattered apps.",
   },
   {
-    icon: BarChart3,
-    title: "Reports that mean something",
-    body: "Net worth, cash flow, and budgets computed from the source of truth, not a spreadsheet guess.",
+    term: "Reports from the source",
+    detail:
+      "Net worth and cash flow computed from the ledger, not a spreadsheet.",
   },
 ]
 
@@ -44,6 +59,55 @@ function WordMark() {
     <span className="text-xl font-black tracking-tight text-wise-ink dark:text-white">
       Permoney
     </span>
+  )
+}
+
+function LedgerCard() {
+  return (
+    <div className="w-full rounded-3xl border border-[rgba(14,15,12,0.12)] bg-white p-6 shadow-[0_0_0_1px_rgba(14,15,12,0.06)] sm:p-8 dark:border-white/10 dark:bg-white/[0.03]">
+      <div className="flex items-baseline justify-between">
+        <span className="text-sm font-semibold tracking-tight text-wise-warm-dark dark:text-zinc-400">
+          This month
+        </span>
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-wise-mint px-2.5 py-1 text-xs font-semibold text-wise-dark-green">
+          In − Out = Net
+          <span aria-hidden>✓</span>
+        </span>
+      </div>
+
+      <dl className="mt-6 space-y-3">
+        {LEDGER_ROWS.map((row) => (
+          <div
+            key={row.label}
+            className="flex items-baseline justify-between gap-6"
+          >
+            <dt className="text-base font-medium text-wise-warm-dark dark:text-zinc-300">
+              {row.label}
+            </dt>
+            <dd
+              className={cn(
+                "font-mono text-base tabular-nums",
+                row.tone === "in"
+                  ? "text-wise-dark-green dark:text-wise-green"
+                  : "text-wise-ink dark:text-zinc-200"
+              )}
+            >
+              {row.amount}
+            </dd>
+          </div>
+        ))}
+      </dl>
+
+      {/* Single rule, then the accounting double-rule under the closing total. */}
+      <div className="mt-4 flex items-baseline justify-between gap-6 border-t border-[rgba(14,15,12,0.12)] pt-4 dark:border-white/15">
+        <dt className="text-base font-semibold tracking-tight text-wise-ink dark:text-white">
+          Net
+        </dt>
+        <dd className="border-b-[3px] border-double border-wise-ink pb-1 font-mono text-lg font-semibold text-wise-dark-green tabular-nums dark:border-white dark:text-wise-green">
+          {LEDGER_NET}
+        </dd>
+      </div>
+    </div>
   )
 }
 
@@ -68,63 +132,58 @@ export function LandingPage() {
       </header>
 
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center px-6 py-16">
-        <section className="flex flex-col items-start gap-8">
-          <span className="inline-flex items-center gap-2 rounded-full bg-wise-mint px-4 py-1.5 text-sm font-semibold text-wise-dark-green">
-            <ShieldCheck className="size-4" />
-            Money without the headache
-          </span>
+        <div className="grid items-center gap-12 lg:grid-cols-[1.1fr_0.9fr]">
+          <section className="flex flex-col items-start gap-7">
+            <h1 className="max-w-2xl text-5xl leading-[0.85] font-black tracking-tight text-wise-ink sm:text-6xl lg:text-7xl dark:text-white">
+              Family money that always balances.
+            </h1>
 
-          <h1 className="max-w-4xl text-5xl leading-[0.85] font-black tracking-tight text-wise-ink sm:text-7xl lg:text-8xl dark:text-white">
-            Family money that finally makes sense.
-          </h1>
+            <p className="max-w-xl text-lg font-semibold text-wise-warm-dark sm:text-xl dark:text-zinc-300">
+              Permoney keeps every account, transfer, and split in one
+              double-entry ledger — so the numbers always reconcile, and you
+              always know where the household stands.
+            </p>
 
-          <p className="max-w-2xl text-lg font-semibold text-wise-warm-dark sm:text-xl dark:text-zinc-300">
-            Permoney is a calm, trustworthy home for every transaction, budget,
-            and account your household runs on — built on a ledger that never
-            lies to you.
-          </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                asChild
+                variant="wise"
+                size="lg"
+                className={cn("h-12 px-8 text-base font-semibold", CTA_GROW)}
+              >
+                <Link to="/signup">Get started — it's free</Link>
+              </Button>
+              <Button
+                asChild
+                variant="wiseSecondary"
+                size="lg"
+                className={cn("h-12 px-8 text-base font-semibold", CTA_GROW)}
+              >
+                <Link to="/login">I already have an account</Link>
+              </Button>
+            </div>
+          </section>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <Button
-              asChild
-              variant="wise"
-              size="lg"
-              className={cn("h-12 px-8 text-base font-semibold", CTA_GROW)}
+          <LedgerCard />
+        </div>
+
+        {/* Quiet hairline-divided pillars — content as a ledger-like column set,
+            not decorative icon cards. */}
+        <dl className="mt-20 grid gap-px overflow-hidden rounded-2xl border border-[rgba(14,15,12,0.12)] bg-[rgba(14,15,12,0.12)] sm:grid-cols-3 dark:border-white/10 dark:bg-white/10">
+          {PILLARS.map((pillar) => (
+            <div
+              key={pillar.term}
+              className="flex flex-col gap-1.5 bg-wise-canvas p-6"
             >
-              <Link to="/signup">Get started — it's free</Link>
-            </Button>
-            <Button
-              asChild
-              variant="wiseSecondary"
-              size="lg"
-              className={cn("h-12 px-8 text-base font-semibold", CTA_GROW)}
-            >
-              <Link to="/login">I already have an account</Link>
-            </Button>
-          </div>
-        </section>
-
-        <section className="mt-20 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {VALUE_PROPS.map(({ icon: Icon, title, body }) => (
-            <article
-              key={title}
-              className={cn(
-                "flex flex-col gap-3 rounded-3xl border border-[rgba(14,15,12,0.12)] p-6",
-                "shadow-[0_0_0_1px_rgba(14,15,12,0.06)] dark:border-white/10"
-              )}
-            >
-              <span className="flex size-11 items-center justify-center rounded-full bg-wise-mint text-wise-dark-green">
-                <Icon className="size-5" />
-              </span>
-              <h2 className="text-xl font-semibold tracking-tight text-wise-ink dark:text-white">
-                {title}
-              </h2>
-              <p className="text-sm font-medium text-wise-warm-dark dark:text-zinc-400">
-                {body}
-              </p>
-            </article>
+              <dt className="text-sm font-semibold tracking-tight text-wise-ink dark:text-white">
+                {pillar.term}
+              </dt>
+              <dd className="text-sm font-medium text-wise-warm-dark dark:text-zinc-400">
+                {pillar.detail}
+              </dd>
+            </div>
           ))}
-        </section>
+        </dl>
       </main>
 
       <footer className="mx-auto w-full max-w-6xl px-6 py-8 text-sm font-medium text-wise-gray">
