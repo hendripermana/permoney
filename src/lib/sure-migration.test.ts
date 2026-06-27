@@ -5,8 +5,13 @@ import {
   normalizeSureAccountType,
   orderCategoriesParentsFirst,
   parseSureBundle,
+  summarizeSureBundle,
   type SureCategory,
 } from "./sure-migration"
+import {
+  buildSureBundleV1Degraded,
+  buildSureBundleV2Complete,
+} from "../../tests/integration/support/sure-fixtures"
 
 // PER-170 / ADR-0041 — pure reader units: NDJSON parse + malformed rejection,
 // account-type normalization + fallback, the Sure sign inversion (incl. 0), and
@@ -208,5 +213,64 @@ describe("orderCategoriesParentsFirst", () => {
   test("is total and terminates on an accidental cycle", () => {
     const ordered = orderCategoriesParentsFirst([cat("a", "b"), cat("b", "a")])
     expect(ordered.map((c) => c.id).sort()).toEqual(["a", "b"])
+  })
+})
+
+// PER-171 — the guided importer's pre-confirm preview runs `summarizeSureBundle`
+// in the browser. These pins prove the client-side held classification mirrors
+// the server orchestrator's gates against the SAME synthetic fixtures the
+// integration suite promotes, so the previewed counts cannot drift from the
+// authoritative SureMigrationResult.
+describe("summarizeSureBundle (preview parity with the orchestrator)", () => {
+  test("v2 complete: created + held-by-reason match the fixture manifest", () => {
+    const manifest = buildSureBundleV2Complete()
+    const preview = summarizeSureBundle(parseSureBundle(manifest.ndjson))
+
+    expect(preview.accounts.total).toBe(manifest.expected.accountsCreated)
+    expect(preview.categories).toBe(manifest.expected.categoriesCreated)
+    expect(preview.merchants).toBe(manifest.expected.merchantsCreated)
+
+    expect(preview.transactions.total).toBe(manifest.expected.transactionsTotal)
+    // promotable mirrors the server's promotedThisRun on a fresh (non-replayed) run.
+    expect(preview.transactions.promotable).toBe(
+      manifest.expected.promotedThisRun
+    )
+    expect(preview.transactions.held).toBe(manifest.expected.held)
+    expect(preview.transactions.zeroAmountSkipped).toBe(
+      manifest.expected.zeroAmountSkipped
+    )
+    // staged = promotable + held (the orchestrator's staged-row count).
+    expect(preview.transactions.promotable + preview.transactions.held).toBe(
+      manifest.expected.staged
+    )
+
+    // One held row per distinct reason in the fixture (transfer, investment
+    // account, currency mismatch, split parent).
+    expect(preview.transactions.heldByReason).toEqual({
+      transfer: 1,
+      nonImportableAccount: 1,
+      currencyMismatch: 1,
+      split: 1,
+    })
+    // Two accounts are non-importable activity holders: the Investment account.
+    expect(preview.accounts.held).toBe(1)
+    expect(preview.accounts.importable).toBe(2)
+    expect(preview.transfers).toBe(1)
+    expect(preview.malformedLines).toBe(manifest.expected.malformedLines)
+    // Deferred entities (Holding, Rule) are surfaced, never silently dropped.
+    expect(preview.ignoredEntities).toEqual({ Holding: 1, Rule: 1 })
+  })
+
+  test("v1 degraded: malformed lines surfaced, single promotable income", () => {
+    const manifest = buildSureBundleV1Degraded()
+    const preview = summarizeSureBundle(parseSureBundle(manifest.ndjson))
+
+    expect(preview.accounts.total).toBe(manifest.expected.accountsCreated)
+    expect(preview.accounts.importable).toBe(1) // unknown type → cash-like fallback
+    expect(preview.transactions.promotable).toBe(
+      manifest.expected.promotedThisRun
+    )
+    expect(preview.transactions.held).toBe(0)
+    expect(preview.malformedLines).toBe(manifest.expected.malformedLines)
   })
 })

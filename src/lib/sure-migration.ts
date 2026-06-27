@@ -384,6 +384,157 @@ export function classifySureAmount(
 }
 
 // ---------------------------------------------------------------------------
+// Pre-confirm preview summary (PER-171 — client-side mirror of the gates)
+// ---------------------------------------------------------------------------
+
+// The guided importer's preview is computed in the browser by running THIS same
+// reader on the uploaded bundle, because the migration server fn commits in one
+// shot (no server dry-run). To keep the preview honest, the held classification
+// below mirrors the orchestrator's `isPromotable` gate (src/server/sure-migration.ts)
+// branch-for-branch and with the SAME precedence, so the previewed counts agree
+// with the authoritative SureMigrationResult after promotion. The parity is
+// pinned by a unit test against the synthetic v2 fixture manifest.
+
+/** A held transaction's single primary reason (assigned with isPromotable's precedence). */
+export type SureHeldReason =
+  | "transfer"
+  | "nonImportableAccount"
+  | "currencyMismatch"
+  | "split"
+
+interface SurePreviewAccount extends NormalizedSureAccount {
+  currency: string
+}
+
+/** An account's Phase-1 promotion eligibility (mirror of isPromotable's account gate). */
+function isImportableSureAccount(account: NormalizedSureAccount): boolean {
+  return account.isImportable && account.balanceSource === "transaction_flow"
+}
+
+/**
+ * Why a staged Sure transaction is held in Phase 1, or `null` if it will promote.
+ * Precedence matches the server's `isPromotable`: non-standard kind, then a
+ * non-importable account, then a currency mismatch, then a split parent.
+ */
+function sureHeldReason(
+  txn: SureTransaction,
+  account: SurePreviewAccount
+): SureHeldReason | null {
+  const kind = (txn.kind ?? "standard").trim() || "standard"
+  if (kind !== "standard") return "transfer"
+  if (!isImportableSureAccount(account)) return "nonImportableAccount"
+  if (txn.currency !== account.currency) return "currencyMismatch"
+  if (txn.split_lines && txn.split_lines.length > 0) return "split"
+  return null
+}
+
+export interface SureBundlePreview {
+  accounts: { total: number; importable: number; held: number }
+  categories: number
+  merchants: number
+  transactions: {
+    total: number
+    /** Standard rows on importable, currency-matching accounts — become ledger txns. */
+    promotable: number
+    /** Staged but held this phase (sum of `heldByReason`). */
+    held: number
+    heldByReason: Record<SureHeldReason, number>
+    /** Zero-amount rows — retained in the artifact, not stageable (ADR-0041 §4.C). */
+    zeroAmountSkipped: number
+    /** Unparseable dates — retained in the artifact, not staged. */
+    invalidDateSkipped: number
+    /** Rows whose account is absent from the bundle (degraded export). */
+    unmappable: number
+  }
+  /** Typed Transfer rows (deferred Phase-2 pairing source). */
+  transfers: number
+  malformedLines: number
+  ignoredEntities: Record<string, number>
+}
+
+/**
+ * Summarize a parsed Sure bundle into the honest "what will be created vs held"
+ * counts the guided importer previews before the user confirms. This is a pure
+ * mirror of the orchestrator's staging gates; the post-promote screen replaces
+ * these estimates with the authoritative server result.
+ */
+export function summarizeSureBundle(
+  bundle: ParsedSureBundle
+): SureBundlePreview {
+  const accountById = new Map<string, SurePreviewAccount>()
+  let importableAccounts = 0
+  for (const account of bundle.accounts) {
+    const normalized: SurePreviewAccount = {
+      ...normalizeSureAccountType(account.accountable_type, account.subtype),
+      currency: account.currency,
+    }
+    accountById.set(account.id, normalized)
+    if (isImportableSureAccount(normalized)) importableAccounts += 1
+  }
+
+  const heldByReason: Record<SureHeldReason, number> = {
+    transfer: 0,
+    nonImportableAccount: 0,
+    currencyMismatch: 0,
+    split: 0,
+  }
+  let promotable = 0
+  let held = 0
+  let zeroAmountSkipped = 0
+  let invalidDateSkipped = 0
+  let unmappable = 0
+
+  for (const txn of bundle.transactions) {
+    const account = accountById.get(txn.account_id)
+    if (!account) {
+      unmappable += 1
+      continue
+    }
+    if (Number.isNaN(new Date(txn.date).getTime())) {
+      invalidDateSkipped += 1
+      continue
+    }
+    const { isZeroAmount } = classifySureAmount(
+      txn.amount,
+      account.currency as CurrencyCode
+    )
+    if (isZeroAmount) {
+      zeroAmountSkipped += 1
+      continue
+    }
+    const reason = sureHeldReason(txn, account)
+    if (reason === null) {
+      promotable += 1
+      continue
+    }
+    heldByReason[reason] += 1
+    held += 1
+  }
+
+  return {
+    accounts: {
+      total: bundle.accounts.length,
+      importable: importableAccounts,
+      held: bundle.accounts.length - importableAccounts,
+    },
+    categories: bundle.categories.length,
+    merchants: bundle.merchants.length,
+    transactions: {
+      total: bundle.transactions.length,
+      promotable,
+      held,
+      heldByReason,
+      zeroAmountSkipped,
+      invalidDateSkipped,
+      unmappable,
+    },
+    transfers: bundle.transfers.length,
+    malformedLines: bundle.malformedLines.length,
+    ignoredEntities: bundle.ignoredEntities,
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Category parent-first ordering (two-pass remap support — ADR-0041 §3)
 // ---------------------------------------------------------------------------
 
