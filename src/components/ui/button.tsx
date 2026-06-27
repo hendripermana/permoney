@@ -20,11 +20,13 @@ const buttonVariants = cva(
           "bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
         link: "text-primary underline-offset-4 hover:underline",
         // PER-166 — Wise-theme pill CTAs (DESIGN.md §4). Lime green with dark
-        // green text, ring shadow, and the signature physical scale(1.05) hover /
-        // scale(0.95) active. Used on the public landing + auth entry shells.
-        wise: "rounded-full bg-[#9fe870] text-[#163300] shadow-[0_0_0_1px_rgba(14,15,12,0.12)] hover:scale-105 hover:bg-[#cdffad] active:scale-95",
+        // green text + ring shadow. The signature physical scale(1.05) hover is
+        // NOT baked in here: it looks right on auto-width pills but makes a
+        // full-width form submit jiggle horizontally. Call sites that want the
+        // grow add `hover:scale-105 active:scale-95` (see landing-page).
+        wise: "rounded-full bg-wise-green text-wise-dark-green shadow-[0_0_0_1px_rgba(14,15,12,0.12)] hover:bg-wise-pastel",
         wiseSecondary:
-          "rounded-full bg-[rgba(22,51,0,0.08)] text-[#0e0f0c] hover:scale-105 active:scale-95 dark:bg-white/10 dark:text-white",
+          "rounded-full bg-[rgba(22,51,0,0.08)] text-wise-ink hover:bg-[rgba(22,51,0,0.12)] dark:bg-white/10 dark:text-white dark:hover:bg-white/15",
       },
       size: {
         default:

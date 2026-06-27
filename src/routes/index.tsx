@@ -4,6 +4,28 @@ import { getSessionGuardFn } from "@/server/auth-fns"
 import { getPublicAuthRouteRedirect } from "@/server/onboarding-contract"
 
 export const Route = createFileRoute("/")({
+  // PER-166: the one public, indexable page — give it real metadata instead of
+  // inheriting the generic root "Permoney App" title. Merges over the root head.
+  head: () => ({
+    meta: [
+      { title: "Permoney — Family money that finally makes sense" },
+      {
+        name: "description",
+        content:
+          "Permoney is a calm, trustworthy home for every transaction, budget, and account your household runs on — built on a ledger that never lies to you.",
+      },
+      {
+        property: "og:title",
+        content: "Permoney — Family money that finally makes sense",
+      },
+      {
+        property: "og:description",
+        content:
+          "A calm, trustworthy home for your household's money, built on a ledger that always balances.",
+      },
+      { property: "og:type", content: "website" },
+    ],
+  }),
   // PER-166: the front door. Auth-aware via the shared session guard — authed
   // users are forwarded to /dashboard (or /onboarding if not yet onboarded);
   // guests fall through to the branded landing. Mirrors the login/signup

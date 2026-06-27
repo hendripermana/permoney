@@ -125,14 +125,14 @@ export function SignUpForm({
               </FieldDescription>
             </FieldGroup>
           </form>
-          <div className="relative hidden flex-col items-center justify-center overflow-hidden bg-[#163300] p-10 text-white md:flex">
-            <div className="absolute inset-0 z-0 bg-gradient-to-br from-[#9fe870]/25 to-[#163300]/90" />
+          <div className="relative hidden flex-col items-center justify-center overflow-hidden bg-wise-dark-green p-10 text-white md:flex">
+            <div className="absolute inset-0 z-0 bg-gradient-to-br from-wise-green/25 to-wise-dark-green/90" />
             <div className="relative z-10 space-y-4 text-center">
               <div className="mb-6 text-6xl">🐝</div>
               <h2 className="text-2xl font-semibold">
                 Your Financial Journey Starts Here.
               </h2>
-              <p className="text-sm text-[#cdffad]/80">
+              <p className="text-sm text-wise-pastel/80">
                 Set up your custom categories, invite family members, and take
                 control of your wealth.
               </p>

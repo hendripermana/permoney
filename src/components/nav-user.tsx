@@ -22,8 +22,9 @@ import {
   RiLogoutBoxLine,
 } from "@remixicon/react"
 import { useRouter } from "@tanstack/react-router"
-import { useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { useServerFn } from "@tanstack/react-start"
+import { toast } from "sonner"
 import { logoutFn } from "@/server/auth-fns"
 
 export function NavUser({
@@ -43,14 +44,20 @@ export function NavUser({
   // PER-166 — wire the previously-dead Log out item. Go through the logoutFn
   // server function (same relative, port-agnostic path as loginFn) rather than
   // the client auth-client whose baseURL is pinned to :3006 and silently fails
-  // off that port. Clear the server session, drop cached tenant data, then land
-  // on the public landing at "/" (a sensible public destination now that "/" is
-  // a real branded surface).
-  async function handleLogout() {
-    await logout()
-    await Promise.all([queryClient.invalidateQueries(), router.invalidate()])
-    await router.navigate({ to: "/" })
-  }
+  // off that port. On success clear the server session, drop cached tenant
+  // data, then land on the public landing at "/". On failure surface a toast
+  // instead of leaving the user in silent limbo (the failure mode this ticket
+  // exists to kill).
+  const logoutMutation = useMutation({
+    mutationFn: () => logout(),
+    onSuccess: async () => {
+      await Promise.all([queryClient.invalidateQueries(), router.invalidate()])
+      await router.navigate({ to: "/" })
+    },
+    onError: () => {
+      toast.error("Couldn't sign you out. Please try again.")
+    },
+  })
 
   return (
     <SidebarMenu>
@@ -111,12 +118,16 @@ export function NavUser({
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuItem
-              onSelect={() => {
-                void handleLogout()
+              disabled={logoutMutation.isPending}
+              onSelect={(event) => {
+                // Keep the menu logic simple: fire the mutation; the toast/redirect
+                // are handled in its callbacks.
+                event.preventDefault()
+                logoutMutation.mutate()
               }}
             >
               <RiLogoutBoxLine />
-              Log out
+              {logoutMutation.isPending ? "Signing out…" : "Log out"}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
