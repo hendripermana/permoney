@@ -17,14 +17,16 @@ test.describe("Sure guided migration", () => {
   }) => {
     await onboard(page)
 
-    // 1. Reach the guided importer from the CSV import page's entry banner.
+    // 1. The CSV import page links to the guided Sure importer (entry point).
     await page.goto("/import")
     await waitForHydration(page)
     await page.getByRole("link", { name: /Coming from Sure/ }).click()
     await expect(page).toHaveURL(/\/import\/sure$/)
-    await waitForHydration(page)
 
-    // 2. Upload the synthetic all.ndjson; the client-side preview resolves.
+    // 2. Upload the synthetic all.ndjson on a fresh load so the file-input change
+    // handler is wired before Playwright sets files programmatically.
+    await page.goto("/import/sure")
+    await waitForHydration(page)
     await page.locator('input[type="file"]').setInputFiles({
       name: "all.ndjson",
       mimeType: "application/x-ndjson",
@@ -34,7 +36,7 @@ test.describe("Sure guided migration", () => {
     // 3. Preview honestly splits crossing-now from held, with the gap note.
     await expect(page.getByText("Crossing into your ledger")).toBeVisible()
     await expect(page.getByText("Held for a later step")).toBeVisible()
-    await expect(page.getByText("Transfers")).toBeVisible()
+    await expect(page.getByText("Transfers", { exact: true })).toBeVisible()
     await expect(page.getByText(/A few balances won't match yet/)).toBeVisible()
 
     // 4. Confirm: only the 2 promotable standard rows import.
