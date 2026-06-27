@@ -24,7 +24,8 @@ import {
 // account-type normalization + fallback, the Sure sign inversion (incl. 0), and
 // the parent-first category ordering for the two-pass remap.
 
-const line = (entity: string, data: unknown) => JSON.stringify({ entity, data })
+// Real Sure exports key the envelope discriminator as `type` (PER-173).
+const line = (type: string, data: unknown) => JSON.stringify({ type, data })
 
 describe("parseSureBundle", () => {
   test("routes known entities into typed arrays and skips blank lines", () => {
@@ -70,7 +71,7 @@ describe("parseSureBundle", () => {
   test("rejects malformed lines without aborting the rest of the parse", () => {
     const content = [
       "{ not json",
-      JSON.stringify({ entity: "Account" }), // missing data envelope
+      JSON.stringify({ type: "Account" }), // missing data envelope
       line("Account", { id: "a1" }), // fails schema (missing required fields)
       line("Merchant", { id: "m1", name: "Ok" }), // valid — survives
     ].join("\n")
@@ -336,8 +337,8 @@ describe("summarizeSureBundle reconciliation", () => {
     expect(t.held).toBe(manifest.expected.held)
     expect(t.zeroAmountSkipped).toBe(manifest.expected.zeroAmountSkipped)
     expect(preview.malformedLines).toBe(manifest.expected.malformedLines)
-    // Deferred entities are surfaced, never silently dropped.
-    expect(preview.ignoredEntities).toEqual({ Holding: 1, Rule: 1 })
+    // Real unmapped entities are surfaced, never silently dropped.
+    expect(preview.ignoredEntities).toEqual(manifest.expected.ignoredEntities)
   })
 
   test("v1 degraded: malformed lines surfaced; buckets still reconcile", () => {

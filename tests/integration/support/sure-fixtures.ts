@@ -1,32 +1,45 @@
 // ============================================================================
-// PER-170 / ADR-0041 — Synthetic Sure v2 bundle builder (test-only).
+// PER-170 / PER-173 / ADR-0041 — Synthetic Sure v2 bundle builder (test-only).
 //
-// Deterministic, schema-faithful `all.ndjson` generators for the Sure full-family
-// migration tests. We NEVER commit a real Sure export (ADR-0041 §11); these
-// fixtures emit the exact `{ entity, data }` envelope the production reader
-// (`src/lib/sure-migration.ts`) consumes, so a parser/orchestrator change that
-// breaks real bundles also breaks these.
+// Deterministic `all.ndjson` generators shaped EXACTLY like a real Sure export
+// (verified head-of-eng 2026-06-28 against a real 3950-line `all.ndjson`):
+//   * the line envelope is `{ "type": <Name>, "data": { ...snake_case } }`
+//     (NOT `entity` — that was a fixture fiction that made PER-170 reject 100%
+//     of real bundles; PER-173 fixes it),
+//   * real field names: `accountable_type`, `classification`, `entry_id`,
+//     `excluded`, `tag_ids`, `created_at`, `updated_at`,
+//   * opening balances come from `Valuation` rows (real exports have NO
+//     `Balance` entity), and transfers from the txn `kind` field (no `Transfer`
+//     entity and no `split_lines` field exist in a real export).
+// We NEVER commit a real export — it carries PII (ADR-0041 §11). The values
+// below are fabricated; only the SHAPE is real.
+//
+// Phase-1 caveat (honest gap, by design): the reader does NOT yet derive an
+// opening balance from `Valuation` (that is PER-174), so every account in these
+// fixtures opens at 0 and `Valuation` rows are counted as `ignoredEntities`.
+// The promotable transactions are therefore chosen so the net flow keeps each
+// ASSET account's balance >= 0 (the `account_normal_balance_sign` CHECK).
 //
 // Two scenarios:
-//   * `buildSureBundleV2Complete` — a full v2 export: depository (with Balance
-//     snapshot opening), investment (held, not importable), a USD account (for
-//     the currency-mismatch hold), parent/child categories, merchants, and the
-//     full transaction taxonomy (promotable expense + income, zero-amount,
-//     non-standard kind, split parent, currency mismatch, held investment), plus
-//     a Transfer row for typed-source coverage.
-//   * `buildSureBundleV1Degraded` — a pre-v2 / degraded export: NO Balance or
-//     Transfer entities (opening falls back to 0), an unknown `accountable_type`
-//     (conservative depository fallback), an orphan category (missing parent),
-//     a promotable INCOME row (so an opening-0 ASSET stays sign-valid), and a
-//     couple of malformed lines the parser must reject without aborting.
+//   * `buildSureBundleV2Complete` — a full export: importable IDR depository,
+//     a held investment account, a USD account (for the currency-mismatch
+//     hold), parent/child categories, merchants, the full transaction taxonomy
+//     (promotable expense + income, zero-amount, non-importable account,
+//     non-standard `kind`, currency mismatch), `Valuation` snapshots, and a few
+//     real unmapped entities (Budget/BudgetCategory/Tag) counted as ignored.
+//   * `buildSureBundleV1Degraded` — a degraded export: an unknown
+//     `accountable_type` (conservative depository fallback), an orphan category
+//     (missing parent), a promotable INCOME row (so an opening-0 ASSET stays
+//     sign-valid), and a couple of malformed lines the parser must reject
+//     without aborting.
 //
 // Each builder returns the NDJSON string AND a manifest of the ids + expected
 // orchestration counts, so a test asserts against intent rather than re-deriving
 // the arithmetic.
 // ============================================================================
 
-const envelope = (entity: string, data: Record<string, unknown>): string =>
-  JSON.stringify({ entity, data })
+const envelope = (type: string, data: Record<string, unknown>): string =>
+  JSON.stringify({ type, data })
 
 export interface SureBundleManifest {
   ndjson: string
@@ -41,9 +54,15 @@ export interface SureBundleManifest {
     held: number
     zeroAmountSkipped: number
     malformedLines: number
+    /** Real v2 entities the reader does not map to typed rows this phase. */
+    ignoredEntities: Record<string, number>
   }
-  /** Opening balance (minor units) the depository account should be created with. */
+  /** Opening balance (minor units) the depository account is created with. */
   openingBalanceMinor: bigint
+  /** Promotable expense magnitude as SIGNED ledger minor units (negative). */
+  promotableExpenseMinor: bigint
+  /** Promotable income magnitude as SIGNED ledger minor units (positive). */
+  promotableIncomeMinor: bigint
 }
 
 // ---------------------------------------------------------------------------
@@ -65,9 +84,7 @@ export function buildSureBundleV2Complete(): SureBundleManifest {
     txnZero: "sure-txn-zero",
     txnHeldInvest: "sure-txn-held-invest",
     txnHeldKind: "sure-txn-held-kind",
-    txnHeldSplit: "sure-txn-held-split",
     txnHeldCurrency: "sure-txn-held-currency",
-    transfer: "sure-transfer-1",
   }
 
   const lines = [
@@ -80,6 +97,10 @@ export function buildSureBundleV2Complete(): SureBundleManifest {
       subtype: "checking",
       currency: "IDR",
       balance: "100000.0",
+      cash_balance: "100000.0",
+      status: "active",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-06-25T00:00:00Z",
     }),
     envelope("Account", {
       id: ids.invest,
@@ -89,6 +110,9 @@ export function buildSureBundleV2Complete(): SureBundleManifest {
       subtype: "mutual_fund",
       currency: "IDR",
       balance: "5000000.0",
+      status: "active",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-06-25T00:00:00Z",
     }),
     envelope("Account", {
       id: ids.usd,
@@ -98,57 +122,94 @@ export function buildSureBundleV2Complete(): SureBundleManifest {
       subtype: "checking",
       currency: "USD",
       balance: "0.0",
+      status: "active",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-06-25T00:00:00Z",
     }),
-    // --- Balance snapshot (opening for the checking account) --------------
-    envelope("Balance", {
+    // --- Valuation snapshots (real exports carry these, NOT `Balance`) -----
+    // Reader does not yet derive opening from these (PER-174); counted as
+    // ignored. An earlier + later snapshot to mirror real multi-row history.
+    envelope("Valuation", {
+      id: "sure-val-checking-1",
       account_id: ids.checking,
+      entry_id: "sure-entry-val-1",
+      name: "Manual valuation",
+      amount: "100000.0",
+      currency: "IDR",
       date: "2026-01-01",
-      start_balance: "100000.0",
-      end_balance: "100000.0",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
     }),
-    // An earlier-id but later-date snapshot to prove "earliest date wins".
-    envelope("Balance", {
+    envelope("Valuation", {
+      id: "sure-val-checking-2",
       account_id: ids.checking,
+      entry_id: "sure-entry-val-2",
+      name: "Manual valuation",
+      amount: "250000.0",
+      currency: "IDR",
       date: "2026-03-01",
-      start_balance: "250000.0",
-      end_balance: "250000.0",
+      created_at: "2026-03-01T00:00:00Z",
+      updated_at: "2026-03-01T00:00:00Z",
     }),
-    // --- Categories (parent before/after child to exercise the reorder) ---
+    // --- Categories (child before parent to exercise the reorder) ---------
     envelope("Category", {
       id: ids.catDining,
       name: "Dining",
       classification: "expense",
       parent_id: ids.catFood,
+      color: "#FF8A00",
       lucide_icon: "utensils",
+      key: null,
+      created_at: "2026-01-02T00:00:00Z",
+      updated_at: "2026-01-02T00:00:00Z",
     }),
     envelope("Category", {
       id: ids.catFood,
       name: "Food",
       classification: "expense",
+      parent_id: null,
+      color: "#6172F3",
       lucide_icon: "apple",
+      key: null,
+      created_at: "2026-01-02T00:00:00Z",
+      updated_at: "2026-01-02T00:00:00Z",
     }),
     envelope("Category", {
       id: ids.catSalary,
       name: "Salary",
       classification: "income",
+      parent_id: null,
+      color: "#12B76A",
       lucide_icon: "banknote",
+      key: null,
+      created_at: "2026-01-02T00:00:00Z",
+      updated_at: "2026-01-02T00:00:00Z",
     }),
     // --- Merchants --------------------------------------------------------
     envelope("Merchant", {
       id: ids.merWarung,
       name: "Warung Tegal",
+      color: null,
       logo_url: null,
+      source: "manual",
+      created_at: "2026-01-03T00:00:00Z",
+      updated_at: "2026-01-03T00:00:00Z",
     }),
     envelope("Merchant", {
       id: ids.merEmployer,
       name: "PT Permana",
+      color: null,
       logo_url: null,
+      source: "manual",
+      created_at: "2026-01-03T00:00:00Z",
+      updated_at: "2026-01-03T00:00:00Z",
     }),
     // --- Transactions -----------------------------------------------------
     // Promotable expense (Sure POSITIVE → Permoney expense, ledger negative).
     envelope("Transaction", {
       id: ids.txnExpense,
       account_id: ids.checking,
+      entry_id: "sure-entry-expense",
       category_id: ids.catDining,
       merchant_id: ids.merWarung,
       date: "2026-06-15",
@@ -156,83 +217,131 @@ export function buildSureBundleV2Complete(): SureBundleManifest {
       currency: "IDR",
       name: "Lumpia beef",
       kind: "standard",
+      notes: null,
+      excluded: false,
+      tag_ids: [],
+      created_at: "2026-06-15T00:00:00Z",
+      updated_at: "2026-06-15T00:00:00Z",
     }),
     // Promotable income (Sure NEGATIVE → Permoney income, ledger positive).
+    // Magnitude > the expense so the opening-0 ASSET nets >= 0 after promotion.
     envelope("Transaction", {
       id: ids.txnIncome,
       account_id: ids.checking,
+      entry_id: "sure-entry-income",
       category_id: ids.catSalary,
       merchant_id: ids.merEmployer,
       date: "2026-06-25",
-      amount: "-5000.0",
+      amount: "-50000.0",
       currency: "IDR",
       name: "June salary",
       kind: "standard",
+      notes: null,
+      excluded: false,
+      tag_ids: [],
+      created_at: "2026-06-25T00:00:00Z",
+      updated_at: "2026-06-25T00:00:00Z",
     }),
     // Zero-amount → classified expense, flagged, skipped from staging.
     envelope("Transaction", {
       id: ids.txnZero,
       account_id: ids.checking,
+      entry_id: "sure-entry-zero",
+      category_id: null,
+      merchant_id: null,
       date: "2026-06-16",
       amount: "0",
       currency: "IDR",
       name: "Zero adjustment",
       kind: "standard",
+      notes: null,
+      excluded: false,
+      tag_ids: [],
+      created_at: "2026-06-16T00:00:00Z",
+      updated_at: "2026-06-16T00:00:00Z",
     }),
     // Held: account not importable (Investment).
     envelope("Transaction", {
       id: ids.txnHeldInvest,
       account_id: ids.invest,
+      entry_id: "sure-entry-held-invest",
+      category_id: null,
+      merchant_id: null,
       date: "2026-06-17",
       amount: "1000000.0",
       currency: "IDR",
       name: "Reksadana buy",
       kind: "standard",
+      notes: null,
+      excluded: false,
+      tag_ids: [],
+      created_at: "2026-06-17T00:00:00Z",
+      updated_at: "2026-06-17T00:00:00Z",
     }),
-    // Held: non-standard kind (transfer leg).
+    // Held: non-standard kind (transfer leg — real exports flag this on `kind`,
+    // there is no separate `Transfer` entity).
     envelope("Transaction", {
       id: ids.txnHeldKind,
       account_id: ids.checking,
+      entry_id: "sure-entry-held-kind",
+      category_id: null,
+      merchant_id: null,
       date: "2026-06-18",
       amount: "20000.0",
       currency: "IDR",
       name: "Move to savings",
       kind: "funds_movement",
-    }),
-    // Held: split parent (split_lines present).
-    envelope("Transaction", {
-      id: ids.txnHeldSplit,
-      account_id: ids.checking,
-      date: "2026-06-19",
-      amount: "30000.0",
-      currency: "IDR",
-      name: "Groceries split",
-      kind: "standard",
-      split_lines: [
-        { category_id: ids.catFood, amount: "20000.0" },
-        { category_id: ids.catDining, amount: "10000.0" },
-      ],
+      notes: null,
+      excluded: false,
+      tag_ids: [],
+      created_at: "2026-06-18T00:00:00Z",
+      updated_at: "2026-06-18T00:00:00Z",
     }),
     // Held: currency mismatch (txn IDR on a USD account).
     envelope("Transaction", {
       id: ids.txnHeldCurrency,
       account_id: ids.usd,
+      entry_id: "sure-entry-held-currency",
+      category_id: null,
+      merchant_id: null,
       date: "2026-06-20",
       amount: "40000.0",
       currency: "IDR",
       name: "Mismatched currency",
       kind: "standard",
+      notes: null,
+      excluded: false,
+      tag_ids: [],
+      created_at: "2026-06-20T00:00:00Z",
+      updated_at: "2026-06-20T00:00:00Z",
     }),
-    // --- Transfer (typed source for deferred Phase 1.5) -------------------
-    envelope("Transfer", {
-      id: ids.transfer,
-      inflow_transaction_id: ids.txnIncome,
-      outflow_transaction_id: ids.txnHeldKind,
-      status: "confirmed",
+    // --- Real unmapped entities — counted as ignored, retained in artifact -
+    envelope("Budget", {
+      id: "sure-budget-1",
+      start_date: "2026-06-01",
+      end_date: "2026-06-30",
+      currency: "IDR",
+      budgeted_spending: "1000000.0",
+      expected_income: "5000000.0",
+      created_at: "2026-06-01T00:00:00Z",
+      updated_at: "2026-06-01T00:00:00Z",
     }),
-    // Deferred/unknown entities — counted as ignored, retained in the artifact.
-    envelope("Holding", { id: "sure-holding-1", account_id: ids.invest }),
-    envelope("Rule", { id: "sure-rule-1" }),
+    envelope("BudgetCategory", {
+      id: "sure-budgetcat-1",
+      budget_id: "sure-budget-1",
+      category_id: ids.catFood,
+      budgeted_spending: "500000.0",
+      currency: "IDR",
+      created_at: "2026-06-01T00:00:00Z",
+      updated_at: "2026-06-01T00:00:00Z",
+    }),
+    envelope("Tag", {
+      id: "sure-tag-1",
+      name: "reimbursable",
+      color: "#6172F3",
+      created_at: "2026-01-04T00:00:00Z",
+      updated_at: "2026-01-04T00:00:00Z",
+    }),
   ]
 
   return {
@@ -242,15 +351,20 @@ export function buildSureBundleV2Complete(): SureBundleManifest {
       accountsCreated: 3,
       categoriesCreated: 3,
       merchantsCreated: 2,
-      transactionsTotal: 7,
-      staged: 6, // all 7 minus the zero-amount row
+      transactionsTotal: 6,
+      staged: 5, // all 6 minus the zero-amount row
       promotedThisRun: 2, // expense + income on the importable IDR depository
-      held: 4, // invest + non-standard kind + split + currency mismatch
+      held: 3, // invest + non-standard kind + currency mismatch
       zeroAmountSkipped: 1,
       malformedLines: 0,
+      ignoredEntities: { Valuation: 2, Budget: 1, BudgetCategory: 1, Tag: 1 },
     },
-    // 100000.0 IDR → 10_000_000 minor (earliest snapshot, not the 250000 one).
-    openingBalanceMinor: 10_000_000n,
+    // Opening from Valuation is PER-174; this phase opens every account at 0.
+    openingBalanceMinor: 0n,
+    // Sure "17000.0" → expense, ledger −1_700_000 minor (IDR has 2 minor digits).
+    promotableExpenseMinor: -1_700_000n,
+    // Sure "-50000.0" → income, ledger +5_000_000 minor.
+    promotableIncomeMinor: 5_000_000n,
   }
 }
 
@@ -275,6 +389,9 @@ export function buildSureBundleV1Degraded(): SureBundleManifest {
       subtype: "warp",
       currency: "IDR",
       balance: "0.0",
+      status: "active",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-05-10T00:00:00Z",
     }),
     // Orphan category: parent_id points at a category absent from the bundle.
     envelope("Category", {
@@ -282,22 +399,33 @@ export function buildSureBundleV1Degraded(): SureBundleManifest {
       name: "Uncategorized",
       classification: "income",
       parent_id: "sure-cat-ghost",
+      color: "#6172F3",
+      lucide_icon: "shapes",
+      created_at: "2026-01-02T00:00:00Z",
+      updated_at: "2026-01-02T00:00:00Z",
     }),
     // Malformed line 1: not JSON.
     "{ this is not valid json",
-    // Malformed line 2: valid JSON, missing the data envelope.
-    JSON.stringify({ entity: "Account" }),
+    // Malformed line 2: valid JSON, missing the `data` envelope.
+    JSON.stringify({ type: "Account" }),
     // Promotable INCOME (Sure NEGATIVE) so an opening-0 ASSET stays sign-valid
     // after promotion (ledger positive).
     envelope("Transaction", {
       id: ids.txnIncome,
       account_id: ids.wallet,
+      entry_id: "sure-entry-degraded-income",
       category_id: ids.catOrphan,
+      merchant_id: null,
       date: "2026-05-10",
       amount: "-12345.0",
       currency: "IDR",
       name: "Cash gift",
       kind: "standard",
+      notes: null,
+      excluded: false,
+      tag_ids: [],
+      created_at: "2026-05-10T00:00:00Z",
+      updated_at: "2026-05-10T00:00:00Z",
     }),
   ]
 
@@ -314,7 +442,11 @@ export function buildSureBundleV1Degraded(): SureBundleManifest {
       held: 0,
       zeroAmountSkipped: 0,
       malformedLines: 2,
+      ignoredEntities: {},
     },
-    openingBalanceMinor: 0n, // no Balance entity → no plug, opening 0
+    openingBalanceMinor: 0n, // no opening source → opening 0
+    promotableExpenseMinor: 0n, // no promotable expense in the degraded bundle
+    // Sure "-12345.0" → income, ledger +1_234_500 minor.
+    promotableIncomeMinor: 1_234_500n,
   }
 }

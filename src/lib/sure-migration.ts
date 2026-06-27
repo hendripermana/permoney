@@ -12,13 +12,16 @@
 // imports nothing from Prisma/Node so it stays client-safe and unit-testable.
 //
 // CONTRACT — the reader targets Sure export v2 (`Family::DataExporter`,
-// `EXPORT_VERSION = 2`). `all.ndjson` is one JSON object per line under a stable
-// envelope `{ "entity": <Name>, "data": { ...snake_case attributes } }`. v2-only
-// entities (Balance/Transfer/Trade/Holding/RecurringTransaction/Rule) are
-// OPTIONAL — a degraded/pre-v2 bundle simply omits them and the reader degrades
-// gracefully (ADR-0041 §1/§5/§6). The synthetic fixture builder emits this exact
-// shape; when a real bundle reveals a quirk we iterate the builder, never commit
-// real data (ADR-0041 §11).
+// `EXPORT_VERSION = 2`). `all.ndjson` is one JSON object per line under the
+// stable envelope `{ "type": <Name>, "data": { ...snake_case attributes } }`.
+// The discriminator key is `type` (verified against a real export, PER-173) —
+// strictly `type`, never `entity` (the latter was a fixture fiction that made
+// PER-170 reject 100% of real bundles). The real v2 entity inventory is
+// Account/Category/Merchant/Transaction/Valuation/Budget/BudgetCategory/Tag;
+// only the first four map to typed rows in Phase 1, the rest are retained as
+// `ignoredEntities` (ADR-0041 §1/§5/§6). The synthetic fixture builder emits
+// this exact shape; a hand-authored real-shape snippet (FAKE data) guards the
+// envelope. We never commit a real export — it carries PII (ADR-0041 §11).
 // ============================================================================
 
 import { z } from "zod"
@@ -37,11 +40,15 @@ export const SURE_PROVIDER = "sure"
 // Entity envelope + Zod schemas (Sure v2 attribute names — snake_case Rails)
 // ---------------------------------------------------------------------------
 
-// Phase-1 entities the reader maps. Deferred v2 entities (Transfer, Trade,
-// Holding, RecurringTransaction, Rule, Tag, Valuation, Budget, BudgetCategory)
-// are retained in the raw bundle and counted as `ignoredEntities`, not parsed
-// into typed rows — except `Transfer`, which we DO parse so the gating tests and
-// the deferred Phase-1.5 transfer pairing have a typed source (ADR-0041 §10).
+// Phase-1 entities the reader maps to typed rows. Other real v2 entities
+// (Valuation, Budget, BudgetCategory, Tag) are retained in the raw bundle and
+// counted as `ignoredEntities`, not parsed into typed rows this phase —
+// Valuation-driven opening balances are PER-174 (ADR-0041 §5). `Balance` and
+// `Transfer` schemas/sinks are retained for forward-compatibility but are
+// DORMANT against real exports: a real Sure v2 export emits neither (verified
+// PER-173); opening balances come from `Valuation`, transfers from the txn
+// `kind` field. They stay so a non-Sure or future bundle that does carry them
+// still parses, and the gating logic has a typed source.
 export const SURE_ENTITY = {
   account: "Account",
   balance: "Balance",
@@ -157,8 +164,11 @@ export interface ParsedSureBundle {
   ignoredEntities: Record<string, number>
 }
 
+// Real Sure exports key the discriminator as `type` (verified PER-173). STRICT:
+// we read `type` only — never `entity` — so the contract stays unambiguous
+// (CLAUDE.md "Strict Contracts"); a line without a string `type` is malformed.
 const ndjsonEnvelopeSchema = z.object({
-  entity: z.string().min(1),
+  type: z.string().min(1),
   data: z.record(z.string(), z.unknown()),
 })
 
@@ -170,7 +180,7 @@ interface EntitySink<T> {
 /**
  * Parse a Sure `all.ndjson` bundle one line at a time. Blank lines are skipped.
  * A line is rejected as malformed (collected, not thrown) when it is not valid
- * JSON, does not match the `{ entity, data }` envelope, or fails its entity
+ * JSON, does not match the `{ type, data }` envelope, or fails its entity
  * schema. Known but deferred entities are counted in `ignoredEntities` and
  * retained only in the raw bundle. The parse never throws on row-level problems
  * so one corrupt line can never abort a multi-thousand-row migration; the
@@ -233,15 +243,16 @@ export function parseSureBundle(content: string): ParsedSureBundle {
     if (!envelope.success) {
       bundle.malformedLines.push({
         line: lineNumber,
-        reason: "missing { entity, data } envelope",
+        reason: "missing { type, data } envelope",
       })
       continue
     }
 
-    const { entity, data } = envelope.data
-    const sink = sinks[entity]
+    const { type: entityType, data } = envelope.data
+    const sink = sinks[entityType]
     if (!sink) {
-      bundle.ignoredEntities[entity] = (bundle.ignoredEntities[entity] ?? 0) + 1
+      bundle.ignoredEntities[entityType] =
+        (bundle.ignoredEntities[entityType] ?? 0) + 1
       continue
     }
 
@@ -249,7 +260,7 @@ export function parseSureBundle(content: string): ParsedSureBundle {
     if (!parsed.success) {
       bundle.malformedLines.push({
         line: lineNumber,
-        reason: `invalid ${entity}: ${parsed.error.issues[0]?.message ?? "schema error"}`,
+        reason: `invalid ${entityType}: ${parsed.error.issues[0]?.message ?? "schema error"}`,
       })
       continue
     }
