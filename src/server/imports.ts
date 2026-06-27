@@ -83,7 +83,13 @@ const stagedRowInputSchema = z.object({
 export type StagedRowInput = z.input<typeof stagedRowInputSchema>
 
 const createImportBatchInputSchema = z.object({
-  sourceKind: z.enum(["csv_upload", "provider"]).default("csv_upload"),
+  sourceKind: z
+    .enum(["csv_upload", "provider", "migration"])
+    .default("csv_upload"),
+  // Provider-agnostic origin label for sourceKind="migration" (e.g. "sure").
+  // The DB CHECK requires it to be present for migration batches (ADR-0041 §8).
+  // Passthrough only — the staging/dedup/promotion logic is unchanged.
+  provider: z.string().min(1).nullable().optional(),
   accountId: z.string().min(1).nullable().optional(),
   contentHash: z.string().min(1),
   idempotencyKey: uuidV7Schema.optional(),
@@ -282,6 +288,7 @@ export async function createImportBatchForFamily({
         familyId,
         createdById: user.id,
         sourceKind: data.sourceKind,
+        provider: data.provider ?? null,
         accountId: data.accountId ?? null,
         contentHash: data.contentHash,
         idempotencyKey: data.idempotencyKey ?? null,

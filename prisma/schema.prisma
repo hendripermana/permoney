@@ -52,6 +52,7 @@ model Family {
   budgets      Budget[]
   importBatches ImportBatch[]
   rawImportedTransactions RawImportedTransaction[]
+  importBatchArtifacts ImportBatchArtifact[]
 }
 
 // ADR-0036: first-class family membership + role authorization.
@@ -202,6 +203,13 @@ model Merchant {
   color   String?
   logoUrl String?
 
+  // Durable external-provider binding (ADR-0041 §3, mirrors Account). NULL for
+  // manually-created merchants. A PARTIAL UNIQUE (familyId, externalProvider,
+  // externalId) WHERE externalProvider IS NOT NULL is created in raw SQL
+  // (migration `sure_migration_bindings`) — Prisma cannot express the predicate.
+  externalProvider String?
+  externalId       String?
+
   familyId     String
   family       Family        @relation(fields: [familyId], references: [id])
   transactions Transaction[]
@@ -225,6 +233,14 @@ model Category {
   isSystem Boolean @default(false)
   familyId String?
   family   Family? @relation(fields: [familyId], references: [id])
+
+  // Durable external-provider binding (ADR-0041 §3, mirrors Account). NULL for
+  // manually-created and system categories. A PARTIAL UNIQUE (familyId,
+  // externalProvider, externalId) WHERE externalProvider IS NOT NULL is created
+  // in raw SQL (migration `sure_migration_bindings`). Sure categories are always
+  // TENANT-owned (familyId set, isSystem=false); system rows are out of scope.
+  externalProvider String?
+  externalId       String?
 
   parentId     String?
   parent       Category?     @relation("SubCategories", fields: [parentId], references: [id])
@@ -680,8 +696,12 @@ model ImportBatch {
   // Acting member (User.id). Plain id, not an FK, like Transaction.userId.
   createdById String
 
-  // 'csv_upload' | 'provider' (DB CHECK). 'provider' reserved for PER-118.
+  // 'csv_upload' | 'provider' | 'migration' (DB CHECK). 'provider' reserved for
+  // PER-118; 'migration' is a full-family bring-your-own-data import (ADR-0041).
   sourceKind  String
+  // Provider-agnostic origin label for sourceKind='migration' (e.g. 'sure'), so
+  // future migrations don't hardcode a per-provider sourceKind (ADR-0041 §8).
+  provider    String?
   // OPTIONAL batch-level default/hint only. The AUTHORITATIVE target account is
   // per-row on RawImportedTransaction, because one file can span many accounts.
   accountId   String?
@@ -707,7 +727,8 @@ model ImportBatch {
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
-  rawRows RawImportedTransaction[]
+  rawRows   RawImportedTransaction[]
+  artifacts ImportBatchArtifact[]
 
   // Per-file batch dedup target (ADR-0039 §5).
   @@unique([familyId, sourceKind, contentHash], name: "import_batch_content_dedup", map: "import_batch_content_dedup")
@@ -768,4 +789,48 @@ model RawImportedTransaction {
   @@index([importBatchId, rowStatus])
   @@index([familyId, fingerprint])
   @@index([accountId])
+}
+
+// ADR-0041 §8 — lossless raw-bundle provenance for a full-family migration.
+//
+// One row per uploaded bundle (`all.ndjson`). The raw bytes are retained as
+// tenant-private provenance AND as the durable source for the deferred Phase
+// 2/3 entities (Balance/Transfer/Trade/Holding/Valuation/Recurring/Rule), so a
+// re-run never re-uploads. The bundle holds real financial PII; encryption-at-
+// rest is the deployment's DB/disk-level encryption (NOT app-level column
+// crypto), gated by RLS app_is_active_member — consistent with the same PII
+// already living plaintext in canonical Transaction/Account rows.
+//
+// `storageKind` is a forward-compat discriminator: today only 'inline_bytea'
+// (gzip(all.ndjson) in `bytes`); a future object-store form adds 'object_store'
+// + `storageRef` WITHOUT a breaking schema change. `contentHash` + `byteSize`
+// provide one-shot idempotency (§7) and integrity. Composite tenant FK
+// (importBatchId, familyId) + FORCE RLS in raw SQL (migration
+// `sure_migration_bindings`).
+model ImportBatchArtifact {
+  id            String @id @default(cuid())
+  familyId      String
+  family        Family @relation(fields: [familyId], references: [id], onDelete: Cascade)
+
+  importBatchId String
+  importBatch   ImportBatch @relation(fields: [importBatchId, familyId], references: [id, familyId], onDelete: Cascade, onUpdate: Cascade, map: "import_artifact_batch_family_fkey")
+
+  filename    String
+  // 'inline_bytea' today; 'object_store' reserved (DB CHECK).
+  storageKind String @default("inline_bytea")
+  // sha256 of the RAW (pre-compression) bundle bytes — the one-shot dedup anchor.
+  contentHash String
+  // Size of the raw (pre-compression) bundle in bytes. Enforced under a guard.
+  byteSize    Int
+  // gzip(all.ndjson) bytes for storageKind='inline_bytea'. NULL when an external
+  // store holds them (storageKind='object_store', reserved).
+  bytes       Bytes?
+  // External-store key/URL for storageKind='object_store' (reserved-nullable).
+  storageRef  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@unique([importBatchId, contentHash], name: "import_artifact_batch_content", map: "import_artifact_batch_content")
+  @@index([familyId])
 }
