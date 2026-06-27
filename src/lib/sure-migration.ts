@@ -402,7 +402,7 @@ export type SureHeldReason =
   | "currencyMismatch"
   | "split"
 
-interface SurePreviewAccount extends NormalizedSureAccount {
+export interface SurePreviewAccount extends NormalizedSureAccount {
   currency: string
 }
 
@@ -416,7 +416,7 @@ function isImportableSureAccount(account: NormalizedSureAccount): boolean {
  * Precedence matches the server's `isPromotable`: non-standard kind, then a
  * non-importable account, then a currency mismatch, then a split parent.
  */
-function sureHeldReason(
+export function sureHeldReason(
   txn: SureTransaction,
   account: SurePreviewAccount
 ): SureHeldReason | null {

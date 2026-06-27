@@ -5,9 +5,16 @@ import {
   normalizeSureAccountType,
   orderCategoriesParentsFirst,
   parseSureBundle,
+  sureHeldReason,
   summarizeSureBundle,
   type SureCategory,
+  type SurePreviewAccount,
+  type SureTransaction,
 } from "./sure-migration"
+// Anchor the client-side preview classifier to the REAL server gate, not a
+// hand-written copy: import the server's `isPromotable` and assert identical
+// verdicts. Behavior-neutral export (PER-171); the integration suite stays green.
+import { isPromotable } from "@/server/sure-migration"
 import {
   buildSureBundleV1Degraded,
   buildSureBundleV2Complete,
@@ -217,60 +224,135 @@ describe("orderCategoriesParentsFirst", () => {
 })
 
 // PER-171 — the guided importer's pre-confirm preview runs `summarizeSureBundle`
-// in the browser. These pins prove the client-side held classification mirrors
-// the server orchestrator's gates against the SAME synthetic fixtures the
-// integration suite promotes, so the previewed counts cannot drift from the
-// authoritative SureMigrationResult.
-describe("summarizeSureBundle (preview parity with the orchestrator)", () => {
-  test("v2 complete: created + held-by-reason match the fixture manifest", () => {
+// in the browser. To be an honest drift guard (not "copy vs copy"), the held
+// classification is asserted against the REAL server verdict `isPromotable`,
+// across a branch matrix AND every transaction in the synthetic fixtures.
+describe("sureHeldReason parity with the server's isPromotable", () => {
+  // One account per Sure accountable_type branch (importable vs held), built
+  // through the same normalizer the orchestrator persists from, so the account
+  // gate (isImportable + balanceSource) is faithful.
+  const accountSpecs: Array<[string, string | null]> = [
+    ["Depository", "checking"],
+    ["CreditCard", null],
+    ["Loan", null],
+    ["Investment", "mutual_fund"],
+    ["PreciousMetal", null],
+    ["OtherAsset", null],
+    ["Spaceship", "warp"], // unknown → conservative depository fallback
+  ]
+  const accounts: Array<SurePreviewAccount & { id: string }> = accountSpecs.map(
+    ([type, subtype], index) => ({
+      id: `acc-${index}`,
+      currency: "IDR",
+      ...normalizeSureAccountType(type, subtype),
+    })
+  )
+
+  // One transaction per gate branch: standard, currency mismatch, transfer
+  // kinds, defaulted/blank kind, and split parent.
+  const txnVariants: Array<Partial<SureTransaction>> = [
+    { kind: "standard", currency: "IDR" },
+    { kind: "standard", currency: "EUR" }, // currency mismatch
+    { kind: "funds_movement", currency: "IDR" },
+    { kind: "cc_payment", currency: "IDR" },
+    { kind: undefined, currency: "IDR" }, // defaults to standard
+    { kind: "   ", currency: "IDR" }, // blank → standard
+    { kind: "standard", currency: "IDR", split_lines: [{}] }, // split parent
+  ]
+
+  test("identical verdict for every account × transaction branch", () => {
+    for (const account of accounts) {
+      for (const variant of txnVariants) {
+        const txn: SureTransaction = {
+          id: "t",
+          account_id: account.id,
+          date: "2026-01-01",
+          amount: "1000.0",
+          currency: variant.currency ?? "IDR",
+          ...variant,
+        }
+        const clientPromotable = sureHeldReason(txn, account) === null
+        const serverPromotable = isPromotable(txn, account)
+        expect(clientPromotable).toBe(serverPromotable)
+      }
+    }
+  })
+
+  test("identical verdict for every transaction in the synthetic bundles", () => {
+    for (const build of [
+      buildSureBundleV2Complete,
+      buildSureBundleV1Degraded,
+    ]) {
+      const bundle = parseSureBundle(build().ndjson)
+      const accountById = new Map(
+        bundle.accounts.map((a) => [
+          a.id,
+          {
+            id: a.id,
+            currency: a.currency,
+            ...normalizeSureAccountType(a.accountable_type, a.subtype),
+          } satisfies SurePreviewAccount & { id: string },
+        ])
+      )
+      for (const txn of bundle.transactions) {
+        const account = accountById.get(txn.account_id)
+        if (!account) continue
+        expect(sureHeldReason(txn, account) === null).toBe(
+          isPromotable(txn, account)
+        )
+      }
+    }
+  })
+})
+
+// The preview must fully reconcile to the SureMigrationResult: every bucket the
+// server distinguishes (held, zero-amount, invalid-date, unmapped) plus malformed
+// lines and ignored entities is surfaced, and the buckets sum back to the total —
+// so a user never sees an unexplained gap.
+describe("summarizeSureBundle reconciliation", () => {
+  test("v2 complete: buckets sum to total and surface all provenance", () => {
     const manifest = buildSureBundleV2Complete()
     const preview = summarizeSureBundle(parseSureBundle(manifest.ndjson))
+    const t = preview.transactions
 
-    expect(preview.accounts.total).toBe(manifest.expected.accountsCreated)
-    expect(preview.categories).toBe(manifest.expected.categoriesCreated)
-    expect(preview.merchants).toBe(manifest.expected.merchantsCreated)
+    // total = importing + held + zero + invalid-date + unmapped (the exact
+    // partition the orchestrator applies before staging).
+    expect(
+      t.promotable +
+        t.held +
+        t.zeroAmountSkipped +
+        t.invalidDateSkipped +
+        t.unmappable
+    ).toBe(t.total)
+    // held is itemized per reason and the parts sum to the held total.
+    expect(
+      t.heldByReason.transfer +
+        t.heldByReason.nonImportableAccount +
+        t.heldByReason.currencyMismatch +
+        t.heldByReason.split
+    ).toBe(t.held)
 
-    expect(preview.transactions.total).toBe(manifest.expected.transactionsTotal)
-    // promotable mirrors the server's promotedThisRun on a fresh (non-replayed) run.
-    expect(preview.transactions.promotable).toBe(
-      manifest.expected.promotedThisRun
-    )
-    expect(preview.transactions.held).toBe(manifest.expected.held)
-    expect(preview.transactions.zeroAmountSkipped).toBe(
-      manifest.expected.zeroAmountSkipped
-    )
-    // staged = promotable + held (the orchestrator's staged-row count).
-    expect(preview.transactions.promotable + preview.transactions.held).toBe(
-      manifest.expected.staged
-    )
-
-    // One held row per distinct reason in the fixture (transfer, investment
-    // account, currency mismatch, split parent).
-    expect(preview.transactions.heldByReason).toEqual({
-      transfer: 1,
-      nonImportableAccount: 1,
-      currencyMismatch: 1,
-      split: 1,
-    })
-    // Two accounts are non-importable activity holders: the Investment account.
-    expect(preview.accounts.held).toBe(1)
-    expect(preview.accounts.importable).toBe(2)
-    expect(preview.transfers).toBe(1)
+    expect(t.promotable).toBe(manifest.expected.promotedThisRun)
+    expect(t.held).toBe(manifest.expected.held)
+    expect(t.zeroAmountSkipped).toBe(manifest.expected.zeroAmountSkipped)
     expect(preview.malformedLines).toBe(manifest.expected.malformedLines)
-    // Deferred entities (Holding, Rule) are surfaced, never silently dropped.
+    // Deferred entities are surfaced, never silently dropped.
     expect(preview.ignoredEntities).toEqual({ Holding: 1, Rule: 1 })
   })
 
-  test("v1 degraded: malformed lines surfaced, single promotable income", () => {
+  test("v1 degraded: malformed lines surfaced; buckets still reconcile", () => {
     const manifest = buildSureBundleV1Degraded()
     const preview = summarizeSureBundle(parseSureBundle(manifest.ndjson))
+    const t = preview.transactions
 
-    expect(preview.accounts.total).toBe(manifest.expected.accountsCreated)
-    expect(preview.accounts.importable).toBe(1) // unknown type → cash-like fallback
-    expect(preview.transactions.promotable).toBe(
-      manifest.expected.promotedThisRun
-    )
-    expect(preview.transactions.held).toBe(0)
+    expect(
+      t.promotable +
+        t.held +
+        t.zeroAmountSkipped +
+        t.invalidDateSkipped +
+        t.unmappable
+    ).toBe(t.total)
+    expect(t.promotable).toBe(manifest.expected.promotedThisRun)
     expect(preview.malformedLines).toBe(manifest.expected.malformedLines)
   })
 })

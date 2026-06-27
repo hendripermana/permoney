@@ -38,6 +38,8 @@ test.describe("Sure guided migration", () => {
     await expect(page.getByText("Held for a later step")).toBeVisible()
     await expect(page.getByText("Transfers", { exact: true })).toBeVisible()
     await expect(page.getByText(/A few balances won't match yet/)).toBeVisible()
+    // Every bucket reconciles back to the file total — no unexplained gap.
+    await expect(page.getByText(/transactions in this file/)).toBeVisible()
 
     // 4. Confirm: only the 2 promotable standard rows import.
     await page.getByRole("button", { name: /Import 2 transactions/ }).click()
