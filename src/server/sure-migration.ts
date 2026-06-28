@@ -179,7 +179,10 @@ function openingBalanceMinor(
 // Promotion gating (ADR-0041 §6)
 // ---------------------------------------------------------------------------
 
-function isPromotable(
+// Phase-1 promotion gate. Exported so the client-side preview classifier in
+// `src/lib/sure-migration.ts` can be parity-tested against the REAL server
+// verdict (not a hand-written copy). Behavior-neutral export — see PER-171.
+export function isPromotable(
   txn: SureTransaction,
   account: PermoneyAccountInfo
 ): boolean {

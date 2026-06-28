@@ -19,8 +19,10 @@ import {
   buildSureBundleV2Complete,
 } from "./support/sure-fixtures"
 
-// PER-170 / ADR-0041 — Real-Postgres proof of the Sure full-family migration:
-// provider-bound account/category/merchant creation, snapshot opening (no plug),
+// PER-170 / PER-173 / ADR-0041 — Real-Postgres proof of the Sure full-family
+// migration against a REAL-SHAPED bundle (`type` envelope, Valuation snapshots,
+// no Balance/Transfer/split_lines): provider-bound account/category/merchant
+// creation, opening 0 (Valuation→opening is PER-174, never a plug),
 // the Sure sign inversion at promotion, §6 gating (held rows stay staged), the
 // PER-82 promotion parity it reuses (signed amount, atomic balance, base FX
 // projection, audit), one-shot idempotent re-run, lossless artifact retention,
@@ -91,7 +93,7 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
 
   // ---- full v2 bundle ------------------------------------------------------
 
-  test("migrates a v2 bundle: bound entities, snapshot opening, only gated rows promoted", async () => {
+  test("migrates a v2 bundle: bound entities, opening 0, only gated rows promoted", async () => {
     const tenant = await setupTenant()
     const fixture = buildSureBundleV2Complete()
 
@@ -109,15 +111,20 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     expect(result.transactions.held).toBe(fixture.expected.held)
     expect(result.transactions.zeroAmountSkipped).toBe(1)
     expect(result.malformedLines).toBe(0)
-    expect(result.ignoredEntities).toMatchObject({ Holding: 1, Rule: 1 })
+    // Real unmapped v2 entities are surfaced (Valuation is opening-source for
+    // PER-174, not consumed yet), never silently dropped.
+    expect(result.ignoredEntities).toEqual(fixture.expected.ignoredEntities)
 
-    // Provider-bound depository, opening from the EARLIEST snapshot, then the
-    // expense (−1_700_000) + income (+500_000) deltas applied atomically.
+    // Provider-bound depository. Opening is 0 this phase (Valuation→opening is
+    // PER-174); the expense (−1_700_000) + income (+5_000_000) deltas are then
+    // applied atomically, netting a sign-valid ASSET balance.
     const checking = await accountByBinding(tenant, fixture.ids.checking)
     expect(checking?.accountType).toBe("DEPOSITORY")
     expect(checking?.isImportable).toBe(true)
     expect(checking?.balance).toBe(
-      fixture.openingBalanceMinor - 1_700_000n + 500_000n
+      fixture.openingBalanceMinor +
+        fixture.promotableExpenseMinor +
+        fixture.promotableIncomeMinor
     )
 
     // Investment shell exists but is held (not importable).
@@ -180,13 +187,13 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     const [expense, income] = txns
     // Sure POSITIVE 17000.0 → Permoney expense, ledger NEGATIVE minor units.
     expect(expense?.type).toBe("expense")
-    expect(expense?.amount).toBe(-1_700_000n)
-    // Sure NEGATIVE −5000.0 → Permoney income, ledger POSITIVE.
+    expect(expense?.amount).toBe(fixture.promotableExpenseMinor)
+    // Sure NEGATIVE −50000.0 → Permoney income, ledger POSITIVE.
     expect(income?.type).toBe("income")
-    expect(income?.amount).toBe(500_000n)
+    expect(income?.amount).toBe(fixture.promotableIncomeMinor)
 
     // PER-159: base-currency FX projection MUST be set (IDR family, IDR account).
-    expect(expense?.baseAmount).toBe(-1_700_000n)
+    expect(expense?.baseAmount).toBe(fixture.promotableExpenseMinor)
     expect(expense?.baseCurrency).toBe("IDR")
     expect(expense?.fxRateScaled).toBe(IDENTITY_RATE)
     expect(expense?.idempotencyKey).toBeTruthy()

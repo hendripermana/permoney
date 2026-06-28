@@ -1,5 +1,5 @@
 import * as React from "react"
-import { createFileRoute, useRouter } from "@tanstack/react-router"
+import { createFileRoute, Link, useRouter } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import {
@@ -12,6 +12,7 @@ import {
   CopyCheck,
   Sparkles,
   Loader2,
+  FileJson,
 } from "lucide-react"
 
 import { AppSidebar } from "@/components/app-sidebar"
@@ -306,6 +307,28 @@ function ImportPage() {
               </p>
               <WizardSteps step={step} />
             </header>
+
+            {step === "upload" && (
+              <Link
+                to="/import/sure"
+                className="group flex max-w-2xl items-center gap-4 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 transition-colors hover:border-emerald-400 hover:bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/30 dark:hover:border-emerald-700"
+              >
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                  <FileJson size={20} />
+                </span>
+                <div className="flex-1">
+                  <p className="font-semibold">Coming from Sure?</p>
+                  <p className="text-sm text-muted-foreground">
+                    Migrate your whole history — accounts, categories, merchants
+                    and transactions — in one guided step.
+                  </p>
+                </div>
+                <ArrowRight
+                  size={18}
+                  className="shrink-0 text-emerald-600 transition-transform group-hover:translate-x-0.5 dark:text-emerald-400"
+                />
+              </Link>
+            )}
 
             {step === "upload" && (
               <UploadStep

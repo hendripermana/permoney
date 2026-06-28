@@ -5,14 +5,27 @@ import {
   normalizeSureAccountType,
   orderCategoriesParentsFirst,
   parseSureBundle,
+  sureHeldReason,
+  summarizeSureBundle,
   type SureCategory,
+  type SurePreviewAccount,
+  type SureTransaction,
 } from "./sure-migration"
+// Anchor the client-side preview classifier to the REAL server gate, not a
+// hand-written copy: import the server's `isPromotable` and assert identical
+// verdicts. Behavior-neutral export (PER-171); the integration suite stays green.
+import { isPromotable } from "@/server/sure-migration"
+import {
+  buildSureBundleV1Degraded,
+  buildSureBundleV2Complete,
+} from "../../tests/integration/support/sure-fixtures"
 
 // PER-170 / ADR-0041 — pure reader units: NDJSON parse + malformed rejection,
 // account-type normalization + fallback, the Sure sign inversion (incl. 0), and
 // the parent-first category ordering for the two-pass remap.
 
-const line = (entity: string, data: unknown) => JSON.stringify({ entity, data })
+// Real Sure exports key the envelope discriminator as `type` (PER-173).
+const line = (type: string, data: unknown) => JSON.stringify({ type, data })
 
 describe("parseSureBundle", () => {
   test("routes known entities into typed arrays and skips blank lines", () => {
@@ -58,7 +71,7 @@ describe("parseSureBundle", () => {
   test("rejects malformed lines without aborting the rest of the parse", () => {
     const content = [
       "{ not json",
-      JSON.stringify({ entity: "Account" }), // missing data envelope
+      JSON.stringify({ type: "Account" }), // missing data envelope
       line("Account", { id: "a1" }), // fails schema (missing required fields)
       line("Merchant", { id: "m1", name: "Ok" }), // valid — survives
     ].join("\n")
@@ -208,5 +221,139 @@ describe("orderCategoriesParentsFirst", () => {
   test("is total and terminates on an accidental cycle", () => {
     const ordered = orderCategoriesParentsFirst([cat("a", "b"), cat("b", "a")])
     expect(ordered.map((c) => c.id).sort()).toEqual(["a", "b"])
+  })
+})
+
+// PER-171 — the guided importer's pre-confirm preview runs `summarizeSureBundle`
+// in the browser. To be an honest drift guard (not "copy vs copy"), the held
+// classification is asserted against the REAL server verdict `isPromotable`,
+// across a branch matrix AND every transaction in the synthetic fixtures.
+describe("sureHeldReason parity with the server's isPromotable", () => {
+  // One account per Sure accountable_type branch (importable vs held), built
+  // through the same normalizer the orchestrator persists from, so the account
+  // gate (isImportable + balanceSource) is faithful.
+  const accountSpecs: Array<[string, string | null]> = [
+    ["Depository", "checking"],
+    ["CreditCard", null],
+    ["Loan", null],
+    ["Investment", "mutual_fund"],
+    ["PreciousMetal", null],
+    ["OtherAsset", null],
+    ["Spaceship", "warp"], // unknown → conservative depository fallback
+  ]
+  const accounts: Array<SurePreviewAccount & { id: string }> = accountSpecs.map(
+    ([type, subtype], index) => ({
+      id: `acc-${index}`,
+      currency: "IDR",
+      ...normalizeSureAccountType(type, subtype),
+    })
+  )
+
+  // One transaction per gate branch: standard, currency mismatch, transfer
+  // kinds, defaulted/blank kind, and split parent.
+  const txnVariants: Array<Partial<SureTransaction>> = [
+    { kind: "standard", currency: "IDR" },
+    { kind: "standard", currency: "EUR" }, // currency mismatch
+    { kind: "funds_movement", currency: "IDR" },
+    { kind: "cc_payment", currency: "IDR" },
+    { kind: undefined, currency: "IDR" }, // defaults to standard
+    { kind: "   ", currency: "IDR" }, // blank → standard
+    { kind: "standard", currency: "IDR", split_lines: [{}] }, // split parent
+  ]
+
+  test("identical verdict for every account × transaction branch", () => {
+    for (const account of accounts) {
+      for (const variant of txnVariants) {
+        const txn: SureTransaction = {
+          id: "t",
+          account_id: account.id,
+          date: "2026-01-01",
+          amount: "1000.0",
+          currency: variant.currency ?? "IDR",
+          ...variant,
+        }
+        const clientPromotable = sureHeldReason(txn, account) === null
+        const serverPromotable = isPromotable(txn, account)
+        expect(clientPromotable).toBe(serverPromotable)
+      }
+    }
+  })
+
+  test("identical verdict for every transaction in the synthetic bundles", () => {
+    for (const build of [
+      buildSureBundleV2Complete,
+      buildSureBundleV1Degraded,
+    ]) {
+      const bundle = parseSureBundle(build().ndjson)
+      const accountById = new Map(
+        bundle.accounts.map((a) => [
+          a.id,
+          {
+            id: a.id,
+            currency: a.currency,
+            ...normalizeSureAccountType(a.accountable_type, a.subtype),
+          } satisfies SurePreviewAccount & { id: string },
+        ])
+      )
+      for (const txn of bundle.transactions) {
+        const account = accountById.get(txn.account_id)
+        if (!account) continue
+        expect(sureHeldReason(txn, account) === null).toBe(
+          isPromotable(txn, account)
+        )
+      }
+    }
+  })
+})
+
+// The preview must fully reconcile to the SureMigrationResult: every bucket the
+// server distinguishes (held, zero-amount, invalid-date, unmapped) plus malformed
+// lines and ignored entities is surfaced, and the buckets sum back to the total —
+// so a user never sees an unexplained gap.
+describe("summarizeSureBundle reconciliation", () => {
+  test("v2 complete: buckets sum to total and surface all provenance", () => {
+    const manifest = buildSureBundleV2Complete()
+    const preview = summarizeSureBundle(parseSureBundle(manifest.ndjson))
+    const t = preview.transactions
+
+    // total = importing + held + zero + invalid-date + unmapped (the exact
+    // partition the orchestrator applies before staging).
+    expect(
+      t.promotable +
+        t.held +
+        t.zeroAmountSkipped +
+        t.invalidDateSkipped +
+        t.unmappable
+    ).toBe(t.total)
+    // held is itemized per reason and the parts sum to the held total.
+    expect(
+      t.heldByReason.transfer +
+        t.heldByReason.nonImportableAccount +
+        t.heldByReason.currencyMismatch +
+        t.heldByReason.split
+    ).toBe(t.held)
+
+    expect(t.promotable).toBe(manifest.expected.promotedThisRun)
+    expect(t.held).toBe(manifest.expected.held)
+    expect(t.zeroAmountSkipped).toBe(manifest.expected.zeroAmountSkipped)
+    expect(preview.malformedLines).toBe(manifest.expected.malformedLines)
+    // Real unmapped entities are surfaced, never silently dropped.
+    expect(preview.ignoredEntities).toEqual(manifest.expected.ignoredEntities)
+  })
+
+  test("v1 degraded: malformed lines surfaced; buckets still reconcile", () => {
+    const manifest = buildSureBundleV1Degraded()
+    const preview = summarizeSureBundle(parseSureBundle(manifest.ndjson))
+    const t = preview.transactions
+
+    expect(
+      t.promotable +
+        t.held +
+        t.zeroAmountSkipped +
+        t.invalidDateSkipped +
+        t.unmappable
+    ).toBe(t.total)
+    expect(t.promotable).toBe(manifest.expected.promotedThisRun)
+    expect(preview.malformedLines).toBe(manifest.expected.malformedLines)
   })
 })

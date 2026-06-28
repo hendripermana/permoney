@@ -12,13 +12,16 @@
 // imports nothing from Prisma/Node so it stays client-safe and unit-testable.
 //
 // CONTRACT — the reader targets Sure export v2 (`Family::DataExporter`,
-// `EXPORT_VERSION = 2`). `all.ndjson` is one JSON object per line under a stable
-// envelope `{ "entity": <Name>, "data": { ...snake_case attributes } }`. v2-only
-// entities (Balance/Transfer/Trade/Holding/RecurringTransaction/Rule) are
-// OPTIONAL — a degraded/pre-v2 bundle simply omits them and the reader degrades
-// gracefully (ADR-0041 §1/§5/§6). The synthetic fixture builder emits this exact
-// shape; when a real bundle reveals a quirk we iterate the builder, never commit
-// real data (ADR-0041 §11).
+// `EXPORT_VERSION = 2`). `all.ndjson` is one JSON object per line under the
+// stable envelope `{ "type": <Name>, "data": { ...snake_case attributes } }`.
+// The discriminator key is `type` (verified against a real export, PER-173) —
+// strictly `type`, never `entity` (the latter was a fixture fiction that made
+// PER-170 reject 100% of real bundles). The real v2 entity inventory is
+// Account/Category/Merchant/Transaction/Valuation/Budget/BudgetCategory/Tag;
+// only the first four map to typed rows in Phase 1, the rest are retained as
+// `ignoredEntities` (ADR-0041 §1/§5/§6). The synthetic fixture builder emits
+// this exact shape; a hand-authored real-shape snippet (FAKE data) guards the
+// envelope. We never commit a real export — it carries PII (ADR-0041 §11).
 // ============================================================================
 
 import { z } from "zod"
@@ -37,11 +40,15 @@ export const SURE_PROVIDER = "sure"
 // Entity envelope + Zod schemas (Sure v2 attribute names — snake_case Rails)
 // ---------------------------------------------------------------------------
 
-// Phase-1 entities the reader maps. Deferred v2 entities (Transfer, Trade,
-// Holding, RecurringTransaction, Rule, Tag, Valuation, Budget, BudgetCategory)
-// are retained in the raw bundle and counted as `ignoredEntities`, not parsed
-// into typed rows — except `Transfer`, which we DO parse so the gating tests and
-// the deferred Phase-1.5 transfer pairing have a typed source (ADR-0041 §10).
+// Phase-1 entities the reader maps to typed rows. Other real v2 entities
+// (Valuation, Budget, BudgetCategory, Tag) are retained in the raw bundle and
+// counted as `ignoredEntities`, not parsed into typed rows this phase —
+// Valuation-driven opening balances are PER-174 (ADR-0041 §5). `Balance` and
+// `Transfer` schemas/sinks are retained for forward-compatibility but are
+// DORMANT against real exports: a real Sure v2 export emits neither (verified
+// PER-173); opening balances come from `Valuation`, transfers from the txn
+// `kind` field. They stay so a non-Sure or future bundle that does carry them
+// still parses, and the gating logic has a typed source.
 export const SURE_ENTITY = {
   account: "Account",
   balance: "Balance",
@@ -157,8 +164,11 @@ export interface ParsedSureBundle {
   ignoredEntities: Record<string, number>
 }
 
+// Real Sure exports key the discriminator as `type` (verified PER-173). STRICT:
+// we read `type` only — never `entity` — so the contract stays unambiguous
+// (CLAUDE.md "Strict Contracts"); a line without a string `type` is malformed.
 const ndjsonEnvelopeSchema = z.object({
-  entity: z.string().min(1),
+  type: z.string().min(1),
   data: z.record(z.string(), z.unknown()),
 })
 
@@ -170,7 +180,7 @@ interface EntitySink<T> {
 /**
  * Parse a Sure `all.ndjson` bundle one line at a time. Blank lines are skipped.
  * A line is rejected as malformed (collected, not thrown) when it is not valid
- * JSON, does not match the `{ entity, data }` envelope, or fails its entity
+ * JSON, does not match the `{ type, data }` envelope, or fails its entity
  * schema. Known but deferred entities are counted in `ignoredEntities` and
  * retained only in the raw bundle. The parse never throws on row-level problems
  * so one corrupt line can never abort a multi-thousand-row migration; the
@@ -233,15 +243,16 @@ export function parseSureBundle(content: string): ParsedSureBundle {
     if (!envelope.success) {
       bundle.malformedLines.push({
         line: lineNumber,
-        reason: "missing { entity, data } envelope",
+        reason: "missing { type, data } envelope",
       })
       continue
     }
 
-    const { entity, data } = envelope.data
-    const sink = sinks[entity]
+    const { type: entityType, data } = envelope.data
+    const sink = sinks[entityType]
     if (!sink) {
-      bundle.ignoredEntities[entity] = (bundle.ignoredEntities[entity] ?? 0) + 1
+      bundle.ignoredEntities[entityType] =
+        (bundle.ignoredEntities[entityType] ?? 0) + 1
       continue
     }
 
@@ -249,7 +260,7 @@ export function parseSureBundle(content: string): ParsedSureBundle {
     if (!parsed.success) {
       bundle.malformedLines.push({
         line: lineNumber,
-        reason: `invalid ${entity}: ${parsed.error.issues[0]?.message ?? "schema error"}`,
+        reason: `invalid ${entityType}: ${parsed.error.issues[0]?.message ?? "schema error"}`,
       })
       continue
     }
@@ -381,6 +392,157 @@ export function classifySureAmount(
   const type = minor >= 0n ? "expense" : "income"
   const absMinorUnits = minor < 0n ? -minor : minor
   return { type, absMinorUnits, isZeroAmount }
+}
+
+// ---------------------------------------------------------------------------
+// Pre-confirm preview summary (PER-171 — client-side mirror of the gates)
+// ---------------------------------------------------------------------------
+
+// The guided importer's preview is computed in the browser by running THIS same
+// reader on the uploaded bundle, because the migration server fn commits in one
+// shot (no server dry-run). To keep the preview honest, the held classification
+// below mirrors the orchestrator's `isPromotable` gate (src/server/sure-migration.ts)
+// branch-for-branch and with the SAME precedence, so the previewed counts agree
+// with the authoritative SureMigrationResult after promotion. The parity is
+// pinned by a unit test against the synthetic v2 fixture manifest.
+
+/** A held transaction's single primary reason (assigned with isPromotable's precedence). */
+export type SureHeldReason =
+  | "transfer"
+  | "nonImportableAccount"
+  | "currencyMismatch"
+  | "split"
+
+export interface SurePreviewAccount extends NormalizedSureAccount {
+  currency: string
+}
+
+/** An account's Phase-1 promotion eligibility (mirror of isPromotable's account gate). */
+function isImportableSureAccount(account: NormalizedSureAccount): boolean {
+  return account.isImportable && account.balanceSource === "transaction_flow"
+}
+
+/**
+ * Why a staged Sure transaction is held in Phase 1, or `null` if it will promote.
+ * Precedence matches the server's `isPromotable`: non-standard kind, then a
+ * non-importable account, then a currency mismatch, then a split parent.
+ */
+export function sureHeldReason(
+  txn: SureTransaction,
+  account: SurePreviewAccount
+): SureHeldReason | null {
+  const kind = (txn.kind ?? "standard").trim() || "standard"
+  if (kind !== "standard") return "transfer"
+  if (!isImportableSureAccount(account)) return "nonImportableAccount"
+  if (txn.currency !== account.currency) return "currencyMismatch"
+  if (txn.split_lines && txn.split_lines.length > 0) return "split"
+  return null
+}
+
+export interface SureBundlePreview {
+  accounts: { total: number; importable: number; held: number }
+  categories: number
+  merchants: number
+  transactions: {
+    total: number
+    /** Standard rows on importable, currency-matching accounts — become ledger txns. */
+    promotable: number
+    /** Staged but held this phase (sum of `heldByReason`). */
+    held: number
+    heldByReason: Record<SureHeldReason, number>
+    /** Zero-amount rows — retained in the artifact, not stageable (ADR-0041 §4.C). */
+    zeroAmountSkipped: number
+    /** Unparseable dates — retained in the artifact, not staged. */
+    invalidDateSkipped: number
+    /** Rows whose account is absent from the bundle (degraded export). */
+    unmappable: number
+  }
+  /** Typed Transfer rows (deferred Phase-2 pairing source). */
+  transfers: number
+  malformedLines: number
+  ignoredEntities: Record<string, number>
+}
+
+/**
+ * Summarize a parsed Sure bundle into the honest "what will be created vs held"
+ * counts the guided importer previews before the user confirms. This is a pure
+ * mirror of the orchestrator's staging gates; the post-promote screen replaces
+ * these estimates with the authoritative server result.
+ */
+export function summarizeSureBundle(
+  bundle: ParsedSureBundle
+): SureBundlePreview {
+  const accountById = new Map<string, SurePreviewAccount>()
+  let importableAccounts = 0
+  for (const account of bundle.accounts) {
+    const normalized: SurePreviewAccount = {
+      ...normalizeSureAccountType(account.accountable_type, account.subtype),
+      currency: account.currency,
+    }
+    accountById.set(account.id, normalized)
+    if (isImportableSureAccount(normalized)) importableAccounts += 1
+  }
+
+  const heldByReason: Record<SureHeldReason, number> = {
+    transfer: 0,
+    nonImportableAccount: 0,
+    currencyMismatch: 0,
+    split: 0,
+  }
+  let promotable = 0
+  let held = 0
+  let zeroAmountSkipped = 0
+  let invalidDateSkipped = 0
+  let unmappable = 0
+
+  for (const txn of bundle.transactions) {
+    const account = accountById.get(txn.account_id)
+    if (!account) {
+      unmappable += 1
+      continue
+    }
+    if (Number.isNaN(new Date(txn.date).getTime())) {
+      invalidDateSkipped += 1
+      continue
+    }
+    const { isZeroAmount } = classifySureAmount(
+      txn.amount,
+      account.currency as CurrencyCode
+    )
+    if (isZeroAmount) {
+      zeroAmountSkipped += 1
+      continue
+    }
+    const reason = sureHeldReason(txn, account)
+    if (reason === null) {
+      promotable += 1
+      continue
+    }
+    heldByReason[reason] += 1
+    held += 1
+  }
+
+  return {
+    accounts: {
+      total: bundle.accounts.length,
+      importable: importableAccounts,
+      held: bundle.accounts.length - importableAccounts,
+    },
+    categories: bundle.categories.length,
+    merchants: bundle.merchants.length,
+    transactions: {
+      total: bundle.transactions.length,
+      promotable,
+      held,
+      heldByReason,
+      zeroAmountSkipped,
+      invalidDateSkipped,
+      unmappable,
+    },
+    transfers: bundle.transfers.length,
+    malformedLines: bundle.malformedLines.length,
+    ignoredEntities: bundle.ignoredEntities,
+  }
 }
 
 // ---------------------------------------------------------------------------
