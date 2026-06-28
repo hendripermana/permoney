@@ -254,14 +254,22 @@ declared opening** (the value before any transaction); `current_anchor` and
    `opening_anchor` amount. **No `opening_anchor` for an account ⇒ gap (0)**,
    **never** the date heuristic — absence of an anchor when `kind` is present
    means "opening unknown", not "permission to guess".
-2. **Bundle carries no `kind`** (degraded export) — opening = the **earliest
-   valid-dated `Valuation.amount`** for the account, used **only** when its date
-   is **strictly `<`** the first **posting** transaction's date (or no posting
-   txn exists). On/after that date the valuation overrides a promoted flow (per
-   the forward calculator) ⇒ gap (0). The "posting" set is exactly the rows that
-   apply a balance delta this run — `isPromotable && !isZeroAmount && validDate`,
-   computed by the **single** `willPostThisRun` predicate the promotion path uses,
-   so the heuristic anchor can never drift from what actually promotes.
+2. **Bundle carries no `kind`** (degraded export) — date heuristic, branching on
+   whether the account has a **posting** transaction this run:
+   - **Posting txns exist** — opening = the **earliest valid-dated
+     `Valuation.amount`**, used **only** when its date is **strictly `<`** the
+     first posting txn's date. On/after that date the valuation overrides a
+     promoted flow (per the forward calculator) ⇒ gap (0).
+   - **Nothing posts** (e.g. an account whose activity is entirely held
+     transfers — verified at **14/35** ASSET-flow accounts on a real export) —
+     opening = the **latest valid-dated `Valuation.amount`**. With no flow added
+     on top there is zero double-count risk, and the latest is the best known
+     current value; the earliest would discard known movement and **understate**.
+
+   The "posting" set is exactly the rows that apply a balance delta this run —
+   `isPromotable && !isZeroAmount && validDate`, computed by the **single**
+   `willPostThisRun` predicate the promotion path uses, so the heuristic anchor
+   can never drift from what actually promotes. Negative amount ⇒ gap (0).
 
 `kind` is parsed as a **tolerant string** (an unknown future kind must not reject
 the row; only `=== "opening_anchor"` matches); `kind: ""` counts as absent. A
@@ -499,8 +507,9 @@ Per AGENTS.md / ADR-0006 / ADR-0036 (PER-86 harness, `docs/testing.md`):
   amount; a Sure income (`amount < 0`) lands positive.
 - **Opening balance (§5):** kind-bearing bundle → opening = the `opening_anchor`
   `Valuation.amount` (`current_anchor`/`reconciliation` ignored); no-kind bundle →
-  earliest `Valuation` strictly before the first posting txn, else opening = 0 +
-  documented gap. Negative-ASSET → 0. **No plug, ever.**
+  earliest `Valuation` strictly before the first posting txn, or — when nothing
+  posts — the latest `Valuation`; else opening = 0 + documented gap.
+  Negative-ASSET → 0. **No plug, ever.**
 - **Gating/held:** transfer-kind rows, rows on `isImportable=false`
   (Investment/TrackedAsset) accounts, and split parents are **staged but not
   promoted**; referenced accounts still exist as shells (no dangling refs).

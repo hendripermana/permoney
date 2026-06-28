@@ -162,10 +162,13 @@ async function gzipBytes(
 //     No `opening_anchor` for an account ⇒ gap (0), NEVER the date heuristic:
 //     a `current_anchor`/`reconciliation` is a mid/end snapshot whose amount
 //     already embeds the very flows we promote, so using it double-counts.
-//   * kind absent (degraded export) — earliest VALID-dated valuation, used only
-//     when it falls STRICTLY before the first posting txn. Sure's forward
-//     calculator lets a valuation OVERRIDE same-date flows, so a same-date or
-//     mid-history valuation already embeds promoted flows ⇒ gap (0).
+//   * kind absent (degraded export) — date heuristic. When posting txns exist:
+//     the EARLIEST valid-dated valuation, used only when STRICTLY before the
+//     first posting txn (Sure's forward calculator lets a valuation OVERRIDE
+//     same-date flows, so a same-date/mid-history valuation already embeds
+//     promoted flows ⇒ gap). When NOTHING posts (held-transfer-only account):
+//     the LATEST valid-dated valuation — best known current value, no flow is
+//     added on top so no double-count; earliest would discard known movement.
 //
 // Never plugs `Sure.balance − Σ(txns)` (§5 forbidden — double-counts deferred
 // transfers). Negative opening on an ASSET violates the balance-sign CHECK ⇒
@@ -207,18 +210,37 @@ export function decideOpeningBalance(
     return assetOpening(anchor.amount, account.currency, "opening_anchor")
   }
 
-  // Degraded export (no `kind`): earliest valid-dated valuation, used only when
-  // strictly before the first posting txn (or when nothing posts at all).
+  // Degraded export (no `kind`): pick the anchoring valuation by date.
   const dated = forAccount
     .filter((v) => !Number.isNaN(new Date(v.date).getTime()))
     .map((v) => ({ valuation: v, day: v.date.slice(0, 10) }))
     .sort((a, b) => a.day.localeCompare(b.day))
+  if (dated.length === 0) return { minor: 0n, source: "gap" }
+
+  if (opts.earliestPromotedTxnDate === null) {
+    // Nothing posts this run (real case: an account whose activity is entirely
+    // held transfers). final balance = opening + 0, so the LATEST valuation is
+    // the best known current value with ZERO double-count risk — nothing is
+    // added on top. The earliest would discard every known movement and
+    // understate (verified on a real export: 14/35 accounts hit this branch).
+    const latest = dated[dated.length - 1]
+    return latest
+      ? assetOpening(
+          latest.valuation.amount,
+          account.currency,
+          "date_heuristic"
+        )
+      : { minor: 0n, source: "gap" }
+  }
+
+  // Posting rows exist → opening must precede the first one. Use the EARLIEST
+  // valuation, and only when it is STRICTLY before that first posting txn: on or
+  // after it, the valuation overrides a promoted flow (Sure's forward
+  // calculator) ⇒ double-count ⇒ gap. (latest here could post-date a flow.)
   const earliest = dated[0]
-  if (!earliest) return { minor: 0n, source: "gap" }
-  const clean =
-    opts.earliestPromotedTxnDate === null ||
-    earliest.day < opts.earliestPromotedTxnDate
-  if (!clean) return { minor: 0n, source: "gap" }
+  if (!earliest || !(earliest.day < opts.earliestPromotedTxnDate)) {
+    return { minor: 0n, source: "gap" }
+  }
   return assetOpening(
     earliest.valuation.amount,
     account.currency,

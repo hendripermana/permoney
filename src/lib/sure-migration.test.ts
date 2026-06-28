@@ -494,15 +494,37 @@ describe("decideOpeningBalance — degraded date-heuristic mode", () => {
     ).toEqual({ minor: 5_000_000n, source: "date_heuristic" })
   })
 
-  test("no posting txn at all → earliest valuation is a clean anchor", () => {
+  test("no posting txn at all → LATEST valuation (best current value, no double-count)", () => {
+    // A held-transfer-only account posts nothing this run; the latest valuation
+    // is the best known current value (nothing is added on top → no
+    // double-count). Latest by date wins, NOT earliest — proving we don't
+    // understate an account with known movement across multiple valuations.
     expect(
       decideOpeningBalance(
         ASSET_FLOW,
         "a",
-        [valuation("a", "50000.0", "2026-01-01")],
+        [
+          valuation("a", "50000.0", "2026-01-01"),
+          valuation("a", "120000.0", "2026-09-01"), // latest
+          valuation("a", "90000.0", "2026-05-01"),
+        ],
         { bundleHasKind: false, earliestPromotedTxnDate: null }
       )
-    ).toEqual({ minor: 5_000_000n, source: "date_heuristic" })
+    ).toEqual({ minor: 12_000_000n, source: "date_heuristic" })
+  })
+
+  test("no posting txn at all → negative latest valuation → gap, never a plug", () => {
+    expect(
+      decideOpeningBalance(
+        ASSET_FLOW,
+        "a",
+        [
+          valuation("a", "50000.0", "2026-01-01"),
+          valuation("a", "-3000.0", "2026-09-01"), // latest, negative
+        ],
+        { bundleHasKind: false, earliestPromotedTxnDate: null }
+      )
+    ).toEqual({ minor: 0n, source: "gap" })
   })
 
   test("same-date as first posting txn → gap (strict <; valuation overrides flow)", () => {
