@@ -981,7 +981,30 @@ describe("classifyTransferPairGate — precedence importable → currency → ki
     ).toBe("kind_divergence")
   })
 
-  test("derived cc_payment matching Sure cc_payment passes", () => {
+  test("ASYMMETRIC cc_payment ([cc_payment, funds_movement]) promotes", () => {
+    // Real Sure tagging: cash-side `cc_payment`, CreditCard-side `funds_movement`.
+    expect(
+      classifyTransferPairGate(
+        meta("a", "A", "DEPOSITORY"),
+        meta("b", "B", "CREDIT"),
+        leg("o", "a", "25000.0", "cc_payment"),
+        leg("i", "b", "-25000.0", "funds_movement")
+      )
+    ).toBeNull()
+  })
+
+  test("ASYMMETRIC loan_payment ([loan_payment, funds_movement]) promotes", () => {
+    expect(
+      classifyTransferPairGate(
+        meta("a", "A", "DEPOSITORY"),
+        meta("b", "B", "LOAN"),
+        leg("o", "a", "25000.0", "loan_payment"),
+        leg("i", "b", "-25000.0", "funds_movement")
+      )
+    ).toBeNull()
+  })
+
+  test("symmetric [cc_payment, cc_payment] still passes (forward-compatible)", () => {
     expect(
       classifyTransferPairGate(
         meta("a", "A", "DEPOSITORY"),
@@ -990,6 +1013,19 @@ describe("classifyTransferPairGate — precedence importable → currency → ki
         leg("i", "b", "-25000.0", "cc_payment")
       )
     ).toBeNull()
+  })
+
+  test("anomaly: Sure cc_payment but accounts derive funds_movement → HELD", () => {
+    // `cc_payment` is neither the derived kind (funds_movement) nor the generic
+    // funds_movement → held, never promoted with a guessed kind.
+    expect(
+      classifyTransferPairGate(
+        meta("a", "A", "DEPOSITORY"),
+        meta("b", "B", "DEPOSITORY"),
+        leg("o", "a", "25000.0", "cc_payment"),
+        leg("i", "b", "-25000.0", "funds_movement")
+      )
+    ).toBe("kind_divergence")
   })
 
   test("plain depository↔depository funds_movement passes", () => {

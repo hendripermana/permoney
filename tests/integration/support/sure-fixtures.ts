@@ -691,14 +691,18 @@ export function buildSureBundleV2Transfers(): SureTransferFixture {
     checking: "sure-acc-t-checking",
     savings: "sure-acc-t-savings",
     card: "sure-acc-t-card",
+    loan: "sure-acc-t-loan",
     usd: "sure-acc-t-usd",
   }
   const legIds = {
     cardSpend: "sure-txn-t-cardspend",
+    loanSpend: "sure-txn-t-loanspend",
     fmOut: "sure-txn-t-fm-out",
     fmIn: "sure-txn-t-fm-in",
     ccOut: "sure-txn-t-cc-out",
     ccIn: "sure-txn-t-cc-in",
+    loanOut: "sure-txn-t-loan-out",
+    loanIn: "sure-txn-t-loan-in",
     cmOut: "sure-txn-t-cm-out",
     cmIn: "sure-txn-t-cm-in",
     nsIn: "sure-txn-t-ns-in",
@@ -709,6 +713,7 @@ export function buildSureBundleV2Transfers(): SureTransferFixture {
     sureAccount(accountIds.checking, "BCA Checking", "Depository", "checking"),
     sureAccount(accountIds.savings, "BCA Savings", "Depository", "savings"),
     sureAccount(accountIds.card, "Visa Card", "CreditCard", "credit_card"),
+    sureAccount(accountIds.loan, "KTA Loan", "Loan", "personal_loan"),
     sureAccount(accountIds.usd, "Wise USD", "Depository", "checking", "USD"),
     // checking opens from an `opening_anchor` (kind-bearing → v2 mode).
     sureVal({
@@ -717,13 +722,21 @@ export function buildSureBundleV2Transfers(): SureTransferFixture {
       date: "2026-01-01",
       kind: "opening_anchor",
     }),
-    // Standard card spend → −10_000_000 debt so the cc_payment can move toward 0.
+    // Standard spends seed liability DEBT so the payments below move toward zero.
     sureTxn({
       id: legIds.cardSpend,
       accountId: accountIds.card,
       amount: "100000.0",
       kind: "standard",
       name: "Card purchase",
+      date: "2026-05-01",
+    }),
+    sureTxn({
+      id: legIds.loanSpend,
+      accountId: accountIds.loan,
+      amount: "200000.0",
+      kind: "standard",
+      name: "Loan principal",
       date: "2026-05-01",
     }),
     // Deterministic funds_movement: checking → savings (promotes).
@@ -745,6 +758,8 @@ export function buildSureBundleV2Transfers(): SureTransferFixture {
     }),
     sureTransfer(legIds.fmOut, legIds.fmIn),
     // Deterministic cc_payment: checking → card (promotes; derived cc_payment).
+    // ASYMMETRIC kind like the real export: only the cash-side leg is `cc_payment`;
+    // the CreditCard-side leg is the generic `funds_movement`.
     sureTxn({
       id: legIds.ccOut,
       accountId: accountIds.checking,
@@ -757,11 +772,30 @@ export function buildSureBundleV2Transfers(): SureTransferFixture {
       id: legIds.ccIn,
       accountId: accountIds.card,
       amount: "-50000.0",
-      kind: "cc_payment",
+      kind: "funds_movement",
       name: "Visa payment",
       date: "2026-05-03",
     }),
     sureTransfer(legIds.ccOut, legIds.ccIn),
+    // Deterministic loan_payment: checking → loan (promotes; derived loan_payment).
+    // ASYMMETRIC: cash-side `loan_payment`, Loan-side `funds_movement`.
+    sureTxn({
+      id: legIds.loanOut,
+      accountId: accountIds.checking,
+      amount: "60000.0",
+      kind: "loan_payment",
+      name: "Loan installment",
+      date: "2026-05-13",
+    }),
+    sureTxn({
+      id: legIds.loanIn,
+      accountId: accountIds.loan,
+      amount: "-60000.0",
+      kind: "funds_movement",
+      name: "Loan installment",
+      date: "2026-05-13",
+    }),
+    sureTransfer(legIds.loanOut, legIds.loanIn),
     // Cross-currency Transfer (IDR ↔ USD) → currency_mismatch HELD (FX deferred).
     sureTxn({
       id: legIds.cmOut,
@@ -812,21 +846,23 @@ export function buildSureBundleV2Transfers(): SureTransferFixture {
     accountIds,
     legIds,
     expected: {
-      accountsCreated: 4,
-      transferLegsSeen: 8,
-      transferLegsStaged: 8,
-      pairsPromotedThisRun: 2,
-      legsPromotedTotal: 4,
-      pairedByTier: { deterministic: 2, clean: 0, resolvedCluster: 0 },
+      accountsCreated: 5,
+      transferLegsSeen: 10,
+      transferLegsStaged: 10,
+      pairsPromotedThisRun: 3,
+      legsPromotedTotal: 6,
+      pairedByTier: { deterministic: 3, clean: 0, resolvedCluster: 0 },
       heldLegsByReason: held,
     },
     balancesMinor: {
-      // 20_000_000 open − 4_000_000 (fm) − 5_000_000 (cc) = 11_000_000.
-      checking: 11_000_000n,
+      // 20_000_000 open − 4_000_000 (fm) − 5_000_000 (cc) − 6_000_000 (loan).
+      checking: 5_000_000n,
       // 0 + 4_000_000 (fm in); the ns inflow is HELD, never posted.
       savings: 4_000_000n,
       // −10_000_000 debt + 5_000_000 (cc payment) = −5_000_000 (toward zero).
       card: -5_000_000n,
+      // −20_000_000 debt + 6_000_000 (loan payment) = −14_000_000 (toward zero).
+      loan: -14_000_000n,
       usd: 0n,
     },
   }

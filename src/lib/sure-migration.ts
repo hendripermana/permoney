@@ -780,9 +780,19 @@ function isImportableFlowAccount(meta: SureTransferAccountMeta): boolean {
 /**
  * Gate a formed candidate pair (precedence: importable → currency → kind), or
  * `null` when it is promotable. Pure: every input comes from the bundle/taxonomy.
+ *
  * The `kind` cross-check derives Permoney's transfer kind from the two account
- * types and requires STRICT equality to BOTH legs' Sure `kind` — any divergence
- * (including a legal-but-unexpected `liability_draw`) holds the pair.
+ * types and validates it against the two legs' Sure `kind`. Sure tags transfers
+ * **ASYMMETRICALLY** (verified head-eng vs the real `all.ndjson`): only the
+ * cash-side leg carries the specialized kind (`cc_payment` / `loan_payment`); the
+ * liability-side leg is tagged the generic `funds_movement`. So a real card/loan
+ * payment is `[special, funds_movement]`, never `[special, special]`. The rule is
+ * therefore asymmetric-aware: **every leg kind must be the derived kind OR the
+ * generic `funds_movement`, AND at least one leg must carry the derived kind.**
+ * This promotes `cc_payment`/`loan_payment` (ADR-0042 §2 / the Q5 lock) while still
+ * holding a genuine divergence: a loan-SOURCED `funds_movement` (derived
+ * `liability_draw`, no leg tagged it → HELD) and a Sure `cc_payment` whose accounts
+ * don't justify it (`cc_payment` is neither derived nor `funds_movement` → HELD).
  */
 export function classifyTransferPairGate(
   outflowMeta: SureTransferAccountMeta,
@@ -808,8 +818,17 @@ export function classifyTransferPairGate(
   })
   const outflowKind = (outflowTxn.kind ?? "").trim()
   const inflowKind = (inflowTxn.kind ?? "").trim()
-  if (outflowKind !== derived || inflowKind !== derived)
+  // Asymmetric-aware: each leg is the derived kind or the generic funds_movement…
+  const allowsLeg = (kind: string): boolean =>
+    kind === derived || kind === "funds_movement"
+  if (!allowsLeg(outflowKind) || !allowsLeg(inflowKind)) {
     return "kind_divergence"
+  }
+  // …and at least one leg actually carries the derived kind (so a pair Sure never
+  // tagged with the specialized kind — e.g. a loan-sourced liability_draw — holds).
+  if (outflowKind !== derived && inflowKind !== derived) {
+    return "kind_divergence"
+  }
   return null
 }
 

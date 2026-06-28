@@ -432,7 +432,10 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     // Atomic dual-leg balances on BOTH accounts; cc_payment toward zero.
     await assertBalances(tenant, fixture.accountIds, fixture.balancesMinor)
 
-    // Two promoted pairs → two Transfer rows + four transfer-type legs, with FX set.
+    // Three promoted pairs (fm + cc + loan) → three Transfer rows + six
+    // transfer-type legs, with FX set. The cc/loan legs are tagged ASYMMETRICALLY
+    // (liability-side = funds_movement) exactly like the real export, so the
+    // asymmetric-aware kind gate is exercised end-to-end.
     const { transferCount, legs } = await harness.withMember(
       tenant.familyId,
       tenant.userId,
@@ -443,11 +446,15 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
         }),
       })
     )
-    expect(transferCount).toBe(2)
-    expect(legs).toHaveLength(4)
+    expect(transferCount).toBe(3)
+    expect(legs).toHaveLength(6)
     // PER-159 / ADR-0035: base projection materialized on every promoted leg.
     expect(legs.every((leg) => leg.baseAmount !== null)).toBe(true)
     expect(legs.every((leg) => leg.baseCurrency === "IDR")).toBe(true)
+    // The cc_payment and loan_payment pairs promoted, deriving the right kinds and
+    // moving each liability toward zero (asserted via balancesMinor above).
+    expect(legs.filter((leg) => leg.kind === "cc_payment")).toHaveLength(2)
+    expect(legs.filter((leg) => leg.kind === "loan_payment")).toHaveLength(2)
   })
 
   test("Mode B — degraded heuristic: clean + cluster promote, every held bucket reconciles", async () => {

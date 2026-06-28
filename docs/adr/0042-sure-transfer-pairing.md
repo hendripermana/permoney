@@ -39,6 +39,34 @@ promotes them as proper **dual-leg Permoney transfers**.
   counterpart account name EXACTLY** (normalized); 8 are substring-only (mis-bind
   risk); 17 have no usable hint. Directional prefixes are **English only**
   (435 `"Transfer to"` + 435 `"Transfer from"`; zero Indonesian `ke/dari`).
+- **Sure tags transfers ASYMMETRICALLY** (discovered head-eng on the first
+  adversarial harness run): only the **cash-side** leg carries the specialized
+  kind (`cc_payment` / `loan_payment`); the **liability-side** leg (on the
+  `CreditCard`/`Loan` account) is tagged the generic `funds_movement`. All 28
+  liability-side legs in the bundle are `funds_movement`. So a real card/loan
+  payment is `[special, funds_movement]`, **never** `[special, special]`. The gate
+  must be asymmetric-aware or it wrongly holds every cc/loan payment (§2).
+
+### Real distribution (verified against `all.ndjson` — the honest Phase-1 ceiling)
+
+The TIE_OUT holds (928 legs all accounted for), and after the asymmetric-kind fix
+the distribution is:
+
+| Outcome                                                                                                                            | Legs        |
+| ---------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| **paired** (promoted as dual-leg transfers)                                                                                        | ~648 (~70%) |
+| `non_importable` — Investment / PreciousMetal / OtherAsset legs **held by §6** (Phase 1 does not import these accounts; by design) | 210         |
+| `ambiguous_cluster` — held conservatively (no unique name match)                                                                   | 60          |
+| `kind_divergence` — loan-sourced `funds_movement` → `liability_draw`, no leg tagged it → held                                      | ~4          |
+| `unpaired_orphan`                                                                                                                  | 6           |
+
+The original "≥83%" was a **projection that did not account for the §6
+importability gate**: ~23% of transfer legs touch Investment/TrackedAsset
+accounts and are **correctly held** (their economically-meaningful postings are
+Trades/Holdings, deferred to PER-150/146). So the honest Phase-1 auto-pair ceiling
+is **~70%**, with the remainder **held legitimately** (dominated by §6), not
+fabricated. This is honest surfacing, not a failure — the DoD bar is corrected
+accordingly below.
 
 ## Decision
 
@@ -79,12 +107,18 @@ Before calling the canonical core, each candidate pair passes, in order:
    Investment/TrackedAsset legs hold, consistent with ADR-0041 §6,
 3. **currency match** between the two legs (else `currency_mismatch` — FX transfer
    pairing is deferred),
-4. **`kind` cross-check (strict equality)**: Permoney **derives** the transfer
-   kind from the two account types (`deriveTransferKindForAccounts`) and requires
-   it to equal both legs' Sure `kind`. Any divergence — **including a
-   legal-but-unexpected `liability_draw`** (a loan-sourced `funds_movement`) — is
-   HELD `kind_divergence`, never silently promoted with a guessed kind. This also
-   catches a flipped pair for free (wrong direction derives the wrong kind).
+4. **`kind` cross-check (asymmetric-aware)**: Permoney **derives** the transfer
+   kind from the two account types (`deriveTransferKindForAccounts`) and validates
+   it against the two legs' Sure `kind`. Because Sure tags transfers
+   **asymmetrically** (only the cash-side leg carries the specialized kind; the
+   liability-side leg is the generic `funds_movement` — see Context), the rule is:
+   **every leg kind must be the derived kind OR `funds_movement`, AND at least one
+   leg must carry the derived kind.** This promotes `cc_payment`/`loan_payment`
+   (the common case), while still holding a genuine divergence — a loan-sourced
+   `funds_movement` (derived `liability_draw`, no leg tagged it → `kind_divergence`,
+   never invents a borrowing event) and a Sure `cc_payment` whose accounts don't
+   justify it. A bilateral-exact rule was the original bug: it held all 21 cc/loan
+   payment pairs because Sure never tags both legs.
 
 The Postgres balance-sign CHECK (e.g. a `cc_payment` overshooting a liability past
 zero) is the runtime backstop: a throw from the core is caught per-pair and held
@@ -191,11 +225,16 @@ opening-balance reconciliation safeguard becomes mandatory.**
 - **Pure edge matrix** (`src/lib/sure-migration.test.ts`): Tier 0/1/2, no-fuzz
   negatives (off-by-day, amount mismatch), cross-currency/self/orphan held,
   cluster bidirectional resolve, ambiguous (no-hint and duplicate-name) held,
-  gate precedence (importable → currency → kind, incl. `liability_draw`
-  divergence), determinism (shuffled input → identical pairing), exhaustiveness.
+  gate precedence (importable → currency → kind), the **asymmetric kind combos**
+  (`[cc_payment, funds_movement]` and `[loan_payment, funds_movement]` promote;
+  loan-sourced `funds_movement` → `liability_draw` held; a Sure `cc_payment` the
+  accounts don't justify → held), determinism, exhaustiveness.
 - **Mode A (deterministic, `Transfer` entity)**: dual-leg promote, atomic both-
-  account balance, `Transfer` link, base/FX set, `cc_payment` moves the CREDIT
-  liability toward zero; `currency_mismatch` / `not_staged` / orphan held.
+  account balance, `Transfer` link, base/FX set; **`cc_payment` AND `loan_payment`
+  pairs tagged ASYMMETRICALLY** (liability-side `funds_movement`, exactly like the
+  real export) promote and move each liability toward zero — so a bilateral-exact
+  regression can never pass CI again; `currency_mismatch` / `not_staged` / orphan
+  held.
 - **Mode B (degraded heuristic)**: clean + cluster promote; every held bucket
   populated and reconciling; balances; held rows stay normalized.
 - **Dedicated regression**: transfers must NOT double-count the opening balance.
