@@ -40,15 +40,16 @@ export const SURE_PROVIDER = "sure"
 // Entity envelope + Zod schemas (Sure v2 attribute names — snake_case Rails)
 // ---------------------------------------------------------------------------
 
-// Phase-1 entities the reader maps to typed rows. Other real v2 entities
-// (Valuation, Budget, BudgetCategory, Tag) are retained in the raw bundle and
-// counted as `ignoredEntities`, not parsed into typed rows this phase —
-// Valuation-driven opening balances are PER-174 (ADR-0041 §5). `Balance` and
-// `Transfer` schemas/sinks are retained for forward-compatibility but are
-// DORMANT against real exports: a real Sure v2 export emits neither (verified
-// PER-173); opening balances come from `Valuation`, transfers from the txn
-// `kind` field. They stay so a non-Sure or future bundle that does carry them
-// still parses, and the gating logic has a typed source.
+// Phase-1 entities the reader maps to typed rows: Account/Category/Merchant/
+// Transaction and — as of PER-174 — `Valuation`, the real-export opening-balance
+// source (ADR-0041 §5). Other real v2 entities (Budget, BudgetCategory, Tag, …)
+// are retained in the raw bundle and counted as `ignoredEntities`, not parsed
+// into typed rows this phase. `Balance` and `Transfer` schemas/sinks are
+// retained for forward-compatibility but are DORMANT against real exports: a
+// real Sure v2 export emits neither (verified PER-173) — opening balances come
+// from `Valuation` (`kind=opening_anchor` when present, else an earliest-by-date
+// heuristic — §5), transfers from the txn `kind` field. They stay so a non-Sure
+// or future bundle that does carry them still parses, with a typed source.
 export const SURE_ENTITY = {
   account: "Account",
   balance: "Balance",
@@ -56,6 +57,7 @@ export const SURE_ENTITY = {
   merchant: "Merchant",
   transaction: "Transaction",
   transfer: "Transfer",
+  valuation: "Valuation",
 } as const
 
 // Sure stores money as a decimal STRING ("17000.0"); accept a number too and
@@ -78,8 +80,8 @@ export const sureAccountSchema = z.object({
   subtype: z.string().nullable().optional(),
   currency: z.string().min(3).max(3),
   // Sure's reported balances — retained as provenance ONLY (never written as a
-  // reconciled number, ADR-0041 §5). `start_balance` for the opening comes from
-  // the Balance snapshot, not here.
+  // reconciled number, ADR-0041 §5). The opening balance comes from a
+  // `Valuation` (`opening_anchor`, else earliest-by-date heuristic), not here.
   balance: sureDecimalSchema.nullable().optional(),
   cash_balance: sureDecimalSchema.nullable().optional(),
 })
@@ -92,6 +94,30 @@ export const sureBalanceSchema = z.object({
   end_balance: sureDecimalSchema.nullable().optional(),
 })
 export type SureBalance = z.infer<typeof sureBalanceSchema>
+
+// A Sure `Valuation` is a point-in-time TOTAL account value anchor (an `Entry`
+// whose `entryable` is a Valuation). Its `kind` ∈ {opening_anchor, current_anchor,
+// reconciliation} (verified against `valuation.rb` + `data_exporter.rb`, export
+// v2). In Sure's `Balance::ForwardCalculator` a valuation OVERRIDES the computed
+// balance on its date — so `amount` is the absolute value at `date`, NOT a
+// pre-history opening (treating it as one and adding Σtxns double-counts; §5).
+//
+// `kind` is a TOLERANT string, never an enum: an unknown future kind must not
+// reject the row — only `opening_anchor` is matched. A real degraded export
+// (the user's) omits `kind` entirely; the orchestrator detects that globally
+// (`bundleHasValuationKind`) and falls back to the earliest-by-date heuristic
+// (§5). `account_id` is REQUIRED — every opening decision groups by it.
+export const sureValuationSchema = z.object({
+  account_id: z.string().min(1),
+  amount: sureDecimalSchema,
+  currency: z.string().min(3).max(3),
+  date: z.string().min(1),
+  entry_id: z.string().nullable().optional(),
+  id: z.string().nullable().optional(),
+  name: z.string().nullable().optional(),
+  kind: z.string().nullable().optional(),
+})
+export type SureValuation = z.infer<typeof sureValuationSchema>
 
 export const sureCategorySchema = z.object({
   id: z.string().min(1),
@@ -158,6 +184,8 @@ export interface ParsedSureBundle {
   merchants: SureMerchant[]
   transactions: SureTransaction[]
   transfers: SureTransfer[]
+  /** Point-in-time account-value anchors — the opening-balance source (§5). */
+  valuations: SureValuation[]
   /** Lines rejected as malformed (bad JSON, bad envelope, or failed schema). */
   malformedLines: SureMalformedLine[]
   /** Deferred/unknown entity name → count (retained in the raw bundle only). */
@@ -194,6 +222,7 @@ export function parseSureBundle(content: string): ParsedSureBundle {
     merchants: [],
     transactions: [],
     transfers: [],
+    valuations: [],
     malformedLines: [],
     ignoredEntities: {},
   }
@@ -222,6 +251,10 @@ export function parseSureBundle(content: string): ParsedSureBundle {
     [SURE_ENTITY.transfer]: {
       schema: sureTransferSchema,
       push: (v) => bundle.transfers.push(v as SureTransfer),
+    },
+    [SURE_ENTITY.valuation]: {
+      schema: sureValuationSchema,
+      push: (v) => bundle.valuations.push(v as SureValuation),
     },
   }
 
@@ -268,6 +301,23 @@ export function parseSureBundle(content: string): ParsedSureBundle {
   }
 
   return bundle
+}
+
+/**
+ * Does this bundle "speak `kind`"? True when ANY valuation row carries a
+ * non-empty (trimmed) `kind`. This is a GLOBAL, per-bundle signal — a real v2
+ * export writes `kind` on every valuation, a degraded export omits it entirely,
+ * so the two never mix in practice. When true, `kind` is authoritative for the
+ * whole bundle: an account with no `opening_anchor` is a gap (0), NEVER guessed
+ * via the date heuristic (ADR-0041 §5). A serialized empty string (`kind: ""`)
+ * counts as absent, so a stray blank never flips a degraded export into kind-mode.
+ */
+export function bundleHasValuationKind(
+  valuations: readonly SureValuation[]
+): boolean {
+  return valuations.some(
+    (v) => typeof v.kind === "string" && v.kind.trim() !== ""
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -459,6 +509,8 @@ export interface SureBundlePreview {
   }
   /** Typed Transfer rows (deferred Phase-2 pairing source). */
   transfers: number
+  /** Typed Valuation rows — the opening-balance source (ADR-0041 §5). */
+  valuations: number
   malformedLines: number
   ignoredEntities: Record<string, number>
 }
@@ -540,6 +592,7 @@ export function summarizeSureBundle(
       unmappable,
     },
     transfers: bundle.transfers.length,
+    valuations: bundle.valuations.length,
     malformedLines: bundle.malformedLines.length,
     ignoredEntities: bundle.ignoredEntities,
   }

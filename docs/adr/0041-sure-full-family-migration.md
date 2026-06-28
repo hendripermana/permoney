@@ -222,25 +222,69 @@ classifies. `sureMinor == 0` is treated as `expense` and flagged for review.
 ### 5. Opening balance for cash-like accounts (transfer-independent, additive)
 
 PER-82 promotion applies signed deltas onto the account's **current** balance, so
-the opening balance matters. **Primary strategy:** when the v2 `Balance` entity is
-present, set a cash-like account's opening balance from the **earliest `Balance`
-snapshot's `start_balance`** (converted to minor units) at account creation; this
-is the **true, transfer-independent** opening, so when the deferred transfer phase
-later posts legs, balances converge **additively** with no recomputation.
+the opening balance matters. It is set **once at account creation**, only for
+**ASSET `transaction_flow`** accounts, and re-runs reuse the account and never
+re-apply it.
 
-> For `transaction_flow` accounts the opening is simply the **initial materialized
-> `Account.balance`** (taxonomy / PER-143 — "captures the opening balance as the
-> initial materialized balance"). It does **not** require the PER-146 valuation
-> primitive; PER-146 governs only the deferred `TRACKED_ASSET` accounts.
+**Real-export correction (PER-174).** A real Sure v2 export carries **no
+`Balance` entity** — verified head-of-eng 2026-06-28 against a real bundle (and
+absent in the user's sample, §Context). The opening source is the **`Valuation`**
+entity: a point-in-time **TOTAL account-value anchor** (an `Entry` whose
+`entryable` is a `Valuation`), serialized with `{ id, entry_id, account_id, date,
+amount, currency, name, kind }`. Crucially, in Sure's `Balance::ForwardCalculator`
+a valuation **OVERRIDES** the computed balance on its date (same-date transaction
+flows are absorbed, not added). So `Valuation.amount` is the **absolute value at
+`date`**, **not** a pre-history opening — treating any valuation as one and adding
+`Σ(txns)` **double-counts**. The earlier "earliest `Balance.start_balance`" plan
+was correct in spirit (a true, transfer-independent opening) but read an entity
+that real exports do not emit; the `Balance` schema stays in the reader as dormant
+forward-compat only.
 
-**Mandatory fallback** (the user's bundle has **no `Balance` rows**): if no
-snapshot exists for an account, set opening `= 0`, **never plug**, and document the
-reconciliation gap. Sure's reported `account.balance` + any snapshots are retained
-as provenance only.
+`Valuation.kind ∈ {opening_anchor, current_anchor, reconciliation}` (verified in
+`valuation.rb` + `data_exporter.rb`). **Only `opening_anchor` is the account's
+declared opening** (the value before any transaction); `current_anchor` and
+`reconciliation` are mid/end snapshots whose amount already embeds promoted flows.
+
+**Precedence (authoritative, no guessing):**
+
+1. **Bundle carries `kind`** — detected GLOBALLY (`bundleHasValuationKind`: any
+   valuation has a non-empty trimmed `kind`; a real v2 export writes it on every
+   valuation, a degraded export omits it entirely, so the two never mix). `kind`
+   is then authoritative for the whole bundle: opening = the account's
+   `opening_anchor` amount. **No `opening_anchor` for an account ⇒ gap (0)**,
+   **never** the date heuristic — absence of an anchor when `kind` is present
+   means "opening unknown", not "permission to guess".
+2. **Bundle carries no `kind`** (degraded export) — opening = the **earliest
+   valid-dated `Valuation.amount`** for the account, used **only** when its date
+   is **strictly `<`** the first **posting** transaction's date (or no posting
+   txn exists). On/after that date the valuation overrides a promoted flow (per
+   the forward calculator) ⇒ gap (0). The "posting" set is exactly the rows that
+   apply a balance delta this run — `isPromotable && !isZeroAmount && validDate`,
+   computed by the **single** `willPostThisRun` predicate the promotion path uses,
+   so the heuristic anchor can never drift from what actually promotes.
+
+`kind` is parsed as a **tolerant string** (an unknown future kind must not reject
+the row; only `=== "opening_anchor"` matches); `kind: ""` counts as absent. A
+valuation with an unparseable date is skipped for the opening decision (never
+rejects the bundle).
+
+**Mandatory fallback / gap:** any account with no usable opening source sets
+opening `= 0` and is surfaced as an explicit **gap**, never a plug. **Negative**
+opening on an ASSET violates the `account_normal_balance_sign` CHECK ⇒ gap (0),
+never a plug. Sure's reported `account.balance` is retained as provenance only.
 
 **Forbidden:** opening `= Sure.balance − Σ(promoted standard txns)`. Because
 transfers are deferred, this plug silently absorbs transfer effects into the
 opening and **double-counts** when transfers later post.
+
+**Observability & reconcile invariant.** `SureMigrationResult.openingBalances`
+reports `{ fromOpeningAnchor, fromDateHeuristic, gapZero }` plus `bundleHasKind`
+and `valuationsParsed`. The buckets close over exactly the **ASSET
+`transaction_flow` accounts CREATED this run** (reused and non-cash accounts
+excluded — their opening is 0 by definition, not a gap), so
+`fromOpeningAnchor + fromDateHeuristic + gapZero === #ASSET-flow accounts created`
+this run. This invariant is asserted in the real-Postgres tests ("no unexplained
+delta").
 
 **By-design statement (ADR-explicit):** a cash-like account's final balance will
 **not** equal Sure's reported balance until **(a)** the correct opening is set
@@ -385,7 +429,7 @@ the artifact is recommended, consistent with the fixture-privacy decision (§11)
 | ------- | ---------------------------------------------------- | ----------------------- |
 | **1**   | accounts + categories + **merchants** + transactions | PER-82 (done)           |
 | **1.5** | transfers (pair legs → `Transfer` mutation)          | transfer-import design  |
-| **2**   | trades / holdings / valuations                       | PER-150, PER-146        |
+| **2**   | trades / holdings / `TRACKED_ASSET` valuations       | PER-150, PER-146        |
 | **3**   | rules → `SmartRule`                                  | smart-rule apply engine |
 
 Deferral is safe because every deferred input is **retained** (§8) and every
@@ -406,12 +450,13 @@ can collide on amount+date.
 - **Fixtures are synthetic, built by a deterministic seeded builder** derived from
   the Sure v2 serializer schema (schema-faithful to the reader contract). **No real
   bundle is ever committed.** Two committed scenarios:
-  - **v2 complete:** Account + `Balance` (snapshot-opening) + Category(with parent)
-    - Merchant + Transaction + `Transfer` (`inflow/outflow_transaction_id`,
-      deterministic pairing) + Sure sign inversion (`inflow < 0`) — exercises the
-      primary paths.
-  - **v1 degraded:** no `Balance`/`Transfer` — exercises the fallback (opening = 0,
-    transfers deferred, documented gap).
+  - **v2 complete:** Account + `Valuation` carrying `kind` (an `opening_anchor`
+    drives the opening; a `current_anchor` on another account proves it is ignored
+    as opening) + Category(with parent) + Merchant + Transaction + Sure sign
+    inversion (`inflow < 0`) — exercises the kind-authoritative opening path.
+  - **v1 degraded:** `Valuation` rows with **no `kind`** (+ no `Transfer`) —
+    exercises the date heuristic (earliest valuation strictly before the first
+    posting txn) and its gaps (same-date / mid-history → opening = 0, documented).
 - The real bundle stays **local + gitignored** (`fixture/`, `*.ndjson`), used only
   for the actual one-shot migration and manual local smoke — never CI. When real
   data reveals a quirk (encoding/locale/odd nominal), **iterate the builder**;
@@ -452,9 +497,10 @@ Per AGENTS.md / ADR-0006 / ADR-0036 (PER-86 harness, `docs/testing.md`):
   **`baseAmount`/`baseCurrency`/`fxRateScaled` set**.
 - **Sign inversion:** a Sure expense (`amount > 0`) lands as a negative Permoney
   amount; a Sure income (`amount < 0`) lands positive.
-- **Opening balance:** with `Balance` rows, a cash-like account's opening =
-  earliest `start_balance`; without `Balance` rows, opening = 0 + documented gap
-  (and **no plug**).
+- **Opening balance (§5):** kind-bearing bundle → opening = the `opening_anchor`
+  `Valuation.amount` (`current_anchor`/`reconciliation` ignored); no-kind bundle →
+  earliest `Valuation` strictly before the first posting txn, else opening = 0 +
+  documented gap. Negative-ASSET → 0. **No plug, ever.**
 - **Gating/held:** transfer-kind rows, rows on `isImportable=false`
   (Investment/TrackedAsset) accounts, and split parents are **staged but not
   promoted**; referenced accounts still exist as shells (no dangling refs).

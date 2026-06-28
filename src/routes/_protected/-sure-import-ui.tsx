@@ -467,6 +467,12 @@ export function DoneStage({
             />
           </div>
 
+          {/* Honest opening-balance provenance for accounts created this run. */}
+          <OpeningBalanceSummary
+            opening={result.openingBalances}
+            hasKind={result.bundleHasKind}
+          />
+
           {/* Full reconciliation of the transaction buckets the server returns. */}
           {(t.held > 0 ||
             t.zeroAmountSkipped > 0 ||
@@ -534,6 +540,53 @@ export function DoneStage({
 
 function sumValues(record: Record<string, number>): number {
   return Object.values(record).reduce((sum, n) => sum + n, 0)
+}
+
+// Opening-balance provenance for the ASSET cash accounts created this run
+// (ADR-0041 §5). Honest by design: an account that opens at 0 is surfaced as
+// "unreconciled", not hidden — its true balance converges after the deferred
+// transfer step. Hidden entirely when no such account was created this run.
+function OpeningBalanceSummary({
+  opening,
+  hasKind,
+}: {
+  opening: SureMigrationResult["openingBalances"]
+  hasKind: boolean
+}) {
+  const total =
+    opening.fromOpeningAnchor + opening.fromDateHeuristic + opening.gapZero
+  if (total === 0) return null
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="text-sm font-semibold">Opening balances</span>
+      <div className="flex flex-wrap gap-2 text-sm">
+        {opening.fromOpeningAnchor > 0 && (
+          <Badge
+            variant="outline"
+            className="border-emerald-400 text-emerald-700 dark:text-emerald-300"
+          >
+            {opening.fromOpeningAnchor} from Sure anchor
+          </Badge>
+        )}
+        {opening.fromDateHeuristic > 0 && (
+          <Badge variant="outline">{opening.fromDateHeuristic} estimated</Badge>
+        )}
+        {opening.gapZero > 0 && (
+          <Badge
+            variant="outline"
+            className="border-amber-400 text-amber-700 dark:text-amber-300"
+          >
+            {opening.gapZero} start at 0 (unreconciled)
+          </Badge>
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {hasKind
+          ? "Opening balances use Sure's own opening anchor where present; the rest start at 0 until the transfer step reconciles them."
+          : "This export carries no opening anchors, so balances are taken from the earliest valuation or start at 0 — they reconcile after the transfer step."}
+      </p>
+    </div>
+  )
 }
 
 function ManifestRow({
