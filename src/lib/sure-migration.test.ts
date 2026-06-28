@@ -13,6 +13,14 @@ import {
   type SureTransaction,
   type SureValuation,
 } from "./sure-migration"
+import {
+  classifyTransferPairGate,
+  normalizeSureAccountName,
+  pairSureTransfers,
+  parseSureTransferHint,
+  type SureTransfer,
+  type SureTransferAccountMeta,
+} from "./sure-migration"
 // Anchor the client-side preview classifier to the REAL server gate, not a
 // hand-written copy: import the server's `isPromotable` and assert identical
 // verdicts. Behavior-neutral export (PER-171); the integration suite stays green.
@@ -341,7 +349,11 @@ describe("summarizeSureBundle reconciliation", () => {
     ).toBe(t.held)
 
     expect(t.promotable).toBe(manifest.expected.promotedThisRun)
-    expect(t.held).toBe(manifest.expected.held)
+    // The PER-171 preview lumps every transfer-kind leg into `held` (reason
+    // `transfer`) — it runs BEFORE pairing. The server's `transactions.held`
+    // (manifest.expected.held) is STANDARD-only (ADR-0042 moves transfer legs to
+    // the `transfers` block), so preview.held = standard-held + transfer legs.
+    expect(t.held).toBe(manifest.expected.held + t.heldByReason.transfer)
     expect(t.zeroAmountSkipped).toBe(manifest.expected.zeroAmountSkipped)
     expect(preview.malformedLines).toBe(manifest.expected.malformedLines)
     // Real unmapped entities are surfaced, never silently dropped.
@@ -665,5 +677,400 @@ describe("willPostThisRun parity with the promote set", () => {
     expect(post(manifest.ids.txnHeldInvest)).toBe(false) // non-importable
     expect(post(manifest.ids.txnHeldKind)).toBe(false) // non-standard kind
     expect(post(manifest.ids.txnHeldCurrency)).toBe(false) // currency mismatch
+  })
+})
+
+// ===========================================================================
+// ADR-0042 — transfer pairing edge matrix (pure, no DB). The whole decision
+// tree: Tier 0/1/2, the no-fuzz negatives, structural holds, gate precedence,
+// determinism, and exhaustiveness.
+// ===========================================================================
+
+const leg = (
+  id: string,
+  accountId: string,
+  amount: string,
+  kind: string,
+  name: string | null = null,
+  date = "2026-05-01",
+  currency = "IDR"
+): SureTransaction => ({
+  id,
+  account_id: accountId,
+  amount,
+  currency,
+  kind,
+  name,
+  date,
+})
+
+const meta = (
+  id: string,
+  name: string,
+  accountType: SureTransferAccountMeta["accountType"] = "DEPOSITORY",
+  opts: Partial<SureTransferAccountMeta> = {}
+): SureTransferAccountMeta => ({
+  sureAccountId: id,
+  name,
+  currency: opts.currency ?? "IDR",
+  accountType,
+  isImportable: opts.isImportable ?? true,
+  balanceSource: opts.balanceSource ?? "transaction_flow",
+})
+
+const metaMap = (
+  ...entries: SureTransferAccountMeta[]
+): Map<string, SureTransferAccountMeta> =>
+  new Map(entries.map((m) => [m.sureAccountId, m]))
+
+describe("parseSureTransferHint", () => {
+  test("parses English directional prefixes, normalizing the target", () => {
+    expect(parseSureTransferHint("Transfer to BCA Savings")).toEqual({
+      direction: "to",
+      target: "bca savings",
+    })
+    expect(parseSureTransferHint("Transfer from   Main  ")).toEqual({
+      direction: "from",
+      target: "main",
+    })
+  })
+
+  test("accepts the cheap Indonesian future-proofing", () => {
+    expect(parseSureTransferHint("transfer ke Gopay")?.direction).toBe("to")
+    expect(parseSureTransferHint("Transfer dari Ovo")?.direction).toBe("from")
+  })
+
+  test("returns null for non-directional names (no fabrication)", () => {
+    expect(parseSureTransferHint("Cash withdrawal")).toBeNull()
+    expect(parseSureTransferHint("")).toBeNull()
+    expect(parseSureTransferHint(null)).toBeNull()
+  })
+})
+
+describe("normalizeSureAccountName", () => {
+  test("trim + lowercase + collapse whitespace", () => {
+    expect(normalizeSureAccountName("  BCA   Savings ")).toBe("bca savings")
+  })
+})
+
+describe("pairSureTransfers — Tier 0 deterministic", () => {
+  test("a Transfer entity pairs its two legs authoritatively", () => {
+    const legs = [
+      leg("o", "a", "40000.0", "funds_movement", "Transfer to B"),
+      leg("i", "b", "-40000.0", "funds_movement", "Transfer from A"),
+    ]
+    const transfers: SureTransfer[] = [
+      { id: "x", outflow_transaction_id: "o", inflow_transaction_id: "i" },
+    ]
+    const result = pairSureTransfers({
+      legs,
+      metaById: metaMap(meta("a", "A"), meta("b", "B")),
+      transfers,
+    })
+    expect(result.pairs).toHaveLength(1)
+    expect(result.pairs[0]?.tier).toBe("deterministic")
+    expect(result.pairs[0]?.outflow.id).toBe("o")
+    expect(result.pairs[0]?.inflow.id).toBe("i")
+    expect(result.held).toHaveLength(0)
+  })
+
+  test("a Transfer referencing a never-staged leg holds the present one not_staged", () => {
+    const legs = [leg("i", "b", "-40000.0", "funds_movement")]
+    const transfers: SureTransfer[] = [
+      {
+        id: "x",
+        outflow_transaction_id: "missing",
+        inflow_transaction_id: "i",
+      },
+    ]
+    const result = pairSureTransfers({
+      legs,
+      metaById: metaMap(meta("b", "B")),
+      transfers,
+    })
+    expect(result.pairs).toHaveLength(0)
+    expect(result.held).toEqual([{ txn: legs[0], reason: "not_staged" }])
+  })
+
+  test("cross-currency Transfer entity → currency_mismatch HELD (FX deferred)", () => {
+    const legs = [
+      leg("o", "a", "10000.0", "funds_movement"),
+      leg("i", "u", "-1.0", "funds_movement", null, "2026-05-01", "USD"),
+    ]
+    const transfers: SureTransfer[] = [
+      { id: "x", outflow_transaction_id: "o", inflow_transaction_id: "i" },
+    ]
+    const result = pairSureTransfers({
+      legs,
+      metaById: metaMap(
+        meta("a", "A"),
+        meta("u", "U", "DEPOSITORY", { currency: "USD" })
+      ),
+      transfers,
+    })
+    expect(result.pairs).toHaveLength(0)
+    expect(result.held.map((h) => h.reason)).toEqual([
+      "currency_mismatch",
+      "currency_mismatch",
+    ])
+  })
+})
+
+describe("pairSureTransfers — Tier 1 clean & the no-fuzz negatives", () => {
+  test("exactly one out + one in, same day/amount, different account → clean pair", () => {
+    const legs = [
+      leg("o", "a", "40000.0", "funds_movement"),
+      leg("i", "b", "-40000.0", "funds_movement"),
+    ]
+    const result = pairSureTransfers({
+      legs,
+      metaById: metaMap(meta("a", "A"), meta("b", "B")),
+    })
+    expect(result.pairs).toHaveLength(1)
+    expect(result.pairs[0]?.tier).toBe("clean")
+  })
+
+  test("off-by-one-day does NOT pair (no fuzzing) → both orphan", () => {
+    const legs = [
+      leg("o", "a", "40000.0", "funds_movement", null, "2026-05-01"),
+      leg("i", "b", "-40000.0", "funds_movement", null, "2026-05-02"),
+    ]
+    const result = pairSureTransfers({
+      legs,
+      metaById: metaMap(meta("a", "A"), meta("b", "B")),
+    })
+    expect(result.pairs).toHaveLength(0)
+    expect(result.held.map((h) => h.reason)).toEqual([
+      "unpaired_orphan",
+      "unpaired_orphan",
+    ])
+  })
+
+  test("amount mismatch does NOT pair → both orphan", () => {
+    const legs = [
+      leg("o", "a", "40000.0", "funds_movement"),
+      leg("i", "b", "-41000.0", "funds_movement"),
+    ]
+    const result = pairSureTransfers({
+      legs,
+      metaById: metaMap(meta("a", "A"), meta("b", "B")),
+    })
+    expect(result.pairs).toHaveLength(0)
+    expect(result.held).toHaveLength(2)
+  })
+
+  test("self-transfer (same account out & in) is never a pair → held", () => {
+    const legs = [
+      leg("o", "a", "40000.0", "funds_movement"),
+      leg("i", "a", "-40000.0", "funds_movement"),
+    ]
+    const result = pairSureTransfers({
+      legs,
+      metaById: metaMap(meta("a", "A")),
+    })
+    expect(result.pairs).toHaveLength(0)
+    expect(result.held.map((h) => h.reason)).toEqual([
+      "unpaired_orphan",
+      "unpaired_orphan",
+    ])
+  })
+
+  test("a lone outflow → unpaired_orphan", () => {
+    const legs = [leg("o", "a", "40000.0", "funds_movement")]
+    const result = pairSureTransfers({
+      legs,
+      metaById: metaMap(meta("a", "A")),
+    })
+    expect(result.held).toEqual([{ txn: legs[0], reason: "unpaired_orphan" }])
+  })
+})
+
+describe("pairSureTransfers — Tier 2 cluster resolution", () => {
+  test("bidirectional exact name hints resolve a balanced cluster uniquely", () => {
+    const legs = [
+      leg("o1", "wallet", "12000.0", "funds_movement", "Transfer to Gopay"),
+      leg("i1", "gopay", "-12000.0", "funds_movement", "Transfer from Wallet"),
+      leg("o2", "dana", "12000.0", "funds_movement", "Transfer to Ovo"),
+      leg("i2", "ovo", "-12000.0", "funds_movement", "Transfer from Dana"),
+    ]
+    const result = pairSureTransfers({
+      legs,
+      metaById: metaMap(
+        meta("wallet", "Wallet"),
+        meta("gopay", "Gopay"),
+        meta("dana", "Dana"),
+        meta("ovo", "Ovo")
+      ),
+    })
+    expect(result.pairs).toHaveLength(2)
+    expect(result.pairs.every((p) => p.tier === "resolved_cluster")).toBe(true)
+    expect(result.held).toHaveLength(0)
+    // The matching is by NAME, not arbitrary: wallet→gopay, dana→ovo.
+    const byOut = new Map(result.pairs.map((p) => [p.outflow.id, p.inflow.id]))
+    expect(byOut.get("o1")).toBe("i1")
+    expect(byOut.get("o2")).toBe("i2")
+  })
+
+  test("no directional hints → whole cluster HELD ambiguous", () => {
+    const legs = [
+      leg("o1", "wallet", "8000.0", "funds_movement", "Cash move"),
+      leg("i1", "gopay", "-8000.0", "funds_movement", "Cash move"),
+      leg("o2", "dana", "8000.0", "funds_movement", "Cash move"),
+      leg("i2", "ovo", "-8000.0", "funds_movement", "Cash move"),
+    ]
+    const result = pairSureTransfers({
+      legs,
+      metaById: metaMap(
+        meta("wallet", "Wallet"),
+        meta("gopay", "Gopay"),
+        meta("dana", "Dana"),
+        meta("ovo", "Ovo")
+      ),
+    })
+    expect(result.pairs).toHaveLength(0)
+    expect(result.held).toHaveLength(4)
+    expect(result.held.every((h) => h.reason === "ambiguous_cluster")).toBe(
+      true
+    )
+  })
+
+  test("≥2 valid counterparts (duplicate names BOTH sides) → whole cluster HELD", () => {
+    // Two sources both named "Joint" and two dests both named "Pool": each
+    // "Transfer to Pool / from Joint" leg validly matches BOTH counterparts →
+    // no unique perfect matching → the whole cluster is held, never guessed.
+    const legs = [
+      leg("o1", "a", "5000.0", "funds_movement", "Transfer to Pool"),
+      leg("o2", "b", "5000.0", "funds_movement", "Transfer to Pool"),
+      leg("i1", "c", "-5000.0", "funds_movement", "Transfer from Joint"),
+      leg("i2", "d", "-5000.0", "funds_movement", "Transfer from Joint"),
+    ]
+    const result = pairSureTransfers({
+      legs,
+      metaById: metaMap(
+        meta("a", "Joint"),
+        meta("b", "Joint"),
+        meta("c", "Pool"),
+        meta("d", "Pool")
+      ),
+    })
+    expect(result.pairs).toHaveLength(0)
+    expect(result.held.every((h) => h.reason === "ambiguous_cluster")).toBe(
+      true
+    )
+  })
+})
+
+describe("classifyTransferPairGate — precedence importable → currency → kind", () => {
+  const o = leg("o", "a", "25000.0", "funds_movement")
+  const i = leg("i", "b", "-25000.0", "funds_movement")
+
+  test("non-importable source holds before any other check", () => {
+    expect(
+      classifyTransferPairGate(
+        meta("a", "A", "INVESTMENT", { isImportable: false }),
+        meta("b", "B"),
+        o,
+        i
+      )
+    ).toBe("non_importable")
+  })
+
+  test("loan-source funds_movement → kind_divergence (derived liability_draw)", () => {
+    expect(
+      classifyTransferPairGate(meta("a", "A", "LOAN"), meta("b", "B"), o, i)
+    ).toBe("kind_divergence")
+  })
+
+  test("ASYMMETRIC cc_payment ([cc_payment, funds_movement]) promotes", () => {
+    // Real Sure tagging: cash-side `cc_payment`, CreditCard-side `funds_movement`.
+    expect(
+      classifyTransferPairGate(
+        meta("a", "A", "DEPOSITORY"),
+        meta("b", "B", "CREDIT"),
+        leg("o", "a", "25000.0", "cc_payment"),
+        leg("i", "b", "-25000.0", "funds_movement")
+      )
+    ).toBeNull()
+  })
+
+  test("ASYMMETRIC loan_payment ([loan_payment, funds_movement]) promotes", () => {
+    expect(
+      classifyTransferPairGate(
+        meta("a", "A", "DEPOSITORY"),
+        meta("b", "B", "LOAN"),
+        leg("o", "a", "25000.0", "loan_payment"),
+        leg("i", "b", "-25000.0", "funds_movement")
+      )
+    ).toBeNull()
+  })
+
+  test("symmetric [cc_payment, cc_payment] still passes (forward-compatible)", () => {
+    expect(
+      classifyTransferPairGate(
+        meta("a", "A", "DEPOSITORY"),
+        meta("b", "B", "CREDIT"),
+        leg("o", "a", "25000.0", "cc_payment"),
+        leg("i", "b", "-25000.0", "cc_payment")
+      )
+    ).toBeNull()
+  })
+
+  test("anomaly: Sure cc_payment but accounts derive funds_movement → HELD", () => {
+    // `cc_payment` is neither the derived kind (funds_movement) nor the generic
+    // funds_movement → held, never promoted with a guessed kind.
+    expect(
+      classifyTransferPairGate(
+        meta("a", "A", "DEPOSITORY"),
+        meta("b", "B", "DEPOSITORY"),
+        leg("o", "a", "25000.0", "cc_payment"),
+        leg("i", "b", "-25000.0", "funds_movement")
+      )
+    ).toBe("kind_divergence")
+  })
+
+  test("plain depository↔depository funds_movement passes", () => {
+    expect(
+      classifyTransferPairGate(meta("a", "A"), meta("b", "B"), o, i)
+    ).toBeNull()
+  })
+})
+
+describe("pairSureTransfers — determinism & exhaustiveness", () => {
+  const legs = [
+    leg("o", "a", "40000.0", "funds_movement"),
+    leg("i", "b", "-40000.0", "funds_movement"),
+    leg("orph", "a", "9000.0", "funds_movement"),
+    leg("kdO", "loan", "25000.0", "funds_movement", null, "2026-05-05"),
+    leg("kdI", "c", "-25000.0", "funds_movement", null, "2026-05-05"),
+  ]
+  const metas = metaMap(
+    meta("a", "A"),
+    meta("b", "B"),
+    meta("c", "C"),
+    meta("loan", "Loan", "LOAN")
+  )
+
+  test("shuffled input yields identical pairing", () => {
+    const forward = pairSureTransfers({ legs, metaById: metas })
+    const reversed = pairSureTransfers({
+      legs: [...legs].reverse(),
+      metaById: metas,
+    })
+    const key = (r: ReturnType<typeof pairSureTransfers>) => ({
+      pairs: r.pairs
+        .map((p) => `${p.outflow.id}->${p.inflow.id}:${p.tier}`)
+        .sort(),
+      held: r.held.map((h) => `${h.txn.id}:${h.reason}`).sort(),
+    })
+    expect(key(reversed)).toEqual(key(forward))
+  })
+
+  test("every input leg lands in exactly one of pairs or held", () => {
+    const result = pairSureTransfers({ legs, metaById: metas })
+    const inPairs = result.pairs.flatMap((p) => [p.outflow.id, p.inflow.id])
+    const inHeld = result.held.map((h) => h.txn.id)
+    const all = [...inPairs, ...inHeld].sort()
+    expect(all).toEqual(legs.map((l) => l.id).sort())
+    expect(new Set(all).size).toBe(legs.length) // disjoint
   })
 })

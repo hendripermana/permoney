@@ -10,6 +10,7 @@
 | **Superseded by** | —                                                                                |
 | **Builds on**     | ADR-0039 (import staging spine, PER-82), ADR-0008 §5, `docs/account-taxonomy.md` |
 | **Amends**        | ADR-0039 §1/§10 (adds `migration` source kind + bundle artifact retention)       |
+| **Amended by**    | ADR-0042 (2026-06-28, PER-175): §5 posting predicate + §10 Phase 1.5             |
 | **Reserves for**  | Phase 2 transfers/trades (PER-150/PER-146), Phase 3 rules (smart-rule engine)    |
 
 ## Context
@@ -220,6 +221,17 @@ classifies. `sureMinor == 0` is treated as `expense` and flagged for review.
 (PER-159 lesson).
 
 ### 5. Opening balance for cash-like accounts (transfer-independent, additive)
+
+> **Amended by ADR-0042 (2026-06-28, PER-175).** This section was written under
+> the assumption that transfers stay deferred. PER-175 promotes transfers, which
+> **generalizes the "posting" predicate**: a row posts if it is a standard
+> promotable row **or a transfer leg in a promotable pair** (the same pure
+> analysis the promotion step uses — `gateSet === promoteSet`). The "nothing
+> posts → latest valuation" branch below therefore applies **only** to accounts
+> with genuinely no posting; a transfer-touched account falls into the "posting
+> exists" branch (so its opening precedes the first transfer and the transfer flow
+> is not double-counted). See ADR-0042 § _Consequences_ for the full reasoning and
+> the pre-launch one-shot assumption (and its limit).
 
 PER-82 promotion applies signed deltas onto the account's **current** balance, so
 the opening balance matters. It is set **once at account creation**, only for
@@ -433,20 +445,21 @@ the artifact is recommended, consistent with the fixture-privacy decision (§11)
 
 ### 10. Phasing (what is deferred, and why it is safe)
 
-| Phase   | Scope                                                | Blocked by              |
-| ------- | ---------------------------------------------------- | ----------------------- |
-| **1**   | accounts + categories + **merchants** + transactions | PER-82 (done)           |
-| **1.5** | transfers (pair legs → `Transfer` mutation)          | transfer-import design  |
-| **2**   | trades / holdings / `TRACKED_ASSET` valuations       | PER-150, PER-146        |
-| **3**   | rules → `SmartRule`                                  | smart-rule apply engine |
+| Phase   | Scope                                                                      | Blocked by              |
+| ------- | -------------------------------------------------------------------------- | ----------------------- |
+| **1**   | accounts + categories + **merchants** + transactions                       | PER-82 (done)           |
+| **1.5** | transfers (pair legs → `Transfer` mutation) — **DONE, ADR-0042 / PER-175** | —                       |
+| **2**   | trades / holdings / `TRACKED_ASSET` valuations                             | PER-150, PER-146        |
+| **3**   | rules → `SmartRule`                                                        | smart-rule apply engine |
 
 Deferral is safe because every deferred input is **retained** (§8) and every
 held row is **staged not dropped** (§6). **Phase 1.5 (transfers)** pairs legs
 **deterministically** from `Transfer.{inflow,outflow}_transaction_id` when the
 entity is present (the common v2 case); a bundle **without** `Transfer` rows (like
-the validation fixture) needs a **separate heuristic-pairing ADR** — Phase 1.5
-must not silently heuristically pair, since `funds_movement` legs across accounts
-can collide on amount+date.
+the validation fixture) needs a **separate heuristic-pairing ADR** — **now
+ADR-0042 (PER-175)**, which pairs clean legs strictly, resolves balanced clusters
+only by unique bidirectional name hints, and HOLDS everything ambiguous rather
+than silently pairing `funds_movement` legs that collide on amount+date.
 
 ### 11. UI shape & fixtures
 

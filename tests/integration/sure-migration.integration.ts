@@ -16,7 +16,9 @@ import {
 import { createTestFactories, type TestFactories } from "./support/factories"
 import {
   buildSureBundleV1Degraded,
+  buildSureBundleV1DegradedTransfers,
   buildSureBundleV2Complete,
+  buildSureBundleV2Transfers,
 } from "./support/sure-fixtures"
 
 // PER-170 / PER-173 / PER-174 / ADR-0041 — Real-Postgres proof of the Sure
@@ -166,9 +168,26 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
         }),
       })
     )
-    expect(staged).toBe(fixture.expected.held) // 4 held remain normalized
+    // 3 rows remain normalized: 2 STANDARD held (invest + currency) + the 1
+    // transfer leg, now an unpaired_orphan in the transfers block (ADR-0042).
+    expect(staged).toBe(3)
     expect(promotedRows).toBe(2)
     expect(txnCount).toBe(2)
+
+    // The lone `funds_movement` leg pairs to nothing → held as unpaired_orphan,
+    // never fabricated into a one-sided transfer.
+    expect(result.transfers.legsSeen).toBe(1)
+    expect(result.transfers.legsStaged).toBe(1)
+    expect(result.transfers.legsPromotedTotal).toBe(0)
+    expect(result.transfers.pairsPromotedThisRun).toBe(0)
+    expect(result.transfers.heldLegsByReason.unpaired_orphan).toBe(1)
+    // Reconcile: every staged transfer leg is promoted or held with one reason.
+    const heldTransferLegs = Object.values(
+      result.transfers.heldLegsByReason
+    ).reduce((a, b) => a + b, 0)
+    expect(result.transfers.legsPromotedTotal + heldTransferLegs).toBe(
+      result.transfers.legsStaged
+    )
 
     // Lossless artifact retained (gzip BYTEA, hash + size provenance).
     const artifact = await harness.withMember(
@@ -362,5 +381,240 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     )
     expect(leaked.accounts).toBe(0)
     expect(leaked.artifacts).toBe(0)
+  })
+
+  // ======================================================================
+  // Transfers (PER-175 / ADR-0042) — dual-leg pairing + liability kinds.
+  // ======================================================================
+
+  const assertBalances = async (
+    tenant: Tenant,
+    accountIds: Record<string, string>,
+    balancesMinor: Record<string, bigint>
+  ): Promise<void> => {
+    for (const [key, expected] of Object.entries(balancesMinor)) {
+      const account = await accountByBinding(tenant, accountIds[key]!)
+      expect({ key, balance: account?.balance }).toEqual({
+        key,
+        balance: expected,
+      })
+    }
+  }
+
+  const sumHeld = (byReason: Record<string, number>): number =>
+    Object.values(byReason).reduce((a, b) => a + b, 0)
+
+  test("Mode A — Transfer entity pairs deterministically; cc_payment moves the liability toward zero", async () => {
+    const tenant = await setupTenant()
+    const fixture = buildSureBundleV2Transfers()
+    const result = await migrate(tenant, "all.ndjson", fixture.ndjson)
+
+    const t = result.transfers
+    expect(t.legsSeen).toBe(fixture.expected.transferLegsSeen)
+    expect(t.legsStaged).toBe(fixture.expected.transferLegsStaged)
+    expect(t.pairsPromotedThisRun).toBe(fixture.expected.pairsPromotedThisRun)
+    expect(t.legsPromotedTotal).toBe(fixture.expected.legsPromotedTotal)
+    expect(t.pairedByTier).toEqual(fixture.expected.pairedByTier)
+    expect(t.heldLegsByReason).toEqual(fixture.expected.heldLegsByReason)
+
+    // Internal reconcile: every staged leg promoted or held with one reason.
+    expect(t.legsPromotedTotal + sumHeld(t.heldLegsByReason)).toBe(t.legsStaged)
+    // Spanning cross-block reconcile: every bundle transaction in exactly one place.
+    expect(
+      result.transactions.promotedThisRun +
+        result.transactions.held +
+        result.transactions.zeroAmountSkipped +
+        result.transactions.invalidDateSkipped +
+        t.legsPromotedTotal +
+        sumHeld(t.heldLegsByReason)
+    ).toBe(result.transactions.total)
+
+    // Atomic dual-leg balances on BOTH accounts; cc_payment toward zero.
+    await assertBalances(tenant, fixture.accountIds, fixture.balancesMinor)
+
+    // Three promoted pairs (fm + cc + loan) → three Transfer rows + six
+    // transfer-type legs, with FX set. The cc/loan legs are tagged ASYMMETRICALLY
+    // (liability-side = funds_movement) exactly like the real export, so the
+    // asymmetric-aware kind gate is exercised end-to-end.
+    const { transferCount, legs } = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      async (tx) => ({
+        transferCount: await tx.transfer.count(),
+        legs: await tx.transaction.findMany({
+          where: { familyId: tenant.familyId, type: "transfer" },
+        }),
+      })
+    )
+    expect(transferCount).toBe(3)
+    expect(legs).toHaveLength(6)
+    // PER-159 / ADR-0035: base projection materialized on every promoted leg.
+    expect(legs.every((leg) => leg.baseAmount !== null)).toBe(true)
+    expect(legs.every((leg) => leg.baseCurrency === "IDR")).toBe(true)
+    // The cc_payment and loan_payment pairs promoted, deriving the right kinds and
+    // moving each liability toward zero (asserted via balancesMinor above).
+    expect(legs.filter((leg) => leg.kind === "cc_payment")).toHaveLength(2)
+    expect(legs.filter((leg) => leg.kind === "loan_payment")).toHaveLength(2)
+  })
+
+  test("Mode B — degraded heuristic: clean + cluster promote, every held bucket reconciles", async () => {
+    const tenant = await setupTenant()
+    const fixture = buildSureBundleV1DegradedTransfers()
+    const result = await migrate(tenant, "all.ndjson", fixture.ndjson)
+
+    expect(result.bundleHasKind).toBe(false)
+    expect(result.accounts.created).toBe(fixture.expected.accountsCreated)
+
+    const t = result.transfers
+    expect(t.pairsPromotedThisRun).toBe(fixture.expected.pairsPromotedThisRun)
+    expect(t.legsPromotedTotal).toBe(fixture.expected.legsPromotedTotal)
+    expect(t.pairedByTier).toEqual(fixture.expected.pairedByTier)
+    // Every heuristic held bucket is populated and disjoint.
+    expect(t.heldLegsByReason).toEqual(fixture.expected.heldLegsByReason)
+    expect(t.legsPromotedTotal + sumHeld(t.heldLegsByReason)).toBe(t.legsStaged)
+    expect(
+      result.transactions.promotedThisRun +
+        result.transactions.held +
+        result.transactions.zeroAmountSkipped +
+        result.transactions.invalidDateSkipped +
+        t.legsPromotedTotal +
+        sumHeld(t.heldLegsByReason)
+    ).toBe(result.transactions.total)
+
+    await assertBalances(tenant, fixture.accountIds, fixture.balancesMinor)
+
+    // Held legs stay normalized (never a Transaction); promoted legs are paired.
+    const { normalized, transferLegs } = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      async (tx) => ({
+        normalized: await tx.rawImportedTransaction.count({
+          where: { familyId: tenant.familyId, rowStatus: "normalized" },
+        }),
+        transferLegs: await tx.transaction.count({
+          where: { familyId: tenant.familyId, type: "transfer" },
+        }),
+      })
+    )
+    expect(normalized).toBe(sumHeld(fixture.expected.heldLegsByReason))
+    expect(transferLegs).toBe(fixture.expected.legsPromotedTotal)
+  })
+
+  test("transfers must NOT double-count the opening balance (ADR-0042 regression)", async () => {
+    // `Nikah` is a held-transfer-only account: its sole activity is one inbound
+    // transfer, and it carries a CURRENT-value valuation dated AFTER that
+    // transfer. The PER-174 opening for "nothing posts" would be the latest
+    // valuation (3_700_000); promoting the transfer on top WITHOUT the ADR-0042
+    // posting-predicate fix would yield 7_400_000 (double). The fix flips Nikah to
+    // "posting exists" → opening gap(0) → final = exactly the transfer (3_700_000).
+    const tenant = await setupTenant()
+    const fixture = buildSureBundleV1DegradedTransfers()
+    await migrate(tenant, "all.ndjson", fixture.ndjson)
+
+    const nikah = await accountByBinding(tenant, fixture.accountIds.nikah!)
+    expect(nikah?.balance).toBe(3_700_000n)
+    expect(nikah?.balance).not.toBe(7_400_000n)
+  })
+
+  test("idempotent re-run: no second Transfer, balances stable, held stays held", async () => {
+    const tenant = await setupTenant()
+    const fixture = buildSureBundleV1DegradedTransfers()
+
+    const first = await migrate(tenant, "all.ndjson", fixture.ndjson)
+    const second = await migrate(tenant, "all.ndjson", fixture.ndjson)
+
+    // The pure pairing is stable; re-promotion is a no-op at the stable key.
+    expect(second.transfers.pairsPromotedThisRun).toBe(0)
+    expect(second.transfers.legsPromotedTotal).toBe(
+      first.transfers.legsPromotedTotal
+    )
+    expect(second.transfers.heldLegsByReason).toEqual(
+      first.transfers.heldLegsByReason
+    )
+
+    const { transferLegs, transferCount } = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      async (tx) => ({
+        transferLegs: await tx.transaction.count({
+          where: { familyId: tenant.familyId, type: "transfer" },
+        }),
+        transferCount: await tx.transfer.count(),
+      })
+    )
+    expect(transferLegs).toBe(fixture.expected.legsPromotedTotal) // no double-book
+    expect(transferCount).toBe(fixture.expected.pairsPromotedThisRun)
+    await assertBalances(tenant, fixture.accountIds, fixture.balancesMinor)
+  })
+
+  test("self-heal 2B: a created leg with unmarked rows re-promotes via the stable key (no double)", async () => {
+    const tenant = await setupTenant()
+    const fixture = buildSureBundleV1DegradedTransfers()
+    await migrate(tenant, "all.ndjson", fixture.ndjson)
+
+    const nikahBefore = await accountByBinding(
+      tenant,
+      fixture.accountIds.nikah!
+    )
+
+    // Simulate a crash AFTER the canonical core created the legs+Transfer but
+    // BEFORE the two staged rows were marked promoted: revert the clean-pair rows
+    // to `normalized`. The leg + Transfer remain, keyed by the stable idempotency
+    // key (the outflow row's persisted promotionIdempotencyKey).
+    await harness.withMember(tenant.familyId, tenant.userId, async (tx) => {
+      await tx.rawImportedTransaction.updateMany({
+        where: {
+          familyId: tenant.familyId,
+          externalId: {
+            in: [fixture.legIds.cleanOut!, fixture.legIds.cleanIn!],
+          },
+        },
+        data: { rowStatus: "normalized", promotedTransactionId: null },
+      })
+    })
+
+    // Re-run: re-pairs the still-normalized clean pair, calls the core with the
+    // SAME stable key → replay returns the existing leg (zero new leg/balance) →
+    // marks the rows. Self-healing, no double.
+    await migrate(tenant, "all.ndjson", fixture.ndjson)
+
+    const { transferLegs, transferCount, nikah } = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      async (tx) => ({
+        transferLegs: await tx.transaction.count({
+          where: { familyId: tenant.familyId, type: "transfer" },
+        }),
+        transferCount: await tx.transfer.count(),
+        nikah: await tx.account.findUniqueOrThrow({
+          where: { id: nikahBefore!.id },
+        }),
+      })
+    )
+    expect(transferLegs).toBe(fixture.expected.legsPromotedTotal) // no extra leg
+    expect(transferCount).toBe(fixture.expected.pairsPromotedThisRun)
+    expect(nikah.balance).toBe(nikahBefore!.balance) // balance unchanged
+  })
+
+  test("tenant isolation: family B cannot pair or read family A's transfer legs", async () => {
+    const a = await setupTenant()
+    const b = await setupTenant()
+    const fixture = buildSureBundleV1DegradedTransfers()
+    await migrate(a, "all.ndjson", fixture.ndjson)
+
+    const leaked = await harness.withMember(
+      b.familyId,
+      b.userId,
+      async (tx) => ({
+        transferLegs: await tx.transaction.count({
+          where: { familyId: b.familyId, type: "transfer" },
+        }),
+        rawRows: await tx.rawImportedTransaction.count({
+          where: { familyId: b.familyId },
+        }),
+      })
+    )
+    expect(leaked.transferLegs).toBe(0)
+    expect(leaked.rawRows).toBe(0)
   })
 })

@@ -6,9 +6,14 @@ import {
   classifySureAmount,
   normalizeSureAccountType,
   orderCategoriesParentsFirst,
+  pairSureTransfers,
   parseSureBundle,
   SURE_PROVIDER,
   type SureTransaction,
+  type SureTransferAccountMeta,
+  type SureTransferHeldReason,
+  type SureTransferPairingResult,
+  type SureTransferTier,
   type SureValuation,
 } from "../lib/sure-migration"
 import { toMinorUnits } from "../lib/money"
@@ -30,7 +35,7 @@ import {
   type TenantTransactionClient,
 } from "./middleware/with-family"
 import type { RunInTenantTransaction } from "./mutation-kit"
-import { createdAuditEntries } from "./transactions"
+import { createTransactionForFamily, createdAuditEntries } from "./transactions"
 
 // ============================================================================
 // PER-170 / ADR-0041 — Sure full-family migration (Phase 1), orchestration.
@@ -101,6 +106,25 @@ export interface SureMigrationResult {
   valuationsParsed: number
   malformedLines: number
   ignoredEntities: Record<string, number>
+  // Transfer dual-leg pairing & promotion (ADR-0042). Leg-based so the reconcile
+  // invariant `legsStaged === legsPromotedTotal + Σ heldLegsByReason` is exact for
+  // any grouping. `legsPromotedTotal` is read from `rowStatus` AFTER the pass
+  // (cumulative — stable across idempotent re-runs); `pairsPromotedThisRun` and
+  // `pairedByTier` reflect only this run's work (0 on a clean re-run). Each held
+  // leg carries exactly one DB-anchored reason (the first failing gate / structural
+  // outcome), surfaced per-reason so the importer UI explains the WHY honestly.
+  transfers: {
+    legsSeen: number
+    legsStaged: number
+    pairsPromotedThisRun: number
+    legsPromotedTotal: number
+    pairedByTier: {
+      deterministic: number
+      clean: number
+      resolvedCluster: number
+    }
+    heldLegsByReason: Record<SureTransferHeldReason, number>
+  }
 }
 
 interface PermoneyAccountInfo {
@@ -284,9 +308,20 @@ export function willPostThisRun(
  * Per Sure-account `YYYY-MM-DD` of the earliest transaction that will post a
  * balance delta this run. Account info is derived purely from the Sure taxonomy
  * (no DB) so the pre-scan can run before any account row exists.
+ *
+ * ADR-0042 amends ADR-0041 §5: a row "posts" if it is a standard promotable row
+ * ({@link willPostThisRun}) OR a transfer leg in a PROMOTABLE pair
+ * (`promotableTransferLegIds`, computed by the SAME pure pairing the promotion
+ * step uses — `gateSet === promoteSet`). Without this, a held-transfer-only
+ * account would keep PER-174's "nothing posts → latest valuation" opening (≈ its
+ * current value, already embedding the transfers); promoting the transfers on top
+ * would DOUBLE-COUNT. Including them flips the account to "posting exists" →
+ * opening = earliest valuation strictly before the first posting (or gap), and the
+ * transfer flows post on top correctly.
  */
 function earliestPromotedDateBySureAccount(
-  bundle: ReturnType<typeof parseSureBundle>
+  bundle: ReturnType<typeof parseSureBundle>,
+  promotableTransferLegIds: ReadonlySet<string>
 ): Map<string, string> {
   const sureAccountById = new Map(bundle.accounts.map((a) => [a.id, a]))
   const earliest = new Map<string, string>()
@@ -303,12 +338,72 @@ function earliestPromotedDateBySureAccount(
       isImportable: taxonomy.isImportable,
       balanceSource: taxonomy.balanceSource,
     }
-    if (!willPostThisRun(txn, info)) continue
+    const posts =
+      willPostThisRun(txn, info) || promotableTransferLegIds.has(txn.id)
+    if (!posts) continue
+    // A transfer leg posts a balance delta even though its date may be invalid
+    // for the standard predicate; guard so the bucket key stays a valid day.
+    if (Number.isNaN(new Date(txn.date).getTime())) continue
     const day = txn.date.slice(0, 10)
     const prev = earliest.get(txn.account_id)
     if (prev === undefined || day < prev) earliest.set(txn.account_id, day)
   }
   return earliest
+}
+
+// ---------------------------------------------------------------------------
+// Transfer pairing inputs (pure, taxonomy-derived — ADR-0042)
+// ---------------------------------------------------------------------------
+
+/** Any non-`standard` Sure kind is a transfer leg in Phase 1 (held until paired). */
+function isSureTransferLeg(txn: SureTransaction): boolean {
+  const kind = (txn.kind ?? "standard").trim() || "standard"
+  return kind !== "standard"
+}
+
+/** Per-Sure-account metadata for the pure pairer (no DB; mirrors the staging taxonomy). */
+function buildSureTransferMeta(
+  bundle: ReturnType<typeof parseSureBundle>
+): Map<string, SureTransferAccountMeta> {
+  const meta = new Map<string, SureTransferAccountMeta>()
+  for (const account of bundle.accounts) {
+    const taxonomy = normalizeSureAccountType(
+      account.accountable_type,
+      account.subtype
+    )
+    meta.set(account.id, {
+      sureAccountId: account.id,
+      name: account.name,
+      currency: account.currency,
+      accountType: taxonomy.accountType,
+      isImportable: taxonomy.isImportable,
+      balanceSource: taxonomy.balanceSource,
+    })
+  }
+  return meta
+}
+
+/**
+ * The transfer legs that WILL be staged — mappable account, valid date, non-zero
+ * amount: exactly the gates the standard staging path applies. Feeding the pure
+ * pairer this same set keeps `gateSet === promoteSet` (the unmappable-leg lockstep
+ * that protects the opening pre-scan, ADR-0042 / ADR-0041 §5).
+ */
+function stageableSureTransferLegs(
+  bundle: ReturnType<typeof parseSureBundle>,
+  metaById: ReadonlyMap<string, SureTransferAccountMeta>
+): SureTransaction[] {
+  return bundle.transactions.filter((txn) => {
+    if (!isSureTransferLeg(txn)) return false
+    const meta = metaById.get(txn.account_id)
+    if (!meta) return false
+    if (Number.isNaN(new Date(txn.date).getTime())) return false
+    const minor = toMinorUnits(
+      txn.amount,
+      meta.currency as CurrencyCode
+    ) as bigint
+    return minor !== 0n
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -364,7 +459,29 @@ export async function runSureMigrationForFamily({
   // anchor the degraded date-heuristic compares against — derived from the SAME
   // posting predicate the promotion path uses (no drift).
   const bundleHasKind = bundleHasValuationKind(bundle.valuations)
-  const earliestPromotedDate = earliestPromotedDateBySureAccount(bundle)
+
+  // Transfer pairing is computed PURELY and UP-FRONT (ADR-0042): the promotable
+  // pairs feed BOTH the opening-balance pre-scan (a transfer-touched account now
+  // "posts", so its opening must precede the first transfer — ADR-0041 §5 as
+  // amended by ADR-0042) AND the later promotion step. ONE analysis means the
+  // opening pre-scan can never disagree with what actually promotes.
+  const transferMeta = buildSureTransferMeta(bundle)
+  const transferLegs = stageableSureTransferLegs(bundle, transferMeta)
+  const transferLegsSeen = bundle.transactions.filter(isSureTransferLeg).length
+  const transferPairing = pairSureTransfers({
+    legs: transferLegs,
+    metaById: transferMeta,
+    transfers: bundle.transfers,
+  })
+  const promotableTransferLegIds = new Set<string>()
+  for (const pair of transferPairing.pairs) {
+    promotableTransferLegIds.add(pair.outflow.id)
+    promotableTransferLegIds.add(pair.inflow.id)
+  }
+  const earliestPromotedDate = earliestPromotedDateBySureAccount(
+    bundle,
+    promotableTransferLegIds
+  )
 
   // --- 1. Accounts -> id-map (+ account info for mapping) -------------------
   const accountMap = new Map<string, string>() // sureId -> permoneyId
@@ -679,6 +796,23 @@ export async function runSureMigrationForFamily({
     Boolean
   ).length
 
+  // --- 8. Pair & promote transfers as dual-leg Permoney transfers (ADR-0042) -
+  // Reuses the SAME pure pairing computed up-front; promotes each pair through the
+  // canonical `createTransactionForFamily` core (no new ledger writer), holding
+  // anything ambiguous/orphan/gated with a DB-anchored typed reason.
+  const transfers = await pairAndPromoteSureTransfers({
+    pairing: transferPairing,
+    transferLegs,
+    legsSeen: transferLegsSeen,
+    batchId,
+    familyId,
+    user,
+    accountMap,
+    transferMeta,
+    runInTenantTransaction,
+    auditCtx,
+  })
+
   return {
     batchId,
     replayed,
@@ -689,12 +823,17 @@ export async function runSureMigrationForFamily({
     merchants: { created: merchantsCreated, reused: merchantsReused },
     transactions: {
       total: bundle.transactions.length,
+      // `staged` is all staged rows (standard + transfer legs); it decomposes as
+      // `promotedThisRun` (standard) + `held` (standard) + `transfers.legsStaged`.
       staged: rows.length,
       promotedThisRun,
-      held: rows.length - promotableCount,
+      // STANDARD held only — transfer legs are owned by the `transfers` block, so
+      // every leg is counted in exactly one place (the spanning reconcile, Q7).
+      held: rows.length - promotableCount - transferLegs.length,
       zeroAmountSkipped,
       invalidDateSkipped,
     },
+    transfers,
     openingBalances: {
       fromOpeningAnchor: openingFromAnchor,
       fromDateHeuristic: openingFromDateHeuristic,
@@ -797,6 +936,369 @@ async function ensureEmptyMigrationBatch(
       withFamily(createdAuditEntries("ImportBatch", [batch]), familyId)
     )
     return batch.id
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Transfer pairing & promotion (ADR-0042 — dual-leg via the canonical core)
+// ---------------------------------------------------------------------------
+
+const EMPTY_HELD_BY_REASON = (): Record<SureTransferHeldReason, number> => ({
+  not_staged: 0,
+  non_importable: 0,
+  currency_mismatch: 0,
+  kind_divergence: 0,
+  db_rejected: 0,
+  unpaired_orphan: 0,
+  ambiguous_cluster: 0,
+})
+
+const TIER_TO_RESULT_KEY: Record<
+  SureTransferTier,
+  keyof SureMigrationResult["transfers"]["pairedByTier"]
+> = {
+  deterministic: "deterministic",
+  clean: "clean",
+  resolved_cluster: "resolvedCluster",
+}
+
+interface StagedTransferRow {
+  id: string
+  externalId: string | null
+  rowStatus: string
+  promotionIdempotencyKey: string
+}
+
+/**
+ * Pair & promote Sure transfer legs as dual-leg Permoney transfers (ADR-0042).
+ *
+ * Each promotable pair is created through the UNCHANGED canonical core
+ * `createTransactionForFamily({type:"transfer"})` (no new ledger writer), keyed by
+ * the OUTFLOW leg's persisted `promotionIdempotencyKey` (the stable idempotency
+ * anchor minted once at PER-170 stage time). The core's own `replayIdempotentTransaction`
+ * runs BEFORE any balance delta, so a re-run returns the existing legs, creates no
+ * second leg and moves no balance (self-healing 2B — the leg-create runs in the
+ * core's OWN tx, then both staged rows are marked promoted in a second tx by
+ * recovering the leg ids via the stable key → outflow leg → `Transfer` →
+ * inflow leg, which works identically on fresh create and replay).
+ *
+ * Held legs (structural or gated) keep `rowStatus="normalized"` and persist their
+ * typed reason in `errorReason`; a runtime rejection from the core (e.g. a
+ * liability balance-sign CHECK) is caught per-pair and held as `db_rejected` — one
+ * poisoned pair never blocks the rest. All counts are read back from `rowStatus` at
+ * the end (DB-anchored), so the reconcile invariant holds across idempotent re-runs.
+ */
+async function pairAndPromoteSureTransfers({
+  pairing,
+  transferLegs,
+  legsSeen,
+  batchId,
+  familyId,
+  user,
+  accountMap,
+  transferMeta,
+  runInTenantTransaction,
+  auditCtx,
+}: {
+  pairing: SureTransferPairingResult
+  transferLegs: readonly SureTransaction[]
+  legsSeen: number
+  batchId: string
+  familyId: string
+  user: { id: string; familyId?: string | null }
+  accountMap: ReadonlyMap<string, string>
+  transferMeta: ReadonlyMap<string, SureTransferAccountMeta>
+  runInTenantTransaction: RunInTenantTransaction
+  auditCtx: Awaited<ReturnType<typeof createAuditContext>>
+}): Promise<SureMigrationResult["transfers"]> {
+  const pairedByTier = { deterministic: 0, clean: 0, resolvedCluster: 0 }
+  const legsStaged = transferLegs.length
+
+  if (legsStaged === 0 && pairing.pairs.length === 0) {
+    return {
+      legsSeen,
+      legsStaged: 0,
+      pairsPromotedThisRun: 0,
+      legsPromotedTotal: 0,
+      pairedByTier,
+      heldLegsByReason: EMPTY_HELD_BY_REASON(),
+    }
+  }
+
+  const allLegIds = transferLegs.map((leg) => leg.id)
+
+  // Recover the staged held rows (stable key + status + rowId) by Sure id.
+  const stagedRows: StagedTransferRow[] = await runInTenantTransaction(
+    familyId,
+    user.id,
+    async (tx) =>
+      tx.rawImportedTransaction.findMany({
+        where: {
+          familyId,
+          importBatchId: batchId,
+          externalId: { in: allLegIds },
+        },
+        select: {
+          id: true,
+          externalId: true,
+          rowStatus: true,
+          promotionIdempotencyKey: true,
+        },
+      })
+  )
+  const rowByExternalId = new Map(
+    stagedRows.map((row) => [row.externalId, row])
+  )
+
+  let pairsPromotedThisRun = 0
+
+  // --- Promote each promotable pair -----------------------------------------
+  for (const pair of pairing.pairs) {
+    const outRow = rowByExternalId.get(pair.outflow.id)
+    const inRow = rowByExternalId.get(pair.inflow.id)
+    // A pair promotes only when BOTH legs recovered a staged row + stable key.
+    if (!outRow || !inRow) {
+      if (outRow)
+        await persistSureHeldReason(
+          runInTenantTransaction,
+          familyId,
+          user,
+          auditCtx,
+          outRow,
+          "not_staged"
+        )
+      if (inRow)
+        await persistSureHeldReason(
+          runInTenantTransaction,
+          familyId,
+          user,
+          auditCtx,
+          inRow,
+          "not_staged"
+        )
+      continue
+    }
+    // Re-run: a promoted pair is authoritative & done — skip (Q3 linkage authority;
+    // 2B marks both rows in one tx so they are never split across statuses).
+    if (outRow.rowStatus === "promoted" || inRow.rowStatus === "promoted") {
+      continue
+    }
+
+    const outMeta = transferMeta.get(pair.outflow.account_id)
+    const outAccountId = accountMap.get(pair.outflow.account_id)
+    const inAccountId = accountMap.get(pair.inflow.account_id)
+    if (!outMeta || !outAccountId || !inAccountId) {
+      await persistSureHeldReason(
+        runInTenantTransaction,
+        familyId,
+        user,
+        auditCtx,
+        outRow,
+        "not_staged"
+      )
+      await persistSureHeldReason(
+        runInTenantTransaction,
+        familyId,
+        user,
+        auditCtx,
+        inRow,
+        "not_staged"
+      )
+      continue
+    }
+
+    const minor = toMinorUnits(
+      pair.outflow.amount,
+      outMeta.currency as CurrencyCode
+    ) as bigint
+    const absMinor = minor < 0n ? -minor : minor
+    const stableKey = outRow.promotionIdempotencyKey
+
+    try {
+      // Leg-create + Transfer + dual balance + audit — the canonical core's OWN
+      // tx (2B keeps the canonical writer & its P2002 recovery pristine).
+      await createTransactionForFamily({
+        data: {
+          type: "transfer",
+          accountId: outAccountId,
+          toAccountId: inAccountId,
+          amount: absMinor.toString(),
+          description: (pair.outflow.name ?? "").trim() || "Imported transfer",
+          date: new Date(pair.outflow.date),
+          idempotencyKey: stableKey,
+          status: "CLEARED",
+        },
+        familyId,
+        user,
+        runInTenantTransaction,
+      })
+
+      // Second tx: recover both leg ids via the stable key (fresh OR replay) and
+      // mark both staged rows promoted — minimal window, self-healing on re-run.
+      await runInTenantTransaction(familyId, user.id, async (tx) => {
+        const outflowLeg = await tx.transaction.findFirst({
+          where: { familyId, idempotencyKey: stableKey },
+          select: { id: true },
+        })
+        if (!outflowLeg) {
+          throw new Error("Promoted transfer outflow leg not found")
+        }
+        const transfer = await tx.transfer.findFirst({
+          where: { outflowTransactionId: outflowLeg.id },
+          select: { inflowTransactionId: true },
+        })
+        if (!transfer) throw new Error("Transfer link row not found")
+
+        const entries: AuditLogEntry[] = []
+        await markSureTransferRowPromoted(tx, outRow.id, outflowLeg.id, entries)
+        await markSureTransferRowPromoted(
+          tx,
+          inRow.id,
+          transfer.inflowTransactionId,
+          entries
+        )
+        await auditLogs(tx, auditCtx, withFamily(entries, familyId))
+      })
+
+      pairsPromotedThisRun += 1
+      pairedByTier[TIER_TO_RESULT_KEY[pair.tier]] += 1
+    } catch {
+      // Runtime rejection (e.g. liability balance-sign CHECK overshoot) → HOLD the
+      // pair as db_rejected, keep both rows normalized; the next re-run retries it.
+      await persistSureHeldReason(
+        runInTenantTransaction,
+        familyId,
+        user,
+        auditCtx,
+        outRow,
+        "db_rejected"
+      )
+      await persistSureHeldReason(
+        runInTenantTransaction,
+        familyId,
+        user,
+        auditCtx,
+        inRow,
+        "db_rejected"
+      )
+    }
+  }
+
+  // --- Persist the pure pairer's held reasons (skip anything already promoted) -
+  for (const heldLeg of pairing.held) {
+    const row = rowByExternalId.get(heldLeg.txn.id)
+    if (!row || row.rowStatus === "promoted") continue
+    await persistSureHeldReason(
+      runInTenantTransaction,
+      familyId,
+      user,
+      auditCtx,
+      row,
+      heldLeg.reason
+    )
+  }
+
+  // --- Count from rowStatus (DB-anchored → reconciles on re-run, Q7 #2) ------
+  const finalRows = await runInTenantTransaction(
+    familyId,
+    user.id,
+    async (tx) =>
+      tx.rawImportedTransaction.findMany({
+        where: {
+          familyId,
+          importBatchId: batchId,
+          externalId: { in: allLegIds },
+        },
+        select: { rowStatus: true, errorReason: true },
+      })
+  )
+  const heldLegsByReason = EMPTY_HELD_BY_REASON()
+  let legsPromotedTotal = 0
+  for (const row of finalRows) {
+    if (row.rowStatus === "promoted") {
+      legsPromotedTotal += 1
+      continue
+    }
+    const reason = (row.errorReason ?? "") as SureTransferHeldReason
+    if (reason in heldLegsByReason) heldLegsByReason[reason] += 1
+    else heldLegsByReason.unpaired_orphan += 1
+  }
+
+  return {
+    legsSeen,
+    legsStaged,
+    pairsPromotedThisRun,
+    legsPromotedTotal,
+    pairedByTier,
+    heldLegsByReason,
+  }
+}
+
+/** Mark a held transfer row promoted (links the created leg; clears any held reason). */
+async function markSureTransferRowPromoted(
+  tx: TenantTransactionClient,
+  rowId: string,
+  legId: string,
+  entries: AuditLogEntry[]
+): Promise<void> {
+  await tx.rawImportedTransaction.update({
+    where: { id: rowId },
+    data: {
+      rowStatus: "promoted",
+      promotedTransactionId: legId,
+      errorReason: null,
+    },
+  })
+  entries.push({
+    action: "update",
+    entityType: "RawImportedTransaction",
+    entityId: rowId,
+    before: { rowStatus: "normalized", promotedTransactionId: null },
+    after: { rowStatus: "promoted", promotedTransactionId: legId },
+  })
+}
+
+/**
+ * Persist a transfer leg's typed hold reason in `errorReason` on its still-held
+ * (`normalized`) row — DB-anchored provenance, zero migration (`errorReason` is a
+ * free TEXT column with no `rowStatus='error'` CHECK and is not surfaced by the
+ * generic batch read). Never touches a promoted row.
+ */
+async function persistSureHeldReason(
+  runInTenantTransaction: RunInTenantTransaction,
+  familyId: string,
+  user: { id: string; familyId?: string | null },
+  auditCtx: Awaited<ReturnType<typeof createAuditContext>>,
+  row: StagedTransferRow,
+  reason: SureTransferHeldReason
+): Promise<void> {
+  await runInTenantTransaction(familyId, user.id, async (tx) => {
+    const current = await tx.rawImportedTransaction.findFirst({
+      where: { id: row.id, familyId },
+      select: { rowStatus: true, errorReason: true },
+    })
+    if (!current || current.rowStatus === "promoted") return
+    if (current.errorReason === reason) return
+    await tx.rawImportedTransaction.update({
+      where: { id: row.id },
+      data: { errorReason: reason },
+    })
+    await auditLogs(
+      tx,
+      auditCtx,
+      withFamily(
+        [
+          {
+            action: "update",
+            entityType: "RawImportedTransaction",
+            entityId: row.id,
+            before: { errorReason: current.errorReason },
+            after: { errorReason: reason },
+          },
+        ],
+        familyId
+      )
+    )
   })
 }
 
