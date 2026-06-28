@@ -118,7 +118,9 @@ const REAL_SHAPE_NDJSON = [
   }),
   transaction("txn-expense", "17000.0", "standard"),
   transaction("txn-income", "-2000.0", "standard"),
-  // Real Valuation `data` keys — opening-balance source (PER-174), ignored now.
+  // Real Valuation `data` keys — the opening-balance source (PER-174). This
+  // real-shape sample omits `kind` (a degraded export), so it parses into a
+  // typed valuation row with `kind` undefined.
   row("Valuation", {
     account_id: "acc-checking",
     amount: "1000.0",
@@ -172,10 +174,20 @@ describe("Sure real-export shape regression guard (PER-173)", () => {
     expect(bundle.merchants).toHaveLength(1)
     expect(bundle.transactions).toHaveLength(2)
 
-    // Real v2 entities the reader does not map this phase are surfaced as
-    // ignored (Valuation is the PER-174 opening source), never malformed.
+    // Valuation is now a typed sink (the PER-174 opening source) with its real
+    // `data` keys preserved — no `kind` in this degraded sample.
+    expect(bundle.valuations).toHaveLength(1)
+    expect(bundle.valuations[0]).toMatchObject({
+      account_id: "acc-checking",
+      amount: "1000.0",
+      currency: "IDR",
+      date: "2026-01-01",
+    })
+    expect(bundle.valuations[0]?.kind).toBeUndefined()
+
+    // The remaining unmapped v2 entities are surfaced as ignored, never
+    // malformed — Valuation is no longer among them.
     expect(bundle.ignoredEntities).toEqual({
-      Valuation: 1,
       Budget: 1,
       BudgetCategory: 1,
       Tag: 1,

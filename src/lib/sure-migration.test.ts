@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vite-plus/test"
 import type { CurrencyCode } from "./data/currencies"
 import {
+  bundleHasValuationKind,
   classifySureAmount,
   normalizeSureAccountType,
   orderCategoriesParentsFirst,
@@ -10,11 +11,17 @@ import {
   type SureCategory,
   type SurePreviewAccount,
   type SureTransaction,
+  type SureValuation,
 } from "./sure-migration"
 // Anchor the client-side preview classifier to the REAL server gate, not a
 // hand-written copy: import the server's `isPromotable` and assert identical
 // verdicts. Behavior-neutral export (PER-171); the integration suite stays green.
-import { isPromotable } from "@/server/sure-migration"
+// `decideOpeningBalance` / `willPostThisRun` are the pure PER-174 opening units.
+import {
+  decideOpeningBalance,
+  isPromotable,
+  willPostThisRun,
+} from "@/server/sure-migration"
 import {
   buildSureBundleV1Degraded,
   buildSureBundleV2Complete,
@@ -355,5 +362,308 @@ describe("summarizeSureBundle reconciliation", () => {
     ).toBe(t.total)
     expect(t.promotable).toBe(manifest.expected.promotedThisRun)
     expect(preview.malformedLines).toBe(manifest.expected.malformedLines)
+  })
+})
+
+// ===========================================================================
+// PER-174 / ADR-0041 §5 — opening balance from `Valuation`
+// ===========================================================================
+
+const valuation = (
+  accountId: string,
+  amount: string,
+  date: string,
+  kind?: string | null
+): SureValuation => ({
+  account_id: accountId,
+  amount,
+  currency: "IDR",
+  date,
+  ...(kind === undefined ? {} : { kind }),
+})
+
+// IDR has 2 minor digits, so "50000.0" → 5_000_000 minor units.
+const ASSET_FLOW = {
+  accountClass: "ASSET",
+  balanceSource: "transaction_flow",
+  currency: "IDR",
+} as const
+
+describe("bundleHasValuationKind", () => {
+  test("true when any valuation carries a non-empty kind", () => {
+    expect(
+      bundleHasValuationKind([
+        valuation("a", "1.0", "2026-01-01"),
+        valuation("a", "2.0", "2026-02-01", "current_anchor"),
+      ])
+    ).toBe(true)
+  })
+
+  test("false for no valuations, missing kind, or only blank kind", () => {
+    expect(bundleHasValuationKind([])).toBe(false)
+    expect(bundleHasValuationKind([valuation("a", "1.0", "2026-01-01")])).toBe(
+      false
+    )
+    // A serialized empty/whitespace `kind` counts as absent — must NOT flip a
+    // degraded export into authoritative kind-mode.
+    expect(
+      bundleHasValuationKind([valuation("a", "1.0", "2026-01-01", "")])
+    ).toBe(false)
+    expect(
+      bundleHasValuationKind([valuation("a", "1.0", "2026-01-01", "   ")])
+    ).toBe(false)
+  })
+
+  test("parses Valuation into a typed sink with kind preserved", () => {
+    const bundle = parseSureBundle(
+      [
+        line("Valuation", {
+          account_id: "a",
+          amount: "100000.0",
+          currency: "IDR",
+          date: "2026-01-01",
+          kind: "opening_anchor",
+        }),
+      ].join("\n")
+    )
+    expect(bundle.valuations).toHaveLength(1)
+    expect(bundle.valuations[0]?.kind).toBe("opening_anchor")
+    expect(bundle.ignoredEntities.Valuation).toBeUndefined()
+  })
+})
+
+describe("decideOpeningBalance — kind-authoritative mode", () => {
+  test("uses the opening_anchor amount; ignores current_anchor/reconciliation", () => {
+    const valuations = [
+      valuation("a", "100000.0", "2026-01-01", "opening_anchor"),
+      valuation("a", "250000.0", "2026-03-01", "current_anchor"),
+    ]
+    expect(
+      decideOpeningBalance(ASSET_FLOW, "a", valuations, {
+        bundleHasKind: true,
+        earliestPromotedTxnDate: null,
+      })
+    ).toEqual({ minor: 10_000_000n, source: "opening_anchor" })
+  })
+
+  test("kind present but no opening_anchor → gap (never the date heuristic)", () => {
+    const valuations = [
+      valuation("a", "250000.0", "2026-03-01", "current_anchor"),
+    ]
+    expect(
+      decideOpeningBalance(ASSET_FLOW, "a", valuations, {
+        bundleHasKind: true,
+        earliestPromotedTxnDate: "2026-12-01",
+      })
+    ).toEqual({ minor: 0n, source: "gap" })
+  })
+
+  test("kind present but account has no valuation → gap", () => {
+    expect(
+      decideOpeningBalance(ASSET_FLOW, "a", [], {
+        bundleHasKind: true,
+        earliestPromotedTxnDate: null,
+      })
+    ).toEqual({ minor: 0n, source: "gap" })
+  })
+
+  test("negative opening_anchor on an ASSET → gap (sign CHECK), never a plug", () => {
+    const valuations = [
+      valuation("a", "-5000.0", "2026-01-01", "opening_anchor"),
+    ]
+    expect(
+      decideOpeningBalance(ASSET_FLOW, "a", valuations, {
+        bundleHasKind: true,
+        earliestPromotedTxnDate: null,
+      })
+    ).toEqual({ minor: 0n, source: "gap" })
+  })
+})
+
+describe("decideOpeningBalance — degraded date-heuristic mode", () => {
+  test("earliest valuation strictly before the first posting txn → used", () => {
+    const valuations = [
+      valuation("a", "999.0", "2026-03-01"),
+      valuation("a", "50000.0", "2026-01-01"), // earliest by date
+    ]
+    expect(
+      decideOpeningBalance(ASSET_FLOW, "a", valuations, {
+        bundleHasKind: false,
+        earliestPromotedTxnDate: "2026-05-10",
+      })
+    ).toEqual({ minor: 5_000_000n, source: "date_heuristic" })
+  })
+
+  test("no posting txn at all → LATEST valuation (best current value, no double-count)", () => {
+    // A held-transfer-only account posts nothing this run; the latest valuation
+    // is the best known current value (nothing is added on top → no
+    // double-count). Latest by date wins, NOT earliest — proving we don't
+    // understate an account with known movement across multiple valuations.
+    expect(
+      decideOpeningBalance(
+        ASSET_FLOW,
+        "a",
+        [
+          valuation("a", "50000.0", "2026-01-01"),
+          valuation("a", "120000.0", "2026-09-01"), // latest
+          valuation("a", "90000.0", "2026-05-01"),
+        ],
+        { bundleHasKind: false, earliestPromotedTxnDate: null }
+      )
+    ).toEqual({ minor: 12_000_000n, source: "date_heuristic" })
+  })
+
+  test("no posting txn at all → negative latest valuation → gap, never a plug", () => {
+    expect(
+      decideOpeningBalance(
+        ASSET_FLOW,
+        "a",
+        [
+          valuation("a", "50000.0", "2026-01-01"),
+          valuation("a", "-3000.0", "2026-09-01"), // latest, negative
+        ],
+        { bundleHasKind: false, earliestPromotedTxnDate: null }
+      )
+    ).toEqual({ minor: 0n, source: "gap" })
+  })
+
+  test("same-date as first posting txn → gap (strict <; valuation overrides flow)", () => {
+    expect(
+      decideOpeningBalance(
+        ASSET_FLOW,
+        "a",
+        [valuation("a", "50000.0", "2026-05-10")],
+        { bundleHasKind: false, earliestPromotedTxnDate: "2026-05-10" }
+      )
+    ).toEqual({ minor: 0n, source: "gap" })
+  })
+
+  test("mid-history valuation (after first posting txn) → gap", () => {
+    expect(
+      decideOpeningBalance(
+        ASSET_FLOW,
+        "a",
+        [valuation("a", "99999.0", "2026-06-01")],
+        { bundleHasKind: false, earliestPromotedTxnDate: "2026-04-01" }
+      )
+    ).toEqual({ minor: 0n, source: "gap" })
+  })
+
+  test("valuation with an unparseable date is skipped (never crashes)", () => {
+    expect(
+      decideOpeningBalance(
+        ASSET_FLOW,
+        "a",
+        [valuation("a", "50000.0", "not-a-date")],
+        { bundleHasKind: false, earliestPromotedTxnDate: null }
+      )
+    ).toEqual({ minor: 0n, source: "gap" })
+  })
+
+  test("negative earliest valuation on an ASSET → gap, never a plug", () => {
+    expect(
+      decideOpeningBalance(
+        ASSET_FLOW,
+        "a",
+        [valuation("a", "-5000.0", "2026-01-01")],
+        { bundleHasKind: false, earliestPromotedTxnDate: "2026-05-10" }
+      )
+    ).toEqual({ minor: 0n, source: "gap" })
+  })
+})
+
+describe("decideOpeningBalance — non-cash accounts are neutral", () => {
+  test("LIABILITY account → 0 (opening logic does not run)", () => {
+    expect(
+      decideOpeningBalance(
+        {
+          accountClass: "LIABILITY",
+          balanceSource: "transaction_flow",
+          currency: "IDR",
+        },
+        "a",
+        [valuation("a", "50000.0", "2026-01-01", "opening_anchor")],
+        { bundleHasKind: true, earliestPromotedTxnDate: null }
+      )
+    ).toEqual({ minor: 0n, source: "gap" })
+  })
+
+  test("non-transaction_flow ASSET (valuation-driven) → 0", () => {
+    expect(
+      decideOpeningBalance(
+        { accountClass: "ASSET", balanceSource: "valuation", currency: "IDR" },
+        "a",
+        [valuation("a", "50000.0", "2026-01-01", "opening_anchor")],
+        { bundleHasKind: true, earliestPromotedTxnDate: null }
+      )
+    ).toEqual({ minor: 0n, source: "gap" })
+  })
+})
+
+// The opening heuristic's `earliestPromotedTxnDate` is derived from the SAME
+// posting predicate the promotion path uses — `willPostThisRun`. Prove on the v2
+// fixture that the posting set is exactly the rows the orchestrator promotes
+// (PER-173 parity lesson: one predicate, no drift).
+describe("willPostThisRun parity with the promote set", () => {
+  test("v2 fixture: posting ids === the promotable expense + income only", () => {
+    const manifest = buildSureBundleV2Complete()
+    const bundle = parseSureBundle(manifest.ndjson)
+    const accountById = new Map(bundle.accounts.map((a) => [a.id, a]))
+
+    const infoFor = (sureAccountId: string) => {
+      const account = accountById.get(sureAccountId)
+      if (!account) return null
+      const tax = normalizeSureAccountType(
+        account.accountable_type,
+        account.subtype
+      )
+      return {
+        id: account.id,
+        currency: account.currency,
+        isImportable: tax.isImportable,
+        balanceSource: tax.balanceSource,
+      }
+    }
+
+    const postingIds = bundle.transactions
+      .filter((txn) => {
+        const info = infoFor(txn.account_id)
+        return info !== null && willPostThisRun(txn, info)
+      })
+      .map((txn) => txn.id)
+      .sort()
+
+    expect(postingIds).toEqual(
+      [manifest.ids.txnExpense, manifest.ids.txnIncome].sort()
+    )
+    expect(postingIds).toHaveLength(manifest.expected.promotedThisRun)
+  })
+
+  test("v2 fixture: every held/skip row is excluded from the posting set", () => {
+    const manifest = buildSureBundleV2Complete()
+    const bundle = parseSureBundle(manifest.ndjson)
+    const accountById = new Map(bundle.accounts.map((a) => [a.id, a]))
+    const infoFor = (sureAccountId: string) => {
+      const account = accountById.get(sureAccountId)!
+      const tax = normalizeSureAccountType(
+        account.accountable_type,
+        account.subtype
+      )
+      return {
+        id: account.id,
+        currency: account.currency,
+        isImportable: tax.isImportable,
+        balanceSource: tax.balanceSource,
+      }
+    }
+    const post = (sureTxnId: string) => {
+      const txn = bundle.transactions.find((t) => t.id === sureTxnId)!
+      return willPostThisRun(txn, infoFor(txn.account_id))
+    }
+
+    expect(post(manifest.ids.txnZero)).toBe(false) // zero amount
+    expect(post(manifest.ids.txnHeldInvest)).toBe(false) // non-importable
+    expect(post(manifest.ids.txnHeldKind)).toBe(false) // non-standard kind
+    expect(post(manifest.ids.txnHeldCurrency)).toBe(false) // currency mismatch
   })
 })

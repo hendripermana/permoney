@@ -14,24 +14,24 @@
 // We NEVER commit a real export — it carries PII (ADR-0041 §11). The values
 // below are fabricated; only the SHAPE is real.
 //
-// Phase-1 caveat (honest gap, by design): the reader does NOT yet derive an
-// opening balance from `Valuation` (that is PER-174), so every account in these
-// fixtures opens at 0 and `Valuation` rows are counted as `ignoredEntities`.
-// The promotable transactions are therefore chosen so the net flow keeps each
-// ASSET account's balance >= 0 (the `account_normal_balance_sign` CHECK).
-//
-// Two scenarios:
-//   * `buildSureBundleV2Complete` — a full export: importable IDR depository,
-//     a held investment account, a USD account (for the currency-mismatch
-//     hold), parent/child categories, merchants, the full transaction taxonomy
-//     (promotable expense + income, zero-amount, non-importable account,
-//     non-standard `kind`, currency mismatch), `Valuation` snapshots, and a few
+// Opening balances come from `Valuation` (PER-174, ADR-0041 §5): the two
+// fixtures deliberately carry the two opening MODES.
+//   * `buildSureBundleV2Complete` — a real v2 export that "speaks `kind`": an
+//     importable IDR depository whose `opening_anchor` valuation drives its
+//     opening; a `current_anchor` valuation (on checking AND on the USD account)
+//     to prove it is NEVER used as opening; a held investment account; the full
+//     transaction taxonomy (promotable expense + income, zero-amount,
+//     non-importable account, non-standard `kind`, currency mismatch); and a few
 //     real unmapped entities (Budget/BudgetCategory/Tag) counted as ignored.
-//   * `buildSureBundleV1Degraded` — a degraded export: an unknown
-//     `accountable_type` (conservative depository fallback), an orphan category
-//     (missing parent), a promotable INCOME row (so an opening-0 ASSET stays
-//     sign-valid), and a couple of malformed lines the parser must reject
-//     without aborting.
+//     Opening provenance: checking→anchor, usd+invest→gap(0).
+//   * `buildSureBundleV1Degraded` — a degraded export with NO `kind`: the date
+//     heuristic applies. `wallet` (unknown `accountable_type`→depository
+//     fallback) has a valuation strictly before its first posting txn → opening
+//     from the earliest valuation; `savings` has a mid-history valuation (after
+//     its posting txn) → gap (0). Plus an orphan category and malformed lines the
+//     parser must reject without aborting.
+// Promotable transactions keep each ASSET account's net balance >= 0
+// (`account_normal_balance_sign` CHECK).
 //
 // Each builder returns the NDJSON string AND a manifest of the ids + expected
 // orchestration counts, so a test asserts against intent rather than re-deriving
@@ -56,8 +56,21 @@ export interface SureBundleManifest {
     malformedLines: number
     /** Real v2 entities the reader does not map to typed rows this phase. */
     ignoredEntities: Record<string, number>
+    /** Whether the bundle "speaks `kind`" (real v2) — drives the opening mode. */
+    bundleHasKind: boolean
+    /** Typed Valuation rows parsed (no longer ignored). */
+    valuationsParsed: number
+    /**
+     * Opening provenance for ASSET transaction_flow accounts CREATED this run.
+     * Invariant: the three buckets sum to that account count (ADR-0041 §5).
+     */
+    openingBalances: {
+      fromOpeningAnchor: number
+      fromDateHeuristic: number
+      gapZero: number
+    }
   }
-  /** Opening balance (minor units) the depository account is created with. */
+  /** Opening balance (minor units) the PRIMARY importable depository is created with. */
   openingBalanceMinor: bigint
   /** Promotable expense magnitude as SIGNED ledger minor units (negative). */
   promotableExpenseMinor: bigint
@@ -126,14 +139,15 @@ export function buildSureBundleV2Complete(): SureBundleManifest {
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-06-25T00:00:00Z",
     }),
-    // --- Valuation snapshots (real exports carry these, NOT `Balance`) -----
-    // Reader does not yet derive opening from these (PER-174); counted as
-    // ignored. An earlier + later snapshot to mirror real multi-row history.
+    // --- Valuations (real v2 exports carry these WITH `kind`, NOT `Balance`) --
+    // checking: an `opening_anchor` (the declared opening → drives the opening
+    // balance) plus a later `current_anchor` that MUST be ignored as opening.
     envelope("Valuation", {
-      id: "sure-val-checking-1",
+      id: "sure-val-checking-open",
       account_id: ids.checking,
-      entry_id: "sure-entry-val-1",
-      name: "Manual valuation",
+      entry_id: "sure-entry-val-open",
+      name: "Opening balance",
+      kind: "opening_anchor",
       amount: "100000.0",
       currency: "IDR",
       date: "2026-01-01",
@@ -141,15 +155,30 @@ export function buildSureBundleV2Complete(): SureBundleManifest {
       updated_at: "2026-01-01T00:00:00Z",
     }),
     envelope("Valuation", {
-      id: "sure-val-checking-2",
+      id: "sure-val-checking-current",
       account_id: ids.checking,
-      entry_id: "sure-entry-val-2",
+      entry_id: "sure-entry-val-current",
       name: "Manual valuation",
+      kind: "current_anchor",
       amount: "250000.0",
       currency: "IDR",
       date: "2026-03-01",
       created_at: "2026-03-01T00:00:00Z",
       updated_at: "2026-03-01T00:00:00Z",
+    }),
+    // usd: only a `current_anchor`, no `opening_anchor` → opening is a gap (0),
+    // proving end-to-end that a non-opening valuation never seeds the opening.
+    envelope("Valuation", {
+      id: "sure-val-usd-current",
+      account_id: ids.usd,
+      entry_id: "sure-entry-val-usd",
+      name: "Manual valuation",
+      kind: "current_anchor",
+      amount: "80.0",
+      currency: "USD",
+      date: "2026-02-01",
+      created_at: "2026-02-01T00:00:00Z",
+      updated_at: "2026-02-01T00:00:00Z",
     }),
     // --- Categories (child before parent to exercise the reorder) ---------
     envelope("Category", {
@@ -357,10 +386,20 @@ export function buildSureBundleV2Complete(): SureBundleManifest {
       held: 3, // invest + non-standard kind + currency mismatch
       zeroAmountSkipped: 1,
       malformedLines: 0,
-      ignoredEntities: { Valuation: 2, Budget: 1, BudgetCategory: 1, Tag: 1 },
+      // Valuation is now a typed sink (opening source), no longer ignored.
+      ignoredEntities: { Budget: 1, BudgetCategory: 1, Tag: 1 },
+      bundleHasKind: true,
+      valuationsParsed: 3,
+      // 3 ASSET transaction_flow accounts created: checking→anchor,
+      // usd (current_anchor only)→gap, invest (no valuation)→gap.
+      openingBalances: {
+        fromOpeningAnchor: 1,
+        fromDateHeuristic: 0,
+        gapZero: 2,
+      },
     },
-    // Opening from Valuation is PER-174; this phase opens every account at 0.
-    openingBalanceMinor: 0n,
+    // checking's `opening_anchor` 100000.0 → 10_000_000 minor (IDR, 2 digits).
+    openingBalanceMinor: 10_000_000n,
     // Sure "17000.0" → expense, ledger −1_700_000 minor (IDR has 2 minor digits).
     promotableExpenseMinor: -1_700_000n,
     // Sure "-50000.0" → income, ledger +5_000_000 minor.
@@ -375,8 +414,10 @@ export function buildSureBundleV2Complete(): SureBundleManifest {
 export function buildSureBundleV1Degraded(): SureBundleManifest {
   const ids = {
     wallet: "sure-acc-wallet",
+    savings: "sure-acc-savings",
     catOrphan: "sure-cat-orphan",
     txnIncome: "sure-txn-degraded-income",
+    txnSavings: "sure-txn-degraded-savings",
   }
 
   const lines = [
@@ -393,6 +434,19 @@ export function buildSureBundleV1Degraded(): SureBundleManifest {
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-05-10T00:00:00Z",
     }),
+    // A second depository to exercise the mid-history gap branch.
+    envelope("Account", {
+      id: ids.savings,
+      name: "Savings",
+      accountable_type: "Depository",
+      classification: "asset",
+      subtype: "savings",
+      currency: "IDR",
+      balance: "0.0",
+      status: "active",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-06-01T00:00:00Z",
+    }),
     // Orphan category: parent_id points at a category absent from the bundle.
     envelope("Category", {
       id: ids.catOrphan,
@@ -404,12 +458,39 @@ export function buildSureBundleV1Degraded(): SureBundleManifest {
       created_at: "2026-01-02T00:00:00Z",
       updated_at: "2026-01-02T00:00:00Z",
     }),
+    // --- Valuations WITHOUT `kind` (degraded export → date heuristic) ---------
+    // wallet: earliest valuation (2026-01-01) is strictly before its first
+    // posting txn (2026-05-10) → opening from this valuation (5_000_000 minor).
+    envelope("Valuation", {
+      id: "sure-val-wallet",
+      account_id: ids.wallet,
+      entry_id: "sure-entry-val-wallet",
+      name: "Manual valuation",
+      amount: "50000.0",
+      currency: "IDR",
+      date: "2026-01-01",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    }),
+    // savings: valuation (2026-06-01) falls AFTER its posting txn (2026-04-01) →
+    // mid-history → gap (0): using it would double-count the promoted flow.
+    envelope("Valuation", {
+      id: "sure-val-savings",
+      account_id: ids.savings,
+      entry_id: "sure-entry-val-savings",
+      name: "Manual valuation",
+      amount: "99999.0",
+      currency: "IDR",
+      date: "2026-06-01",
+      created_at: "2026-06-01T00:00:00Z",
+      updated_at: "2026-06-01T00:00:00Z",
+    }),
     // Malformed line 1: not JSON.
     "{ this is not valid json",
     // Malformed line 2: valid JSON, missing the `data` envelope.
     JSON.stringify({ type: "Account" }),
-    // Promotable INCOME (Sure NEGATIVE) so an opening-0 ASSET stays sign-valid
-    // after promotion (ledger positive).
+    // Promotable INCOME (Sure NEGATIVE) so an opening ASSET stays sign-valid
+    // after promotion (ledger positive). wallet opening 5_000_000 + 1_234_500.
     envelope("Transaction", {
       id: ids.txnIncome,
       account_id: ids.wallet,
@@ -427,26 +508,53 @@ export function buildSureBundleV1Degraded(): SureBundleManifest {
       created_at: "2026-05-10T00:00:00Z",
       updated_at: "2026-05-10T00:00:00Z",
     }),
+    // savings posting txn BEFORE its valuation (drives the mid-history gap).
+    envelope("Transaction", {
+      id: ids.txnSavings,
+      account_id: ids.savings,
+      entry_id: "sure-entry-degraded-savings",
+      category_id: null,
+      merchant_id: null,
+      date: "2026-04-01",
+      amount: "-22222.0",
+      currency: "IDR",
+      name: "Savings deposit",
+      kind: "standard",
+      notes: null,
+      excluded: false,
+      tag_ids: [],
+      created_at: "2026-04-01T00:00:00Z",
+      updated_at: "2026-04-01T00:00:00Z",
+    }),
   ]
 
   return {
     ndjson: lines.join("\n"),
     ids,
     expected: {
-      accountsCreated: 1,
+      accountsCreated: 2,
       categoriesCreated: 1,
       merchantsCreated: 0,
-      transactionsTotal: 1,
-      staged: 1,
-      promotedThisRun: 1,
+      transactionsTotal: 2,
+      staged: 2,
+      promotedThisRun: 2,
       held: 0,
       zeroAmountSkipped: 0,
       malformedLines: 2,
       ignoredEntities: {},
+      bundleHasKind: false,
+      valuationsParsed: 2,
+      // 2 ASSET transaction_flow accounts created: wallet→heuristic, savings→gap.
+      openingBalances: {
+        fromOpeningAnchor: 0,
+        fromDateHeuristic: 1,
+        gapZero: 1,
+      },
     },
-    openingBalanceMinor: 0n, // no opening source → opening 0
+    // wallet's earliest valuation "50000.0" → 5_000_000 minor (date heuristic).
+    openingBalanceMinor: 5_000_000n,
     promotableExpenseMinor: 0n, // no promotable expense in the degraded bundle
-    // Sure "-12345.0" → income, ledger +1_234_500 minor.
+    // Sure "-12345.0" → wallet income, ledger +1_234_500 minor.
     promotableIncomeMinor: 1_234_500n,
   }
 }

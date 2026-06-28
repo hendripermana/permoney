@@ -2,13 +2,14 @@ import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
 import type { CurrencyCode } from "../lib/data/currencies"
 import {
+  bundleHasValuationKind,
   classifySureAmount,
   normalizeSureAccountType,
   orderCategoriesParentsFirst,
   parseSureBundle,
   SURE_PROVIDER,
-  type SureBalance,
   type SureTransaction,
+  type SureValuation,
 } from "../lib/sure-migration"
 import { toMinorUnits } from "../lib/money"
 import { createUuidV7 } from "../lib/uuid-v7"
@@ -84,6 +85,20 @@ export interface SureMigrationResult {
     zeroAmountSkipped: number
     invalidDateSkipped: number
   }
+  // Opening-balance provenance for the accounts CREATED this run (ADR-0041 §5).
+  // The buckets close over exactly the ASSET `transaction_flow` accounts created
+  // this run: `fromOpeningAnchor + fromDateHeuristic + gapZero` === that count.
+  // Reused and non-cash accounts are excluded (their opening is 0 by definition,
+  // not an unreconciled gap).
+  openingBalances: {
+    fromOpeningAnchor: number
+    fromDateHeuristic: number
+    gapZero: number
+  }
+  // True when the bundle "speaks `kind`" (a real v2 export); false for a degraded
+  // export. Tells the reviewer at a glance which opening path the whole bundle took.
+  bundleHasKind: boolean
+  valuationsParsed: number
   malformedLines: number
   ignoredEntities: Record<string, number>
 }
@@ -137,42 +152,163 @@ async function gzipBytes(
 
 // ---------------------------------------------------------------------------
 // Account opening balance (ADR-0041 §5 — transfer-independent, additive)
+//
+// Source of truth: a Sure `Valuation` (a point-in-time TOTAL account-value
+// anchor), NOT `Balance` (absent from real exports — PER-174). Two modes,
+// selected by whether the bundle "speaks `kind`":
+//
+//   * kind present (real v2 export) — AUTHORITATIVE: the `opening_anchor`
+//     valuation's amount is Sure's own declared opening (pre-transaction value).
+//     No `opening_anchor` for an account ⇒ gap (0), NEVER the date heuristic:
+//     a `current_anchor`/`reconciliation` is a mid/end snapshot whose amount
+//     already embeds the very flows we promote, so using it double-counts.
+//   * kind absent (degraded export) — date heuristic. When posting txns exist:
+//     the EARLIEST valid-dated valuation, used only when STRICTLY before the
+//     first posting txn (Sure's forward calculator lets a valuation OVERRIDE
+//     same-date flows, so a same-date/mid-history valuation already embeds
+//     promoted flows ⇒ gap). When NOTHING posts (held-transfer-only account):
+//     the LATEST valid-dated valuation — best known current value, no flow is
+//     added on top so no double-count; earliest would discard known movement.
+//
+// Never plugs `Sure.balance − Σ(txns)` (§5 forbidden — double-counts deferred
+// transfers). Negative opening on an ASSET violates the balance-sign CHECK ⇒
+// gap (0), never a plug. Applied ONCE at creation (re-run reuses the account and
+// never re-applies). Non-cash / non-ASSET shells stay neutral (0, untallied).
 // ---------------------------------------------------------------------------
 
+export type OpeningBalanceSource = "opening_anchor" | "date_heuristic" | "gap"
+
+export interface OpeningBalanceDecision {
+  minor: bigint
+  source: OpeningBalanceSource
+}
+
 /**
- * Opening balance for a newly-created account, applied ONCE at creation (re-run
- * reuses the account and never re-applies). Restricted to ASSET cash-like
- * accounts where the snapshot sign is unambiguous (`account_normal_balance_sign`
- * requires ASSET balance ≥ 0): the earliest `Balance.start_balance`, else 0.
- *
- * NEVER plugs `Sure.balance − Σ(txns)` (§5 forbidden — double-counts deferred
- * transfers). LIABILITY opening from Sure snapshots is deferred (fallback 0 +
- * documented gap): Sure's liability balance SIGN convention is not pinned by the
- * ADR, and a wrong guess would corrupt the ledger. Non-cash shells stay neutral.
+ * Decide a newly-created account's opening balance from the bundle's valuations.
+ * Pure and exported so the full edge matrix is unit-tested without a database.
+ * `earliestPromotedTxnDate` is the `YYYY-MM-DD` of the first row that will POST
+ * a balance delta this run (see {@link willPostThisRun}) for this account, or
+ * `null` when none will post.
  */
-function openingBalanceMinor(
+export function decideOpeningBalance(
   account: { accountClass: string; balanceSource: string; currency: string },
   sureAccountId: string,
-  balances: readonly SureBalance[]
-): bigint {
+  valuations: readonly SureValuation[],
+  opts: { bundleHasKind: boolean; earliestPromotedTxnDate: string | null }
+): OpeningBalanceDecision {
   if (
     account.accountClass !== "ASSET" ||
     account.balanceSource !== "transaction_flow"
   ) {
-    return 0n
+    return { minor: 0n, source: "gap" }
   }
-  const snapshots = balances
-    .filter((b) => b.account_id === sureAccountId && b.start_balance != null)
-    .sort((a, z2) => a.date.localeCompare(z2.date))
-  const earliest = snapshots[0]
-  if (!earliest?.start_balance) return 0n
-  const minor = toMinorUnits(
-    earliest.start_balance,
+  const forAccount = valuations.filter((v) => v.account_id === sureAccountId)
+
+  if (opts.bundleHasKind) {
+    const anchor = forAccount.find((v) => v.kind?.trim() === "opening_anchor")
+    if (!anchor) return { minor: 0n, source: "gap" }
+    return assetOpening(anchor.amount, account.currency, "opening_anchor")
+  }
+
+  // Degraded export (no `kind`): pick the anchoring valuation by date.
+  const dated = forAccount
+    .filter((v) => !Number.isNaN(new Date(v.date).getTime()))
+    .map((v) => ({ valuation: v, day: v.date.slice(0, 10) }))
+    .sort((a, b) => a.day.localeCompare(b.day))
+  if (dated.length === 0) return { minor: 0n, source: "gap" }
+
+  if (opts.earliestPromotedTxnDate === null) {
+    // Nothing posts this run (real case: an account whose activity is entirely
+    // held transfers). final balance = opening + 0, so the LATEST valuation is
+    // the best known current value with ZERO double-count risk — nothing is
+    // added on top. The earliest would discard every known movement and
+    // understate (verified on a real export: 14/35 accounts hit this branch).
+    const latest = dated[dated.length - 1]
+    return latest
+      ? assetOpening(
+          latest.valuation.amount,
+          account.currency,
+          "date_heuristic"
+        )
+      : { minor: 0n, source: "gap" }
+  }
+
+  // Posting rows exist → opening must precede the first one. Use the EARLIEST
+  // valuation, and only when it is STRICTLY before that first posting txn: on or
+  // after it, the valuation overrides a promoted flow (Sure's forward
+  // calculator) ⇒ double-count ⇒ gap. (latest here could post-date a flow.)
+  const earliest = dated[0]
+  if (!earliest || !(earliest.day < opts.earliestPromotedTxnDate)) {
+    return { minor: 0n, source: "gap" }
+  }
+  return assetOpening(
+    earliest.valuation.amount,
+    account.currency,
+    "date_heuristic"
+  )
+}
+
+// Convert a Sure decimal amount to minor units for an ASSET opening. A negative
+// result would violate the balance-sign CHECK ⇒ gap (0), never a plug.
+function assetOpening(
+  amount: string,
+  currency: string,
+  source: Exclude<OpeningBalanceSource, "gap">
+): OpeningBalanceDecision {
+  const minor = toMinorUnits(amount, currency as CurrencyCode) as bigint
+  return minor >= 0n ? { minor, source } : { minor: 0n, source: "gap" }
+}
+
+/**
+ * Will this Sure transaction POST a balance delta this run? The SINGLE posting
+ * predicate, reused by the opening-balance pre-scan and conceptually equal to
+ * the orchestrator's stage→promote decision (a staged row is promotable iff it
+ * passed the same valid-date + non-zero gates, then {@link isPromotable}). One
+ * predicate so the heuristic's `earliestPromotedTxnDate` can NEVER drift from
+ * what actually promotes (PER-173 parity lesson). Exported for the parity test.
+ */
+export function willPostThisRun(
+  txn: SureTransaction,
+  account: PermoneyAccountInfo
+): boolean {
+  if (Number.isNaN(new Date(txn.date).getTime())) return false
+  const { isZeroAmount } = classifySureAmount(
+    txn.amount,
     account.currency as CurrencyCode
-  ) as bigint
-  // A negative opening on an ASSET would violate the balance-sign CHECK; treat
-  // it as an unreconcilable gap (fallback 0), never a plug.
-  return minor >= 0n ? minor : 0n
+  )
+  if (isZeroAmount) return false
+  return isPromotable(txn, account)
+}
+
+/**
+ * Per Sure-account `YYYY-MM-DD` of the earliest transaction that will post a
+ * balance delta this run. Account info is derived purely from the Sure taxonomy
+ * (no DB) so the pre-scan can run before any account row exists.
+ */
+function earliestPromotedDateBySureAccount(
+  bundle: ReturnType<typeof parseSureBundle>
+): Map<string, string> {
+  const sureAccountById = new Map(bundle.accounts.map((a) => [a.id, a]))
+  const earliest = new Map<string, string>()
+  for (const txn of bundle.transactions) {
+    const sureAccount = sureAccountById.get(txn.account_id)
+    if (!sureAccount) continue
+    const taxonomy = normalizeSureAccountType(
+      sureAccount.accountable_type,
+      sureAccount.subtype
+    )
+    const info: PermoneyAccountInfo = {
+      id: sureAccount.id,
+      currency: sureAccount.currency,
+      isImportable: taxonomy.isImportable,
+      balanceSource: taxonomy.balanceSource,
+    }
+    if (!willPostThisRun(txn, info)) continue
+    const day = txn.date.slice(0, 10)
+    const prev = earliest.get(txn.account_id)
+    if (prev === undefined || day < prev) earliest.set(txn.account_id, day)
+  }
+  return earliest
 }
 
 // ---------------------------------------------------------------------------
@@ -223,12 +359,23 @@ export async function runSureMigrationForFamily({
   const auditCtx = await createAuditContext({ user })
 
   const bundle = parseSureBundle(data.bundle)
+  // Opening-balance inputs, computed once (ADR-0041 §5). `bundleHasKind` selects
+  // the whole bundle's opening mode; `earliestPromotedDate` is the per-account
+  // anchor the degraded date-heuristic compares against — derived from the SAME
+  // posting predicate the promotion path uses (no drift).
+  const bundleHasKind = bundleHasValuationKind(bundle.valuations)
+  const earliestPromotedDate = earliestPromotedDateBySureAccount(bundle)
 
   // --- 1. Accounts -> id-map (+ account info for mapping) -------------------
   const accountMap = new Map<string, string>() // sureId -> permoneyId
   const accountInfo = new Map<string, PermoneyAccountInfo>() // permoneyId -> info
   let accountsCreated = 0
   let accountsReused = 0
+  // Opening-balance provenance — tallied ONLY for ASSET transaction_flow accounts
+  // CREATED this run (the bucket denominator; §5 reconcile invariant).
+  let openingFromAnchor = 0
+  let openingFromDateHeuristic = 0
+  let openingGapZero = 0
 
   await runInTenantTransaction(familyId, user.id, async (tx) => {
     const auditEntries: AuditLogEntry[] = []
@@ -244,11 +391,29 @@ export async function runSureMigrationForFamily({
         sureAccount.accountable_type,
         sureAccount.subtype
       )
-      const balance = openingBalanceMinor(
-        { ...taxonomy, currency: sureAccount.currency },
+      const opening = decideOpeningBalance(
+        {
+          accountClass: taxonomy.accountClass,
+          balanceSource: taxonomy.balanceSource,
+          currency: sureAccount.currency,
+        },
         sureAccount.id,
-        bundle.balances
+        bundle.valuations,
+        {
+          bundleHasKind,
+          earliestPromotedTxnDate:
+            earliestPromotedDate.get(sureAccount.id) ?? null,
+        }
       )
+      if (
+        taxonomy.accountClass === "ASSET" &&
+        taxonomy.balanceSource === "transaction_flow"
+      ) {
+        if (opening.source === "opening_anchor") openingFromAnchor += 1
+        else if (opening.source === "date_heuristic") {
+          openingFromDateHeuristic += 1
+        } else openingGapZero += 1
+      }
       const created = await tx.account.create({
         data: {
           familyId,
@@ -257,7 +422,7 @@ export async function runSureMigrationForFamily({
           accountType: taxonomy.accountType,
           accountSubtype: taxonomy.accountSubtype,
           balanceSource: taxonomy.balanceSource,
-          balance,
+          balance: opening.minor,
           currency: sureAccount.currency,
           isImportable: taxonomy.isImportable,
           externalProvider: SURE_PROVIDER,
@@ -530,6 +695,13 @@ export async function runSureMigrationForFamily({
       zeroAmountSkipped,
       invalidDateSkipped,
     },
+    openingBalances: {
+      fromOpeningAnchor: openingFromAnchor,
+      fromDateHeuristic: openingFromDateHeuristic,
+      gapZero: openingGapZero,
+    },
+    bundleHasKind,
+    valuationsParsed: bundle.valuations.length,
     malformedLines: bundle.malformedLines.length,
     ignoredEntities: bundle.ignoredEntities,
   }

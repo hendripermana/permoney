@@ -19,14 +19,15 @@ import {
   buildSureBundleV2Complete,
 } from "./support/sure-fixtures"
 
-// PER-170 / PER-173 / ADR-0041 — Real-Postgres proof of the Sure full-family
-// migration against a REAL-SHAPED bundle (`type` envelope, Valuation snapshots,
-// no Balance/Transfer/split_lines): provider-bound account/category/merchant
-// creation, opening 0 (Valuation→opening is PER-174, never a plug),
-// the Sure sign inversion at promotion, §6 gating (held rows stay staged), the
-// PER-82 promotion parity it reuses (signed amount, atomic balance, base FX
-// projection, audit), one-shot idempotent re-run, lossless artifact retention,
-// and tenant isolation under RLS.
+// PER-170 / PER-173 / PER-174 / ADR-0041 — Real-Postgres proof of the Sure
+// full-family migration against a REAL-SHAPED bundle (`type` envelope, Valuation
+// anchors, no Balance/Transfer/split_lines): provider-bound account/category/
+// merchant creation, opening balances from `Valuation` per §5 (kind-bearing
+// bundle → `opening_anchor`; no-kind bundle → date heuristic; gaps → 0, never a
+// plug), the Sure sign inversion at promotion, §6 gating (held rows stay
+// staged), the PER-82 promotion parity it reuses (signed amount, atomic balance,
+// base FX projection, audit), one-shot idempotent re-run (opening applied once),
+// lossless artifact retention, and tenant isolation under RLS.
 
 describe("Sure full-family migration vertical slice (PER-170)", () => {
   let harness: IntegrationHarness
@@ -93,7 +94,7 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
 
   // ---- full v2 bundle ------------------------------------------------------
 
-  test("migrates a v2 bundle: bound entities, opening 0, only gated rows promoted", async () => {
+  test("migrates a v2 bundle: bound entities, opening from anchor, only gated rows promoted", async () => {
     const tenant = await setupTenant()
     const fixture = buildSureBundleV2Complete()
 
@@ -111,13 +112,24 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     expect(result.transactions.held).toBe(fixture.expected.held)
     expect(result.transactions.zeroAmountSkipped).toBe(1)
     expect(result.malformedLines).toBe(0)
-    // Real unmapped v2 entities are surfaced (Valuation is opening-source for
-    // PER-174, not consumed yet), never silently dropped.
+    // Valuation is now a typed sink (opening source), out of ignoredEntities.
     expect(result.ignoredEntities).toEqual(fixture.expected.ignoredEntities)
 
-    // Provider-bound depository. Opening is 0 this phase (Valuation→opening is
-    // PER-174); the expense (−1_700_000) + income (+5_000_000) deltas are then
-    // applied atomically, netting a sign-valid ASSET balance.
+    // Opening provenance (§5): kind-bearing bundle, checking opened from its
+    // `opening_anchor`; usd (current_anchor only) + invest (no valuation) → gap.
+    expect(result.bundleHasKind).toBe(true)
+    expect(result.valuationsParsed).toBe(fixture.expected.valuationsParsed)
+    expect(result.openingBalances).toEqual(fixture.expected.openingBalances)
+    // Reconcile invariant: the three buckets close over exactly the ASSET
+    // transaction_flow accounts created this run (no unexplained delta).
+    expect(
+      result.openingBalances.fromOpeningAnchor +
+        result.openingBalances.fromDateHeuristic +
+        result.openingBalances.gapZero
+    ).toBe(3)
+
+    // Provider-bound depository: opening from the `opening_anchor` (10_000_000),
+    // then expense (−1_700_000) + income (+5_000_000) applied atomically.
     const checking = await accountByBinding(tenant, fixture.ids.checking)
     expect(checking?.accountType).toBe("DEPOSITORY")
     expect(checking?.isImportable).toBe(true)
@@ -127,10 +139,16 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
         fixture.promotableIncomeMinor
     )
 
-    // Investment shell exists but is held (not importable).
+    // usd carries ONLY a current_anchor (no opening_anchor) → opening gap (0):
+    // a non-opening valuation must never seed the opening, end-to-end.
+    const usd = await accountByBinding(tenant, fixture.ids.usd)
+    expect(usd?.balance).toBe(0n)
+
+    // Investment shell exists but is held (not importable); no valuation → 0.
     const invest = await accountByBinding(tenant, fixture.ids.invest)
     expect(invest?.accountType).toBe("INVESTMENT")
     expect(invest?.isImportable).toBe(false)
+    expect(invest?.balance).toBe(0n)
 
     // Held rows are staged-not-promoted: still normalized, never a Transaction.
     const { staged, promotedRows, txnCount } = await harness.withMember(
@@ -268,23 +286,41 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
 
   // ---- degraded v1 bundle --------------------------------------------------
 
-  test("degraded bundle: unknown-type fallback, orphan category, no-snapshot opening 0, rejects malformed", async () => {
+  test("degraded bundle: unknown-type fallback, date-heuristic opening + mid-history gap, rejects malformed", async () => {
     const tenant = await setupTenant()
     const fixture = buildSureBundleV1Degraded()
 
     const result = await migrate(tenant, "all.ndjson", fixture.ndjson)
 
     expect(result.malformedLines).toBe(2)
-    expect(result.accounts).toEqual({ created: 1, reused: 0 })
+    expect(result.accounts).toEqual({ created: 2, reused: 0 })
     expect(result.categories).toEqual({ created: 1, reused: 0 })
-    expect(result.transactions.promotedThisRun).toBe(1)
+    expect(result.transactions.promotedThisRun).toBe(2)
+
+    // No-kind bundle → date-heuristic mode; wallet opens from its earliest
+    // valuation, savings falls back to 0 (its valuation is mid-history).
+    expect(result.bundleHasKind).toBe(false)
+    expect(result.openingBalances).toEqual(fixture.expected.openingBalances)
+    expect(
+      result.openingBalances.fromOpeningAnchor +
+        result.openingBalances.fromDateHeuristic +
+        result.openingBalances.gapZero
+    ).toBe(2)
 
     const wallet = await accountByBinding(tenant, fixture.ids.wallet)
     // Unknown accountable_type → conservative cash-like depository, importable.
     expect(wallet?.accountType).toBe("DEPOSITORY")
     expect(wallet?.isImportable).toBe(true)
-    // No Balance entity → opening 0 (no plug); income promotion → +1_234_500.
-    expect(wallet?.balance).toBe(1_234_500n)
+    // Earliest valuation (2026-01-01) strictly precedes the first posting txn
+    // (2026-05-10) → opening 5_000_000; income promotion → +1_234_500.
+    expect(wallet?.balance).toBe(
+      fixture.openingBalanceMinor + fixture.promotableIncomeMinor
+    )
+
+    // savings: valuation is mid-history (after its posting txn) → opening gap (0,
+    // never a plug); only the promoted income (+2_222_200) lands.
+    const savings = await accountByBinding(tenant, fixture.ids.savings)
+    expect(savings?.balance).toBe(2_222_200n)
 
     // Orphan category (missing parent) created as a root.
     const orphan = await harness.withMember(
