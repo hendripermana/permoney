@@ -31,6 +31,7 @@ import {
   type AccountType,
   normalizeAccountTaxonomy,
 } from "./accounts"
+import { deriveTransferKindForAccounts } from "./liability-semantics"
 import { toMinorUnits } from "./money"
 
 export const SURE_EXPORT_VERSION = 2
@@ -632,4 +633,403 @@ export function orderCategoriesParentsFirst(
 
   for (const category of categories) place(category, new Set())
   return ordered
+}
+
+// ---------------------------------------------------------------------------
+// Transfer pairing (ADR-0042 — Phase 2: dual-leg pairing + liability kinds)
+//
+// Pure, deterministic pairing of Sure transfer-kind legs into (outflow, inflow)
+// candidate pairs the orchestrator promotes through the canonical transfer core
+// (`createTransactionForFamily({type:"transfer"})`) — NEVER a new ledger writer.
+// Precedence is precise-first, heuristic-fallback, hold-on-ambiguity:
+//
+//   Tier 0 — DETERMINISTIC: a Sure `Transfer { outflow_transaction_id,
+//            inflow_transaction_id }` pairs its two legs AUTHORITATIVELY (the
+//            common v2 case). Direction is taken from the entity, not the sign.
+//   Tier 1 — CLEAN heuristic: legs grouped by (day, |amount| minor, currency);
+//            exactly one outflow (Sure amount > 0 = source) + one inflow (< 0 =
+//            dest) on DIFFERENT accounts → a clean pair. No fuzzing, ever.
+//   Tier 2 — CLUSTER resolution: a >1-per-side group is resolved ONLY by
+//            bidirectional, exact-normalized directional name hints
+//            ("Transfer to <X>" on the outflow ↔ "Transfer from <Y>" on the
+//            inflow, each naming the other's account). A unique perfect matching
+//            promotes; anything ambiguous/partial → the WHOLE cluster is HELD.
+//
+// Everything unresolved is HELD with a typed reason — NEVER a fabricated
+// counterparty (HOLD > guess; a fabricated transfer is ledger poison). Each
+// candidate pair then passes a gate (importable → currency → kind, first failure
+// wins); a failing gate HOLDS both legs. Permoney DERIVES the transfer `kind`
+// from the two account types (`deriveTransferKindForAccounts`); Sure's own leg
+// `kind` is a strict cross-check (divergence — including a legal-but-unexpected
+// `liability_draw` — is HELD, never silently promoted with a guessed kind).
+//
+// `currency_mismatch` and `not_staged` are STRUCTURALLY Tier-0 outcomes: a
+// degraded bundle (no `Transfer` entity) can't produce them heuristically —
+// cross-currency legs differ in amount so they fall to `unpaired_orphan`, and
+// every heuristic input leg is already staged. They arise only when an
+// authoritative `Transfer` entity links a cross-currency pair (FX transfer,
+// deferred) or references a leg that was never staged.
+// ---------------------------------------------------------------------------
+
+/** Which tier produced a promotable pair (provenance for the result + tests). */
+export type SureTransferTier = "deterministic" | "clean" | "resolved_cluster"
+
+/**
+ * Why a transfer leg is held (disjoint + exhaustive, one per leg). The pure
+ * pairer assigns every reason EXCEPT `db_rejected`, which is a runtime outcome
+ * (the canonical core threw, e.g. a liability balance-sign CHECK) the
+ * orchestrator records.
+ */
+export type SureTransferHeldReason =
+  | "not_staged"
+  | "non_importable"
+  | "currency_mismatch"
+  | "kind_divergence"
+  | "db_rejected"
+  | "unpaired_orphan"
+  | "ambiguous_cluster"
+
+/** Reasons the pure pairer can assign (everything but the runtime `db_rejected`). */
+export type SureTransferPureHeldReason = Exclude<
+  SureTransferHeldReason,
+  "db_rejected"
+>
+
+/** Gate failures for a formed candidate pair (precedence: importable→currency→kind). */
+export type SureTransferGateReason =
+  | "non_importable"
+  | "currency_mismatch"
+  | "kind_divergence"
+
+/**
+ * Per-account metadata the pairer needs — all derivable from the bundle +
+ * taxonomy (no DB): the Permoney `accountType` (for kind derivation), the Sure
+ * account `name` (for directional-hint matching), `currency`, and the Phase-1
+ * importability gate inputs.
+ */
+export interface SureTransferAccountMeta {
+  sureAccountId: string
+  name: string
+  currency: string
+  accountType: AccountType
+  isImportable: boolean
+  balanceSource: string
+}
+
+export interface SureTransferCandidatePair {
+  tier: SureTransferTier
+  /** Sure amount > 0 — the source leg (→ Permoney `accountId`). */
+  outflow: SureTransaction
+  /** Sure amount < 0 — the destination leg (→ Permoney `toAccountId`). */
+  inflow: SureTransaction
+}
+
+export interface SureTransferHeldLeg {
+  txn: SureTransaction
+  reason: SureTransferPureHeldReason
+}
+
+export interface SureTransferPairingResult {
+  /** Gate-passed, promotable pairs (the orchestrator drives the canonical core). */
+  pairs: SureTransferCandidatePair[]
+  /** Held legs with their typed reason (staged but never promoted — provenance). */
+  held: SureTransferHeldLeg[]
+}
+
+/** A parsed directional transfer hint (`"Transfer to <X>"` / `"… from <Y>"`). */
+export interface SureTransferHint {
+  direction: "to" | "from"
+  /** The counterpart account name, normalized (trim + lowercase + collapse ws). */
+  target: string
+}
+
+// English directional prefixes only — verified against the real export (435 "to"
+// + 435 "from", zero Indonesian "ke/dari"). `ke|dari` are accepted as cheap,
+// harmless future-proofing but the real data is 100% English. Adding any other
+// pattern would be fabrication, not parsing.
+const SURE_TRANSFER_HINT_RE = /^transfer\s+(to|from|ke|dari)\s+(.+)$/i
+
+/** Normalize an account name for exact-match comparison (no partial/substring). */
+export function normalizeSureAccountName(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ")
+}
+
+/**
+ * Parse a Sure transaction `name` into a directional transfer hint, or `null`
+ * when it carries none. `to`/`ke` mean an outflow toward the target account;
+ * `from`/`dari` mean an inflow sourced from it. The target is normalized for
+ * the exact bidirectional match (`normalizeSureAccountName`).
+ */
+export function parseSureTransferHint(
+  name: string | null | undefined
+): SureTransferHint | null {
+  if (!name) return null
+  const match = SURE_TRANSFER_HINT_RE.exec(name.trim())
+  if (!match) return null
+  const direction =
+    match[1].toLowerCase() === "from" || match[1].toLowerCase() === "dari"
+      ? "from"
+      : "to"
+  return { direction, target: normalizeSureAccountName(match[2]) }
+}
+
+function isImportableFlowAccount(meta: SureTransferAccountMeta): boolean {
+  return meta.isImportable && meta.balanceSource === "transaction_flow"
+}
+
+/**
+ * Gate a formed candidate pair (precedence: importable → currency → kind), or
+ * `null` when it is promotable. Pure: every input comes from the bundle/taxonomy.
+ * The `kind` cross-check derives Permoney's transfer kind from the two account
+ * types and requires STRICT equality to BOTH legs' Sure `kind` — any divergence
+ * (including a legal-but-unexpected `liability_draw`) holds the pair.
+ */
+export function classifyTransferPairGate(
+  outflowMeta: SureTransferAccountMeta,
+  inflowMeta: SureTransferAccountMeta,
+  outflowTxn: SureTransaction,
+  inflowTxn: SureTransaction
+): SureTransferGateReason | null {
+  if (
+    !isImportableFlowAccount(outflowMeta) ||
+    !isImportableFlowAccount(inflowMeta)
+  ) {
+    return "non_importable"
+  }
+  if (
+    outflowTxn.currency !== inflowTxn.currency ||
+    outflowMeta.currency !== inflowMeta.currency
+  ) {
+    return "currency_mismatch"
+  }
+  const derived = deriveTransferKindForAccounts({
+    fromAccountType: outflowMeta.accountType,
+    toAccountType: inflowMeta.accountType,
+  })
+  const outflowKind = (outflowTxn.kind ?? "").trim()
+  const inflowKind = (inflowTxn.kind ?? "").trim()
+  if (outflowKind !== derived || inflowKind !== derived)
+    return "kind_divergence"
+  return null
+}
+
+/**
+ * Pair Sure transfer-kind legs deterministically. `legs` MUST be pre-filtered by
+ * the orchestrator to exactly the legs that will be staged (mappable account,
+ * valid date, non-zero amount) so the pure pairer and the DB-gated promotion
+ * agree on which legs post (the `gateSet === promoteSet` invariant that protects
+ * the PER-174 opening-balance pre-scan). `transfers` enables Tier-0 deterministic
+ * pairing when the bundle carries the `Transfer` entity.
+ */
+export function pairSureTransfers(input: {
+  legs: readonly SureTransaction[]
+  metaById: ReadonlyMap<string, SureTransferAccountMeta>
+  transfers?: readonly SureTransfer[]
+}): SureTransferPairingResult {
+  const { metaById } = input
+  // Stable order → identical pairing on every run (idempotency precondition).
+  const legs = [...input.legs].sort((a, b) => a.id.localeCompare(b.id))
+  const legById = new Map(legs.map((leg) => [leg.id, leg]))
+
+  const pairs: SureTransferCandidatePair[] = []
+  const held: SureTransferHeldLeg[] = []
+  const consumed = new Set<string>()
+
+  const hold = (
+    txn: SureTransaction,
+    reason: SureTransferPureHeldReason
+  ): void => {
+    if (consumed.has(txn.id)) return
+    held.push({ txn, reason })
+    consumed.add(txn.id)
+  }
+
+  const signedMinor = (txn: SureTransaction, currency: string): bigint =>
+    toMinorUnits(txn.amount, currency as CurrencyCode) as bigint
+
+  // A formed candidate pair → gate → promote or hold-both. Direction is fixed by
+  // the caller (outflow = source, inflow = dest); the gate never reorders it.
+  const gateAndCommit = (
+    outflow: SureTransaction,
+    inflow: SureTransaction,
+    tier: SureTransferTier
+  ): void => {
+    const outflowMeta = metaById.get(outflow.account_id)
+    const inflowMeta = metaById.get(inflow.account_id)
+    if (!outflowMeta || !inflowMeta) {
+      // Defensive — caller pre-filters mappable legs, so this is a Tier-0 entity
+      // pointing at a leg dropped before staging.
+      hold(outflow, "not_staged")
+      hold(inflow, "not_staged")
+      return
+    }
+    const gate = classifyTransferPairGate(
+      outflowMeta,
+      inflowMeta,
+      outflow,
+      inflow
+    )
+    if (gate) {
+      hold(outflow, gate)
+      hold(inflow, gate)
+      return
+    }
+    pairs.push({ tier, outflow, inflow })
+    consumed.add(outflow.id)
+    consumed.add(inflow.id)
+  }
+
+  // --- Tier 0: authoritative `Transfer` entity ------------------------------
+  for (const transfer of input.transfers ?? []) {
+    if (
+      consumed.has(transfer.outflow_transaction_id) ||
+      consumed.has(transfer.inflow_transaction_id)
+    ) {
+      continue
+    }
+    const outflow = legById.get(transfer.outflow_transaction_id)
+    const inflow = legById.get(transfer.inflow_transaction_id)
+    if (!outflow || !inflow) {
+      // The entity references a leg that was never staged (unmappable / zero /
+      // invalid-date). Hold the present leg; never invent the missing one.
+      if (outflow) hold(outflow, "not_staged")
+      if (inflow) hold(inflow, "not_staged")
+      continue
+    }
+    gateAndCommit(outflow, inflow, "deterministic")
+  }
+
+  // --- Tier 1 + 2: heuristic over the remaining legs ------------------------
+  const remaining = legs.filter((leg) => !consumed.has(leg.id))
+  const groups = new Map<string, SureTransaction[]>()
+  for (const leg of remaining) {
+    const meta = metaById.get(leg.account_id)
+    if (!meta) {
+      hold(leg, "not_staged")
+      continue
+    }
+    const minor = signedMinor(leg, meta.currency)
+    if (minor === 0n) {
+      // Caller filters zero-amount legs; guard so a stray never groups.
+      hold(leg, "unpaired_orphan")
+      continue
+    }
+    const absMinor = minor < 0n ? -minor : minor
+    const key = `${leg.date.slice(0, 10)}|${absMinor}|${leg.currency}`
+    const bucket = groups.get(key)
+    if (bucket) bucket.push(leg)
+    else groups.set(key, [leg])
+  }
+
+  for (const key of [...groups.keys()].sort((a, b) => a.localeCompare(b))) {
+    const groupLegs = groups.get(key) ?? []
+    const outflows = groupLegs
+      .filter(
+        (leg) => signedMinor(leg, metaById.get(leg.account_id)!.currency) > 0n
+      )
+      .sort((a, b) => a.id.localeCompare(b.id))
+    const inflows = groupLegs
+      .filter(
+        (leg) => signedMinor(leg, metaById.get(leg.account_id)!.currency) < 0n
+      )
+      .sort((a, b) => a.id.localeCompare(b.id))
+
+    // One-sided group → every leg is an orphan (no counterpart exists).
+    if (outflows.length === 0 || inflows.length === 0) {
+      for (const leg of groupLegs) hold(leg, "unpaired_orphan")
+      continue
+    }
+
+    // Tier 1: exactly one of each on different accounts → clean pair.
+    if (outflows.length === 1 && inflows.length === 1) {
+      const [outflow] = outflows
+      const [inflow] = inflows
+      if (!outflow || !inflow) continue
+      if (outflow.account_id === inflow.account_id) {
+        // Self-transfer (same account out & in) is never a real pair.
+        hold(outflow, "unpaired_orphan")
+        hold(inflow, "unpaired_orphan")
+        continue
+      }
+      gateAndCommit(outflow, inflow, "clean")
+      continue
+    }
+
+    // Tier 2: cluster resolved only by a UNIQUE bidirectional name matching.
+    resolveCluster(outflows, inflows, metaById, gateAndCommit, hold)
+  }
+
+  return { pairs, held }
+}
+
+/**
+ * Resolve a balanced/unbalanced cluster (>1 per side, same day+|amount|) using
+ * bidirectional, exact-normalized directional name hints. A pair `(O, I)` is a
+ * valid match iff O says `"Transfer to <I.account.name>"` AND I says
+ * `"Transfer from <O.account.name>"` (both exact-normalized). The cluster
+ * resolves ONLY when these valid matches form a unique perfect matching across
+ * every leg; otherwise the WHOLE cluster is held `ambiguous_cluster` — never an
+ * arbitrary pick.
+ */
+function resolveCluster(
+  outflows: readonly SureTransaction[],
+  inflows: readonly SureTransaction[],
+  metaById: ReadonlyMap<string, SureTransferAccountMeta>,
+  gateAndCommit: (
+    outflow: SureTransaction,
+    inflow: SureTransaction,
+    tier: SureTransferTier
+  ) => void,
+  hold: (txn: SureTransaction, reason: SureTransferPureHeldReason) => void
+): void {
+  const holdWholeCluster = (): void => {
+    for (const leg of [...outflows, ...inflows]) hold(leg, "ambiguous_cluster")
+  }
+
+  const isValidMatch = (
+    outflow: SureTransaction,
+    inflow: SureTransaction
+  ): boolean => {
+    if (outflow.account_id === inflow.account_id) return false
+    const outflowMeta = metaById.get(outflow.account_id)
+    const inflowMeta = metaById.get(inflow.account_id)
+    if (!outflowMeta || !inflowMeta) return false
+    const outflowHint = parseSureTransferHint(outflow.name)
+    const inflowHint = parseSureTransferHint(inflow.name)
+    return (
+      outflowHint?.direction === "to" &&
+      inflowHint?.direction === "from" &&
+      outflowHint.target === normalizeSureAccountName(inflowMeta.name) &&
+      inflowHint.target === normalizeSureAccountName(outflowMeta.name)
+    )
+  }
+
+  // Unequal sides can never be a perfect matching → hold whole cluster.
+  if (outflows.length !== inflows.length) {
+    holdWholeCluster()
+    return
+  }
+
+  // Each outflow must have exactly one valid inflow, and each inflow must be
+  // claimed by exactly one outflow — anything else is ambiguous.
+  const chosen = new Map<string, SureTransaction>()
+  const inflowClaims = new Map<string, number>()
+  for (const outflow of outflows) {
+    const matches = inflows.filter((inflow) => isValidMatch(outflow, inflow))
+    if (matches.length !== 1 || !matches[0]) {
+      holdWholeCluster()
+      return
+    }
+    chosen.set(outflow.id, matches[0])
+    inflowClaims.set(matches[0].id, (inflowClaims.get(matches[0].id) ?? 0) + 1)
+  }
+  if ([...inflowClaims.values()].some((count) => count !== 1)) {
+    holdWholeCluster()
+    return
+  }
+
+  for (const outflow of outflows) {
+    const inflow = chosen.get(outflow.id)
+    if (inflow) gateAndCommit(outflow, inflow, "resolved_cluster")
+  }
 }

@@ -39,6 +39,22 @@ function makeResult(
     valuationsParsed: 0,
     malformedLines: 0,
     ignoredEntities: {},
+    transfers: {
+      legsSeen: 0,
+      legsStaged: 0,
+      pairsPromotedThisRun: 0,
+      legsPromotedTotal: 0,
+      pairedByTier: { deterministic: 0, clean: 0, resolvedCluster: 0 },
+      heldLegsByReason: {
+        not_staged: 0,
+        non_importable: 0,
+        currency_mismatch: 0,
+        kind_divergence: 0,
+        db_rejected: 0,
+        unpaired_orphan: 0,
+        ambiguous_cluster: 0,
+      },
+    },
     ...rest,
   }
 }

@@ -38,6 +38,8 @@
 // the arithmetic.
 // ============================================================================
 
+import type { SureTransferHeldReason } from "@/lib/sure-migration"
+
 const envelope = (type: string, data: Record<string, unknown>): string =>
   JSON.stringify({ type, data })
 
@@ -383,7 +385,10 @@ export function buildSureBundleV2Complete(): SureBundleManifest {
       transactionsTotal: 6,
       staged: 5, // all 6 minus the zero-amount row
       promotedThisRun: 2, // expense + income on the importable IDR depository
-      held: 3, // invest + non-standard kind + currency mismatch
+      // STANDARD held only (ADR-0042): invest + currency mismatch. The
+      // `funds_movement` leg is now owned by the `transfers` block (it pairs to
+      // nothing → unpaired_orphan), so it leaves `transactions.held`.
+      held: 2,
       zeroAmountSkipped: 1,
       malformedLines: 0,
       // Valuation is now a typed sink (opening source), no longer ignored.
@@ -556,5 +561,514 @@ export function buildSureBundleV1Degraded(): SureBundleManifest {
     promotableExpenseMinor: 0n, // no promotable expense in the degraded bundle
     // Sure "-12345.0" → wallet income, ledger +1_234_500 minor.
     promotableIncomeMinor: 1_234_500n,
+  }
+}
+
+// ===========================================================================
+// Transfer fixtures (ADR-0042 — dual-leg pairing). Separate builders from the
+// opening-balance fixtures above so each fixture exercises ONE concern cleanly
+// (no scatter — same file, table-driven manifest). Sure stores outflow POSITIVE,
+// inflow NEGATIVE; both legs of a transfer carry the same transfer `kind`.
+// ===========================================================================
+
+export interface SureTransferFixture {
+  ndjson: string
+  /** Sure account id → key, for binding lookups + balance assertions. */
+  accountIds: Record<string, string>
+  /** Sure transaction (leg) id → key, for self-heal row targeting. */
+  legIds: Record<string, string>
+  expected: {
+    accountsCreated: number
+    transferLegsSeen: number
+    transferLegsStaged: number
+    pairsPromotedThisRun: number
+    legsPromotedTotal: number
+    pairedByTier: {
+      deterministic: number
+      clean: number
+      resolvedCluster: number
+    }
+    heldLegsByReason: Record<SureTransferHeldReason, number>
+  }
+  /** Expected FINAL balance (minor units) per account key after the migration. */
+  balancesMinor: Record<string, bigint>
+}
+
+const sureAccount = (
+  id: string,
+  name: string,
+  accountableType: string,
+  subtype: string,
+  currency = "IDR"
+): string =>
+  envelope("Account", {
+    id,
+    name,
+    accountable_type: accountableType,
+    classification: accountableType === "CreditCard" ? "liability" : "asset",
+    subtype,
+    currency,
+    balance: "0.0",
+    status: "active",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-06-25T00:00:00Z",
+  })
+
+const sureTxn = (args: {
+  id: string
+  accountId: string
+  amount: string
+  kind: string
+  name: string
+  date: string
+  currency?: string
+}): string =>
+  envelope("Transaction", {
+    id: args.id,
+    account_id: args.accountId,
+    entry_id: `entry-${args.id}`,
+    category_id: null,
+    merchant_id: null,
+    date: args.date,
+    amount: args.amount,
+    currency: args.currency ?? "IDR",
+    name: args.name,
+    kind: args.kind,
+    notes: null,
+    excluded: false,
+    tag_ids: [],
+    created_at: `${args.date}T00:00:00Z`,
+    updated_at: `${args.date}T00:00:00Z`,
+  })
+
+const sureVal = (args: {
+  accountId: string
+  amount: string
+  date: string
+  kind?: string
+  currency?: string
+}): string =>
+  envelope("Valuation", {
+    id: `val-${args.accountId}-${args.date}`,
+    account_id: args.accountId,
+    entry_id: `entry-val-${args.accountId}-${args.date}`,
+    name: "Valuation",
+    ...(args.kind ? { kind: args.kind } : {}),
+    amount: args.amount,
+    currency: args.currency ?? "IDR",
+    date: args.date,
+    created_at: `${args.date}T00:00:00Z`,
+    updated_at: `${args.date}T00:00:00Z`,
+  })
+
+const sureTransfer = (outflowId: string, inflowId: string): string =>
+  envelope("Transfer", {
+    id: `xfer-${outflowId}`,
+    outflow_transaction_id: outflowId,
+    inflow_transaction_id: inflowId,
+    status: "confirmed",
+  })
+
+const emptyHeld = (): Record<SureTransferHeldReason, number> => ({
+  not_staged: 0,
+  non_importable: 0,
+  currency_mismatch: 0,
+  kind_divergence: 0,
+  db_rejected: 0,
+  unpaired_orphan: 0,
+  ambiguous_cluster: 0,
+})
+
+// ---------------------------------------------------------------------------
+// Mode A — v2 complete (carries the `Transfer` entity → Tier-0 DETERMINISTIC).
+// Exercises: deterministic funds_movement promote, deterministic cc_payment
+// promote (liability moves toward zero), currency_mismatch (cross-currency
+// Transfer), not_staged (Transfer references a never-staged leg), unpaired_orphan.
+// ---------------------------------------------------------------------------
+
+export function buildSureBundleV2Transfers(): SureTransferFixture {
+  const accountIds = {
+    checking: "sure-acc-t-checking",
+    savings: "sure-acc-t-savings",
+    card: "sure-acc-t-card",
+    usd: "sure-acc-t-usd",
+  }
+  const legIds = {
+    cardSpend: "sure-txn-t-cardspend",
+    fmOut: "sure-txn-t-fm-out",
+    fmIn: "sure-txn-t-fm-in",
+    ccOut: "sure-txn-t-cc-out",
+    ccIn: "sure-txn-t-cc-in",
+    cmOut: "sure-txn-t-cm-out",
+    cmIn: "sure-txn-t-cm-in",
+    nsIn: "sure-txn-t-ns-in",
+    orphan: "sure-txn-t-orphan",
+  }
+
+  const lines = [
+    sureAccount(accountIds.checking, "BCA Checking", "Depository", "checking"),
+    sureAccount(accountIds.savings, "BCA Savings", "Depository", "savings"),
+    sureAccount(accountIds.card, "Visa Card", "CreditCard", "credit_card"),
+    sureAccount(accountIds.usd, "Wise USD", "Depository", "checking", "USD"),
+    // checking opens from an `opening_anchor` (kind-bearing → v2 mode).
+    sureVal({
+      accountId: accountIds.checking,
+      amount: "200000.0",
+      date: "2026-01-01",
+      kind: "opening_anchor",
+    }),
+    // Standard card spend → −10_000_000 debt so the cc_payment can move toward 0.
+    sureTxn({
+      id: legIds.cardSpend,
+      accountId: accountIds.card,
+      amount: "100000.0",
+      kind: "standard",
+      name: "Card purchase",
+      date: "2026-05-01",
+    }),
+    // Deterministic funds_movement: checking → savings (promotes).
+    sureTxn({
+      id: legIds.fmOut,
+      accountId: accountIds.checking,
+      amount: "40000.0",
+      kind: "funds_movement",
+      name: "Transfer to BCA Savings",
+      date: "2026-05-02",
+    }),
+    sureTxn({
+      id: legIds.fmIn,
+      accountId: accountIds.savings,
+      amount: "-40000.0",
+      kind: "funds_movement",
+      name: "Transfer from BCA Checking",
+      date: "2026-05-02",
+    }),
+    sureTransfer(legIds.fmOut, legIds.fmIn),
+    // Deterministic cc_payment: checking → card (promotes; derived cc_payment).
+    sureTxn({
+      id: legIds.ccOut,
+      accountId: accountIds.checking,
+      amount: "50000.0",
+      kind: "cc_payment",
+      name: "Visa payment",
+      date: "2026-05-03",
+    }),
+    sureTxn({
+      id: legIds.ccIn,
+      accountId: accountIds.card,
+      amount: "-50000.0",
+      kind: "cc_payment",
+      name: "Visa payment",
+      date: "2026-05-03",
+    }),
+    sureTransfer(legIds.ccOut, legIds.ccIn),
+    // Cross-currency Transfer (IDR ↔ USD) → currency_mismatch HELD (FX deferred).
+    sureTxn({
+      id: legIds.cmOut,
+      accountId: accountIds.checking,
+      amount: "10000.0",
+      kind: "funds_movement",
+      name: "Transfer to Wise USD",
+      date: "2026-05-04",
+    }),
+    sureTxn({
+      id: legIds.cmIn,
+      accountId: accountIds.usd,
+      amount: "-1.0",
+      kind: "funds_movement",
+      name: "Transfer from BCA Checking",
+      date: "2026-05-04",
+      currency: "USD",
+    }),
+    sureTransfer(legIds.cmOut, legIds.cmIn),
+    // Transfer references a never-staged outflow id → present leg HELD not_staged.
+    sureTxn({
+      id: legIds.nsIn,
+      accountId: accountIds.savings,
+      amount: "-15000.0",
+      kind: "funds_movement",
+      name: "Transfer from ghost",
+      date: "2026-05-05",
+    }),
+    sureTransfer("sure-txn-t-ghost-missing", legIds.nsIn),
+    // A lone funds_movement leg with no counterpart → unpaired_orphan.
+    sureTxn({
+      id: legIds.orphan,
+      accountId: accountIds.checking,
+      amount: "20000.0",
+      kind: "funds_movement",
+      name: "Unmatched move",
+      date: "2026-05-06",
+    }),
+  ]
+
+  const held = emptyHeld()
+  held.currency_mismatch = 2
+  held.not_staged = 1
+  held.unpaired_orphan = 1
+
+  return {
+    ndjson: lines.join("\n"),
+    accountIds,
+    legIds,
+    expected: {
+      accountsCreated: 4,
+      transferLegsSeen: 8,
+      transferLegsStaged: 8,
+      pairsPromotedThisRun: 2,
+      legsPromotedTotal: 4,
+      pairedByTier: { deterministic: 2, clean: 0, resolvedCluster: 0 },
+      heldLegsByReason: held,
+    },
+    balancesMinor: {
+      // 20_000_000 open − 4_000_000 (fm) − 5_000_000 (cc) = 11_000_000.
+      checking: 11_000_000n,
+      // 0 + 4_000_000 (fm in); the ns inflow is HELD, never posted.
+      savings: 4_000_000n,
+      // −10_000_000 debt + 5_000_000 (cc payment) = −5_000_000 (toward zero).
+      card: -5_000_000n,
+      usd: 0n,
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mode B — v1 degraded (NO `Transfer` entity, NO `kind` on valuations → date
+// heuristic). Populates EVERY heuristic held bucket so the spanning reconcile is
+// exercised with all buckets active, AND a held-transfer-only account whose
+// opening proves the ADR-0042 double-count fix.
+// ---------------------------------------------------------------------------
+
+export function buildSureBundleV1DegradedTransfers(): SureTransferFixture {
+  const accountIds = {
+    main: "sure-acc-d-main",
+    nikah: "sure-acc-d-nikah",
+    wallet: "sure-acc-d-wallet",
+    gopay: "sure-acc-d-gopay",
+    dana: "sure-acc-d-dana",
+    ovo: "sure-acc-d-ovo",
+    loan: "sure-acc-d-loan",
+    invest: "sure-acc-d-invest",
+    cash: "sure-acc-d-cash",
+  }
+  const legIds = {
+    cleanOut: "sure-txn-d-clean-out",
+    cleanIn: "sure-txn-d-clean-in",
+    clOut1: "sure-txn-d-cl-out1",
+    clIn1: "sure-txn-d-cl-in1",
+    clOut2: "sure-txn-d-cl-out2",
+    clIn2: "sure-txn-d-cl-in2",
+    ambOut1: "sure-txn-d-amb-out1",
+    ambIn1: "sure-txn-d-amb-in1",
+    ambOut2: "sure-txn-d-amb-out2",
+    ambIn2: "sure-txn-d-amb-in2",
+    kdOut: "sure-txn-d-kd-out",
+    kdIn: "sure-txn-d-kd-in",
+    niOut: "sure-txn-d-ni-out",
+    niIn: "sure-txn-d-ni-in",
+    orphan: "sure-txn-d-orphan",
+  }
+
+  const lines = [
+    sureAccount(accountIds.main, "Main", "Depository", "checking"),
+    sureAccount(accountIds.nikah, "Nikah", "Depository", "savings"),
+    sureAccount(accountIds.wallet, "Wallet", "Depository", "checking"),
+    sureAccount(accountIds.gopay, "Gopay", "Depository", "checking"),
+    sureAccount(accountIds.dana, "Dana", "Depository", "checking"),
+    sureAccount(accountIds.ovo, "Ovo", "Depository", "checking"),
+    sureAccount(accountIds.loan, "KTA Loan", "Loan", "personal_loan"),
+    sureAccount(accountIds.invest, "Bibit", "Investment", "mutual_fund"),
+    sureAccount(accountIds.cash, "Cash", "Depository", "checking"),
+    // Valuations WITHOUT `kind` (degraded → date heuristic). Sources that POST a
+    // transfer get an early valuation (strictly before → opening); Nikah's is
+    // AFTER its inbound transfer (the double-count trap).
+    sureVal({
+      accountId: accountIds.main,
+      amount: "50000.0",
+      date: "2026-01-01",
+    }),
+    sureVal({
+      accountId: accountIds.wallet,
+      amount: "30000.0",
+      date: "2026-01-01",
+    }),
+    sureVal({
+      accountId: accountIds.dana,
+      amount: "30000.0",
+      date: "2026-01-01",
+    }),
+    // Nikah: a CURRENT-value valuation dated AFTER the inbound transfer. With the
+    // ADR-0042 fix (the transfer now posts) → posting-exists branch → this is not
+    // strictly-before → gap(0); final = 0 + 3_700_000. WITHOUT the fix it would be
+    // the "latest valuation" opening (3_700_000) + the transfer = 7_400_000 (double).
+    sureVal({
+      accountId: accountIds.nikah,
+      amount: "37000.0",
+      date: "2026-06-01",
+    }),
+    // Clean Tier-1 pair: Main → Nikah (promotes).
+    sureTxn({
+      id: legIds.cleanOut,
+      accountId: accountIds.main,
+      amount: "37000.0",
+      kind: "funds_movement",
+      name: "Transfer to Nikah",
+      date: "2026-05-01",
+    }),
+    sureTxn({
+      id: legIds.cleanIn,
+      accountId: accountIds.nikah,
+      amount: "-37000.0",
+      kind: "funds_movement",
+      name: "Transfer from Main",
+      date: "2026-05-01",
+    }),
+    // Resolvable cluster (day+amount collide → 2 outflows + 2 inflows): resolved by
+    // bidirectional exact name hints Wallet↔Gopay, Dana↔Ovo (both promote).
+    sureTxn({
+      id: legIds.clOut1,
+      accountId: accountIds.wallet,
+      amount: "12000.0",
+      kind: "funds_movement",
+      name: "Transfer to Gopay",
+      date: "2026-05-02",
+    }),
+    sureTxn({
+      id: legIds.clIn1,
+      accountId: accountIds.gopay,
+      amount: "-12000.0",
+      kind: "funds_movement",
+      name: "Transfer from Wallet",
+      date: "2026-05-02",
+    }),
+    sureTxn({
+      id: legIds.clOut2,
+      accountId: accountIds.dana,
+      amount: "12000.0",
+      kind: "funds_movement",
+      name: "Transfer to Ovo",
+      date: "2026-05-02",
+    }),
+    sureTxn({
+      id: legIds.clIn2,
+      accountId: accountIds.ovo,
+      amount: "-12000.0",
+      kind: "funds_movement",
+      name: "Transfer from Dana",
+      date: "2026-05-02",
+    }),
+    // Ambiguous cluster (same day+amount, NO directional hints) → whole cluster HELD.
+    sureTxn({
+      id: legIds.ambOut1,
+      accountId: accountIds.wallet,
+      amount: "8000.0",
+      kind: "funds_movement",
+      name: "Cash move",
+      date: "2026-05-09",
+    }),
+    sureTxn({
+      id: legIds.ambIn1,
+      accountId: accountIds.gopay,
+      amount: "-8000.0",
+      kind: "funds_movement",
+      name: "Cash move",
+      date: "2026-05-09",
+    }),
+    sureTxn({
+      id: legIds.ambOut2,
+      accountId: accountIds.dana,
+      amount: "8000.0",
+      kind: "funds_movement",
+      name: "Cash move",
+      date: "2026-05-09",
+    }),
+    sureTxn({
+      id: legIds.ambIn2,
+      accountId: accountIds.ovo,
+      amount: "-8000.0",
+      kind: "funds_movement",
+      name: "Cash move",
+      date: "2026-05-09",
+    }),
+    // kind_divergence: a loan-SOURCED funds_movement → Permoney derives liability_draw
+    // ≠ Sure funds_movement → HELD (never invents a borrowing event).
+    sureTxn({
+      id: legIds.kdOut,
+      accountId: accountIds.loan,
+      amount: "25000.0",
+      kind: "funds_movement",
+      name: "Transfer to Cash",
+      date: "2026-05-05",
+    }),
+    sureTxn({
+      id: legIds.kdIn,
+      accountId: accountIds.cash,
+      amount: "-25000.0",
+      kind: "funds_movement",
+      name: "Transfer from KTA Loan",
+      date: "2026-05-05",
+    }),
+    // non_importable: an Investment-SOURCED transfer → HELD (its real postings are
+    // Trades/Holdings, deferred).
+    sureTxn({
+      id: legIds.niOut,
+      accountId: accountIds.invest,
+      amount: "18000.0",
+      kind: "funds_movement",
+      name: "Transfer to Cash",
+      date: "2026-05-06",
+    }),
+    sureTxn({
+      id: legIds.niIn,
+      accountId: accountIds.cash,
+      amount: "-18000.0",
+      kind: "funds_movement",
+      name: "Transfer from Bibit",
+      date: "2026-05-06",
+    }),
+    // Lone outflow → unpaired_orphan.
+    sureTxn({
+      id: legIds.orphan,
+      accountId: accountIds.cash,
+      amount: "9000.0",
+      kind: "funds_movement",
+      name: "Unmatched",
+      date: "2026-05-07",
+    }),
+  ]
+
+  const held = emptyHeld()
+  held.ambiguous_cluster = 4
+  held.kind_divergence = 2
+  held.non_importable = 2
+  held.unpaired_orphan = 1
+
+  return {
+    ndjson: lines.join("\n"),
+    accountIds,
+    legIds,
+    expected: {
+      accountsCreated: 9,
+      transferLegsSeen: 15,
+      transferLegsStaged: 15,
+      pairsPromotedThisRun: 3,
+      legsPromotedTotal: 6,
+      pairedByTier: { deterministic: 0, clean: 1, resolvedCluster: 2 },
+      heldLegsByReason: held,
+    },
+    balancesMinor: {
+      // 5_000_000 open (earliest val strictly before) − 3_700_000 (clean out).
+      main: 1_300_000n,
+      // gap(0) + 3_700_000 (clean in) — the double-count fix: NOT 7_400_000.
+      nikah: 3_700_000n,
+      // 3_000_000 open − 1_200_000 (resolved out); amb leg HELD.
+      wallet: 1_800_000n,
+      dana: 1_800_000n,
+      gopay: 1_200_000n, // 0 + 1_200_000 (resolved in)
+      ovo: 1_200_000n,
+      loan: 0n, // kd leg HELD, never posted
+      invest: 0n, // ni leg HELD
+      cash: 0n, // all Cash legs HELD (kd in, ni in, orphan)
+    },
   }
 }
