@@ -86,7 +86,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
-    "@rsbuild/core": "^2.1.0",
+    "@rsbuild/core": "^2.1.1",
     "@tanstack/devtools-vite": "^0.8.1",
     "@tanstack/eslint-config": "^0.4.0",
     "@tanstack/react-query-devtools": "^5.101.1",
