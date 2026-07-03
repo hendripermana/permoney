@@ -9,6 +9,7 @@
 | **Amends**        | ADR-0008                     |
 | **Supersedes**    | PER-78, PER-79 (design only) |
 | **Superseded by** | —                            |
+| **Amended by**    | ADR-0043 (§4, §7)            |
 
 ## Context
 
@@ -253,3 +254,22 @@ construction.
 - ADR-0033 (bulk mutation parity)
 - `docs/account-taxonomy.md` (`balanceSource` contract)
 - `src/server/accounts.ts` (opening-balance + rebuild stub deferred to this ticket)
+
+## Amendment — Reconciliation-anchor valuations (ADR-0043)
+
+§4's cash balance formula (`opening.value + Σ all transaction flow`, with every
+non-opening valuation treated as a pure observation) and §7's `RECONCILIATION`
+drift kind are superseded by **ADR-0043**: PER-176's Sure migration grill
+verified against the real Sure UI that Permoney's opening+Σflow model cannot
+reproduce cash-account balances once an intervening reconciliation exists
+(Sure treats each balance-assertion valuation as a hard anchor overriding
+accumulated flow, then sums only the flow strictly after it). ADR-0043 scopes
+that anchor rule to balance-assertion valuation types (`opening`,
+`reconciliation`, `manual`; `market` stays an observation) — reversing this
+ADR's own "Alternatives considered" #2, for reasons documented there — and
+replaces §7's `RECONCILIATION` check with the strictly stronger
+`ANCHOR_CHAIN` check. §5 (tracked/valuation-sourced balance) and §3 (opening
+balance as a valuation) are unchanged. See ADR-0043 for the full formula,
+drift redesign, and the live-reconcile-UI consequence (the compensating
+`balance_adjustment` transaction that flow used to require is removed as a
+now-unnecessary plug).
