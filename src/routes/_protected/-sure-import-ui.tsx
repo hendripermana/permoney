@@ -467,11 +467,9 @@ export function DoneStage({
             />
           </div>
 
-          {/* Honest opening-balance provenance for accounts created this run. */}
-          <OpeningBalanceSummary
-            opening={result.openingBalances}
-            hasKind={result.bundleHasKind}
-          />
+          {/* Anchor provenance (ADR-0043 §5) + expected-drift framing at the
+              moment it matters most (PER-176 grill Q4). */}
+          <AnchorSummary valuations={result.valuations} />
 
           {/* Full reconciliation of the transaction buckets the server returns. */}
           {(t.held > 0 ||
@@ -546,44 +544,40 @@ function sumValues(record: Record<string, number>): number {
 // (ADR-0041 §5). Honest by design: an account that opens at 0 is surfaced as
 // "unreconciled", not hidden — its true balance converges after the deferred
 // transfer step. Hidden entirely when no such account was created this run.
-function OpeningBalanceSummary({
-  opening,
-  hasKind,
+function AnchorSummary({
+  valuations,
 }: {
-  opening: SureMigrationResult["openingBalances"]
-  hasKind: boolean
+  valuations: SureMigrationResult["valuations"]
 }) {
-  const total =
-    opening.fromOpeningAnchor + opening.fromDateHeuristic + opening.gapZero
-  if (total === 0) return null
+  const { anchorsWritten, negativeSkipped } = valuations
+  if (anchorsWritten === 0 && negativeSkipped === 0) return null
   return (
     <div className="flex flex-col gap-2">
-      <span className="text-sm font-semibold">Opening balances</span>
+      <span className="text-sm font-semibold">Account balances</span>
       <div className="flex flex-wrap gap-2 text-sm">
-        {opening.fromOpeningAnchor > 0 && (
+        {anchorsWritten > 0 && (
           <Badge
             variant="outline"
             className="border-emerald-400 text-emerald-700 dark:text-emerald-300"
           >
-            {opening.fromOpeningAnchor} from Sure anchor
+            {anchorsWritten} balance snapshot{anchorsWritten === 1 ? "" : "s"}{" "}
+            anchored from Sure
           </Badge>
         )}
-        {opening.fromDateHeuristic > 0 && (
-          <Badge variant="outline">{opening.fromDateHeuristic} estimated</Badge>
-        )}
-        {opening.gapZero > 0 && (
+        {negativeSkipped > 0 && (
           <Badge
             variant="outline"
             className="border-amber-400 text-amber-700 dark:text-amber-300"
           >
-            {opening.gapZero} start at 0 (unreconciled)
+            {negativeSkipped} skipped (unexpected negative value)
           </Badge>
         )}
       </div>
       <p className="text-xs text-muted-foreground">
-        {hasKind
-          ? "Opening balances use Sure's own opening anchor where present; the rest start at 0 until the transfer step reconciles them."
-          : "This export carries no opening anchors, so balances are taken from the earliest valuation or start at 0 — they reconcile after the transfer step."}
+        Balances are anchored to your Sure account values, plus every
+        transaction recorded after them. If an account shows a "needs reconcile"
+        hint right after import, that's expected — Sure's own history already
+        absorbed some drift before it was exported.
       </p>
     </div>
   )

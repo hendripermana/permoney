@@ -1,17 +1,17 @@
 # ADR-0041 — Sure full-family migration (accounts + categories + merchants + transactions)
 
-|                   |                                                                                  |
-| ----------------- | -------------------------------------------------------------------------------- |
-| **Status**        | Accepted                                                                         |
-| **Date**          | 2026-06-27                                                                       |
-| **Accepted**      | 2026-06-27                                                                       |
-| **Deciders**      | Hendri Permana                                                                   |
-| **Supersedes**    | —                                                                                |
-| **Superseded by** | —                                                                                |
-| **Builds on**     | ADR-0039 (import staging spine, PER-82), ADR-0008 §5, `docs/account-taxonomy.md` |
-| **Amends**        | ADR-0039 §1/§10 (adds `migration` source kind + bundle artifact retention)       |
-| **Amended by**    | ADR-0042 (2026-06-28, PER-175): §5 posting predicate + §10 Phase 1.5             |
-| **Reserves for**  | Phase 2 transfers/trades (PER-150/PER-146), Phase 3 rules (smart-rule engine)    |
+|                   |                                                                                                                                                                                          |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Status**        | Accepted                                                                                                                                                                                 |
+| **Date**          | 2026-06-27                                                                                                                                                                               |
+| **Accepted**      | 2026-06-27                                                                                                                                                                               |
+| **Deciders**      | Hendri Permana                                                                                                                                                                           |
+| **Supersedes**    | —                                                                                                                                                                                        |
+| **Superseded by** | —                                                                                                                                                                                        |
+| **Builds on**     | ADR-0039 (import staging spine, PER-82), ADR-0008 §5, `docs/account-taxonomy.md`                                                                                                         |
+| **Amends**        | ADR-0039 §1/§10 (adds `migration` source kind + bundle artifact retention)                                                                                                               |
+| **Amended by**    | ADR-0042 (2026-06-28, PER-175): §5 posting predicate + §10 Phase 1.5; ADR-0043 (2026-07-04, PER-176): §5 superseded by the reconciliation-anchor calculator, §2/§6 Investment importable |
+| **Reserves for**  | Phase 2 transfers/trades (PER-150/PER-146), Phase 3 rules (smart-rule engine)                                                                                                            |
 
 ## Context
 
@@ -116,26 +116,35 @@ and are retained in the bundle only). `normalizeSureAccountType(accountable_type
 subtype)` is the Sure specialization of the PER-82 `normalizeProviderAccountType`
 stub (ADR-0039 §6), with a conservative `DEPOSITORY`/`checking` fallback.
 
-| Sure `accountable_type` | Sure `classification` | `accountClass` | `accountType`   | `accountSubtype` (from Sure `subtype`)                                             | `balanceSource`    | `isImportable` (Phase 1) |
-| ----------------------- | --------------------- | -------------- | --------------- | ---------------------------------------------------------------------------------- | ------------------ | ------------------------ |
-| `Depository`            | asset                 | `ASSET`        | `DEPOSITORY`    | `savings`→savings, `checking`→checking, `cooperative`→cooperative, `null`→checking | `transaction_flow` | **true**                 |
-| `CreditCard`            | liability             | `LIABILITY`    | `CREDIT`        | `credit_card`                                                                      | `transaction_flow` | **true**                 |
-| `Loan`                  | liability             | `LIABILITY`    | `LOAN`          | `personal_loan` (refine by name later)                                             | `transaction_flow` | **true**                 |
-| `Investment`            | asset                 | `ASSET`        | `INVESTMENT`    | `mutual_fund`/`cooperative_share`→same, `null`→brokerage                           | `transaction_flow` | **false** (see note)     |
-| `PreciousMetal`         | asset                 | `ASSET`        | `TRACKED_ASSET` | `gold`                                                                             | `valuation`        | **false**                |
-| `OtherAsset`            | asset                 | `ASSET`        | `TRACKED_ASSET` | `generic_asset`                                                                    | `valuation`        | **false**                |
+| Sure `accountable_type` | Sure `classification` | `accountClass` | `accountType`   | `accountSubtype` (from Sure `subtype`)                                             | `balanceSource`    | `isImportable` (Amended 2026-07-04, PER-176) |
+| ----------------------- | --------------------- | -------------- | --------------- | ---------------------------------------------------------------------------------- | ------------------ | -------------------------------------------- |
+| `Depository`            | asset                 | `ASSET`        | `DEPOSITORY`    | `savings`→savings, `checking`→checking, `cooperative`→cooperative, `null`→checking | `transaction_flow` | **true**                                     |
+| `CreditCard`            | liability             | `LIABILITY`    | `CREDIT`        | `credit_card`                                                                      | `transaction_flow` | **true**                                     |
+| `Loan`                  | liability             | `LIABILITY`    | `LOAN`          | `personal_loan` (refine by name later)                                             | `transaction_flow` | **true**                                     |
+| `Investment`            | asset                 | `ASSET`        | `INVESTMENT`    | `mutual_fund`/`cooperative_share`→same, `null`→brokerage                           | `transaction_flow` | **true** (see note)                          |
+| `PreciousMetal`         | asset                 | `ASSET`        | `TRACKED_ASSET` | `gold`                                                                             | `valuation`        | **false**                                    |
+| `OtherAsset`            | asset                 | `ASSET`        | `TRACKED_ASSET` | `generic_asset`                                                                    | `valuation`        | **false**                                    |
 
 `classification` maps directly to `accountClass` (asset→ASSET, liability→LIABILITY).
 `balanceSource` is a **pure function of `accountType`** (taxonomy contract) — it is
 **never** copied from Sure.
 
-**Taxonomy note on `INVESTMENT`.** Per `docs/account-taxonomy.md`, `INVESTMENT` is
-`transaction_flow`, **not** valuation. Phase 1 nonetheless marks Investment
-accounts `isImportable=false` and **holds** their rows, because their
-economically-meaningful postings are **Trades/Holdings** (deferred to PER-150) —
-promoting only the stray cash rows would render a misleading partial balance. This
-is a deliberate phasing choice, **not** a taxonomy reclassification. `TRACKED_ASSET`
-accounts (`PreciousMetal`, `OtherAsset`) are valuation-driven and owned by PER-146.
+**Taxonomy note on `INVESTMENT` (Amended 2026-07-04, PER-176).** Per
+`docs/account-taxonomy.md`, `INVESTMENT` is `transaction_flow`, **not** valuation.
+Phase 1 originally marked Investment accounts `isImportable=false` and held their
+rows because their economically-meaningful postings are **Trades/Holdings**
+(deferred to PER-150) — promoting only the stray cash rows would have rendered a
+misleading partial balance. **PER-176 (ADR-0043) lifts that restriction**:
+because the balance calculator now derives balance from the latest
+reconciliation-anchor valuation plus flow strictly after it (§5, superseded),
+Investment's balance is anchored to Sure's own valuation just like any other
+`transaction_flow` account — promoting its standard transactions/transfers no
+longer produces a misleading partial balance, so `isImportable=true`. Lot-level
+Trades/Holdings remain a separate concern (PER-150); this is not a taxonomy
+reclassification, Investment stays `transaction_flow`. `TRACKED_ASSET` accounts
+(`PreciousMetal`, `OtherAsset`) are unchanged — valuation-driven, held regardless
+of `isImportable` since the promotion gate checks `balanceSource`, and owned by
+PER-146.
 
 **All account shells are created in Phase 1** (correct taxonomy, `externalProvider`
 binding) so transactions referencing any account resolve. Only `transaction_flow`
@@ -233,6 +242,31 @@ classifies. `sureMinor == 0` is treated as `expense` and flagged for review.
 > is not double-counted). See ADR-0042 § _Consequences_ for the full reasoning and
 > the pre-launch one-shot assumption (and its limit).
 
+> **Superseded by ADR-0043 + PER-176 (2026-07-04).** This entire section — the
+> kind-authoritative/date-heuristic opening-decision subsystem
+> (`decideOpeningBalance`/`assetOpening`/`willPostThisRun`/
+> `earliestPromotedDateBySureAccount`, all deleted) — no longer runs. ADR-0043
+> made Permoney's balance calculator anchor-aware: `balance = latest
+reconciliation-anchor valuation (≤ now) + Σ(transactions strictly after it)`.
+> Migration no longer decides or computes an opening value at all. It writes
+> **every** parsed Sure valuation as its own `type="reconciliation"` Valuation
+> row (via the canonical `createValuationForFamily`, source=`"migration:sure"`)
+> for every account that has any — cash, investment, and tracked alike — then
+> promotes **all** standard transactions and **all** transfer pairs dual-leg
+> (the one-sided transfer primitive this section's fix made unnecessary stays
+> retired). The calculator's anchor chain, not a single "best" pick, reproduces
+> Sure's own forward-calculator; a pre-anchor transaction is still promoted for
+> faithful history but is correctly excluded from the balance (absorbed by the
+> anchor, never double-counted). `Account.balance` is transiently incorrect
+> during the run (per-transaction increments don't know about anchors) and is
+> corrected by a mandatory final `rebuildFamilyBalances` pass — the actual
+> correctness guarantee, not a cleanup step. Idempotency for anchor writes uses
+> a content-derived pseudo-UUIDv7 (hash of account + day + amount + currency)
+> so a re-run replays instead of duplicating an anchor; a negative Sure
+> valuation amount is skipped and counted as an anomaly, never `abs()`'d. See
+> PER-176 for the implementation and ADR-0043 §5 for the calculator-side
+> contract this section now defers to entirely.
+
 PER-82 promotion applies signed deltas onto the account's **current** balance, so
 the opening balance matters. It is set **once at account creation**, only for
 **ASSET `transaction_flow`** accounts, and re-runs reuse the account and never
@@ -317,7 +351,8 @@ Phase 1 promotes a transaction row only when **all** hold:
 
 1. `kind == "standard"` (transfer kinds held — §10, deferred),
 2. target account `isImportable == true` **and** `balanceSource == transaction_flow`
-   (Investment/TrackedAsset accounts held — §2),
+   (Amended 2026-07-04, PER-176: only `TRACKED_ASSET` accounts — `PreciousMetal`/
+   `OtherAsset` — are held by this gate now; Investment is importable, §2),
 3. row currency == account currency (foreign-into-domestic held — §4.A),
 4. not a split parent (`split_lines` held — §4).
 
