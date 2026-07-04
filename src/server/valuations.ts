@@ -233,13 +233,6 @@ interface AnchorValuation {
   valuationDate: Date
 }
 
-// Σ Transaction.amount strictly after `afterDate` (ADR-0043 §2). Each amount is
-// already the signed delta to its own accountId (transfers post a separate
-// inflow row on the destination account), so per-account flow is a single sum
-// — no toAccountId. `Transaction.date` is a full timestamp and
-// `Valuation.valuationDate` is date-only, so Postgres compares it against
-// midnight of that day — any real (non-midnight) same-day transaction is
-// naturally "strictly after" its anchor with no separate tie-break needed.
 // Σ Transaction.amount strictly after `afterDate`, optionally bounded through
 // `throughDate` inclusive (ADR-0043 §2/§6 — the SAME segmentation predicate
 // backs both the balance formula and the ANCHOR_CHAIN drift check, so they can
@@ -271,41 +264,35 @@ async function sumTransactionFlowInRange(
   return toMoney(agg._sum.amount ?? 0n)
 }
 
-// The latest balance-assertion valuation (ADR-0043 §1 ANCHOR_VALUATION_TYPES)
-// with valuationDate <= asOf. Ties broken the same way as latestValuationValue.
-async function latestAnchorValuation(
+// Single "latest valuation" selector shared by both balance-derivation paths,
+// so the tie-break (valuationDate DESC, createdAt DESC, id DESC) can never
+// drift between them. Tracked (`valuation`-sourced) accounts call this with
+// no filter — latest valuation of ANY type wins (ADR-0034 §5). Transaction-
+// flow (cash) accounts call it with `anchorTypesOnly: true, asOf` — latest
+// balance-assertion anchor (ADR-0043 §1 ANCHOR_VALUATION_TYPES) at or before
+// a given date.
+async function latestValuation(
   tx: TenantTransactionClient,
   familyId: string,
   accountId: string,
-  asOf: Date
+  options?: { anchorTypesOnly?: boolean; asOf?: Date }
 ): Promise<AnchorValuation | null> {
-  const anchor = await tx.valuation.findFirst({
+  const latest = await tx.valuation.findFirst({
     where: {
       accountId,
       familyId,
       deletedAt: null,
-      type: { in: [...ANCHOR_VALUATION_TYPES] },
-      valuationDate: { lte: asOf },
+      ...(options?.anchorTypesOnly
+        ? { type: { in: [...ANCHOR_VALUATION_TYPES] } }
+        : {}),
+      ...(options?.asOf ? { valuationDate: { lte: options.asOf } } : {}),
     },
     orderBy: [{ valuationDate: "desc" }, { createdAt: "desc" }, { id: "desc" }],
     select: { value: true, valuationDate: true },
   })
-  return anchor
-    ? { value: toMoney(anchor.value), valuationDate: anchor.valuationDate }
+  return latest
+    ? { value: toMoney(latest.value), valuationDate: latest.valuationDate }
     : null
-}
-
-async function latestValuationValue(
-  tx: TenantTransactionClient,
-  familyId: string,
-  accountId: string
-): Promise<Money | null> {
-  const latest = await tx.valuation.findFirst({
-    where: { accountId, familyId, deletedAt: null },
-    orderBy: [{ valuationDate: "desc" }, { createdAt: "desc" }, { id: "desc" }],
-    select: { value: true },
-  })
-  return latest ? toMoney(latest.value) : null
 }
 
 // The balance the materialized cache SHOULD hold, computed purely from
@@ -326,15 +313,13 @@ async function computeCanonicalBalance(
   account: AccountBalanceFacts
 ): Promise<Money> {
   if (account.balanceSource === "valuation") {
-    const latest = await latestValuationValue(tx, familyId, account.id)
-    return latest ?? toMoney(account.balance)
+    const latest = await latestValuation(tx, familyId, account.id)
+    return latest?.value ?? toMoney(account.balance)
   }
-  const anchor = await latestAnchorValuation(
-    tx,
-    familyId,
-    account.id,
-    new Date()
-  )
+  const anchor = await latestValuation(tx, familyId, account.id, {
+    anchorTypesOnly: true,
+    asOf: new Date(),
+  })
   if (anchor === null) return toMoney(account.balance)
   const flow = await sumTransactionFlowInRange(
     tx,

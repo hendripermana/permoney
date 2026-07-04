@@ -104,6 +104,27 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
       user: owner.user,
     })
 
+  const addTransaction = (
+    owner: AuthenticatedOnboardedUser,
+    accountId: string,
+    type: "income" | "expense",
+    amount: string,
+    description: string,
+    date: Date = new Date()
+  ) =>
+    createTransactionForFamily({
+      data: {
+        type,
+        amount,
+        description,
+        accountId,
+        date,
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
   // Days-ago helper for anchor-chain tests (ADR-0043 §2/§6): the auto-created
   // `opening` valuation is always dated "now" (not overridable at account
   // create), so tests that need a genuine multi-day anchor history push it
@@ -386,18 +407,14 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
       const account = await makeCash(owner, "150000")
       await backdateOpeningValuation(owner, account.id, daysAgo(10))
 
-      await createTransactionForFamily({
-        data: {
-          type: "expense",
-          amount: "20000",
-          description: "Pre-anchor expense",
-          accountId: account.id,
-          date: daysAgo(8),
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        user: owner.user,
-      })
+      await addTransaction(
+        owner,
+        account.id,
+        "expense",
+        "20000",
+        "Pre-anchor expense",
+        daysAgo(8)
+      )
 
       await addValuation(
         owner,
@@ -407,18 +424,14 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
         daysAgo(5)
       )
 
-      await createTransactionForFamily({
-        data: {
-          type: "income",
-          amount: "30000",
-          description: "Post-anchor income",
-          accountId: account.id,
-          date: daysAgo(3),
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        user: owner.user,
-      })
+      await addTransaction(
+        owner,
+        account.id,
+        "income",
+        "30000",
+        "Post-anchor income",
+        daysAgo(3)
+      )
 
       const row = await accountRow(owner, account.id)
       expect(row.balance).toBe(230000n) // anchor(200000) + post-anchor flow(30000)
@@ -460,31 +473,23 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
         "reconciliation",
         daysAgo(6)
       )
-      await createTransactionForFamily({
-        data: {
-          type: "expense",
-          amount: "5000",
-          description: "Between anchors",
-          accountId: account.id,
-          date: daysAgo(4),
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        user: owner.user,
-      })
+      await addTransaction(
+        owner,
+        account.id,
+        "expense",
+        "5000",
+        "Between anchors",
+        daysAgo(4)
+      )
       await addValuation(owner, account.id, "220000", "manual", daysAgo(2))
-      await createTransactionForFamily({
-        data: {
-          type: "income",
-          amount: "10000",
-          description: "After latest anchor",
-          accountId: account.id,
-          date: daysAgo(1),
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        user: owner.user,
-      })
+      await addTransaction(
+        owner,
+        account.id,
+        "income",
+        "10000",
+        "After latest anchor",
+        daysAgo(1)
+      )
 
       const row = await accountRow(owner, account.id)
       // Latest anchor (daysAgo(2), value 220000) + flow strictly after it
@@ -509,18 +514,7 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
     test("is a no-op when the materialized balance already matches the canonical rows", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
       const account = await makeCash(owner, "150000")
-      await createTransactionForFamily({
-        data: {
-          type: "expense",
-          amount: "50000",
-          description: "Groceries",
-          accountId: account.id,
-          date: new Date(),
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        user: owner.user,
-      })
+      await addTransaction(owner, account.id, "expense", "50000", "Groceries")
 
       // Baseline: the expense already wrote one Account balance-update audit.
       const auditsBefore = await updateAuditCount(owner, account.id)
@@ -590,18 +584,14 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
         "reconciliation",
         daysAgo(5)
       )
-      await createTransactionForFamily({
-        data: {
-          type: "income",
-          amount: "10000",
-          description: "Post-anchor",
-          accountId: account.id,
-          date: daysAgo(2),
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        user: owner.user,
-      })
+      await addTransaction(
+        owner,
+        account.id,
+        "income",
+        "10000",
+        "Post-anchor",
+        daysAgo(2)
+      )
 
       // Corrupt the materialized cache directly.
       await setBalance(owner, account.id, 1n)
@@ -686,18 +676,14 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
       const account = await makeCash(owner, "100000")
       await backdateOpeningValuation(owner, account.id, daysAgo(10))
 
-      await createTransactionForFamily({
-        data: {
-          type: "expense",
-          amount: "20000",
-          description: "Explained by the ledger",
-          accountId: account.id,
-          date: daysAgo(8),
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        user: owner.user,
-      })
+      await addTransaction(
+        owner,
+        account.id,
+        "expense",
+        "20000",
+        "Explained by the ledger",
+        daysAgo(8)
+      )
       // 100000 - 20000 = 80000 — the next anchor matches recorded activity.
       await addValuation(
         owner,
