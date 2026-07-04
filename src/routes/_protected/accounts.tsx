@@ -75,7 +75,6 @@ import {
   reactivateAccountFn,
   updateAccountFn,
 } from "@/server/accounts"
-import { createTransactionFn } from "@/server/transactions"
 import { createValuationFn, getAccountBalanceFn } from "@/server/valuations"
 
 export const Route = createFileRoute("/_protected/accounts")({
@@ -712,11 +711,11 @@ function AccountFormDialog({
   )
 }
 
-// PER-146 / ADR-0034 §10 UI slice. Tracked assets "Update value" → a market
-// valuation that re-materializes the balance. Cash accounts "Reconcile" → record
-// the observed balance as a reconciliation valuation and post an explicit
-// `balance_adjustment` transaction for the gap, so the correction stays in the
-// ledger (§4) and the drift badge clears.
+// PER-146/PER-177 UI slice (ADR-0034 §10, ADR-0043). Tracked assets
+// "Update value" → a market valuation that re-materializes the balance. Cash
+// accounts "Reconcile" → a reconciliation valuation, which is a balance-
+// assertion ANCHOR (ADR-0043 §2): it re-materializes the balance directly,
+// no compensating transaction needed.
 function ValuationActionDialog({
   account,
   onClose,
@@ -770,21 +769,10 @@ function ValuationActionDialog({
           idempotencyKey: createUuidV7(),
         },
       })
-      // Cash: the valuation is only an observation; the gap is corrected by an
-      // explicit, audited adjustment transaction (ADR-0034 §4).
-      if (cashLike && driftMinor !== null && driftMinor !== 0n) {
-        await createTransactionFn({
-          data: {
-            type: driftMinor > 0n ? "income" : "expense",
-            kind: "balance_adjustment",
-            amount: (driftMinor > 0n ? driftMinor : -driftMinor).toString(),
-            description: "Reconciliation adjustment",
-            accountId: account.id,
-            date: new Date(),
-            idempotencyKey: createUuidV7(),
-          },
-        })
-      }
+      // Cash: a reconciliation valuation is now a balance-assertion ANCHOR
+      // (ADR-0043 §2/§4) — it re-materializes the balance directly, in the
+      // same transaction as the valuation write. No compensating transaction
+      // is posted; that would double-count the anchor's own value.
       await onSaved()
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))
@@ -802,7 +790,7 @@ function ValuationActionDialog({
             </DialogTitle>
             <DialogDescription>
               {cashLike
-                ? "Enter the real-world balance. The difference is posted as an audited balance-adjustment transaction; your transaction history is never rewritten."
+                ? "Enter the real-world balance. This becomes your account's new balance immediately, recorded as an audited reconciliation — your transaction history is never rewritten."
                 : "Record the latest market value. The balance follows this valuation."}
             </DialogDescription>
           </DialogHeader>
@@ -846,11 +834,11 @@ function ValuationActionDialog({
             />
             {cashLike && driftMinor !== null && driftMinor !== 0n ? (
               <p className="text-xs text-muted-foreground">
-                Adjustment of{" "}
+                Balance will change by{" "}
                 <span className="font-medium tabular-nums">
                   {formatCurrency(driftMinor.toString(), account.currency)}
-                </span>{" "}
-                will be posted to reconcile this account.
+                </span>
+                .
               </p>
             ) : null}
           </div>

@@ -31,14 +31,18 @@ import {
 import { validateTenantReferences } from "./validation/tenant-references"
 
 // =============================================================================
-// PER-146 / ADR-0034 — Valuation primitive, balance derivation, rebuild & drift.
+// PER-146/PER-177 — ADR-0034 + ADR-0043 — Valuation primitive, balance
+// derivation, rebuild & drift.
 //
 // `Valuation` is a dated, audited ledger entry that sits alongside `Transaction`.
 // `Account.balance` stays materialized-but-rebuildable (ADR-0034 §2):
-//   - cash-like (balanceSource="transaction_flow"): balance = opening anchor
-//     value + Σ Transaction.amount on the account. Non-opening valuations are
-//     OBSERVATIONS that feed the read-only drift detector and never move the
-//     balance (§4); corrections are explicit `balance_adjustment` transactions.
+//   - cash-like (balanceSource="transaction_flow"): balance = the latest
+//     ANCHOR valuation (<= now) + Σ Transaction.amount strictly after that
+//     anchor's date (ADR-0043 §2). Anchors are balance-assertion types —
+//     opening/reconciliation/manual (ANCHOR_VALUATION_TYPES) — while "market"
+//     stays an OBSERVATION that never overrides the ledger-derived balance.
+//     With a single anchor this degenerates to ADR-0034 §4's original
+//     opening + Σflow formula.
 //   - tracked (balanceSource="valuation"): balance = latest valuation value (§5);
 //     writing a valuation re-materializes the balance atomically.
 //
@@ -57,6 +61,14 @@ type PublicValuationType = (typeof PUBLIC_VALUATION_TYPES)[number]
 const PUBLIC_VALUATION_TYPE_SET: ReadonlySet<string> = new Set(
   PUBLIC_VALUATION_TYPES
 )
+
+// ADR-0043 — a valuation is an ANCHOR for `transaction_flow` accounts iff its
+// type is a balance-assertion (the user or source system vouches for the
+// number), not a mere observation. "market" (a price/value data point) stays
+// observation-only and must never silently override a cash account's
+// ledger-derived balance. "opening" needs no special-casing here: it is
+// simply the earliest anchor in the chain.
+const ANCHOR_VALUATION_TYPES = ["opening", "reconciliation", "manual"] as const
 
 /**
  * Raised for valuation-specific rejections (unknown/forbidden type, currency
@@ -158,7 +170,7 @@ export interface BalanceRebuildResult {
   changed: boolean
 }
 
-export type DriftKind = "MATERIALIZATION" | "RECONCILIATION"
+export type DriftKind = "MATERIALIZATION" | "ANCHOR_CHAIN"
 
 export interface BalanceDriftReport {
   accountId: string
@@ -168,6 +180,10 @@ export interface BalanceDriftReport {
   actual: string
   drift: string
   asOf: string
+  // ANCHOR_CHAIN only: the earlier anchor's valuationDate, so a consumer can
+  // look up both anchors' `source` to contextualize a migrated-anchor warning
+  // differently from a live user-reconciliation warning (ADR-0043 §6).
+  fromAnchorDate?: string
 }
 
 interface ServerActor {
@@ -212,62 +228,107 @@ function signMagnitudeForAccount(
 // Canonical balance derivation (the rebuild source of truth)
 // =============================================================================
 
-// Σ Transaction.amount over the account's live rows. Each amount is already the
-// signed delta to its own accountId (transfers post a separate inflow row on the
-// destination account), so per-account flow is a single sum — no toAccountId.
-async function sumTransactionFlow(
+interface AnchorValuation {
+  value: Money
+  valuationDate: Date
+}
+
+// Σ Transaction.amount strictly after `afterDate`, optionally bounded through
+// `throughDate` inclusive (ADR-0043 §2/§6 — the SAME segmentation predicate
+// backs both the balance formula and the ANCHOR_CHAIN drift check, so they can
+// never silently disagree on which flows belong to which anchor). Each amount
+// is already the signed delta to its own accountId (transfers post a separate
+// inflow row on the destination account), so per-account flow is a single sum
+// — no toAccountId. `Transaction.date` is a full timestamp and
+// `Valuation.valuationDate` is date-only, so Postgres compares it against
+// midnight of that day — any real (non-midnight) same-day transaction is
+// naturally "strictly after" its anchor with no separate tie-break needed.
+async function sumTransactionFlowInRange(
   tx: TenantTransactionClient,
   familyId: string,
-  accountId: string
+  accountId: string,
+  afterDate: Date,
+  throughDate: Date | null
 ): Promise<Money> {
   const agg = await tx.transaction.aggregate({
     _sum: { amount: true },
-    where: { accountId, familyId, deletedAt: null },
+    where: {
+      accountId,
+      familyId,
+      deletedAt: null,
+      date: throughDate
+        ? { gt: afterDate, lte: throughDate }
+        : { gt: afterDate },
+    },
   })
   return toMoney(agg._sum.amount ?? 0n)
 }
 
-async function openingAnchorValue(
+// Single "latest valuation" selector shared by both balance-derivation paths,
+// so the tie-break (valuationDate DESC, createdAt DESC, id DESC) can never
+// drift between them. Tracked (`valuation`-sourced) accounts call this with
+// no filter — latest valuation of ANY type wins (ADR-0034 §5). Transaction-
+// flow (cash) accounts call it with `anchorTypesOnly: true, asOf` — latest
+// balance-assertion anchor (ADR-0043 §1 ANCHOR_VALUATION_TYPES) at or before
+// a given date.
+async function latestValuation(
   tx: TenantTransactionClient,
   familyId: string,
-  accountId: string
-): Promise<Money | null> {
-  const opening = await tx.valuation.findFirst({
-    where: { accountId, familyId, type: "opening", deletedAt: null },
-    select: { value: true },
-  })
-  return opening ? toMoney(opening.value) : null
-}
-
-async function latestValuationValue(
-  tx: TenantTransactionClient,
-  familyId: string,
-  accountId: string
-): Promise<Money | null> {
+  accountId: string,
+  options?: { anchorTypesOnly?: boolean; asOf?: Date }
+): Promise<AnchorValuation | null> {
   const latest = await tx.valuation.findFirst({
-    where: { accountId, familyId, deletedAt: null },
+    where: {
+      accountId,
+      familyId,
+      deletedAt: null,
+      ...(options?.anchorTypesOnly
+        ? { type: { in: [...ANCHOR_VALUATION_TYPES] } }
+        : {}),
+      ...(options?.asOf ? { valuationDate: { lte: options.asOf } } : {}),
+    },
     orderBy: [{ valuationDate: "desc" }, { createdAt: "desc" }, { id: "desc" }],
-    select: { value: true },
+    select: { value: true, valuationDate: true },
   })
-  return latest ? toMoney(latest.value) : null
+  return latest
+    ? { value: toMoney(latest.value), valuationDate: latest.valuationDate }
+    : null
 }
 
-// The balance the materialized cache SHOULD hold, computed purely from canonical
-// rows. Returns the stored balance unchanged if the anchor is somehow missing,
-// so a rebuild can never corrupt a balance it cannot reconstruct.
+// The balance the materialized cache SHOULD hold, computed purely from
+// canonical rows. Returns the stored balance unchanged if no anchor can be
+// found, so a rebuild can never corrupt a balance it cannot reconstruct.
+//
+// ADR-0043: for transaction_flow accounts, balance = the latest anchor
+// valuation (<= now) + Σ flows strictly after that anchor's date. With a
+// single anchor (the common case — just `opening`) this is exactly ADR-0034
+// §4's original opening + Σflow formula; multiple anchors let a later
+// balance-assertion (reconciliation/manual) override accumulated flow, which
+// is what reproduces the real Sure UI for migrated accounts. Tracked
+// (`valuation`-sourced) accounts are unchanged: latest valuation of any type
+// wins, no transaction sum (ADR-0034 §5).
 async function computeCanonicalBalance(
   tx: TenantTransactionClient,
   familyId: string,
   account: AccountBalanceFacts
 ): Promise<Money> {
   if (account.balanceSource === "valuation") {
-    const latest = await latestValuationValue(tx, familyId, account.id)
-    return latest ?? toMoney(account.balance)
+    const latest = await latestValuation(tx, familyId, account.id)
+    return latest?.value ?? toMoney(account.balance)
   }
-  const opening = await openingAnchorValue(tx, familyId, account.id)
-  if (opening === null) return toMoney(account.balance)
-  const flow = await sumTransactionFlow(tx, familyId, account.id)
-  return addMoney(opening, flow)
+  const anchor = await latestValuation(tx, familyId, account.id, {
+    anchorTypesOnly: true,
+    asOf: new Date(),
+  })
+  if (anchor === null) return toMoney(account.balance)
+  const flow = await sumTransactionFlowInRange(
+    tx,
+    familyId,
+    account.id,
+    anchor.valuationDate,
+    null
+  )
+  return addMoney(anchor.value, flow)
 }
 
 // Optimistically-locked balance write. Returns whether it changed. A version
@@ -418,17 +479,18 @@ export async function createValuationForFamily({
         after: serialized,
       })
 
-      // Tracked accounts derive their balance from the latest valuation, so a
-      // new valuation re-materializes the balance atomically (ADR-0034 §5). Cash
-      // accounts only observe — the balance moves through transactions (§4).
-      if (
-        account.balanceSource === "valuation" &&
-        signedValue !== account.balance
-      ) {
+      // Re-materialize the balance from canonical rows (ADR-0043). Tracked
+      // accounts always follow their latest valuation (ADR-0034 §5). Cash
+      // accounts move only when this valuation is an anchor type that is
+      // currently the effective anchor (latest <= now) — a backdated anchor
+      // superseded by a later one, or a "market" observation, leaves the
+      // materialized balance untouched, same as before.
+      const canonical = await computeCanonicalBalance(tx, familyId, account)
+      if (canonical !== toMoney(account.balance)) {
         await setAccountBalanceTo(tx, {
           accountId: account.id,
           familyId,
-          target: signedValue,
+          target: canonical,
           currentVersion: account.version,
         })
         await auditLog(tx, auditCtx, {
@@ -436,7 +498,7 @@ export async function createValuationForFamily({
           entityType: "Account",
           entityId: account.id,
           before: { balance: account.balance.toString() },
-          after: { balance: signedValue.toString() },
+          after: { balance: canonical.toString() },
         })
       }
 
@@ -591,6 +653,62 @@ export const rebuildAccountBalanceFn = createServerFn({ method: "POST" })
 // DRIFT DETECTOR (read-only — never mutates)
 // =============================================================================
 
+// ANCHOR_CHAIN (ADR-0043 §6): for every consecutive pair of anchors on an
+// account's anchor chain, does the prior anchor's value plus the flow in that
+// exact segment explain the next anchor's asserted value? A mismatch means a
+// transaction was missed, duplicated, or miscategorized between two balance
+// assertions — the classic bookkeeping "does activity explain the
+// restatement" check, generalized to every transition in history instead of
+// only the latest one. Uses the same segmentation predicate as the balance
+// formula (`sumTransactionFlowInRange`) so the two can never silently
+// disagree about which flows belong to which anchor.
+async function detectAnchorChainDrift(
+  tx: TenantTransactionClient,
+  familyId: string,
+  accountId: string
+): Promise<BalanceDriftReport[]> {
+  const anchors = await tx.valuation.findMany({
+    where: {
+      accountId,
+      familyId,
+      deletedAt: null,
+      type: { in: [...ANCHOR_VALUATION_TYPES] },
+    },
+    orderBy: [{ valuationDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+    select: { value: true, valuationDate: true },
+  })
+
+  const reports: BalanceDriftReport[] = []
+  for (let index = 0; index < anchors.length - 1; index += 1) {
+    const from = anchors[index]
+    const to = anchors[index + 1]
+    if (!from || !to) continue
+
+    const segmentFlow = await sumTransactionFlowInRange(
+      tx,
+      familyId,
+      accountId,
+      from.valuationDate,
+      to.valuationDate
+    )
+    const expected = addMoney(toMoney(from.value), segmentFlow)
+    const actual = toMoney(to.value)
+    if (expected !== actual) {
+      reports.push({
+        accountId,
+        kind: "ANCHOR_CHAIN",
+        severity: "warning",
+        expected: expected.toString(),
+        actual: actual.toString(),
+        drift: subMoney(actual, expected).toString(),
+        asOf: to.valuationDate.toISOString().slice(0, 10),
+        fromAnchorDate: from.valuationDate.toISOString().slice(0, 10),
+      })
+    }
+  }
+  return reports
+}
+
 export async function detectBalanceDriftForFamily({
   familyId,
   userId,
@@ -627,38 +745,13 @@ export async function detectBalanceDriftForFamily({
         })
       }
 
-      // (2) Reconciliation drift (cash only): the latest reconciliation
-      // observation vs the transaction-derived balance.
+      // (2) Anchor-chain drift (cash only, ADR-0043 §6): does the flow between
+      // every consecutive pair of balance-assertion anchors explain the
+      // restatement between them?
       if (account.balanceSource === "transaction_flow") {
-        const recon = await tx.valuation.findFirst({
-          where: {
-            accountId: account.id,
-            familyId,
-            type: "reconciliation",
-            deletedAt: null,
-          },
-          orderBy: [
-            { valuationDate: "desc" },
-            { createdAt: "desc" },
-            { id: "desc" },
-          ],
-          select: { value: true, valuationDate: true },
-        })
-        if (recon) {
-          const computed = canonical // cash canonical == transaction-derived
-          const expected = toMoney(recon.value)
-          if (expected !== computed) {
-            reports.push({
-              accountId: account.id,
-              kind: "RECONCILIATION",
-              severity: "warning",
-              expected: expected.toString(),
-              actual: computed.toString(),
-              drift: subMoney(expected, computed).toString(),
-              asOf: recon.valuationDate.toISOString().slice(0, 10),
-            })
-          }
-        }
+        reports.push(
+          ...(await detectAnchorChainDrift(tx, familyId, account.id))
+        )
       }
     }
     return reports

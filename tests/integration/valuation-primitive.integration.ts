@@ -27,7 +27,7 @@ import {
   type TestFactories,
 } from "./support/factories"
 
-describe("valuation primitive + balance rebuild & drift (PER-146 / ADR-0034)", () => {
+describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-0034/ADR-0043)", () => {
   let harness: IntegrationHarness
   let factories: TestFactories
 
@@ -89,18 +89,60 @@ describe("valuation primitive + balance rebuild & drift (PER-146 / ADR-0034)", (
     owner: AuthenticatedOnboardedUser,
     accountId: string,
     value: string,
-    type: "reconciliation" | "market" | "manual"
+    type: "reconciliation" | "market" | "manual",
+    valuationDate?: Date
   ) =>
     createValuationForFamily({
       data: {
         accountId,
         value,
         type,
+        ...(valuationDate ? { valuationDate } : {}),
         idempotencyKey: factories.createIdempotencyKey(),
       },
       familyId: owner.family.id,
       user: owner.user,
     })
+
+  const addTransaction = (
+    owner: AuthenticatedOnboardedUser,
+    accountId: string,
+    type: "income" | "expense",
+    amount: string,
+    description: string,
+    date: Date = new Date()
+  ) =>
+    createTransactionForFamily({
+      data: {
+        type,
+        amount,
+        description,
+        accountId,
+        date,
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+  // Days-ago helper for anchor-chain tests (ADR-0043 §2/§6): the auto-created
+  // `opening` valuation is always dated "now" (not overridable at account
+  // create), so tests that need a genuine multi-day anchor history push it
+  // into the past directly, then place later anchors/transactions at points
+  // between that backdated opening and today — always <= now, never flaky.
+  const daysAgo = (n: number) => new Date(Date.now() - n * 24 * 60 * 60 * 1000)
+
+  const backdateOpeningValuation = (
+    owner: AuthenticatedOnboardedUser,
+    accountId: string,
+    valuationDate: Date
+  ) =>
+    harness.withFamily(owner.family.id, async (tx) =>
+      tx.valuation.updateMany({
+        where: { accountId, type: "opening", deletedAt: null },
+        data: { valuationDate },
+      })
+    )
 
   const setBalance = (
     owner: AuthenticatedOnboardedUser,
@@ -225,14 +267,40 @@ describe("valuation primitive + balance rebuild & drift (PER-146 / ADR-0034)", (
       expect(audits[0]?.action).toBe("create")
     })
 
-    test("cash valuation is an observation only: it does NOT move the balance", async () => {
+    test("reconciliation valuation is a balance-assertion anchor: it overrides the balance (ADR-0043)", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
       const account = await makeCash(owner, "150000")
 
-      await addValuation(owner, account.id, "175000", "reconciliation")
+      const valuation = await addValuation(
+        owner,
+        account.id,
+        "175000",
+        "reconciliation"
+      )
+      expect(valuation.value).toBe("175000")
 
       const row = await accountRow(owner, account.id)
-      expect(row.balance).toBe(150000n) // unchanged
+      expect(row.balance).toBe(175000n) // anchor IS the new balance, no plug
+    })
+
+    test("manual valuation is also a balance-assertion anchor for cash accounts", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "150000")
+
+      await addValuation(owner, account.id, "180000", "manual")
+
+      const row = await accountRow(owner, account.id)
+      expect(row.balance).toBe(180000n)
+    })
+
+    test("market valuation on a cash account is an observation only: it does NOT move the balance", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "150000")
+
+      await addValuation(owner, account.id, "175000", "market")
+
+      const row = await accountRow(owner, account.id)
+      expect(row.balance).toBe(150000n) // market is a price observation, never an anchor
     })
 
     test("rejects a valuation whose currency differs from the account", async () => {
@@ -323,6 +391,116 @@ describe("valuation primitive + balance rebuild & drift (PER-146 / ADR-0034)", (
   })
 
   // --------------------------------------------------------------------------
+  // Anchor override, post-anchor flow, and multi-anchor history (ADR-0043)
+  // --------------------------------------------------------------------------
+  describe("reconciliation-anchor balance calculator (ADR-0043)", () => {
+    test("flow strictly after the anchor accumulates; flow at/before it is absorbed into the anchor's value (migration-mismatch reproduction)", async () => {
+      // Reproduces, at integration-test scale, the exact class of mismatch
+      // head-eng verified against the real Sure UI (2026-06-29): a cash
+      // account with an opening balance, an expense BEFORE a later
+      // reconciliation, and income AFTER it. ADR-0034's old opening+Σ(all
+      // flow) model would compute 150000 - 20000 + 30000 = 160000 here —
+      // wrong. ADR-0043's anchor model computes 200000 (the reconciliation
+      // anchor) + 30000 (post-anchor flow only) = 230000, matching what a
+      // real bank/source-system statement asserted as of its date.
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "150000")
+      await backdateOpeningValuation(owner, account.id, daysAgo(10))
+
+      await addTransaction(
+        owner,
+        account.id,
+        "expense",
+        "20000",
+        "Pre-anchor expense",
+        daysAgo(8)
+      )
+
+      await addValuation(
+        owner,
+        account.id,
+        "200000",
+        "reconciliation",
+        daysAgo(5)
+      )
+
+      await addTransaction(
+        owner,
+        account.id,
+        "income",
+        "30000",
+        "Post-anchor income",
+        daysAgo(3)
+      )
+
+      const row = await accountRow(owner, account.id)
+      expect(row.balance).toBe(230000n) // anchor(200000) + post-anchor flow(30000)
+    })
+
+    test("a backdated anchor superseded by a later one does not move the current balance", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "150000")
+      await backdateOpeningValuation(owner, account.id, daysAgo(10))
+
+      // Effective anchor #1.
+      await addValuation(
+        owner,
+        account.id,
+        "200000",
+        "reconciliation",
+        daysAgo(5)
+      )
+      const afterFirstAnchor = await accountRow(owner, account.id)
+      expect(afterFirstAnchor.balance).toBe(200000n)
+
+      // A second anchor dated BEFORE the first — should not move the
+      // materialized balance, because it is not the latest anchor <= now.
+      await addValuation(owner, account.id, "999999", "manual", daysAgo(7))
+
+      const row = await accountRow(owner, account.id)
+      expect(row.balance).toBe(200000n) // unchanged — daysAgo(5) is still latest
+    })
+
+    test("multi-anchor history: the effective anchor is always the latest one <= now", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "150000")
+      await backdateOpeningValuation(owner, account.id, daysAgo(10))
+
+      await addValuation(
+        owner,
+        account.id,
+        "180000",
+        "reconciliation",
+        daysAgo(6)
+      )
+      await addTransaction(
+        owner,
+        account.id,
+        "expense",
+        "5000",
+        "Between anchors",
+        daysAgo(4)
+      )
+      await addValuation(owner, account.id, "220000", "manual", daysAgo(2))
+      await addTransaction(
+        owner,
+        account.id,
+        "income",
+        "10000",
+        "After latest anchor",
+        daysAgo(1)
+      )
+
+      const row = await accountRow(owner, account.id)
+      // Latest anchor (daysAgo(2), value 220000) + flow strictly after it
+      // (only the daysAgo(1) income; the daysAgo(4) expense belongs to the
+      // PRIOR segment and is absorbed into the daysAgo(6) -> daysAgo(2) anchor
+      // transition, not summed again here).
+      expect(row.balance).toBe(230000n)
+    })
+  })
+
+  // --------------------------------------------------------------------------
   // Balance rebuild
   // --------------------------------------------------------------------------
   describe("rebuildAccountBalanceForFamily", () => {
@@ -336,18 +514,7 @@ describe("valuation primitive + balance rebuild & drift (PER-146 / ADR-0034)", (
     test("is a no-op when the materialized balance already matches the canonical rows", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
       const account = await makeCash(owner, "150000")
-      await createTransactionForFamily({
-        data: {
-          type: "expense",
-          amount: "50000",
-          description: "Groceries",
-          accountId: account.id,
-          date: new Date(),
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        user: owner.user,
-      })
+      await addTransaction(owner, account.id, "expense", "50000", "Groceries")
 
       // Baseline: the expense already wrote one Account balance-update audit.
       const auditsBefore = await updateAuditCount(owner, account.id)
@@ -405,6 +572,36 @@ describe("valuation primitive + balance rebuild & drift (PER-146 / ADR-0034)", (
       })
       expect(results.filter((r) => r.changed)).toHaveLength(2)
     })
+
+    test("rebuild recomputes the anchor-aware canonical balance (ADR-0043), not just opening + all flow", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "100000")
+      await backdateOpeningValuation(owner, account.id, daysAgo(10))
+      await addValuation(
+        owner,
+        account.id,
+        "150000",
+        "reconciliation",
+        daysAgo(5)
+      )
+      await addTransaction(
+        owner,
+        account.id,
+        "income",
+        "10000",
+        "Post-anchor",
+        daysAgo(2)
+      )
+
+      // Corrupt the materialized cache directly.
+      await setBalance(owner, account.id, 1n)
+
+      const result = await rebuild(owner, account.id)
+      expect(result.rebuiltBalance).toBe("160000") // anchor(150000) + post-anchor flow(10000)
+
+      const row = await accountRow(owner, account.id)
+      expect(row.balance).toBe(160000n)
+    })
   })
 
   // --------------------------------------------------------------------------
@@ -442,45 +639,66 @@ describe("valuation primitive + balance rebuild & drift (PER-146 / ADR-0034)", (
       expect(row.balance).toBe(100000n)
     })
 
-    test("flags cash reconciliation drift as a warning, cleared by a balance_adjustment", async () => {
+    test("flags ANCHOR_CHAIN drift when recorded flow doesn't explain the restatement between two anchors", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
       const account = await makeCash(owner, "100000")
+      await backdateOpeningValuation(owner, account.id, daysAgo(10))
 
-      // Real-world statement says 120,000; transaction-derived balance is 100,000.
-      await addValuation(owner, account.id, "120000", "reconciliation")
-
-      const before = await detect(owner)
-      const recon = before.find(
-        (r) => r.accountId === account.id && r.kind === "RECONCILIATION"
+      // A later statement asserts 120,000 with no recorded flow in between —
+      // an unexplained restatement (real-world equivalent: a missed deposit).
+      await addValuation(
+        owner,
+        account.id,
+        "120000",
+        "reconciliation",
+        daysAgo(6)
       )
-      expect(recon).toBeDefined()
-      expect(recon?.severity).toBe("warning")
-      expect(recon?.drift).toBe("20000") // expected 120000 - computed 100000
 
-      // The correction stays in the ledger as an explicit adjustment transaction.
-      await createTransactionForFamily({
-        data: {
-          type: "income",
-          kind: "balance_adjustment",
-          amount: "20000",
-          description: "Reconciliation adjustment",
-          accountId: account.id,
-          date: new Date(),
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        user: owner.user,
-      })
+      const report = await detect(owner)
+      const chain = report.find(
+        (r) => r.accountId === account.id && r.kind === "ANCHOR_CHAIN"
+      )
+      expect(chain).toBeDefined()
+      expect(chain?.severity).toBe("warning")
+      expect(chain?.expected).toBe("100000") // opening(100000) + segment flow(0)
+      expect(chain?.actual).toBe("120000") // what the next anchor asserts
+      expect(chain?.drift).toBe("20000")
+      expect(chain?.fromAnchorDate).toBe(daysAgo(10).toISOString().slice(0, 10))
 
-      const after = await detect(owner)
-      expect(
-        after.find(
-          (r) => r.accountId === account.id && r.kind === "RECONCILIATION"
-        )
-      ).toBeUndefined()
-
+      // Read-only: the anchor itself already re-materialized the balance;
+      // detection does not change it further.
       const row = await accountRow(owner, account.id)
       expect(row.balance).toBe(120000n)
+    })
+
+    test("reports no ANCHOR_CHAIN drift when recorded flow fully explains the restatement", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "100000")
+      await backdateOpeningValuation(owner, account.id, daysAgo(10))
+
+      await addTransaction(
+        owner,
+        account.id,
+        "expense",
+        "20000",
+        "Explained by the ledger",
+        daysAgo(8)
+      )
+      // 100000 - 20000 = 80000 — the next anchor matches recorded activity.
+      await addValuation(
+        owner,
+        account.id,
+        "80000",
+        "reconciliation",
+        daysAgo(5)
+      )
+
+      const report = await detect(owner)
+      expect(
+        report.find(
+          (r) => r.accountId === account.id && r.kind === "ANCHOR_CHAIN"
+        )
+      ).toBeUndefined()
     })
 
     test("is tenant-scoped: never reports another family's accounts", async () => {
