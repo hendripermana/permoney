@@ -9,27 +9,34 @@ import {
 import { IDENTITY_RATE } from "@/lib/fx"
 import { SURE_PROVIDER } from "@/lib/sure-migration"
 import { runSureMigrationForFamily } from "@/server/sure-migration"
+import { detectBalanceDriftForFamily } from "@/server/valuations"
 import {
   createIntegrationHarness,
   type IntegrationHarness,
 } from "./support/database"
 import { createTestFactories, type TestFactories } from "./support/factories"
 import {
+  buildSureBundleAnchorEdgeCases,
   buildSureBundleV1Degraded,
   buildSureBundleV1DegradedTransfers,
   buildSureBundleV2Complete,
   buildSureBundleV2Transfers,
 } from "./support/sure-fixtures"
 
-// PER-170 / PER-173 / PER-174 / ADR-0041 — Real-Postgres proof of the Sure
-// full-family migration against a REAL-SHAPED bundle (`type` envelope, Valuation
-// anchors, no Balance/Transfer/split_lines): provider-bound account/category/
-// merchant creation, opening balances from `Valuation` per §5 (kind-bearing
-// bundle → `opening_anchor`; no-kind bundle → date heuristic; gaps → 0, never a
-// plug), the Sure sign inversion at promotion, §6 gating (held rows stay
-// staged), the PER-82 promotion parity it reuses (signed amount, atomic balance,
-// base FX projection, audit), one-shot idempotent re-run (opening applied once),
-// lossless artifact retention, and tenant isolation under RLS.
+// PER-170 / PER-173 / PER-174 / PER-176 / ADR-0041 / ADR-0043 — Real-Postgres
+// proof of the Sure full-family migration against a REAL-SHAPED bundle (`type`
+// envelope, Valuation anchors, no Balance/Transfer/split_lines): provider-bound
+// account/category/merchant creation, EVERY Valuation written as its own
+// `type="reconciliation"` anchor (Sure's own `kind` is provenance-only — no
+// opening-mode selection), the balance calculator's anchor-chain formula
+// (latest anchor + Σ post-anchor flow, ADR-0043 §2) including the double-count
+// guard for pre-anchor flow, Investment's importable flip (§3), the Sure sign
+// inversion at promotion, §6 gating (held rows stay staged), the PER-82
+// promotion parity it reuses (signed amount, atomic balance, base FX
+// projection, audit), one-shot idempotent re-run (anchors replay via a
+// content-derived key, never duplicated), the mandatory final
+// `rebuildFamilyBalances` correctness pass, lossless artifact retention, and
+// tenant isolation under RLS.
 
 describe("Sure full-family migration vertical slice (PER-170)", () => {
   let harness: IntegrationHarness
@@ -114,24 +121,18 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     expect(result.transactions.held).toBe(fixture.expected.held)
     expect(result.transactions.zeroAmountSkipped).toBe(1)
     expect(result.malformedLines).toBe(0)
-    // Valuation is now a typed sink (opening source), out of ignoredEntities.
+    // Valuation is now a typed sink (anchor source), out of ignoredEntities.
     expect(result.ignoredEntities).toEqual(fixture.expected.ignoredEntities)
 
-    // Opening provenance (§5): kind-bearing bundle, checking opened from its
-    // `opening_anchor`; usd (current_anchor only) + invest (no valuation) → gap.
-    expect(result.bundleHasKind).toBe(true)
+    // Reconciliation-anchor provenance (ADR-0043 §5, PER-176): every parsed
+    // valuation is written as its own anchor — no opening-mode selection.
     expect(result.valuationsParsed).toBe(fixture.expected.valuationsParsed)
-    expect(result.openingBalances).toEqual(fixture.expected.openingBalances)
-    // Reconcile invariant: the three buckets close over exactly the ASSET
-    // transaction_flow accounts created this run (no unexplained delta).
-    expect(
-      result.openingBalances.fromOpeningAnchor +
-        result.openingBalances.fromDateHeuristic +
-        result.openingBalances.gapZero
-    ).toBe(3)
+    expect(result.valuations).toEqual(fixture.expected.valuations)
 
-    // Provider-bound depository: opening from the `opening_anchor` (10_000_000),
-    // then expense (−1_700_000) + income (+5_000_000) applied atomically.
+    // checking has TWO anchors (opening_anchor 100000.0, then current_anchor
+    // 250000.0 on 2026-03-01). The LATEST anchor overrides accumulated flow —
+    // this is the anchor-CHAIN behavior: balance = 250000.0's anchor value +
+    // Σ(flow strictly after 2026-03-01), not the earlier anchor + all flow.
     const checking = await accountByBinding(tenant, fixture.ids.checking)
     expect(checking?.accountType).toBe("DEPOSITORY")
     expect(checking?.isImportable).toBe(true)
@@ -141,16 +142,20 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
         fixture.promotableIncomeMinor
     )
 
-    // usd carries ONLY a current_anchor (no opening_anchor) → opening gap (0):
-    // a non-opening valuation must never seed the opening, end-to-end.
+    // usd carries ONLY a `current_anchor` — under ADR-0043 that's still a full
+    // anchor (Sure's `kind` is provenance-only), so usd's balance is the
+    // anchor's own value (8_000 minor = 80.00 USD), not 0. The one txn
+    // referencing usd currency-mismatches and stays held, so no flow applies.
     const usd = await accountByBinding(tenant, fixture.ids.usd)
-    expect(usd?.balance).toBe(0n)
+    expect(usd?.balance).toBe(8_000n)
 
-    // Investment shell exists but is held (not importable); no valuation → 0.
+    // Investment is importable now (ADR-0043 §3 / PER-176): its anchor
+    // (2_000_000.0 = 200_000_000 minor) + the promoted standard txn (expense
+    // -100_000_000) derive its balance, exactly like any transaction_flow account.
     const invest = await accountByBinding(tenant, fixture.ids.invest)
     expect(invest?.accountType).toBe("INVESTMENT")
-    expect(invest?.isImportable).toBe(false)
-    expect(invest?.balance).toBe(0n)
+    expect(invest?.isImportable).toBe(true)
+    expect(invest?.balance).toBe(100_000_000n)
 
     // Held rows are staged-not-promoted: still normalized, never a Transaction.
     const { staged, promotedRows, txnCount } = await harness.withMember(
@@ -168,11 +173,11 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
         }),
       })
     )
-    // 3 rows remain normalized: 2 STANDARD held (invest + currency) + the 1
+    // 2 rows remain normalized: 1 STANDARD held (currency mismatch) + the 1
     // transfer leg, now an unpaired_orphan in the transfers block (ADR-0042).
-    expect(staged).toBe(3)
-    expect(promotedRows).toBe(2)
-    expect(txnCount).toBe(2)
+    expect(staged).toBe(2)
+    expect(promotedRows).toBe(3)
+    expect(txnCount).toBe(3)
 
     // The lone `funds_movement` leg pairs to nothing → held as unpaired_orphan,
     // never fabricated into a one-sided transfer.
@@ -282,7 +287,7 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     expect(second.merchants).toEqual({ created: 0, reused: 2 })
     expect(second.transactions.promotedThisRun).toBe(0) // already promoted
 
-    const { accountCount, txnCount, artifactCount, checking } =
+    const { accountCount, txnCount, artifactCount, valuationCount, checking } =
       await harness.withMember(tenant.familyId, tenant.userId, async (tx) => ({
         accountCount: await tx.account.count({
           where: { familyId: tenant.familyId },
@@ -293,13 +298,19 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
         artifactCount: await tx.importBatchArtifact.count({
           where: { familyId: tenant.familyId },
         }),
+        valuationCount: await tx.valuation.count({
+          where: { familyId: tenant.familyId },
+        }),
         checking: await tx.account.findUniqueOrThrow({
           where: { id: checkingAfterFirst!.id },
         }),
       }))
     expect(accountCount).toBe(3) // no new shells
-    expect(txnCount).toBe(2) // no double-book
+    expect(txnCount).toBe(3) // no double-book (expense + income + invest std txn)
     expect(artifactCount).toBe(1) // one-shot artifact
+    // PER-176 grill Q6 / Q8 #4: the content-derived idempotency key means a
+    // re-run replays every anchor write instead of duplicating it.
+    expect(valuationCount).toBe(fixture.expected.valuations.anchorsWritten)
     expect(checking.balance).toBe(checkingAfterFirst!.balance) // balance stable
   })
 
@@ -316,30 +327,29 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     expect(result.categories).toEqual({ created: 1, reused: 0 })
     expect(result.transactions.promotedThisRun).toBe(2)
 
-    // No-kind bundle → date-heuristic mode; wallet opens from its earliest
-    // valuation, savings falls back to 0 (its valuation is mid-history).
-    expect(result.bundleHasKind).toBe(false)
-    expect(result.openingBalances).toEqual(fixture.expected.openingBalances)
-    expect(
-      result.openingBalances.fromOpeningAnchor +
-        result.openingBalances.fromDateHeuristic +
-        result.openingBalances.gapZero
-    ).toBe(2)
+    // No `kind` anywhere — irrelevant now (ADR-0043 §5: `kind` is
+    // provenance-only). Both valuations are still written as anchors.
+    expect(result.valuationsParsed).toBe(fixture.expected.valuationsParsed)
+    expect(result.valuations).toEqual(fixture.expected.valuations)
 
     const wallet = await accountByBinding(tenant, fixture.ids.wallet)
     // Unknown accountable_type → conservative cash-like depository, importable.
     expect(wallet?.accountType).toBe("DEPOSITORY")
     expect(wallet?.isImportable).toBe(true)
-    // Earliest valuation (2026-01-01) strictly precedes the first posting txn
-    // (2026-05-10) → opening 5_000_000; income promotion → +1_234_500.
+    // Anchor (2026-01-01) precedes the posting txn (2026-05-10) → anchor
+    // 5_000_000 + Σ(flow after) = + income promotion +1_234_500.
     expect(wallet?.balance).toBe(
       fixture.openingBalanceMinor + fixture.promotableIncomeMinor
     )
 
-    // savings: valuation is mid-history (after its posting txn) → opening gap (0,
-    // never a plug); only the promoted income (+2_222_200) lands.
+    // savings: MANDATORY double-count regression guard (PER-176 grill Q8 #6).
+    // The valuation (2026-06-01) is dated AFTER the posting txn (2026-04-01).
+    // Under ADR-0043 the anchor ABSORBS that pre-anchor txn — balance is the
+    // anchor value alone (9_999_900), NOT anchor + all flow (which would be
+    // 9_999_900 + 2_222_200 = 12_222_100, the double-counted wrong answer the
+    // old opening+Σflow model was forced into for a mid-history valuation).
     const savings = await accountByBinding(tenant, fixture.ids.savings)
-    expect(savings?.balance).toBe(2_222_200n)
+    expect(savings?.balance).toBe(9_999_900n)
 
     // Orphan category (missing parent) created as a root.
     const orphan = await harness.withMember(
@@ -381,6 +391,68 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     )
     expect(leaked.accounts).toBe(0)
     expect(leaked.artifacts).toBe(0)
+  })
+
+  // ---- anchor-chain observability (PER-176 grill Q8 #9, optional) ---------
+
+  test("ANCHOR_CHAIN drift fires for a migrated multi-anchor account, tagged with migration provenance", async () => {
+    const tenant = await setupTenant()
+    const fixture = buildSureBundleV2Complete()
+    await migrate(tenant, "all.ndjson", fixture.ndjson)
+
+    const checking = await accountByBinding(tenant, fixture.ids.checking)
+    const reports = await detectBalanceDriftForFamily({
+      familyId: tenant.familyId,
+      userId: tenant.userId,
+      runInTenantTransaction: runner(),
+    })
+    const chainReport = reports.find(
+      (r) => r.accountId === checking!.id && r.kind === "ANCHOR_CHAIN"
+    )
+    // checking's two anchors (100000.0 then 250000.0) have zero recorded flow
+    // between them — Sure's own anchor absorbed the restatement, exactly the
+    // "expected on migrated data" case ADR-0043 §6 documents.
+    expect(chainReport).toBeDefined()
+    expect(chainReport?.severity).toBe("warning")
+
+    const anchors = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      (tx) =>
+        tx.valuation.findMany({
+          where: { accountId: checking!.id },
+          select: { source: true },
+        })
+    )
+    expect(anchors.every((a) => a.source === "migration:sure")).toBe(true)
+  })
+
+  // ---- anchor edge cases (PER-176 grill Q8 #3 negative-skip / #5 tracked) --
+
+  test("negative valuations are skipped (never abs()'d); TRACKED_ASSET stays latest-valuation-only", async () => {
+    const tenant = await setupTenant()
+    const fixture = buildSureBundleAnchorEdgeCases()
+
+    const result = await migrate(tenant, "all.ndjson", fixture.ndjson)
+
+    expect(result.valuationsParsed).toBe(fixture.expected.valuationsParsed)
+    expect(result.valuations).toEqual(fixture.expected.valuations)
+
+    const tracked = await accountByBinding(tenant, fixture.accountIds.tracked)
+    expect(tracked?.accountType).toBe("TRACKED_ASSET")
+    expect(tracked?.isImportable).toBe(false)
+    expect(tracked?.balance).toBe(fixture.balancesMinor.tracked)
+
+    const cash = await accountByBinding(tenant, fixture.accountIds.cash)
+    expect(cash?.balance).toBe(fixture.balancesMinor.cash)
+
+    // The negative valuation itself must never have been written as a row.
+    const valuationCount = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      (tx) => tx.valuation.count({ where: { accountId: cash!.id } })
+    )
+    expect(valuationCount).toBe(1)
   })
 
   // ======================================================================
@@ -462,7 +534,6 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     const fixture = buildSureBundleV1DegradedTransfers()
     const result = await migrate(tenant, "all.ndjson", fixture.ndjson)
 
-    expect(result.bundleHasKind).toBe(false)
     expect(result.accounts.created).toBe(fixture.expected.accountsCreated)
 
     const t = result.transfers
@@ -500,13 +571,14 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     expect(transferLegs).toBe(fixture.expected.legsPromotedTotal)
   })
 
-  test("transfers must NOT double-count the opening balance (ADR-0042 regression)", async () => {
-    // `Nikah` is a held-transfer-only account: its sole activity is one inbound
-    // transfer, and it carries a CURRENT-value valuation dated AFTER that
-    // transfer. The PER-174 opening for "nothing posts" would be the latest
-    // valuation (3_700_000); promoting the transfer on top WITHOUT the ADR-0042
-    // posting-predicate fix would yield 7_400_000 (double). The fix flips Nikah to
-    // "posting exists" → opening gap(0) → final = exactly the transfer (3_700_000).
+  test("transfers must NOT double-count the anchor (ADR-0043 anchor-chain regression)", async () => {
+    // `Nikah`'s sole activity is one inbound transfer, and it carries a
+    // valuation dated AFTER that transfer. Under ADR-0043 that valuation is a
+    // reconciliation ANCHOR: balance = anchor (3_700_000) + Σ(flow strictly
+    // AFTER the anchor's date). The transfer is dated BEFORE the anchor, so it
+    // is absorbed, not summed again — final = exactly the anchor (3_700_000),
+    // never anchor + the transfer a second time (7_400_000, the double-count
+    // this fixture exists to catch).
     const tenant = await setupTenant()
     const fixture = buildSureBundleV1DegradedTransfers()
     await migrate(tenant, "all.ndjson", fixture.ndjson)

@@ -103,11 +103,11 @@ export type SureBalance = z.infer<typeof sureBalanceSchema>
 // balance on its date — so `amount` is the absolute value at `date`, NOT a
 // pre-history opening (treating it as one and adding Σtxns double-counts; §5).
 //
-// `kind` is a TOLERANT string, never an enum: an unknown future kind must not
-// reject the row — only `opening_anchor` is matched. A real degraded export
-// (the user's) omits `kind` entirely; the orchestrator detects that globally
-// (`bundleHasValuationKind`) and falls back to the earliest-by-date heuristic
-// (§5). `account_id` is REQUIRED — every opening decision groups by it.
+// `kind` is a TOLERANT string, never an enum, and is PROVENANCE-ONLY as of
+// ADR-0043/PER-176: the migration writes every valuation as its own
+// `type="reconciliation"` anchor regardless of Sure's own `kind` — the balance
+// calculator's anchor chain (not a single "best" pick) reproduces Sure's
+// forward-calculator. `account_id` is REQUIRED — every anchor write groups by it.
 export const sureValuationSchema = z.object({
   account_id: z.string().min(1),
   amount: sureDecimalSchema,
@@ -304,23 +304,6 @@ export function parseSureBundle(content: string): ParsedSureBundle {
   return bundle
 }
 
-/**
- * Does this bundle "speak `kind`"? True when ANY valuation row carries a
- * non-empty (trimmed) `kind`. This is a GLOBAL, per-bundle signal — a real v2
- * export writes `kind` on every valuation, a degraded export omits it entirely,
- * so the two never mix in practice. When true, `kind` is authoritative for the
- * whole bundle: an account with no `opening_anchor` is a gap (0), NEVER guessed
- * via the date heuristic (ADR-0041 §5). A serialized empty string (`kind: ""`)
- * counts as absent, so a stray blank never flips a degraded export into kind-mode.
- */
-export function bundleHasValuationKind(
-  valuations: readonly SureValuation[]
-): boolean {
-  return valuations.some(
-    (v) => typeof v.kind === "string" && v.kind.trim() !== ""
-  )
-}
-
 // ---------------------------------------------------------------------------
 // Account type normalization (Sure accountable_type → Permoney taxonomy §2)
 // ---------------------------------------------------------------------------
@@ -338,11 +321,17 @@ interface SureAccountTypeRule {
   defaultSubtype: string
 }
 
-// ADR-0041 §2. `accountClass` + `balanceSource` are derived downstream by
-// `normalizeAccountTaxonomy` (pure function of `accountType`) so they can NEVER
-// drift from Sure-copied values. Investment is transaction_flow in the taxonomy
-// but HELD in Phase 1 (its meaningful postings are Trades/Holdings, PER-150);
-// PreciousMetal/OtherAsset are valuation-driven TRACKED_ASSET (PER-146).
+// ADR-0041 §2 (Amended 2026-07-04, PER-176). `accountClass` + `balanceSource`
+// are derived downstream by `normalizeAccountTaxonomy` (pure function of
+// `accountType`) so they can NEVER drift from Sure-copied values. Investment
+// is transaction_flow and now IMPORTABLE like any other transaction_flow
+// account: under ADR-0043's reconciliation-anchor calculator, its balance is
+// derived from the Sure-sourced anchor + Σ(post-anchor flow), the same as
+// cash — promoting its standard transactions/transfers is safe and correct.
+// (Lot-level Trades/Holdings remain a separate concern, PER-150.)
+// PreciousMetal/OtherAsset stay valuation-driven TRACKED_ASSET (PER-146),
+// held regardless of this flag since the promotion gate checks
+// `balanceSource === "transaction_flow"`.
 const SURE_ACCOUNT_TYPE_RULES: Record<string, SureAccountTypeRule> = {
   Depository: {
     accountType: "DEPOSITORY",
@@ -366,7 +355,7 @@ const SURE_ACCOUNT_TYPE_RULES: Record<string, SureAccountTypeRule> = {
   },
   Investment: {
     accountType: "INVESTMENT",
-    isImportable: false,
+    isImportable: true,
     subtypeMap: {
       mutual_fund: "mutual_fund",
       cooperative_share: "cooperative_share",

@@ -14,21 +14,23 @@
 // We NEVER commit a real export — it carries PII (ADR-0041 §11). The values
 // below are fabricated; only the SHAPE is real.
 //
-// Opening balances come from `Valuation` (PER-174, ADR-0041 §5): the two
-// fixtures deliberately carry the two opening MODES.
-//   * `buildSureBundleV2Complete` — a real v2 export that "speaks `kind`": an
-//     importable IDR depository whose `opening_anchor` valuation drives its
-//     opening; a `current_anchor` valuation (on checking AND on the USD account)
-//     to prove it is NEVER used as opening; a held investment account; the full
-//     transaction taxonomy (promotable expense + income, zero-amount,
-//     non-importable account, non-standard `kind`, currency mismatch); and a few
-//     real unmapped entities (Budget/BudgetCategory/Tag) counted as ignored.
-//     Opening provenance: checking→anchor, usd+invest→gap(0).
-//   * `buildSureBundleV1Degraded` — a degraded export with NO `kind`: the date
-//     heuristic applies. `wallet` (unknown `accountable_type`→depository
-//     fallback) has a valuation strictly before its first posting txn → opening
-//     from the earliest valuation; `savings` has a mid-history valuation (after
-//     its posting txn) → gap (0). Plus an orphan category and malformed lines the
+// Every valuation becomes its own `type="reconciliation"` anchor now (ADR-0043
+// §5, PER-176) — Sure's own `kind` is provenance-only, never opening-mode
+// routing. `computeCanonicalBalance` derives balance = latest anchor + Σ(flow
+// strictly after it).
+//   * `buildSureBundleV2Complete` — a real v2 export: an importable IDR
+//     depository with TWO anchors (checking — proves the anchor CHAIN, not a
+//     single "opening" pick); a USD account with only a `current_anchor`
+//     (still a full anchor, no longer a "gap"); an Investment account (now
+//     importable, ADR-0043 §3) with its own anchor + a promoted standard txn;
+//     the full transaction taxonomy (promotable expense + income, zero-amount,
+//     non-standard `kind`, currency mismatch); and a few real unmapped
+//     entities (Budget/BudgetCategory/Tag) counted as ignored.
+//   * `buildSureBundleV1Degraded` — a degraded export with no `kind` anywhere
+//     (irrelevant under ADR-0043): `wallet`'s anchor precedes its posting txn;
+//     `savings`'s anchor is dated AFTER its posting txn — the MANDATORY
+//     anchor-chain double-count guard (the anchor absorbs the pre-anchor flow,
+//     it is not summed again). Plus an orphan category and malformed lines the
 //     parser must reject without aborting.
 // Promotable transactions keep each ASSET account's net balance >= 0
 // (`account_normal_balance_sign` CHECK).
@@ -58,18 +60,17 @@ export interface SureBundleManifest {
     malformedLines: number
     /** Real v2 entities the reader does not map to typed rows this phase. */
     ignoredEntities: Record<string, number>
-    /** Whether the bundle "speaks `kind`" (real v2) — drives the opening mode. */
-    bundleHasKind: boolean
     /** Typed Valuation rows parsed (no longer ignored). */
     valuationsParsed: number
     /**
-     * Opening provenance for ASSET transaction_flow accounts CREATED this run.
-     * Invariant: the three buckets sum to that account count (ADR-0041 §5).
+     * Reconciliation-anchor valuations written this run (ADR-0043 §5,
+     * PER-176). `anchorsWritten` counts every Sure valuation written as its
+     * own `type="reconciliation"` Valuation row; `negativeSkipped` counts
+     * negative-amount valuations skipped (never `abs()`'d).
      */
-    openingBalances: {
-      fromOpeningAnchor: number
-      fromDateHeuristic: number
-      gapZero: number
+    valuations: {
+      anchorsWritten: number
+      negativeSkipped: number
     }
   }
   /** Opening balance (minor units) the PRIMARY importable depository is created with. */
@@ -168,8 +169,9 @@ export function buildSureBundleV2Complete(): SureBundleManifest {
       created_at: "2026-03-01T00:00:00Z",
       updated_at: "2026-03-01T00:00:00Z",
     }),
-    // usd: only a `current_anchor`, no `opening_anchor` → opening is a gap (0),
-    // proving end-to-end that a non-opening valuation never seeds the opening.
+    // usd: only a `current_anchor` — under ADR-0043/PER-176, Sure's `kind` is
+    // provenance-only; EVERY valuation becomes its own reconciliation anchor,
+    // so this one anchors usd's balance just the same as an `opening_anchor` would.
     envelope("Valuation", {
       id: "sure-val-usd-current",
       account_id: ids.usd,
@@ -181,6 +183,22 @@ export function buildSureBundleV2Complete(): SureBundleManifest {
       date: "2026-02-01",
       created_at: "2026-02-01T00:00:00Z",
       updated_at: "2026-02-01T00:00:00Z",
+    }),
+    // invest: an anchor BEFORE its one standard transaction (real-world shape —
+    // real Investment accounts always carry a Sure valuation, PER-176 grill Q3).
+    // Also proves an Investment account promotes + anchors exactly like any
+    // other transaction_flow account now that isImportable=true (ADR-0043 §3).
+    envelope("Valuation", {
+      id: "sure-val-invest-open",
+      account_id: ids.invest,
+      entry_id: "sure-entry-val-invest",
+      name: "Opening balance",
+      kind: "opening_anchor",
+      amount: "2000000.0",
+      currency: "IDR",
+      date: "2026-01-01",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
     }),
     // --- Categories (child before parent to exercise the reorder) ---------
     envelope("Category", {
@@ -291,7 +309,9 @@ export function buildSureBundleV2Complete(): SureBundleManifest {
       created_at: "2026-06-16T00:00:00Z",
       updated_at: "2026-06-16T00:00:00Z",
     }),
-    // Held: account not importable (Investment).
+    // Promotable standard txn on the Investment account (ADR-0043 §3 / PER-176:
+    // Investment is importable now — id kept as `txnHeldInvest` for fixture
+    // continuity, but this row PROMOTES, it does not hold).
     envelope("Transaction", {
       id: ids.txnHeldInvest,
       account_id: ids.invest,
@@ -384,27 +404,31 @@ export function buildSureBundleV2Complete(): SureBundleManifest {
       merchantsCreated: 2,
       transactionsTotal: 6,
       staged: 5, // all 6 minus the zero-amount row
-      promotedThisRun: 2, // expense + income on the importable IDR depository
-      // STANDARD held only (ADR-0042): invest + currency mismatch. The
-      // `funds_movement` leg is now owned by the `transfers` block (it pairs to
-      // nothing → unpaired_orphan), so it leaves `transactions.held`.
-      held: 2,
+      // ADR-0043/PER-176: Investment is importable now, so its standard txn
+      // promotes alongside the depository's expense + income.
+      promotedThisRun: 3,
+      // STANDARD held only (ADR-0042): currency mismatch. The `funds_movement`
+      // leg is now owned by the `transfers` block (pairs to nothing →
+      // unpaired_orphan), so it leaves `transactions.held`.
+      held: 1,
       zeroAmountSkipped: 1,
       malformedLines: 0,
-      // Valuation is now a typed sink (opening source), no longer ignored.
+      // Valuation is now a typed sink (anchor source), no longer ignored.
       ignoredEntities: { Budget: 1, BudgetCategory: 1, Tag: 1 },
-      bundleHasKind: true,
-      valuationsParsed: 3,
-      // 3 ASSET transaction_flow accounts created: checking→anchor,
-      // usd (current_anchor only)→gap, invest (no valuation)→gap.
-      openingBalances: {
-        fromOpeningAnchor: 1,
-        fromDateHeuristic: 0,
-        gapZero: 2,
+      valuationsParsed: 4,
+      // All 4 valuations are non-negative → all written as reconciliation
+      // anchors (ADR-0043 §5); zero skipped.
+      valuations: {
+        anchorsWritten: 4,
+        negativeSkipped: 0,
       },
     },
-    // checking's `opening_anchor` 100000.0 → 10_000_000 minor (IDR, 2 digits).
-    openingBalanceMinor: 10_000_000n,
+    // checking's LATEST anchor as of any date >= 2026-03-01 is the
+    // `current_anchor` 250000.0 (Sure's `kind` is provenance-only under
+    // ADR-0043 — every valuation is an anchor), NOT the earlier opening_anchor
+    // 100000.0. This is the anchor-CHAIN behavior the old opening-anchor-only
+    // model didn't have.
+    openingBalanceMinor: 25_000_000n,
     // Sure "17000.0" → expense, ledger −1_700_000 minor (IDR has 2 minor digits).
     promotableExpenseMinor: -1_700_000n,
     // Sure "-50000.0" → income, ledger +5_000_000 minor.
@@ -477,8 +501,10 @@ export function buildSureBundleV1Degraded(): SureBundleManifest {
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
     }),
-    // savings: valuation (2026-06-01) falls AFTER its posting txn (2026-04-01) →
-    // mid-history → gap (0): using it would double-count the promoted flow.
+    // savings: valuation (2026-06-01) falls AFTER its posting txn (2026-04-01).
+    // Under ADR-0043 this is exactly the anchor-chain double-count guard: the
+    // anchor ABSORBS the pre-anchor txn (it is not summed again) — final
+    // balance is the anchor value alone, not anchor + all flow.
     envelope("Valuation", {
       id: "sure-val-savings",
       account_id: ids.savings,
@@ -547,16 +573,14 @@ export function buildSureBundleV1Degraded(): SureBundleManifest {
       zeroAmountSkipped: 0,
       malformedLines: 2,
       ignoredEntities: {},
-      bundleHasKind: false,
       valuationsParsed: 2,
-      // 2 ASSET transaction_flow accounts created: wallet→heuristic, savings→gap.
-      openingBalances: {
-        fromOpeningAnchor: 0,
-        fromDateHeuristic: 1,
-        gapZero: 1,
+      // Both valuations are non-negative → both written as anchors.
+      valuations: {
+        anchorsWritten: 2,
+        negativeSkipped: 0,
       },
     },
-    // wallet's earliest valuation "50000.0" → 5_000_000 minor (date heuristic).
+    // wallet's sole valuation "50000.0" → 5_000_000 minor anchor.
     openingBalanceMinor: 5_000_000n,
     promotableExpenseMinor: 0n, // no promotable expense in the degraded bundle
     // Sure "-12345.0" → wallet income, ledger +1_234_500 minor.
@@ -915,11 +939,20 @@ export function buildSureBundleV1DegradedTransfers(): SureTransferFixture {
     sureAccount(accountIds.loan, "KTA Loan", "Loan", "personal_loan"),
     sureAccount(accountIds.invest, "Bibit", "Investment", "mutual_fund"),
     sureAccount(accountIds.cash, "Cash", "Depository", "checking"),
-    // Valuations WITHOUT `kind` (degraded → date heuristic). Sources that POST a
-    // transfer get an early valuation (strictly before → opening); Nikah's is
-    // AFTER its inbound transfer (the double-count trap).
+    // Valuations WITHOUT `kind` — irrelevant under ADR-0043 (kind is
+    // provenance-only). Every valuation here becomes its own reconciliation
+    // anchor; Nikah's is dated AFTER its inbound transfer (the anchor-chain
+    // double-count guard — the anchor absorbs the pre-anchor transfer flow).
     sureVal({
       accountId: accountIds.main,
+      amount: "50000.0",
+      date: "2026-01-01",
+    }),
+    // invest needs an anchor (real-world shape, PER-176 grill Q3): without one
+    // its promoted outflow leg below would drive an ASSET account negative and
+    // violate the balance-sign CHECK.
+    sureVal({
+      accountId: accountIds.invest,
       amount: "50000.0",
       date: "2026-01-01",
     }),
@@ -1044,8 +1077,10 @@ export function buildSureBundleV1DegradedTransfers(): SureTransferFixture {
       name: "Transfer from KTA Loan",
       date: "2026-05-05",
     }),
-    // non_importable: an Investment-SOURCED transfer → HELD (its real postings are
-    // Trades/Holdings, deferred).
+    // PER-176 grill Q3: Investment is importable now (ADR-0043 §3), so this
+    // Investment-sourced leg PROMOTES like any transaction_flow account —
+    // it is no longer held for `non_importable`. Kept the `ni` id prefix for
+    // fixture continuity.
     sureTxn({
       id: legIds.niOut,
       accountId: accountIds.invest,
@@ -1076,7 +1111,6 @@ export function buildSureBundleV1DegradedTransfers(): SureTransferFixture {
   const held = emptyHeld()
   held.ambiguous_cluster = 4
   held.kind_divergence = 2
-  held.non_importable = 2
   held.unpaired_orphan = 1
 
   return {
@@ -1087,24 +1121,125 @@ export function buildSureBundleV1DegradedTransfers(): SureTransferFixture {
       accountsCreated: 9,
       transferLegsSeen: 15,
       transferLegsStaged: 15,
-      pairsPromotedThisRun: 3,
-      legsPromotedTotal: 6,
-      pairedByTier: { deterministic: 0, clean: 1, resolvedCluster: 2 },
+      // PER-176: the invest<->cash pair (`ni`) now promotes (Tier-1 clean —
+      // unique amount/date/currency), since Investment is importable.
+      pairsPromotedThisRun: 4,
+      legsPromotedTotal: 8,
+      pairedByTier: { deterministic: 0, clean: 2, resolvedCluster: 2 },
       heldLegsByReason: held,
     },
     balancesMinor: {
-      // 5_000_000 open (earliest val strictly before) − 3_700_000 (clean out).
+      // 5_000_000 anchor − 3_700_000 (clean out).
       main: 1_300_000n,
-      // gap(0) + 3_700_000 (clean in) — the double-count fix: NOT 7_400_000.
+      // Anchor-chain double-count guard: nikah's anchor (3_700_000, dated
+      // AFTER the inbound transfer) absorbs that transfer — final balance is
+      // the anchor value alone, NOT anchor + the transfer again (7_400_000).
       nikah: 3_700_000n,
-      // 3_000_000 open − 1_200_000 (resolved out); amb leg HELD.
+      // 3_000_000 anchor − 1_200_000 (resolved out); amb leg HELD.
       wallet: 1_800_000n,
       dana: 1_800_000n,
       gopay: 1_200_000n, // 0 + 1_200_000 (resolved in)
       ovo: 1_200_000n,
       loan: 0n, // kd leg HELD, never posted
-      invest: 0n, // ni leg HELD
-      cash: 0n, // all Cash legs HELD (kd in, ni in, orphan)
+      // PER-176 grill Q8 #8: invest<->cash transfer with anchors/no-anchor on
+      // each side both promote dual-leg, and each account's OWN calculator
+      // independently derives its balance — zero special-case code needed.
+      // invest: anchor 5_000_000 - 1_800_000 (ni out, promoted).
+      invest: 3_200_000n,
+      // cash: no anchor, so balance = Σ(promoted flow) = +1_800_000 (ni in);
+      // kd-in and orphan stay held, contributing nothing.
+      cash: 1_800_000n,
+    },
+  }
+}
+
+// ===========================================================================
+// PER-176 grill Q8 #3 / #5 — anchor edge cases: negative-valuation skip, and a
+// TRACKED_ASSET (valuation-sourced) account proven untouched by the anchor
+// rewrite (its held transaction never posts; balance stays latest-valuation-only).
+// ===========================================================================
+
+export interface SureAnchorEdgeCaseFixture {
+  ndjson: string
+  accountIds: { tracked: string; cash: string }
+  expected: {
+    valuationsParsed: number
+    valuations: { anchorsWritten: number; negativeSkipped: number }
+  }
+  balancesMinor: { tracked: bigint; cash: bigint }
+}
+
+export function buildSureBundleAnchorEdgeCases(): SureAnchorEdgeCaseFixture {
+  const accountIds = {
+    tracked: "sure-acc-edge-tracked",
+    cash: "sure-acc-edge-cash",
+  }
+
+  const lines = [
+    // TRACKED_ASSET (OtherAsset → valuation-sourced, held regardless of
+    // isImportable). Its balance must stay latest-valuation-only.
+    sureAccount(
+      accountIds.tracked,
+      "Grandma's Ring",
+      "OtherAsset",
+      "generic_asset"
+    ),
+    sureAccount(accountIds.cash, "Edge Checking", "Depository", "checking"),
+    sureVal({
+      accountId: accountIds.tracked,
+      amount: "75000.0",
+      date: "2026-01-01",
+    }),
+    // Held: TRACKED_ASSET's standard txn never posts (balanceSource=valuation
+    // gates isPromotable regardless of isImportable) — proves this path is
+    // untouched by the Investment-importable flip.
+    sureTxn({
+      id: "sure-txn-edge-tracked-held",
+      accountId: accountIds.tracked,
+      amount: "10000.0",
+      kind: "standard",
+      name: "Appraisal note (never posts)",
+      date: "2026-02-01",
+    }),
+    // cash: a valid anchor, then a NEGATIVE valuation that must be SKIPPED
+    // (never abs()'d), then a promotable txn strictly after the valid anchor.
+    sureVal({
+      accountId: accountIds.cash,
+      amount: "20000.0",
+      date: "2026-01-01",
+    }),
+    sureVal({
+      accountId: accountIds.cash,
+      amount: "-5000.0",
+      date: "2026-02-01",
+    }),
+    sureTxn({
+      id: "sure-txn-edge-cash-income",
+      accountId: accountIds.cash,
+      amount: "-3000.0", // Sure NEGATIVE → income, ledger +300_000
+      kind: "standard",
+      name: "Refund",
+      date: "2026-03-01",
+    }),
+  ]
+
+  return {
+    ndjson: lines.join("\n"),
+    accountIds,
+    expected: {
+      valuationsParsed: 3,
+      // The negative valuation is skipped, not abs()'d — only 2 anchors write.
+      valuations: { anchorsWritten: 2, negativeSkipped: 1 },
+    },
+    balancesMinor: {
+      // Latest (only) valuation, 75000.0 IDR → 7_500_000 minor; the held txn
+      // never posts, so this is untouched by anything downstream.
+      tracked: 7_500_000n,
+      // If the negative valuation had been abs()'d instead of skipped, this
+      // would incorrectly be 500_000 + 300_000 = 800_000. Skipping it leaves
+      // the 2026-01-01 anchor (2_000_000) as the effective anchor:
+      // 2_000_000 + 300_000 (income after it) = 2_300_000.
+      cash: 2_300_000n,
     },
   }
 }

@@ -41,8 +41,10 @@ test.describe("Sure guided migration", () => {
     // Every bucket reconciles back to the file total — no unexplained gap.
     await expect(page.getByText(/transactions in this file/)).toBeVisible()
 
-    // 4. Confirm: only the 2 promotable standard rows import.
-    await page.getByRole("button", { name: /Import 2 transactions/ }).click()
+    // 4. Confirm: the 3 promotable standard rows import (expense + income on
+    // the depository, plus the Investment account's standard txn — ADR-0043
+    // §3 / PER-176 made Investment importable).
+    await page.getByRole("button", { name: /Import 3 transactions/ }).click()
 
     // 5. Done screen reports the authoritative result and a manual navigate.
     await expect(page.getByText("Migration complete")).toBeVisible()
@@ -61,8 +63,13 @@ test.describe("Sure guided migration", () => {
       mimeType: "application/x-ndjson",
       buffer: Buffer.from(bundle.ndjson),
     })
-    await page.getByRole("button", { name: /Import 2 transactions/ }).click()
-    await expect(page.getByText("Already imported")).toBeVisible()
+    await page.getByRole("button", { name: /Import 3 transactions/ }).click()
+    // Scoped to the Done screen's card title: a toast with overlapping text
+    // ("Already imported — nothing was duplicated.") can be visible at the
+    // same time, and `getByText` alone is ambiguous between the two.
+    await expect(
+      page.locator('[data-slot="card-title"]', { hasText: "Already imported" })
+    ).toBeVisible()
 
     // The ledger still holds exactly one of each promoted row (no duplicate).
     await page.goto("/transactions")

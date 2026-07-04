@@ -2,7 +2,6 @@ import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
 import type { CurrencyCode } from "../lib/data/currencies"
 import {
-  bundleHasValuationKind,
   classifySureAmount,
   normalizeSureAccountType,
   orderCategoriesParentsFirst,
@@ -36,6 +35,7 @@ import {
 } from "./middleware/with-family"
 import type { RunInTenantTransaction } from "./mutation-kit"
 import { createTransactionForFamily, createdAuditEntries } from "./transactions"
+import { createValuationForFamily, rebuildFamilyBalances } from "./valuations"
 
 // ============================================================================
 // PER-170 / ADR-0041 — Sure full-family migration (Phase 1), orchestration.
@@ -90,19 +90,17 @@ export interface SureMigrationResult {
     zeroAmountSkipped: number
     invalidDateSkipped: number
   }
-  // Opening-balance provenance for the accounts CREATED this run (ADR-0041 §5).
-  // The buckets close over exactly the ASSET `transaction_flow` accounts created
-  // this run: `fromOpeningAnchor + fromDateHeuristic + gapZero` === that count.
-  // Reused and non-cash accounts are excluded (their opening is 0 by definition,
-  // not an unreconciled gap).
-  openingBalances: {
-    fromOpeningAnchor: number
-    fromDateHeuristic: number
-    gapZero: number
+  // Reconciliation-anchor valuations written this run (ADR-0043 §5, PER-176).
+  // `anchorsWritten` counts every Sure valuation successfully written as a
+  // `type="reconciliation"` Valuation row (re-runs replay via the content-derived
+  // idempotency key, not double-counted here since `createValuationForFamily`
+  // returns the same row). `negativeSkipped` counts valuations skipped because
+  // their amount was negative (never `abs()`'d — a defensive path, zero
+  // occurrences verified against the real export).
+  valuations: {
+    anchorsWritten: number
+    negativeSkipped: number
   }
-  // True when the bundle "speaks `kind`" (a real v2 export); false for a degraded
-  // export. Tells the reviewer at a glance which opening path the whole bundle took.
-  bundleHasKind: boolean
   valuationsParsed: number
   malformedLines: number
   ignoredEntities: Record<string, number>
@@ -175,180 +173,120 @@ async function gzipBytes(
 }
 
 // ---------------------------------------------------------------------------
-// Account opening balance (ADR-0041 §5 — transfer-independent, additive)
+// Reconciliation-anchor valuations (ADR-0043 §5 / ADR-0041 §5, PER-176)
 //
-// Source of truth: a Sure `Valuation` (a point-in-time TOTAL account-value
-// anchor), NOT `Balance` (absent from real exports — PER-174). Two modes,
-// selected by whether the bundle "speaks `kind`":
+// Superseded design note: Phase-1/PER-174 picked ONE "best" valuation per
+// account (kind-authoritative `opening_anchor`, or a date heuristic) to seed
+// `Account.balance` directly. That entire subsystem is retired now that the
+// balance CALCULATOR (ADR-0043) is anchor-aware: migration no longer decides
+// or computes a balance at all — it writes every Sure valuation as its own
+// `type="reconciliation"` anchor row (Sure's own `kind` becomes provenance-only,
+// never routing logic) and lets `computeCanonicalBalance` derive the correct
+// balance from the anchor chain + post-anchor flow. This reproduces Sure's own
+// forward-calculator exactly, for cash AND investment accounts alike.
 //
-//   * kind present (real v2 export) — AUTHORITATIVE: the `opening_anchor`
-//     valuation's amount is Sure's own declared opening (pre-transaction value).
-//     No `opening_anchor` for an account ⇒ gap (0), NEVER the date heuristic:
-//     a `current_anchor`/`reconciliation` is a mid/end snapshot whose amount
-//     already embeds the very flows we promote, so using it double-counts.
-//   * kind absent (degraded export) — date heuristic. When posting txns exist:
-//     the EARLIEST valid-dated valuation, used only when STRICTLY before the
-//     first posting txn (Sure's forward calculator lets a valuation OVERRIDE
-//     same-date flows, so a same-date/mid-history valuation already embeds
-//     promoted flows ⇒ gap). When NOTHING posts (held-transfer-only account):
-//     the LATEST valid-dated valuation — best known current value, no flow is
-//     added on top so no double-count; earliest would discard known movement.
+// Writes go through the canonical `createValuationForFamily` (no new ledger
+// writer — same discipline PER-175 applied to transfers), so every anchor gets
+// FX base-projection, audit, and idempotency for free. A negative Sure amount
+// is SKIPPED + counted as an anomaly, never `abs()`'d: `createValuationForFamily`
+// signs a non-negative magnitude by the account's `accountClass`, so silently
+// flipping a negative would mask a real export sign anomaly (defensive path —
+// verified zero occurrences in the real bundle).
 //
-// Never plugs `Sure.balance − Σ(txns)` (§5 forbidden — double-counts deferred
-// transfers). Negative opening on an ASSET violates the balance-sign CHECK ⇒
-// gap (0), never a plug. Applied ONCE at creation (re-run reuses the account and
-// never re-applies). Non-cash / non-ASSET shells stay neutral (0, untallied).
+// Idempotency key: a content-derived pseudo-UUIDv7 (SHA-256 of account + day +
+// amount + currency, reshaped into the version/variant nibbles `uuidV7Schema`
+// requires — it is a dedup TOKEN for `IdempotencyRecord`, never a real
+// timestamp or an ordering key; the calculator's own tie-break is
+// `valuationDate DESC, createdAt DESC, id DESC`). A re-run recomputes the
+// identical key and replays through `createValuationForFamily`'s own
+// endpoint-idempotency contract instead of duplicating an anchor — no separate
+// find-before-create guard needed. Verified against the real export: zero
+// `(account, day)` pairs carry more than one valuation, so this key never
+// collapses two distinct anchors (it only collapses byte-identical repeats,
+// which is correct to dedup). Forward-guard for a future bundle that DOES have
+// same-day multiple valuations: write them in Sure's own source/file order so
+// the last-written naturally wins the calculator's tie-break, matching Sure's
+// own last-wins semantics — not built here since no real bundle exercises it.
 // ---------------------------------------------------------------------------
 
-export type OpeningBalanceSource = "opening_anchor" | "date_heuristic" | "gap"
-
-export interface OpeningBalanceDecision {
-  minor: bigint
-  source: OpeningBalanceSource
-}
-
-/**
- * Decide a newly-created account's opening balance from the bundle's valuations.
- * Pure and exported so the full edge matrix is unit-tested without a database.
- * `earliestPromotedTxnDate` is the `YYYY-MM-DD` of the first row that will POST
- * a balance delta this run (see {@link willPostThisRun}) for this account, or
- * `null` when none will post.
- */
-export function decideOpeningBalance(
-  account: { accountClass: string; balanceSource: string; currency: string },
-  sureAccountId: string,
-  valuations: readonly SureValuation[],
-  opts: { bundleHasKind: boolean; earliestPromotedTxnDate: string | null }
-): OpeningBalanceDecision {
-  if (
-    account.accountClass !== "ASSET" ||
-    account.balanceSource !== "transaction_flow"
-  ) {
-    return { minor: 0n, source: "gap" }
-  }
-  const forAccount = valuations.filter((v) => v.account_id === sureAccountId)
-
-  if (opts.bundleHasKind) {
-    const anchor = forAccount.find((v) => v.kind?.trim() === "opening_anchor")
-    if (!anchor) return { minor: 0n, source: "gap" }
-    return assetOpening(anchor.amount, account.currency, "opening_anchor")
-  }
-
-  // Degraded export (no `kind`): pick the anchoring valuation by date.
-  const dated = forAccount
-    .filter((v) => !Number.isNaN(new Date(v.date).getTime()))
-    .map((v) => ({ valuation: v, day: v.date.slice(0, 10) }))
-    .sort((a, b) => a.day.localeCompare(b.day))
-  if (dated.length === 0) return { minor: 0n, source: "gap" }
-
-  if (opts.earliestPromotedTxnDate === null) {
-    // Nothing posts this run (real case: an account whose activity is entirely
-    // held transfers). final balance = opening + 0, so the LATEST valuation is
-    // the best known current value with ZERO double-count risk — nothing is
-    // added on top. The earliest would discard every known movement and
-    // understate (verified on a real export: 14/35 accounts hit this branch).
-    const latest = dated[dated.length - 1]
-    return latest
-      ? assetOpening(
-          latest.valuation.amount,
-          account.currency,
-          "date_heuristic"
-        )
-      : { minor: 0n, source: "gap" }
-  }
-
-  // Posting rows exist → opening must precede the first one. Use the EARLIEST
-  // valuation, and only when it is STRICTLY before that first posting txn: on or
-  // after it, the valuation overrides a promoted flow (Sure's forward
-  // calculator) ⇒ double-count ⇒ gap. (latest here could post-date a flow.)
-  const earliest = dated[0]
-  if (!earliest || !(earliest.day < opts.earliestPromotedTxnDate)) {
-    return { minor: 0n, source: "gap" }
-  }
-  return assetOpening(
-    earliest.valuation.amount,
-    account.currency,
-    "date_heuristic"
-  )
-}
-
-// Convert a Sure decimal amount to minor units for an ASSET opening. A negative
-// result would violate the balance-sign CHECK ⇒ gap (0), never a plug.
-function assetOpening(
+async function deriveValuationIdempotencyKey(
+  externalAccountId: string,
+  day: string,
   amount: string,
-  currency: string,
-  source: Exclude<OpeningBalanceSource, "gap">
-): OpeningBalanceDecision {
-  const minor = toMinorUnits(amount, currency as CurrencyCode) as bigint
-  return minor >= 0n ? { minor, source } : { minor: 0n, source: "gap" }
-}
-
-/**
- * Will this Sure transaction POST a balance delta this run? The SINGLE posting
- * predicate, reused by the opening-balance pre-scan and conceptually equal to
- * the orchestrator's stage→promote decision (a staged row is promotable iff it
- * passed the same valid-date + non-zero gates, then {@link isPromotable}). One
- * predicate so the heuristic's `earliestPromotedTxnDate` can NEVER drift from
- * what actually promotes (PER-173 parity lesson). Exported for the parity test.
- */
-export function willPostThisRun(
-  txn: SureTransaction,
-  account: PermoneyAccountInfo
-): boolean {
-  if (Number.isNaN(new Date(txn.date).getTime())) return false
-  const { isZeroAmount } = classifySureAmount(
-    txn.amount,
-    account.currency as CurrencyCode
-  )
-  if (isZeroAmount) return false
-  return isPromotable(txn, account)
-}
-
-/**
- * Per Sure-account `YYYY-MM-DD` of the earliest transaction that will post a
- * balance delta this run. Account info is derived purely from the Sure taxonomy
- * (no DB) so the pre-scan can run before any account row exists.
- *
- * ADR-0042 amends ADR-0041 §5: a row "posts" if it is a standard promotable row
- * ({@link willPostThisRun}) OR a transfer leg in a PROMOTABLE pair
- * (`promotableTransferLegIds`, computed by the SAME pure pairing the promotion
- * step uses — `gateSet === promoteSet`). Without this, a held-transfer-only
- * account would keep PER-174's "nothing posts → latest valuation" opening (≈ its
- * current value, already embedding the transfers); promoting the transfers on top
- * would DOUBLE-COUNT. Including them flips the account to "posting exists" →
- * opening = earliest valuation strictly before the first posting (or gap), and the
- * transfer flows post on top correctly.
- */
-function earliestPromotedDateBySureAccount(
-  bundle: ReturnType<typeof parseSureBundle>,
-  promotableTransferLegIds: ReadonlySet<string>
-): Map<string, string> {
-  const sureAccountById = new Map(bundle.accounts.map((a) => [a.id, a]))
-  const earliest = new Map<string, string>()
-  for (const txn of bundle.transactions) {
-    const sureAccount = sureAccountById.get(txn.account_id)
-    if (!sureAccount) continue
-    const taxonomy = normalizeSureAccountType(
-      sureAccount.accountable_type,
-      sureAccount.subtype
+  currency: string
+): Promise<string> {
+  const hex = await sha256Hex(
+    new TextEncoder().encode(
+      `sure-valuation:${externalAccountId}:${day}:${amount}:${currency}`
     )
-    const info: PermoneyAccountInfo = {
-      id: sureAccount.id,
-      currency: sureAccount.currency,
-      isImportable: taxonomy.isImportable,
-      balanceSource: taxonomy.balanceSource,
+  )
+  const h = hex.padEnd(32, "0").slice(0, 32)
+  const variantNibble = "89ab"[parseInt(h[16] ?? "0", 16) % 4]
+  return [
+    h.slice(0, 8),
+    h.slice(8, 12),
+    `7${h.slice(13, 16)}`,
+    `${variantNibble}${h.slice(17, 20)}`,
+    h.slice(20, 32),
+  ].join("-")
+}
+
+interface SureValuationAnchorSummary {
+  anchorsWritten: number
+  negativeSkipped: number
+}
+
+async function writeSureValuationAnchors(
+  valuations: readonly SureValuation[],
+  accountMap: ReadonlyMap<string, string>,
+  familyId: string,
+  user: { id: string; familyId?: string | null },
+  runInTenantTransaction: RunInTenantTransaction
+): Promise<SureValuationAnchorSummary> {
+  let anchorsWritten = 0
+  let negativeSkipped = 0
+
+  for (const valuation of valuations) {
+    const permoneyAccountId = accountMap.get(valuation.account_id)
+    if (!permoneyAccountId) continue // unmappable — shell missing (shouldn't happen)
+
+    const date = new Date(valuation.date)
+    if (Number.isNaN(date.getTime())) continue // unparseable date — skip, never rejects the bundle
+
+    const minor = toMinorUnits(
+      valuation.amount,
+      valuation.currency as CurrencyCode
+    ) as bigint
+    if (minor < 0n) {
+      negativeSkipped += 1
+      continue
     }
-    const posts =
-      willPostThisRun(txn, info) || promotableTransferLegIds.has(txn.id)
-    if (!posts) continue
-    // A transfer leg posts a balance delta even though its date may be invalid
-    // for the standard predicate; guard so the bucket key stays a valid day.
-    if (Number.isNaN(new Date(txn.date).getTime())) continue
-    const day = txn.date.slice(0, 10)
-    const prev = earliest.get(txn.account_id)
-    if (prev === undefined || day < prev) earliest.set(txn.account_id, day)
+
+    const idempotencyKey = await deriveValuationIdempotencyKey(
+      valuation.account_id,
+      valuation.date.slice(0, 10),
+      valuation.amount,
+      valuation.currency
+    )
+
+    await createValuationForFamily({
+      data: {
+        accountId: permoneyAccountId,
+        value: minor.toString(),
+        currency: valuation.currency,
+        valuationDate: date,
+        type: "reconciliation",
+        source: "migration:sure",
+        idempotencyKey,
+      },
+      familyId,
+      user,
+      runInTenantTransaction,
+    })
+    anchorsWritten += 1
   }
-  return earliest
+
+  return { anchorsWritten, negativeSkipped }
 }
 
 // ---------------------------------------------------------------------------
@@ -454,17 +392,11 @@ export async function runSureMigrationForFamily({
   const auditCtx = await createAuditContext({ user })
 
   const bundle = parseSureBundle(data.bundle)
-  // Opening-balance inputs, computed once (ADR-0041 §5). `bundleHasKind` selects
-  // the whole bundle's opening mode; `earliestPromotedDate` is the per-account
-  // anchor the degraded date-heuristic compares against — derived from the SAME
-  // posting predicate the promotion path uses (no drift).
-  const bundleHasKind = bundleHasValuationKind(bundle.valuations)
 
   // Transfer pairing is computed PURELY and UP-FRONT (ADR-0042): the promotable
-  // pairs feed BOTH the opening-balance pre-scan (a transfer-touched account now
-  // "posts", so its opening must precede the first transfer — ADR-0041 §5 as
-  // amended by ADR-0042) AND the later promotion step. ONE analysis means the
-  // opening pre-scan can never disagree with what actually promotes.
+  // pairs feed the later promotion step. `promotableTransferLegIds` is no longer
+  // consumed by any opening-balance pre-scan (ADR-0043/PER-176 — the calculator
+  // derives balance from anchors, migration no longer computes one).
   const transferMeta = buildSureTransferMeta(bundle)
   const transferLegs = stageableSureTransferLegs(bundle, transferMeta)
   const transferLegsSeen = bundle.transactions.filter(isSureTransferLeg).length
@@ -473,26 +405,16 @@ export async function runSureMigrationForFamily({
     metaById: transferMeta,
     transfers: bundle.transfers,
   })
-  const promotableTransferLegIds = new Set<string>()
-  for (const pair of transferPairing.pairs) {
-    promotableTransferLegIds.add(pair.outflow.id)
-    promotableTransferLegIds.add(pair.inflow.id)
-  }
-  const earliestPromotedDate = earliestPromotedDateBySureAccount(
-    bundle,
-    promotableTransferLegIds
-  )
 
   // --- 1. Accounts -> id-map (+ account info for mapping) -------------------
+  // ADR-0043/PER-176: no opening-balance decision at creation time — every
+  // account shell starts at balance=0. Step 4 below writes every Sure
+  // valuation as a reconciliation anchor, and the final rebuild (step 7)
+  // derives the real balance from the anchor chain + promoted flow.
   const accountMap = new Map<string, string>() // sureId -> permoneyId
   const accountInfo = new Map<string, PermoneyAccountInfo>() // permoneyId -> info
   let accountsCreated = 0
   let accountsReused = 0
-  // Opening-balance provenance — tallied ONLY for ASSET transaction_flow accounts
-  // CREATED this run (the bucket denominator; §5 reconcile invariant).
-  let openingFromAnchor = 0
-  let openingFromDateHeuristic = 0
-  let openingGapZero = 0
 
   await runInTenantTransaction(familyId, user.id, async (tx) => {
     const auditEntries: AuditLogEntry[] = []
@@ -508,29 +430,6 @@ export async function runSureMigrationForFamily({
         sureAccount.accountable_type,
         sureAccount.subtype
       )
-      const opening = decideOpeningBalance(
-        {
-          accountClass: taxonomy.accountClass,
-          balanceSource: taxonomy.balanceSource,
-          currency: sureAccount.currency,
-        },
-        sureAccount.id,
-        bundle.valuations,
-        {
-          bundleHasKind,
-          earliestPromotedTxnDate:
-            earliestPromotedDate.get(sureAccount.id) ?? null,
-        }
-      )
-      if (
-        taxonomy.accountClass === "ASSET" &&
-        taxonomy.balanceSource === "transaction_flow"
-      ) {
-        if (opening.source === "opening_anchor") openingFromAnchor += 1
-        else if (opening.source === "date_heuristic") {
-          openingFromDateHeuristic += 1
-        } else openingGapZero += 1
-      }
       const created = await tx.account.create({
         data: {
           familyId,
@@ -539,7 +438,7 @@ export async function runSureMigrationForFamily({
           accountType: taxonomy.accountType,
           accountSubtype: taxonomy.accountSubtype,
           balanceSource: taxonomy.balanceSource,
-          balance: opening.minor,
+          balance: 0n,
           currency: sureAccount.currency,
           isImportable: taxonomy.isImportable,
           externalProvider: SURE_PROVIDER,
@@ -638,7 +537,20 @@ export async function runSureMigrationForFamily({
     await auditLogs(tx, auditCtx, withFamily(auditEntries, familyId))
   })
 
-  // --- 4. Transactions -> StagedRowInput[] (per-row id remap + classify) ----
+  // --- 4. Write every Sure valuation as a reconciliation anchor (ADR-0043) --
+  // Runs after account shells exist (needs accountMap) and before transaction
+  // promotion — order doesn't affect final correctness (step 10's rebuild fixes
+  // any intermediate state), this is just the natural shell→history reading
+  // order. See writeSureValuationAnchors above for the write/idempotency design.
+  const anchorSummary = await writeSureValuationAnchors(
+    bundle.valuations,
+    accountMap,
+    familyId,
+    user,
+    runInTenantTransaction
+  )
+
+  // --- 5. Transactions -> StagedRowInput[] (per-row id remap + classify) ----
   const rows: StagedRowInput[] = []
   const promotableBySureId = new Map<string, boolean>()
   let zeroAmountSkipped = 0
@@ -687,7 +599,7 @@ export async function runSureMigrationForFamily({
     })
   }
 
-  // --- 5. Stage through PER-82 (reuses the batch on re-run via contentHash) --
+  // --- 6. Stage through PER-82 (reuses the batch on re-run via contentHash) --
   let batchId: string
   let replayed: boolean
   if (rows.length > 0) {
@@ -717,7 +629,7 @@ export async function runSureMigrationForFamily({
     replayed = false
   }
 
-  // --- 6. Retain the raw bundle (gzip BYTEA artifact, one-shot per content) --
+  // --- 7. Retain the raw bundle (gzip BYTEA artifact, one-shot per content) --
   const gzip = await gzipBytes(rawBytes)
   await runInTenantTransaction(familyId, user.id, async (tx) => {
     const existing = await tx.importBatchArtifact.findFirst({
@@ -746,7 +658,7 @@ export async function runSureMigrationForFamily({
     )
   })
 
-  // --- 7. Confirm gated rows that are still normalized, then promote --------
+  // --- 8. Confirm gated rows that are still normalized, then promote --------
   let promotedThisRun = 0
   if (rows.length > 0) {
     const confirmRowIds = await runInTenantTransaction(
@@ -796,7 +708,7 @@ export async function runSureMigrationForFamily({
     Boolean
   ).length
 
-  // --- 8. Pair & promote transfers as dual-leg Permoney transfers (ADR-0042) -
+  // --- 9. Pair & promote transfers as dual-leg Permoney transfers (ADR-0042) -
   // Reuses the SAME pure pairing computed up-front; promotes each pair through the
   // canonical `createTransactionForFamily` core (no new ledger writer), holding
   // anything ambiguous/orphan/gated with a DB-anchored typed reason.
@@ -812,6 +724,18 @@ export async function runSureMigrationForFamily({
     runInTenantTransaction,
     auditCtx,
   })
+
+  // --- 10. Mandatory final rebuild — the correctness guarantee (ADR-0043) ---
+  // During steps 4-9, `Account.balance` is transiently WRONG: step 4 sets it to
+  // the latest anchor's value (via createValuationForFamily's own interim
+  // recompute), then steps 8-9 apply per-transaction increments/decrements that
+  // over-count any PRE-anchor flow (createTransactionForFamily doesn't know
+  // about anchors — it just applies a delta). Nothing reads the balance mid-run,
+  // so this is safe ONLY because this rebuild recomputes the materialized cache
+  // from canonical rows (latest anchor + Σ post-anchor flow, or the existing
+  // no-anchor-found fallback for the handful of accounts with no valuations)
+  // — overriding the incremental journey with the calculator's actual answer.
+  await rebuildFamilyBalances({ familyId, user, runInTenantTransaction })
 
   return {
     batchId,
@@ -834,12 +758,7 @@ export async function runSureMigrationForFamily({
       invalidDateSkipped,
     },
     transfers,
-    openingBalances: {
-      fromOpeningAnchor: openingFromAnchor,
-      fromDateHeuristic: openingFromDateHeuristic,
-      gapZero: openingGapZero,
-    },
-    bundleHasKind,
+    valuations: anchorSummary,
     valuationsParsed: bundle.valuations.length,
     malformedLines: bundle.malformedLines.length,
     ignoredEntities: bundle.ignoredEntities,
