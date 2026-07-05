@@ -65,6 +65,33 @@ import { createValuationForFamily, rebuildFamilyBalances } from "./valuations"
 // real validation bundle is ~1–2 MB (3002 transactions); 64 MiB is generous.
 const MAX_BUNDLE_BYTES = 64 * 1024 * 1024
 
+// ADR-0044 §2/§4: bounded-transaction chunk size for the confirm→promote
+// orchestration loop. ~2050 real promotable rows measured to exceed Prisma's
+// 5000ms interactive-tx default (>= ~2.5ms/row); 250 rows/chunk is a 5-8x
+// margin under that default even at 2x the measured per-row cost. LOCKSTEP
+// INVARIANT (load-bearing): confirmation must never run more than one chunk
+// ahead of promotion — `promoteImportBatchForFamily` has no row-subset
+// filter, it always promotes every currently-`confirmed` row in the batch, so
+// confirming the whole set up front before "promoting per chunk" would
+// silently reproduce a single oversized promote transaction (ADR-0044 §4).
+export const PROMOTE_CHUNK_SIZE = 250
+
+// Per-phase wall-clock timings (ms) — ADR-0044 §5. Permanent import-
+// observability, not throwaway diagnostic code; also what the ADR-0044 §6
+// measurement-gate reads to decide whether the valuation/transfer candidate
+// fixes are needed at all.
+export interface SureMigrationTimings {
+  accounts: number
+  categories: number
+  merchants: number
+  valuations: number
+  transactionsStage: number
+  transactionsConfirm: number
+  transactionsPromote: number
+  transfers: number
+  rebuild: number
+}
+
 const sureMigrationInputSchema = z.object({
   filename: z.string().min(1).max(255),
   // Raw `all.ndjson` content. Phase 1a accepts it as a UTF-8 string over the
@@ -123,6 +150,7 @@ export interface SureMigrationResult {
     }
     heldLegsByReason: Record<SureTransferHeldReason, number>
   }
+  timings: SureMigrationTimings
 }
 
 interface PermoneyAccountInfo {
@@ -391,6 +419,21 @@ export async function runSureMigrationForFamily({
   const contentHash = await sha256Hex(rawBytes)
   const auditCtx = await createAuditContext({ user })
 
+  // ADR-0044 §5: permanent per-phase wall-clock instrumentation, printed by
+  // callers/tests rather than asserted on in CI (wall-time is nondeterministic
+  // — see ADR-0044 §6 measurement-gate discipline).
+  const timings: SureMigrationTimings = {
+    accounts: 0,
+    categories: 0,
+    merchants: 0,
+    valuations: 0,
+    transactionsStage: 0,
+    transactionsConfirm: 0,
+    transactionsPromote: 0,
+    transfers: 0,
+    rebuild: 0,
+  }
+
   const bundle = parseSureBundle(data.bundle)
 
   // Transfer pairing is computed PURELY and UP-FRONT (ADR-0042): the promotable
@@ -416,6 +459,7 @@ export async function runSureMigrationForFamily({
   let accountsCreated = 0
   let accountsReused = 0
 
+  const accountsT0 = Date.now()
   await runInTenantTransaction(familyId, user.id, async (tx) => {
     const auditEntries: AuditLogEntry[] = []
     for (const sureAccount of bundle.accounts) {
@@ -458,12 +502,14 @@ export async function runSureMigrationForFamily({
     }
     await auditLogs(tx, auditCtx, withFamily(auditEntries, familyId))
   })
+  timings.accounts = Date.now() - accountsT0
 
   // --- 2. Categories -> id-map (two-pass: parents before children) ----------
   const categoryMap = new Map<string, string>()
   let categoriesCreated = 0
   let categoriesReused = 0
 
+  const categoriesT0 = Date.now()
   await runInTenantTransaction(familyId, user.id, async (tx) => {
     const auditEntries: AuditLogEntry[] = []
     for (const sureCategory of orderCategoriesParentsFirst(bundle.categories)) {
@@ -500,12 +546,14 @@ export async function runSureMigrationForFamily({
     }
     await auditLogs(tx, auditCtx, withFamily(auditEntries, familyId))
   })
+  timings.categories = Date.now() - categoriesT0
 
   // --- 3. Merchants -> id-map ----------------------------------------------
   const merchantMap = new Map<string, string>()
   let merchantsCreated = 0
   let merchantsReused = 0
 
+  const merchantsT0 = Date.now()
   await runInTenantTransaction(familyId, user.id, async (tx) => {
     const auditEntries: AuditLogEntry[] = []
     for (const sureMerchant of bundle.merchants) {
@@ -536,12 +584,14 @@ export async function runSureMigrationForFamily({
     }
     await auditLogs(tx, auditCtx, withFamily(auditEntries, familyId))
   })
+  timings.merchants = Date.now() - merchantsT0
 
   // --- 4. Write every Sure valuation as a reconciliation anchor (ADR-0043) --
   // Runs after account shells exist (needs accountMap) and before transaction
   // promotion — order doesn't affect final correctness (step 10's rebuild fixes
   // any intermediate state), this is just the natural shell→history reading
   // order. See writeSureValuationAnchors above for the write/idempotency design.
+  const valuationsT0 = Date.now()
   const anchorSummary = await writeSureValuationAnchors(
     bundle.valuations,
     accountMap,
@@ -549,8 +599,10 @@ export async function runSureMigrationForFamily({
     user,
     runInTenantTransaction
   )
+  timings.valuations = Date.now() - valuationsT0
 
   // --- 5. Transactions -> StagedRowInput[] (per-row id remap + classify) ----
+  const transactionsStageT0 = Date.now()
   const rows: StagedRowInput[] = []
   const promotableBySureId = new Map<string, boolean>()
   let zeroAmountSkipped = 0
@@ -628,6 +680,7 @@ export async function runSureMigrationForFamily({
     )
     replayed = false
   }
+  timings.transactionsStage = Date.now() - transactionsStageT0
 
   // --- 7. Retain the raw bundle (gzip BYTEA artifact, one-shot per content) --
   const gzip = await gzipBytes(rawBytes)
@@ -659,9 +712,32 @@ export async function runSureMigrationForFamily({
   })
 
   // --- 8. Confirm gated rows that are still normalized, then promote --------
+  // ADR-0044 §4 LOCKSTEP INVARIANT (load-bearing): confirm and promote exactly
+  // one PROMOTE_CHUNK_SIZE-sized slice at a time, never confirming ahead of
+  // promotion. `promoteImportBatchForFamily` has no row-subset filter — it
+  // always promotes every currently-`confirmed` row in the batch — so
+  // confirming the entire promotable set up front and "promoting per chunk"
+  // afterward would silently reproduce a single oversized promote transaction,
+  // exactly the timeout this ADR fixes.
   let promotedThisRun = 0
   if (rows.length > 0) {
-    const confirmRowIds = await runInTenantTransaction(
+    // Sweep leftovers first: rows a prior crashed run confirmed but never
+    // promoted. Bounded by construction — the lockstep loop below never
+    // confirms more than one chunk ahead of promoting it, so at most
+    // PROMOTE_CHUNK_SIZE rows can be sitting confirmed-but-unpromoted when
+    // this call starts. On a fresh (non-crashed) run this is a fast no-op.
+    const sweepT0 = Date.now()
+    const sweep = await promoteImportBatchForFamily({
+      data: { batchId, idempotencyKey: createUuidV7() },
+      familyId,
+      user,
+      runInTenantTransaction,
+    })
+    timings.transactionsPromote += Date.now() - sweepT0
+    promotedThisRun += sweep.promotedCount
+
+    const confirmT0 = Date.now()
+    const stagedRowIds = await runInTenantTransaction(
       familyId,
       user.id,
       async (tx) => {
@@ -678,13 +754,21 @@ export async function runSureMigrationForFamily({
           .map((r) => r.id)
       }
     )
+    timings.transactionsConfirm += Date.now() - confirmT0
 
-    if (confirmRowIds.length > 0) {
+    for (
+      let start = 0;
+      start < stagedRowIds.length;
+      start += PROMOTE_CHUNK_SIZE
+    ) {
+      const slice = stagedRowIds.slice(start, start + PROMOTE_CHUNK_SIZE)
+
+      const chunkConfirmT0 = Date.now()
       await reviewImportRowsForFamily({
         data: {
           batchId,
           idempotencyKey: createUuidV7(),
-          decisions: confirmRowIds.map((rowId) => ({
+          decisions: slice.map((rowId) => ({
             rowId,
             verdict: "confirm" as const,
           })),
@@ -693,15 +777,18 @@ export async function runSureMigrationForFamily({
         user,
         runInTenantTransaction,
       })
-    }
+      timings.transactionsConfirm += Date.now() - chunkConfirmT0
 
-    const promotion = await promoteImportBatchForFamily({
-      data: { batchId, idempotencyKey: createUuidV7() },
-      familyId,
-      user,
-      runInTenantTransaction,
-    })
-    promotedThisRun = promotion.promotedCount
+      const chunkPromoteT0 = Date.now()
+      const promotion = await promoteImportBatchForFamily({
+        data: { batchId, idempotencyKey: createUuidV7() },
+        familyId,
+        user,
+        runInTenantTransaction,
+      })
+      timings.transactionsPromote += Date.now() - chunkPromoteT0
+      promotedThisRun += promotion.promotedCount
+    }
   }
 
   const promotableCount = Array.from(promotableBySureId.values()).filter(
@@ -712,6 +799,7 @@ export async function runSureMigrationForFamily({
   // Reuses the SAME pure pairing computed up-front; promotes each pair through the
   // canonical `createTransactionForFamily` core (no new ledger writer), holding
   // anything ambiguous/orphan/gated with a DB-anchored typed reason.
+  const transfersT0 = Date.now()
   const transfers = await pairAndPromoteSureTransfers({
     pairing: transferPairing,
     transferLegs,
@@ -724,6 +812,7 @@ export async function runSureMigrationForFamily({
     runInTenantTransaction,
     auditCtx,
   })
+  timings.transfers = Date.now() - transfersT0
 
   // --- 10. Mandatory final rebuild — the correctness guarantee (ADR-0043) ---
   // During steps 4-9, `Account.balance` is transiently WRONG: step 4 sets it to
@@ -735,7 +824,9 @@ export async function runSureMigrationForFamily({
   // from canonical rows (latest anchor + Σ post-anchor flow, or the existing
   // no-anchor-found fallback for the handful of accounts with no valuations)
   // — overriding the incremental journey with the calculator's actual answer.
+  const rebuildT0 = Date.now()
   await rebuildFamilyBalances({ familyId, user, runInTenantTransaction })
+  timings.rebuild = Date.now() - rebuildT0
 
   return {
     batchId,
@@ -762,6 +853,7 @@ export async function runSureMigrationForFamily({
     valuationsParsed: bundle.valuations.length,
     malformedLines: bundle.malformedLines.length,
     ignoredEntities: bundle.ignoredEntities,
+    timings,
   }
 }
 

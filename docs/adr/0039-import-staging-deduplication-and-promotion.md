@@ -1,15 +1,16 @@
 # ADR-0039 — Import staging, deduplication, and promotion contract
 
-|                   |                                                       |
-| ----------------- | ----------------------------------------------------- |
-| **Status**        | Accepted                                              |
-| **Date**          | 2026-06-22                                            |
-| **Accepted**      | 2026-06-22                                            |
-| **Deciders**      | Hendri Permana                                        |
-| **Supersedes**    | —                                                     |
-| **Superseded by** | —                                                     |
-| **Amends**        | ADR-0008 §5 (import staging); clarifies ADR-0031 note |
-| **Reserves for**  | PER-118 / ADR-0015 (provider integration contract)    |
+|                   |                                                                                                                            |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **Status**        | Accepted                                                                                                                   |
+| **Date**          | 2026-06-22                                                                                                                 |
+| **Accepted**      | 2026-06-22                                                                                                                 |
+| **Deciders**      | Hendri Permana                                                                                                             |
+| **Supersedes**    | —                                                                                                                          |
+| **Superseded by** | —                                                                                                                          |
+| **Amends**        | ADR-0008 §5 (import staging); clarifies ADR-0031 note                                                                      |
+| **Amended by**    | ADR-0044 (2026-07-04, PER-179): §1 staging insert becomes chunked + resumable, §9 promotion is chunked by its orchestrator |
+| **Reserves for**  | PER-118 / ADR-0015 (provider integration contract)                                                                         |
 
 ## Context
 
@@ -87,6 +88,17 @@ deduplicated rows are promoted into canonical `Transaction`s through the existin
 ledger mutation internals — atomically, idempotently, and audited.**
 
 ### 1. Models: a source-agnostic staging spine (one wide raw row, per-row account)
+
+> **Amended by ADR-0044 (2026-07-04, PER-179).** `createImportBatchForFamily`'s
+> row-insert step, described below as part of one interactive transaction, is
+> now internally chunked into bounded `createMany` transactions
+> (`STAGING_CHUNK_SIZE`) with count-based resume on crash-and-retry — a real
+> Sure-migration bundle's row count (thousands) can otherwise approach the
+> Prisma interactive-transaction default timeout in a single physical
+> transaction. The model shape, dedup algorithm, and idempotency keys below are
+> unchanged; only the transaction boundary around row insertion changed. See
+> ADR-0044 §3 for the `pending`-lifecycle resume design and its soundness
+> conditions.
 
 Two new tenant-scoped models. `RawImportedTransaction` is **one wide row** that
 carries the immutable raw payload plus nullable, pipeline-filled parsed,
@@ -341,6 +353,16 @@ suggestedMerchantId, matchedSmartRuleId }` in `src/lib/import-staging.ts`.
   cross-tenant reference.
 
 ### 9. Promotion (one atomic transaction, reusing bulk internals)
+
+> **Amended by ADR-0044 (2026-07-04, PER-179).** `promoteImportBatchForFamily`
+> itself is unchanged — it still selects and promotes every `confirmed` row in
+> the batch in one transaction, exactly as described below. What changed is
+> the **orchestrator**: a caller with more confirmable rows than one chunk
+> safely allows (e.g. the Sure migration) must confirm and promote in
+> lockstep `PROMOTE_CHUNK_SIZE`-sized slices rather than confirming everything
+> up front, because this function has no row-subset filter — confirming ahead
+> of promotion would silently reproduce a single oversized promote
+> transaction. See ADR-0044 §4.
 
 A dedicated deep function `promoteConfirmedImportRows` runs **one interactive
 `scopedTenantTransaction`** over the selected rows:
