@@ -109,6 +109,21 @@ const DEFAULT_ACCOUNT_SUBTYPE_BY_TYPE = {
 
 const TRACKED_ASSET_ACCOUNT_TYPE: AccountType = "TRACKED_ASSET"
 
+// ADR-0045 §1/§2: the ONLY accountTypes that may legitimately hold a negative
+// final ASSET balance (real bank/e-wallet overdraft). This list must stay in
+// exact lockstep with the SQL function app_allows_negative_asset() (migration
+// 20260705130000_negative_balance_carve_out) — an exhaustive coherence test
+// asserts the two agree for every AccountType. CASH (physically impossible
+// negative), INVESTMENT (unmodeled margin), RECEIVABLE (category error), and
+// TRACKED_ASSET (valuation-sourced, unchanged) are deliberately excluded.
+const NEGATIVE_BALANCE_ALLOWED_ACCOUNT_TYPES = [
+  "DEPOSITORY",
+  "E_WALLET",
+] as const satisfies readonly AccountType[]
+const NEGATIVE_BALANCE_ALLOWED_ACCOUNT_TYPE_SET = new Set<AccountType>(
+  NEGATIVE_BALANCE_ALLOWED_ACCOUNT_TYPES
+)
+
 const NORMAL_BALANCE_BY_CLASS = {
   ASSET: {
     balanceSign: "positive",
@@ -161,6 +176,16 @@ export function isLiabilityAccountType(accountType: AccountType): boolean {
 
 export function isAssetAccountType(accountType: AccountType): boolean {
   return ASSET_ACCOUNT_TYPE_SET.has(accountType)
+}
+
+/**
+ * ADR-0045: whether this accountType may legitimately hold a negative final
+ * ASSET balance (DEPOSITORY/E_WALLET overdraft). Mirrors the SQL function
+ * app_allows_negative_asset() exactly — see that migration's coherence test.
+ * Always false for LIABILITY types; the sign rule there is unconditional.
+ */
+export function allowsNegativeAssetBalance(accountType: AccountType): boolean {
+  return NEGATIVE_BALANCE_ALLOWED_ACCOUNT_TYPE_SET.has(accountType)
 }
 
 export function normalizeAccountTaxonomy(

@@ -1,5 +1,10 @@
 import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
+import {
+  allowsNegativeAssetBalance,
+  type AccountClass,
+  type AccountType,
+} from "../lib/accounts"
 import type { CurrencyCode } from "../lib/data/currencies"
 import {
   classifySureAmount,
@@ -8,6 +13,7 @@ import {
   pairSureTransfers,
   parseSureBundle,
   SURE_PROVIDER,
+  type ParsedSureBundle,
   type SureTransaction,
   type SureTransferAccountMeta,
   type SureTransferHeldReason,
@@ -33,6 +39,7 @@ import {
   scopedTenantTransaction,
   type TenantTransactionClient,
 } from "./middleware/with-family"
+import { withBulkLedgerReplayBypass } from "./bulk-ledger-replay"
 import type { RunInTenantTransaction } from "./mutation-kit"
 import { createTransactionForFamily, createdAuditEntries } from "./transactions"
 import { createValuationForFamily, rebuildFamilyBalances } from "./valuations"
@@ -158,6 +165,10 @@ interface PermoneyAccountInfo {
   currency: string
   isImportable: boolean
   balanceSource: string
+  // ADR-0045: needed to decide whether a negative Sure valuation is a
+  // legitimate carve-out anchor (DEPOSITORY/E_WALLET) or a data anomaly to
+  // skip, in writeSureValuationAnchors below.
+  accountType: AccountType
 }
 
 // ---------------------------------------------------------------------------
@@ -281,6 +292,7 @@ interface SureValuationAnchorSummary {
 async function writeSureValuationAnchors(
   valuations: readonly SureValuation[],
   accountMap: ReadonlyMap<string, string>,
+  accountInfo: ReadonlyMap<string, PermoneyAccountInfo>,
   familyId: string,
   user: { id: string; familyId?: string | null },
   runInTenantTransaction: RunInTenantTransaction
@@ -291,6 +303,8 @@ async function writeSureValuationAnchors(
   for (const valuation of valuations) {
     const permoneyAccountId = accountMap.get(valuation.account_id)
     if (!permoneyAccountId) continue // unmappable — shell missing (shouldn't happen)
+    const account = accountInfo.get(permoneyAccountId)
+    if (!account) continue
 
     const date = new Date(valuation.date)
     if (Number.isNaN(date.getTime())) continue // unparseable date — skip, never rejects the bundle
@@ -299,7 +313,12 @@ async function writeSureValuationAnchors(
       valuation.amount,
       valuation.currency as CurrencyCode
     ) as bigint
-    if (minor < 0n) {
+    // ADR-0045: a negative Sure valuation is a genuine anchor (not an
+    // anomaly) only for a carve-out account (DEPOSITORY/E_WALLET real
+    // overdraft — the Dana case). For every other accountType, negative
+    // stays the pre-existing anomaly (PER-176 Q2): skip the single row,
+    // never abs() it, count it, never reject the whole bundle for it.
+    if (minor < 0n && !allowsNegativeAssetBalance(account.accountType)) {
       negativeSkipped += 1
       continue
     }
@@ -332,6 +351,230 @@ async function writeSureValuationAnchors(
 }
 
 // ---------------------------------------------------------------------------
+// ADR-0044 §8 — Pre-flight validator (PER-182). Projects every Sure account's
+// FINAL balance PURELY from the parsed bundle (no DB read/write) using the
+// same anchor + post-anchor-flow formula as ADR-0043 §2's `computeCanonicalBalance`,
+// then evaluates it against ADR-0045's sign rule. A bundle that would leave
+// any account illegal never touches the database. The projection formula
+// must stay in lockstep with `computeCanonicalBalance` — an integration test
+// asserts `projectedBalance === Account.balance` after the mandatory final
+// rebuild, per account, for every fixture (so the two can never silently
+// disagree, mirroring ADR-0043 §6's "one segmentation function" discipline).
+// ---------------------------------------------------------------------------
+
+export interface SureMigrationPreflightViolation {
+  sureAccountId: string
+  accountName: string
+  accountType: AccountType
+  accountClass: AccountClass
+  projectedBalance: string
+  violatedRule: string
+}
+
+/**
+ * Raised when the pre-flight pass finds one or more accounts whose projected
+ * FINAL balance would violate ADR-0045's sign rule. Thrown before step 1
+ * (account shells) — zero DB writes occur for a bundle that would fail.
+ */
+export class SureMigrationPreflightError extends Error {
+  override readonly name = "SureMigrationPreflightError"
+  readonly statusCode = 422
+  constructor(readonly violations: SureMigrationPreflightViolation[]) {
+    super(
+      `Sure migration pre-flight failed for ${violations.length} account(s): ` +
+        violations
+          .map(
+            (v) =>
+              `"${v.accountName}" (${v.accountType}) would end at ${v.projectedBalance} — ${v.violatedRule}`
+          )
+          .join("; ")
+    )
+  }
+}
+
+interface PreflightAccountFacts {
+  name: string
+  currency: string
+  accountType: AccountType
+  accountClass: AccountClass
+  balanceSource: string
+  isImportable: boolean
+}
+
+// -Infinity when there is no anchor at all — every promotable flow counts,
+// which is exactly right: a fresh account shell starts at balance=0, so
+// "anchor value 0, cutoff before all time" is mathematically identical to
+// the real no-anchor fallback (stored balance, which for a brand-new shell
+// accumulates to exactly Σ promotable flow via per-transaction increments —
+// PER-176 Q2's "Borrow money from Abah" case).
+function anchorCutoffMillis(isoDay: string | null): number {
+  return isoDay === null
+    ? Number.NEGATIVE_INFINITY
+    : new Date(`${isoDay}T00:00:00.000Z`).getTime()
+}
+
+export interface SureMigrationAccountProjection {
+  sureAccountId: string
+  accountName: string
+  accountType: AccountType
+  accountClass: AccountClass
+  projectedBalance: bigint
+}
+
+/**
+ * Pure per-account FINAL-balance projection from the parsed bundle alone (no
+ * DB read/write) — the in-memory twin of `computeCanonicalBalance` (ADR-0043
+ * §2). Exported separately from the violation-finder below so a test can
+ * assert this projection equals the real post-rebuild `Account.balance` for
+ * every account, pinning the two formulas together (ADR-0043 §6 discipline).
+ */
+export function projectSureMigrationBalances(
+  bundle: ParsedSureBundle,
+  transferPairing: SureTransferPairingResult,
+  transferMeta: ReadonlyMap<string, SureTransferAccountMeta>
+): Map<string, SureMigrationAccountProjection> {
+  const now = Date.now()
+  const factsById = new Map<string, PreflightAccountFacts>()
+  for (const account of bundle.accounts) {
+    const taxonomy = normalizeSureAccountType(
+      account.accountable_type,
+      account.subtype
+    )
+    factsById.set(account.id, {
+      name: account.name,
+      currency: account.currency,
+      accountType: taxonomy.accountType,
+      accountClass: taxonomy.accountClass,
+      balanceSource: taxonomy.balanceSource,
+      isImportable: taxonomy.isImportable,
+    })
+  }
+
+  // Latest ANCHOR per account, mirroring writeSureValuationAnchors' negative-
+  // skip rule (ADR-0045) and the (valuationDate DESC, createdAt DESC)
+  // tie-break: every Sure valuation is written in bundle array order, so a
+  // later same-day entry naturally wins by processing order (`day >= existing.day`).
+  const anchorById = new Map<string, { value: bigint; day: string }>()
+  for (const valuation of bundle.valuations) {
+    const facts = factsById.get(valuation.account_id)
+    if (!facts) continue
+    const date = new Date(valuation.date)
+    if (Number.isNaN(date.getTime()) || date.getTime() > now) continue
+    const minor = toMinorUnits(
+      valuation.amount,
+      valuation.currency as CurrencyCode
+    ) as bigint
+    if (minor < 0n && !allowsNegativeAssetBalance(facts.accountType)) continue
+    const day = valuation.date.slice(0, 10)
+    const existing = anchorById.get(valuation.account_id)
+    if (!existing || day >= existing.day) {
+      anchorById.set(valuation.account_id, { value: minor, day })
+    }
+  }
+
+  const projected = new Map<string, bigint>()
+  for (const accountId of factsById.keys()) {
+    projected.set(accountId, anchorById.get(accountId)?.value ?? 0n)
+  }
+  const addFlow = (accountId: string, date: Date, delta: bigint) => {
+    if (!factsById.has(accountId)) return
+    const cutoff = anchorCutoffMillis(anchorById.get(accountId)?.day ?? null)
+    if (date.getTime() <= cutoff) return
+    projected.set(accountId, (projected.get(accountId) ?? 0n) + delta)
+  }
+
+  // Standard transaction flow (transfer legs are handled separately below,
+  // using the exact same promotable/held decision the real pairer made).
+  for (const txn of bundle.transactions) {
+    if (isSureTransferLeg(txn)) continue
+    const facts = factsById.get(txn.account_id)
+    if (!facts) continue
+    const date = new Date(txn.date)
+    if (Number.isNaN(date.getTime())) continue
+    const infoLike: PermoneyAccountInfo = {
+      id: txn.account_id,
+      currency: facts.currency,
+      isImportable: facts.isImportable,
+      balanceSource: facts.balanceSource,
+      accountType: facts.accountType,
+    }
+    if (!isPromotable(txn, infoLike)) continue
+    const minor = toMinorUnits(
+      txn.amount,
+      facts.currency as CurrencyCode
+    ) as bigint
+    addFlow(txn.account_id, date, -minor)
+  }
+
+  // Promotable transfer pairs only (pairing.held never promotes). Both legs
+  // share the outflow's date, mirroring pairAndPromoteSureTransfers' single
+  // shared-date dual-leg write exactly.
+  for (const pair of transferPairing.pairs) {
+    const outMeta = transferMeta.get(pair.outflow.account_id)
+    if (!outMeta) continue
+    const date = new Date(pair.outflow.date)
+    if (Number.isNaN(date.getTime())) continue
+    const absMinor = toMinorUnits(
+      pair.outflow.amount,
+      outMeta.currency as CurrencyCode
+    ) as bigint
+    addFlow(pair.outflow.account_id, date, -absMinor)
+    addFlow(pair.inflow.account_id, date, absMinor)
+  }
+
+  const result = new Map<string, SureMigrationAccountProjection>()
+  for (const [accountId, facts] of factsById) {
+    result.set(accountId, {
+      sureAccountId: accountId,
+      accountName: facts.name,
+      accountType: facts.accountType,
+      accountClass: facts.accountClass,
+      projectedBalance: projected.get(accountId) ?? 0n,
+    })
+  }
+  return result
+}
+
+/**
+ * Evaluates `projectSureMigrationBalances`' output against ADR-0045's sign
+ * rule and returns every violation (collect-all, not fail-on-first — a
+ * bundle with two bad accounts should report both in one pass).
+ */
+function findSureMigrationPreflightViolations(
+  bundle: ParsedSureBundle,
+  transferPairing: SureTransferPairingResult,
+  transferMeta: ReadonlyMap<string, SureTransferAccountMeta>
+): SureMigrationPreflightViolation[] {
+  const projections = projectSureMigrationBalances(
+    bundle,
+    transferPairing,
+    transferMeta
+  )
+  const violations: SureMigrationPreflightViolation[] = []
+  for (const projection of projections.values()) {
+    const { accountClass, accountType, projectedBalance } = projection
+    const legal =
+      accountClass === "ASSET"
+        ? projectedBalance >= 0n || allowsNegativeAssetBalance(accountType)
+        : projectedBalance <= 0n
+    if (!legal) {
+      violations.push({
+        sureAccountId: projection.sureAccountId,
+        accountName: projection.accountName,
+        accountType,
+        accountClass,
+        projectedBalance: projectedBalance.toString(),
+        violatedRule:
+          accountClass === "ASSET"
+            ? `ASSET balance must be >= 0 for accountType ${accountType}`
+            : "LIABILITY balance must be <= 0",
+      })
+    }
+  }
+  return violations
+}
+
+// ---------------------------------------------------------------------------
 // Transfer pairing inputs (pure, taxonomy-derived — ADR-0042)
 // ---------------------------------------------------------------------------
 
@@ -342,7 +585,7 @@ function isSureTransferLeg(txn: SureTransaction): boolean {
 }
 
 /** Per-Sure-account metadata for the pure pairer (no DB; mirrors the staging taxonomy). */
-function buildSureTransferMeta(
+export function buildSureTransferMeta(
   bundle: ReturnType<typeof parseSureBundle>
 ): Map<string, SureTransferAccountMeta> {
   const meta = new Map<string, SureTransferAccountMeta>()
@@ -369,7 +612,7 @@ function buildSureTransferMeta(
  * pairer this same set keeps `gateSet === promoteSet` (the unmappable-leg lockstep
  * that protects the opening pre-scan, ADR-0042 / ADR-0041 §5).
  */
-function stageableSureTransferLegs(
+export function stageableSureTransferLegs(
   bundle: ReturnType<typeof parseSureBundle>,
   metaById: ReadonlyMap<string, SureTransferAccountMeta>
 ): SureTransaction[] {
@@ -463,6 +706,27 @@ export async function runSureMigrationForFamily({
     transfers: bundle.transfers,
   })
 
+  // --- 0. Pre-flight (ADR-0044 §8 / ADR-0045): fail fast, zero DB writes ----
+  // Pure in-memory projection of every account's FINAL balance from the
+  // bundle alone. Runs before any write (including account shells) so a
+  // bundle that would leave any account illegal never touches the database.
+  const preflightViolations = findSureMigrationPreflightViolations(
+    bundle,
+    transferPairing,
+    transferMeta
+  )
+  if (preflightViolations.length > 0) {
+    throw new SureMigrationPreflightError(preflightViolations)
+  }
+
+  // ADR-0044 §8: the ONLY 3 phases below that do incremental Account.balance/
+  // Valuation writes before the mandatory final (unbypassed) rebuild use this
+  // wrapper — valuations (anchors), transaction promote-chunk (not staging/
+  // confirm), and transfer-pair promotion. Composes over whatever
+  // `runInTenantTransaction` was passed in (production default or a test
+  // double), so test injection (crash/chunk-tracking harnesses) is unaffected.
+  const bulkReplayTx = withBulkLedgerReplayBypass(runInTenantTransaction)
+
   // --- 1. Accounts -> id-map (+ account info for mapping) -------------------
   // ADR-0043/PER-176: no opening-balance decision at creation time — every
   // account shell starts at balance=0. Step 4 below writes every Sure
@@ -510,6 +774,7 @@ export async function runSureMigrationForFamily({
         currency: created.currency,
         isImportable: created.isImportable,
         balanceSource: created.balanceSource,
+        accountType: created.accountType as AccountType,
       })
       accountsCreated += 1
       auditEntries.push(...createdAuditEntries("Account", [created]))
@@ -609,9 +874,10 @@ export async function runSureMigrationForFamily({
   const anchorSummary = await writeSureValuationAnchors(
     bundle.valuations,
     accountMap,
+    accountInfo,
     familyId,
     user,
-    runInTenantTransaction
+    bulkReplayTx
   )
   timings.valuations = Date.now() - valuationsT0
 
@@ -745,7 +1011,7 @@ export async function runSureMigrationForFamily({
       data: { batchId, idempotencyKey: createUuidV7() },
       familyId,
       user,
-      runInTenantTransaction,
+      runInTenantTransaction: bulkReplayTx,
     })
     timings.transactionsPromote += Date.now() - sweepT0
     promotedThisRun += sweep.promotedCount
@@ -798,7 +1064,7 @@ export async function runSureMigrationForFamily({
         data: { batchId, idempotencyKey: createUuidV7() },
         familyId,
         user,
-        runInTenantTransaction,
+        runInTenantTransaction: bulkReplayTx,
       })
       timings.transactionsPromote += Date.now() - chunkPromoteT0
       promotedThisRun += promotion.promotedCount
@@ -823,7 +1089,7 @@ export async function runSureMigrationForFamily({
     user,
     accountMap,
     transferMeta,
-    runInTenantTransaction,
+    runInTenantTransaction: bulkReplayTx,
     auditCtx,
   })
   timings.transfers = Date.now() - transfersT0
@@ -891,9 +1157,12 @@ async function reuseAccount(
       currency: true,
       isImportable: true,
       balanceSource: true,
+      accountType: true,
     },
   })
   return existing
+    ? { ...existing, accountType: existing.accountType as AccountType }
+    : null
 }
 
 async function reuseBoundId(

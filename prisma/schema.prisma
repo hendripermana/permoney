@@ -537,6 +537,13 @@ model Valuation {
   // Denormalized normal-balance discriminator: "POSITIVE" | "NEGATIVE", copied
   // from the account at write time so the value-sign rule is a pure table CHECK.
   normalBalance String
+  // Orthogonal to normalBalance (which still means "this account's usual
+  // class-implied sign"): true iff the account's accountType is in the
+  // ADR-0045 negative-balance carve-out (DEPOSITORY/E_WALLET), copied from
+  // app_allows_negative_asset(accountType) at write time so valuation_value_sign
+  // can allow a genuinely negative ASSET anchor (e.g. an overdrawn e-wallet)
+  // without overloading normalBalance's meaning. See ADR-0034 §9 amendment / ADR-0045.
+  allowsNegativeAsset Boolean @default(false)
 
   // Base-currency projection (ADR-0035 §4/§7), keyed off `valuationDate`. Same
   // all-three-or-none, rebuildable, FX-pending-tolerant rules as Transaction.

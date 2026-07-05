@@ -1184,7 +1184,13 @@ export function buildSureBundleAnchorEdgeCases(): SureAnchorEdgeCaseFixture {
       "OtherAsset",
       "generic_asset"
     ),
-    sureAccount(accountIds.cash, "Edge Checking", "Depository", "checking"),
+    // Investment (transaction_flow, NOT in the ADR-0045 negative-balance
+    // carve-out — unlike DEPOSITORY/E_WALLET) so this fixture's "negative
+    // valuation is always skipped as an anomaly" intent (PER-176 Q8 #3)
+    // stays valid regardless of the carve-out; PER-182's own fixtures
+    // (buildSureBundlePer182CarveOut) cover the DEPOSITORY/E_WALLET case
+    // where a negative valuation IS legitimately written.
+    sureAccount(accountIds.cash, "Edge Checking", "Investment", "brokerage"),
     sureVal({
       accountId: accountIds.tracked,
       amount: "75000.0",
@@ -1471,5 +1477,106 @@ export function buildLargeSureBundle(
         heldLegsByReason,
       },
     },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PER-182 / ADR-0045 — negative-balance carve-out fixtures.
+// ---------------------------------------------------------------------------
+
+export interface SurePer182CarveOutFixture {
+  ndjson: string
+  accountIds: { dana: string; abah: string }
+  expectedBalancesMinor: { dana: bigint; abah: bigint }
+}
+
+/**
+ * Happy-path carve-out bundle, verified against real data (head-eng adu,
+ * 2026-07-05): `dana` is a DEPOSITORY account (Sure `Depository`) whose only
+ * anchor is already negative (a real overdrawn e-wallet/checking balance) —
+ * legal under ADR-0045's carve-out, no further flow needed. `abah` is a LOAN
+ * (LIABILITY) with NO valuation at all — resolves via the pre-existing
+ * no-anchor fallback (PER-176 Q2's "Borrow money from Abah" correction:
+ * no-valuation does NOT mean zero, it means pure Σ promotable flow).
+ */
+export function buildSureBundlePer182CarveOut(): SurePer182CarveOutFixture {
+  const accountIds = {
+    dana: "sure-acc-per182-dana",
+    abah: "sure-acc-per182-abah",
+  }
+
+  const lines = [
+    sureAccount(accountIds.dana, "Dana", "Depository", "checking"),
+    sureAccount(
+      accountIds.abah,
+      "Borrow money from Abah",
+      "Loan",
+      "personal_loan"
+    ),
+    // Real Dana anchor: -164298 minor units, no flow after it — final balance
+    // IS the anchor. Legal only because DEPOSITORY is carve-out-eligible.
+    sureVal({
+      accountId: accountIds.dana,
+      amount: "-1642.98",
+      date: "2026-01-01",
+    }),
+    // Abah: no valuation at all — balance is pure Σ promotable flow. Sure
+    // amount positive (expense-shaped) → Permoney delta -1_500_000 (more debt).
+    sureTxn({
+      id: "sure-txn-per182-abah-draw",
+      accountId: accountIds.abah,
+      amount: "15000.00",
+      kind: "standard",
+      name: "Borrowed from Abah",
+      date: "2026-02-01",
+    }),
+  ]
+
+  return {
+    ndjson: lines.join("\n"),
+    accountIds,
+    expectedBalancesMinor: {
+      dana: -164298n,
+      abah: -1_500_000n,
+    },
+  }
+}
+
+export interface SurePer182PreflightViolationFixture {
+  ndjson: string
+  accountIds: { investment: string }
+}
+
+/**
+ * A single INVESTMENT account (transaction_flow, NOT in the ADR-0045
+ * carve-out) with no anchor and a net-negative promotable flow — its
+ * projected final balance is illegal. The whole migration must throw
+ * `SureMigrationPreflightError` before any DB write (zero accounts created).
+ */
+export function buildSureBundlePer182PreflightViolation(): SurePer182PreflightViolationFixture {
+  const accountIds = {
+    investment: "sure-acc-per182-investment-illegal",
+  }
+
+  const lines = [
+    sureAccount(
+      accountIds.investment,
+      "Illegal Brokerage",
+      "Investment",
+      "brokerage"
+    ),
+    sureTxn({
+      id: "sure-txn-per182-investment-illegal",
+      accountId: accountIds.investment,
+      amount: "50000.00", // Sure positive (expense-shaped) → Permoney -5_000_000
+      kind: "standard",
+      name: "Withdrawal exceeding balance",
+      date: "2026-02-01",
+    }),
+  ]
+
+  return {
+    ndjson: lines.join("\n"),
+    accountIds,
   }
 }

@@ -40,8 +40,16 @@ account can do.
 
 | `accountClass` | Normal balance | Balance sign rule | Use for                               |
 | -------------- | -------------- | ----------------- | ------------------------------------- |
-| `ASSET`        | Debit          | `balance >= 0`    | Cash, deposits, wallets, investments. |
+| `ASSET`        | Debit          | `balance >= 0`\*  | Cash, deposits, wallets, investments. |
 | `LIABILITY`    | Credit         | `balance <= 0`    | Credit cards, BNPL, loans, mortgages. |
+
+\* **ADR-0045 carve-out**: `DEPOSITORY` and `E_WALLET` accounts may hold a
+negative balance (real bank/e-wallet overdraft). `CASH` (a physical
+impossibility), `INVESTMENT` (unmodeled margin), `RECEIVABLE` (a category
+error), and `TRACKED_ASSET` keep the unconditional `>= 0` rule. See
+`allowsNegativeAssetBalance()` (`src/lib/accounts.ts`) and the SQL
+`app_allows_negative_asset()` function (single source of truth, coherence
+tested) for the exact scope.
 
 `EQUITY` and `TRACKING` are intentionally not in the M2.5 schema. Tracked real
 assets still use `ASSET` with `accountType = TRACKED_ASSET`. Future equity or
