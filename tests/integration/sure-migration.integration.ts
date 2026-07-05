@@ -187,6 +187,48 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     return runnerFn
   }
 
+  // Shared by the scale + crash/resume tests below: every one of them stages
+  // a `buildLargeSureBundle` ndjson under the filename "large.ndjson" and
+  // only ever varies the injected `runInTenantTransaction` (plain runner for
+  // a control/resume run, a tracker or crash-injecting wrapper otherwise).
+  const migrateLarge = (
+    tenant: Tenant,
+    ndjson: string,
+    runInTenantTransaction: RunInTenantTransaction = runner()
+  ) =>
+    runSureMigrationForFamily({
+      data: { filename: "large.ndjson", bundle: ndjson },
+      familyId: tenant.familyId,
+      user: { id: tenant.userId, familyId: tenant.familyId },
+      runInTenantTransaction,
+    })
+
+  const expectMigrateLargeToCrash = (
+    tenant: Tenant,
+    ndjson: string,
+    crashRunner: RunInTenantTransaction
+  ) => expect(migrateLarge(tenant, ndjson, crashRunner)).rejects.toThrow()
+
+  const batchAndRawCount = (tenant: Tenant) =>
+    harness.withMember(tenant.familyId, tenant.userId, async (tx) => ({
+      batch: await tx.importBatch.findFirst({
+        where: { familyId: tenant.familyId },
+      }),
+      rawCount: await tx.rawImportedTransaction.count({
+        where: { familyId: tenant.familyId },
+      }),
+    }))
+
+  const promotedAndIdempotencyState = (tenant: Tenant, endpoint: string) =>
+    harness.withMember(tenant.familyId, tenant.userId, async (tx) => ({
+      promotedCount: await tx.rawImportedTransaction.count({
+        where: { familyId: tenant.familyId, rowStatus: "promoted" },
+      }),
+      idempotencyRecords: await tx.idempotencyRecord.count({
+        where: { familyId: tenant.familyId, endpoint },
+      }),
+    }))
+
   // ---- full v2 bundle ------------------------------------------------------
 
   test("migrates a v2 bundle: bound entities, opening from anchor, only gated rows promoted", async () => {
@@ -864,12 +906,7 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     const tracker = createChunkBoundTracker()
 
     const startedAt = Date.now()
-    const result = await runSureMigrationForFamily({
-      data: { filename: "large.ndjson", bundle: fixture.ndjson },
-      familyId: tenant.familyId,
-      user: { id: tenant.userId, familyId: tenant.familyId },
-      runInTenantTransaction: tracker.runner,
-    })
+    const result = await migrateLarge(tenant, fixture.ndjson, tracker.runner)
     const wallMs = Date.now() - startedAt
 
     // Structural, not wall-time (ADR-0044 §6 — wall-time is nondeterministic
@@ -934,67 +971,28 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     const control = await setupTenant()
     const fixture = buildLargeSureBundle(800)
 
-    await runSureMigrationForFamily({
-      data: { filename: "large.ndjson", bundle: fixture.ndjson },
-      familyId: control.familyId,
-      user: { id: control.userId, familyId: control.familyId },
-      runInTenantTransaction: runner(),
-    })
+    await migrateLarge(control, fixture.ndjson)
 
     const crashRunner = crashWhen(
       (state) =>
         state.rawCount >= 2 * STAGING_CHUNK_SIZE &&
         state.rawCount < fixture.expected.staged
     )
-    await expect(
-      runSureMigrationForFamily({
-        data: { filename: "large.ndjson", bundle: fixture.ndjson },
-        familyId: tenant.familyId,
-        user: { id: tenant.userId, familyId: tenant.familyId },
-        runInTenantTransaction: crashRunner,
-      })
-    ).rejects.toThrow()
+    await expectMigrateLargeToCrash(tenant, fixture.ndjson, crashRunner)
 
     // Precondition guard (ADR-0044 / Q6 lock): assert the crash landed
     // genuinely mid-staging, not somewhere else — a data-state check, not
     // trust in a call-count. If this fails, the test is not proving what it
     // claims and must fail loudly rather than silently pass as a no-op.
-    const preCrash = await harness.withMember(
-      tenant.familyId,
-      tenant.userId,
-      async (tx) => ({
-        batch: await tx.importBatch.findFirst({
-          where: { familyId: tenant.familyId },
-        }),
-        rawCount: await tx.rawImportedTransaction.count({
-          where: { familyId: tenant.familyId },
-        }),
-      })
-    )
+    const preCrash = await batchAndRawCount(tenant)
     expect(preCrash.batch?.status).toBe("pending")
     expect(preCrash.rawCount).toBeGreaterThan(0)
     expect(preCrash.rawCount).toBeLessThan(fixture.expected.staged)
 
-    const resumed = await runSureMigrationForFamily({
-      data: { filename: "large.ndjson", bundle: fixture.ndjson },
-      familyId: tenant.familyId,
-      user: { id: tenant.userId, familyId: tenant.familyId },
-      runInTenantTransaction: runner(),
-    })
+    const resumed = await migrateLarge(tenant, fixture.ndjson)
     expect(resumed.replayed).toBe(false)
 
-    const post = await harness.withMember(
-      tenant.familyId,
-      tenant.userId,
-      async (tx) => ({
-        batch: await tx.importBatch.findFirst({
-          where: { familyId: tenant.familyId },
-        }),
-        rawCount: await tx.rawImportedTransaction.count({
-          where: { familyId: tenant.familyId },
-        }),
-      })
-    )
+    const post = await batchAndRawCount(tenant)
     // The batch rollup is recomputed again by the promote step later in this
     // same resumed call, and the fixture's 4 orphan transfer legs never
     // promote (by design — they have no pairing partner) — so the batch's
@@ -1015,12 +1013,7 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     const control = await setupTenant()
     const fixture = buildLargeSureBundle(800)
 
-    await runSureMigrationForFamily({
-      data: { filename: "large.ndjson", bundle: fixture.ndjson },
-      familyId: control.familyId,
-      user: { id: control.userId, familyId: control.familyId },
-      runInTenantTransaction: runner(),
-    })
+    await migrateLarge(control, fixture.ndjson)
 
     // Crash the FIRST call after every staging row has landed — i.e. finalize
     // itself, not any of the chunk inserts (a distinct code branch from the
@@ -1028,48 +1021,20 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     const crashRunner = crashWhen(
       (state) => state.rawCount >= fixture.expected.staged
     )
-    await expect(
-      runSureMigrationForFamily({
-        data: { filename: "large.ndjson", bundle: fixture.ndjson },
-        familyId: tenant.familyId,
-        user: { id: tenant.userId, familyId: tenant.familyId },
-        runInTenantTransaction: crashRunner,
-      })
-    ).rejects.toThrow()
+    await expectMigrateLargeToCrash(tenant, fixture.ndjson, crashRunner)
 
-    const preCrash = await harness.withMember(
-      tenant.familyId,
-      tenant.userId,
-      async (tx) => ({
-        batch: await tx.importBatch.findFirst({
-          where: { familyId: tenant.familyId },
-        }),
-        rawCount: await tx.rawImportedTransaction.count({
-          where: { familyId: tenant.familyId },
-        }),
-      })
-    )
+    const preCrash = await batchAndRawCount(tenant)
     expect(preCrash.batch?.status).toBe("pending")
     expect(preCrash.rawCount).toBe(fixture.expected.staged)
 
-    const resumed = await runSureMigrationForFamily({
-      data: { filename: "large.ndjson", bundle: fixture.ndjson },
-      familyId: tenant.familyId,
-      user: { id: tenant.userId, familyId: tenant.familyId },
-      runInTenantTransaction: runner(),
-    })
+    const resumed = await migrateLarge(tenant, fixture.ndjson)
     expect(resumed.replayed).toBe(false)
 
-    const post = await harness.withMember(
-      tenant.familyId,
-      tenant.userId,
-      async (tx) =>
-        tx.importBatch.findFirst({ where: { familyId: tenant.familyId } })
-    )
+    const post = await batchAndRawCount(tenant)
     // See the mid-staging test above: the fixture's 4 permanently-orphan
     // transfer legs mean the terminal rollup is `partially_promoted`, not
     // `ready_for_review` — what this proves is finalize actually ran.
-    expect(post?.status).not.toBe("pending")
+    expect(post.batch?.status).not.toBe("pending")
 
     await assertLedgerMatchesControl(tenant, control)
   }, 300_000)
@@ -1079,12 +1044,7 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     const control = await setupTenant()
     const fixture = buildLargeSureBundle(800)
 
-    await runSureMigrationForFamily({
-      data: { filename: "large.ndjson", bundle: fixture.ndjson },
-      familyId: control.familyId,
-      user: { id: control.userId, familyId: control.familyId },
-      runInTenantTransaction: runner(),
-    })
+    await migrateLarge(control, fixture.ndjson)
 
     const crashRunner = crashWhen(
       (state) =>
@@ -1092,29 +1052,11 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
         state.promotedCount >= 2 * PROMOTE_CHUNK_SIZE &&
         state.promotedCount < fixture.expected.promotedThisRun
     )
-    await expect(
-      runSureMigrationForFamily({
-        data: { filename: "large.ndjson", bundle: fixture.ndjson },
-        familyId: tenant.familyId,
-        user: { id: tenant.userId, familyId: tenant.familyId },
-        runInTenantTransaction: crashRunner,
-      })
-    ).rejects.toThrow()
+    await expectMigrateLargeToCrash(tenant, fixture.ndjson, crashRunner)
 
     const endpoint = "promoteImportBatch" // must match imports.ts's PROMOTE_IMPORT_BATCH_ENDPOINT
 
-    const preCrash = await harness.withMember(
-      tenant.familyId,
-      tenant.userId,
-      async (tx) => ({
-        promotedCount: await tx.rawImportedTransaction.count({
-          where: { familyId: tenant.familyId, rowStatus: "promoted" },
-        }),
-        idempotencyRecords: await tx.idempotencyRecord.count({
-          where: { familyId: tenant.familyId, endpoint },
-        }),
-      })
-    )
+    const preCrash = await promotedAndIdempotencyState(tenant, endpoint)
     expect(preCrash.promotedCount).toBeGreaterThan(0)
     expect(preCrash.promotedCount).toBeLessThan(
       fixture.expected.promotedThisRun
@@ -1128,25 +1070,9 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     // complete batch) — `replayed` reflects the STAGING sub-step only, not
     // "did the whole migration do net-new work." The real proof of self-heal
     // is the promoted-count and idempotency-record assertions below.
-    await runSureMigrationForFamily({
-      data: { filename: "large.ndjson", bundle: fixture.ndjson },
-      familyId: tenant.familyId,
-      user: { id: tenant.userId, familyId: tenant.familyId },
-      runInTenantTransaction: runner(),
-    })
+    await migrateLarge(tenant, fixture.ndjson)
 
-    const post = await harness.withMember(
-      tenant.familyId,
-      tenant.userId,
-      async (tx) => ({
-        promotedCount: await tx.rawImportedTransaction.count({
-          where: { familyId: tenant.familyId, rowStatus: "promoted" },
-        }),
-        idempotencyRecords: await tx.idempotencyRecord.count({
-          where: { familyId: tenant.familyId, endpoint },
-        }),
-      })
-    )
+    const post = await promotedAndIdempotencyState(tenant, endpoint)
     // Every promotable row ends up promoted exactly once — no double-promotion,
     // no gap left behind by the crash. `rowStatus="promoted"` counts BOTH
     // standard rows (promoted via promoteImportBatchForFamily, the path this
