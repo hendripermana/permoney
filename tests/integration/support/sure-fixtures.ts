@@ -879,15 +879,24 @@ export function buildSureBundleV2Transfers(): SureTransferFixture {
       heldLegsByReason: held,
     },
     balancesMinor: {
-      // 20_000_000 open − 4_000_000 (fm) − 5_000_000 (cc) − 6_000_000 (loan).
-      checking: 5_000_000n,
-      // 0 + 4_000_000 (fm in); the ns inflow is HELD, never posted.
-      savings: 4_000_000n,
+      // 20_000_000 open − 4_000_000 (fm) − 5_000_000 (cc) − 6_000_000 (loan)
+      // − 1_000_000 (cm out, HELD currency_mismatch) − 2_000_000 (orphan,
+      // HELD unpaired_orphan) — PER-182's final reconciliation anchor closes
+      // both held-leg gaps by construction (ADR-0045 amendment): the account
+      // never posts these as Transaction rows, but the closing anchor
+      // asserts the true final value Sure itself would show.
+      checking: 2_000_000n,
+      // 0 + 4_000_000 (fm in) + 1_500_000 (ns in, HELD not_staged, now
+      // closed) = 5_500_000.
+      savings: 5_500_000n,
       // −10_000_000 debt + 5_000_000 (cc payment) = −5_000_000 (toward zero).
+      // No held legs on this account — unaffected by the closing anchor.
       card: -5_000_000n,
-      // −20_000_000 debt + 6_000_000 (loan payment) = −14_000_000 (toward zero).
+      // −20_000_000 debt + 6_000_000 (loan payment) = −14_000_000 (toward
+      // zero). No held legs on this account — unaffected.
       loan: -14_000_000n,
-      usd: 0n,
+      // 0 + 100 (cm in, HELD currency_mismatch, now closed).
+      usd: 100n,
     },
   }
 }
@@ -1059,8 +1068,12 @@ export function buildSureBundleV1DegradedTransfers(): SureTransferFixture {
       name: "Cash move",
       date: "2026-05-09",
     }),
-    // kind_divergence: a loan-SOURCED funds_movement → Permoney derives liability_draw
-    // ≠ Sure funds_movement → HELD (never invents a borrowing event).
+    // A loan-SOURCED funds_movement → Permoney derives liability_draw; both
+    // legs are the generic Sure funds_movement (never specially tagged for a
+    // draw) → PROMOTES under the ADR-0042 amendment (PER-182, head-eng adu
+    // 2026-07-06): a clean, uniquely-matched draw pair posts as a real
+    // liability_draw transfer rather than being held (which used to silently
+    // understate debt — the draw never posted, only a later repayment did).
     sureTxn({
       id: legIds.kdOut,
       accountId: accountIds.loan,
@@ -1110,7 +1123,6 @@ export function buildSureBundleV1DegradedTransfers(): SureTransferFixture {
 
   const held = emptyHeld()
   held.ambiguous_cluster = 4
-  held.kind_divergence = 2
   held.unpaired_orphan = 1
 
   return {
@@ -1123,32 +1135,46 @@ export function buildSureBundleV1DegradedTransfers(): SureTransferFixture {
       transferLegsStaged: 15,
       // PER-176: the invest<->cash pair (`ni`) now promotes (Tier-1 clean —
       // unique amount/date/currency), since Investment is importable.
-      pairsPromotedThisRun: 4,
-      legsPromotedTotal: 8,
-      pairedByTier: { deterministic: 0, clean: 2, resolvedCluster: 2 },
+      // PER-182 (ADR-0042 amendment): the loan-sourced draw pair (`kd`) now
+      // also promotes (Tier-1 clean, unique amount/date/currency).
+      pairsPromotedThisRun: 5,
+      legsPromotedTotal: 10,
+      pairedByTier: { deterministic: 0, clean: 3, resolvedCluster: 2 },
       heldLegsByReason: held,
     },
     balancesMinor: {
-      // 5_000_000 anchor − 3_700_000 (clean out).
+      // 5_000_000 anchor − 3_700_000 (clean out). No held legs on this
+      // account — unaffected by the PER-182 closing anchor.
       main: 1_300_000n,
       // Anchor-chain double-count guard: nikah's anchor (3_700_000, dated
       // AFTER the inbound transfer) absorbs that transfer — final balance is
       // the anchor value alone, NOT anchor + the transfer again (7_400_000).
       nikah: 3_700_000n,
-      // 3_000_000 anchor − 1_200_000 (resolved out); amb leg HELD.
-      wallet: 1_800_000n,
-      dana: 1_800_000n,
-      gopay: 1_200_000n, // 0 + 1_200_000 (resolved in)
-      ovo: 1_200_000n,
-      loan: 0n, // kd leg HELD, never posted
+      // PER-182: 3_000_000 anchor − 1_200_000 (resolved out, promoted)
+      // − 800_000 (amb leg, HELD ambiguous_cluster, now closed by the final
+      // reconciliation anchor) = 1_000_000.
+      wallet: 1_000_000n,
+      // PER-182: same shape as wallet — anchor 3_000_000 − 1_200_000
+      // (resolved out) − 800_000 (amb, held, now closed) = 1_000_000.
+      dana: 1_000_000n,
+      // PER-182: 0 (no anchor) + 1_200_000 (resolved in, promoted)
+      // + 800_000 (amb leg, HELD, now closed) = 2_000_000.
+      gopay: 2_000_000n,
+      ovo: 2_000_000n,
+      // PER-182: the draw now posts — 0 (no anchor) - 2_500_000 (kd out,
+      // promoted liability_draw) = more debt, not the un-posted 0 it used
+      // to be under the reversed Q5 gate.
+      loan: -2_500_000n,
       // PER-176 grill Q8 #8: invest<->cash transfer with anchors/no-anchor on
       // each side both promote dual-leg, and each account's OWN calculator
       // independently derives its balance — zero special-case code needed.
-      // invest: anchor 5_000_000 - 1_800_000 (ni out, promoted).
+      // invest: anchor 5_000_000 - 1_800_000 (ni out, promoted). No held
+      // legs on this account — unaffected by the closing anchor.
       invest: 3_200_000n,
-      // cash: no anchor, so balance = Σ(promoted flow) = +1_800_000 (ni in);
-      // kd-in and orphan stay held, contributing nothing.
-      cash: 1_800_000n,
+      // PER-182: no anchor, so balance = Σ(ALL legs, not just promoted) =
+      // 1_800_000 (ni in, promoted) + 2_500_000 (kd in, now promoted)
+      // − 900_000 (orphan, HELD unpaired_orphan, now closed) = 3_400_000.
+      cash: 3_400_000n,
     },
   }
 }

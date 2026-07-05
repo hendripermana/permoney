@@ -7,19 +7,13 @@ import {
   test,
 } from "vite-plus/test"
 import { IDENTITY_RATE } from "@/lib/fx"
-import {
-  pairSureTransfers,
-  parseSureBundle,
-  SURE_PROVIDER,
-} from "@/lib/sure-migration"
+import { parseSureBundle, SURE_PROVIDER } from "@/lib/sure-migration"
 import { STAGING_CHUNK_SIZE } from "@/server/imports"
 import type { RunInTenantTransaction } from "@/server/mutation-kit"
 import {
-  buildSureTransferMeta,
   projectSureMigrationBalances,
   PROMOTE_CHUNK_SIZE,
   runSureMigrationForFamily,
-  stageableSureTransferLegs,
   SureMigrationPreflightError,
 } from "@/server/sure-migration"
 import { detectBalanceDriftForFamily } from "@/server/valuations"
@@ -274,10 +268,16 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     const checking = await accountByBinding(tenant, fixture.ids.checking)
     expect(checking?.accountType).toBe("DEPOSITORY")
     expect(checking?.isImportable).toBe(true)
+    // PER-182: `txnHeldKind` (a lone funds_movement leg on checking, HELD as
+    // unpaired_orphan — no counterpart in this fixture) never posts as a
+    // Transaction, but the final reconciliation anchor now closes its
+    // economic effect (Sure amount 20000.0 → Permoney delta -2_000_000) into
+    // the account's true final balance.
     expect(checking?.balance).toBe(
       fixture.openingBalanceMinor +
         fixture.promotableExpenseMinor +
-        fixture.promotableIncomeMinor
+        fixture.promotableIncomeMinor -
+        2_000_000n
     )
 
     // usd carries ONLY a `current_anchor` — under ADR-0043 that's still a full
@@ -447,8 +447,20 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     expect(txnCount).toBe(3) // no double-book (expense + income + invest std txn)
     expect(artifactCount).toBe(1) // one-shot artifact
     // PER-176 grill Q6 / Q8 #4: the content-derived idempotency key means a
-    // re-run replays every anchor write instead of duplicating it.
-    expect(valuationCount).toBe(fixture.expected.valuations.anchorsWritten)
+    // re-run replays every anchor write instead of duplicating it. PER-182
+    // adds one closing reconciliation anchor per account (every account,
+    // unconditionally) on top of the original per-Sure-valuation anchors —
+    // also idempotent (same content-derived key discipline), so a re-run
+    // doesn't add a second batch of them either.
+    expect(valuationCount).toBe(
+      fixture.expected.valuations.anchorsWritten +
+        first.finalReconciliation.anchorsWritten
+    )
+    // anchorsWritten counts every successful call (fresh OR replay) — same
+    // convention as `valuations.anchorsWritten` above — so it repeats, not 0.
+    expect(second.finalReconciliation.anchorsWritten).toBe(
+      first.finalReconciliation.anchorsWritten
+    )
     expect(checking.balance).toBe(checkingAfterFirst!.balance) // balance stable
   })
 
@@ -585,12 +597,15 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     expect(cash?.balance).toBe(fixture.balancesMinor.cash)
 
     // The negative valuation itself must never have been written as a row.
+    // 1 anchor (step 4, the valid non-negative one) + 1 closing reconciliation
+    // anchor (step 10, PER-182 — every account gets one, unconditionally,
+    // asserting the same already-correct value here) = 2.
     const valuationCount = await harness.withMember(
       tenant.familyId,
       tenant.userId,
       (tx) => tx.valuation.count({ where: { accountId: cash!.id } })
     )
-    expect(valuationCount).toBe(1)
+    expect(valuationCount).toBe(2)
   })
 
   // ---- PER-182 / ADR-0045 — negative-balance carve-out ---------------------
@@ -614,14 +629,19 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
 
     const abah = await accountByBinding(tenant, fixture.accountIds.abah)
     expect(abah?.accountType).toBe("LOAN")
-    // No valuation was ever written for Abah — the no-anchor fallback IS the
-    // canonical answer (PER-176 Q2's correction: no-valuation != zero).
+    // No PER-SURE-VALUATION anchor was ever written for Abah (no `Valuation`
+    // entity in the bundle for it) — the no-anchor fallback IS the canonical
+    // answer for its INTERIM balance (PER-176 Q2's correction: no-valuation
+    // != zero). PER-182's final reconciliation anchor still writes exactly
+    // ONE closing Valuation for it (every account gets one, unconditionally)
+    // asserting that same -1_500_000 value — a redundant-but-harmless
+    // confirmation, not a second, different source of truth.
     const abahValuationCount = await harness.withMember(
       tenant.familyId,
       tenant.userId,
       (tx) => tx.valuation.count({ where: { accountId: abah!.id } })
     )
-    expect(abahValuationCount).toBe(0)
+    expect(abahValuationCount).toBe(1)
 
     // Drift detector stays clean — the real invariant this ADR must not break.
     const drift = await detectBalanceDriftForFamily({
@@ -662,18 +682,7 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     // computeCanonicalBalance so the two can never silently drift apart
     // (ADR-0043 §6 discipline).
     const bundle = parseSureBundle(fixture.ndjson)
-    const transferMeta = buildSureTransferMeta(bundle)
-    const transferLegs = stageableSureTransferLegs(bundle, transferMeta)
-    const pairing = pairSureTransfers({
-      legs: transferLegs,
-      metaById: transferMeta,
-      transfers: bundle.transfers,
-    })
-    const projections = projectSureMigrationBalances(
-      bundle,
-      pairing,
-      transferMeta
-    )
+    const projections = projectSureMigrationBalances(bundle)
 
     for (const [key, sureAccountId] of Object.entries(fixture.accountIds)) {
       // `projections` is keyed by the SURE account id (bundle.accounts' own

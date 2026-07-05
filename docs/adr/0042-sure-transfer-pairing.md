@@ -52,13 +52,13 @@ promotes them as proper **dual-leg Permoney transfers**.
 The TIE_OUT holds (928 legs all accounted for), and after the asymmetric-kind fix
 the distribution is:
 
-| Outcome                                                                                                                            | Legs        |
-| ---------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| **paired** (promoted as dual-leg transfers)                                                                                        | ~648 (~70%) |
-| `non_importable` — Investment / PreciousMetal / OtherAsset legs **held by §6** (Phase 1 does not import these accounts; by design) | 210         |
-| `ambiguous_cluster` — held conservatively (no unique name match)                                                                   | 60          |
-| `kind_divergence` — loan-sourced `funds_movement` → `liability_draw`, no leg tagged it → held                                      | ~4          |
-| `unpaired_orphan`                                                                                                                  | 6           |
+| Outcome                                                                                                                                                                                         | Legs               |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| **paired** (promoted as dual-leg transfers)                                                                                                                                                     | ~648 (~70%)        |
+| `non_importable` — Investment / PreciousMetal / OtherAsset legs **held by §6** (Phase 1 does not import these accounts; by design)                                                              | 210                |
+| `ambiguous_cluster` — held conservatively (no unique name match)                                                                                                                                | 60                 |
+| `kind_divergence` — a Sure specialized kind the accounts don't justify → held (as of PER-182: no longer includes a clean loan-sourced draw, which now promotes — see the dated amendment below) | ~4 (pre-amendment) |
+| `unpaired_orphan`                                                                                                                                                                               | 6                  |
 
 The original "≥83%" was a **projection that did not account for the §6
 importability gate**: ~23% of transfer legs touch Investment/TrackedAsset
@@ -113,12 +113,13 @@ Before calling the canonical core, each candidate pair passes, in order:
    **asymmetrically** (only the cash-side leg carries the specialized kind; the
    liability-side leg is the generic `funds_movement` — see Context), the rule is:
    **every leg kind must be the derived kind OR `funds_movement`, AND at least one
-   leg must carry the derived kind.** This promotes `cc_payment`/`loan_payment`
-   (the common case), while still holding a genuine divergence — a loan-sourced
-   `funds_movement` (derived `liability_draw`, no leg tagged it → `kind_divergence`,
-   never invents a borrowing event) and a Sure `cc_payment` whose accounts don't
-   justify it. A bilateral-exact rule was the original bug: it held all 21 cc/loan
-   payment pairs because Sure never tags both legs.
+   leg must carry the derived kind — EXCEPT for `liability_draw`** (amended
+   PER-182, see the dated amendment below), which promotes on a clean pair with
+   both legs `funds_movement` since Sure never tags a draw specially at all. This
+   promotes `cc_payment`/`loan_payment` (the common case) and `liability_draw`
+   (the amendment), while still holding a genuine divergence — a Sure `cc_payment`
+   whose accounts don't justify it. A bilateral-exact rule was the original bug:
+   it held all 21 cc/loan payment pairs because Sure never tags both legs.
 
 The Postgres balance-sign CHECK (e.g. a `cc_payment` overshooting a liability past
 zero) is the runtime backstop: a throw from the core is caught per-pair and held
@@ -227,8 +228,9 @@ opening-balance reconciliation safeguard becomes mandatory.**
   cluster bidirectional resolve, ambiguous (no-hint and duplicate-name) held,
   gate precedence (importable → currency → kind), the **asymmetric kind combos**
   (`[cc_payment, funds_movement]` and `[loan_payment, funds_movement]` promote;
-  loan-sourced `funds_movement` → `liability_draw` held; a Sure `cc_payment` the
-  accounts don't justify → held), determinism, exhaustiveness.
+  loan-sourced `funds_movement` → `liability_draw` also promotes on a clean pair,
+  as of the PER-182 amendment below; a Sure `cc_payment` the accounts don't
+  justify → held), determinism, exhaustiveness.
 - **Mode A (deterministic, `Transfer` entity)**: dual-leg promote, atomic both-
   account balance, `Transfer` link, base/FX set; **`cc_payment` AND `loan_payment`
   pairs tagged ASYMMETRICALLY** (liability-side `funds_movement`, exactly like the
@@ -261,6 +263,40 @@ opening-balance reconciliation safeguard becomes mandatory.**
    in sync (CLAUDE.md "no new ledger writer", "bulk paths match single paths").
 6. **An opening-balance reconciliation pass for the cross-version edge.** Rejected
    for now — over-engineering pre-launch; documented assumption + limit instead.
+
+## Amendment — `liability_draw` promotes on a clean pair (PER-182, 2026-07-06)
+
+Alternative #3 above is **reversed**. Head-eng's real `all.ndjson` adu against
+PER-182 verified multiple genuine loan-draw pairs (Abah's borrow ↔ BRI Ayu,
+Pinjem uang ayu, both bidirectionally confirmed) that the original
+`kind_divergence` hold produced a real correctness bug, not a conservative
+safety margin: the draw leg (which increases debt) stayed held while a later
+repayment (which decreases debt) still posted, understating — or in the
+worst case inverting the sign of — the liability's true balance. "Only 1 real
+pair" undersold the real bundle's actual shape.
+
+The rule (§2 above) now has one exception: when the derived kind is
+`liability_draw` **and** the candidate pair was already formed by a clean
+Tier 0/1/2 match, it promotes even though **neither** leg carries the
+specialized kind (Sure never tags a draw specially — unlike `cc_payment`/
+`loan_payment`, where the cash-side leg IS tagged). No additional
+"bidirectional" check is needed at the gate itself: an ambiguous or
+partially-matched candidate never becomes a pair in the first place — it is
+held before `classifyTransferPairGate` ever runs (§1's Tier 0/1/2 pairing).
+A genuine kind conflict (a leg carrying some OTHER specialized kind that
+doesn't match the derived kind) still holds, unchanged.
+
+This does not weaken "held, never fabricated" (§1): the pairer still never
+invents a counterparty. It only stops treating "Sure didn't specially tag
+this leg" as if it meant "this pairing is unverified," when for
+`liability_draw` Sure structurally never tags either leg regardless of
+correctness — the clean-pairing tiers themselves are the verification.
+
+See ADR-0045's own PER-182 amendment for the companion fix: a new
+post-promotion final reconciliation anchor per account, which closes any
+remaining balance gap from legs held for other, genuinely ambiguous reasons
+(non-importable counterpart, ambiguous cluster, orphan) that this narrower
+gate change does not address.
 
 ## References
 

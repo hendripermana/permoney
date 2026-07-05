@@ -100,6 +100,7 @@ export interface SureMigrationTimings {
   transactionsConfirm: number
   transactionsPromote: number
   transfers: number
+  reconciliation: number
   rebuild: number
 }
 
@@ -161,6 +162,11 @@ export interface SureMigrationResult {
     }
     heldLegsByReason: Record<SureTransferHeldReason, number>
   }
+  // Post-promote closing anchors (ADR-0045's PER-182 amendment) — one final
+  // `type="reconciliation"` Valuation per account asserting the "all legs"
+  // projection, closing any gap left by legs Permoney's own staging gates
+  // held. See writeSureFinalReconciliationAnchors.
+  finalReconciliation: SureFinalReconciliationSummary
   timings: SureMigrationTimings
 }
 
@@ -270,11 +276,12 @@ async function deriveValuationIdempotencyKey(
   externalAccountId: string,
   day: string,
   amount: string,
-  currency: string
+  currency: string,
+  prefix = "sure-valuation"
 ): Promise<string> {
   const hex = await sha256Hex(
     new TextEncoder().encode(
-      `sure-valuation:${externalAccountId}:${day}:${amount}:${currency}`
+      `${prefix}:${externalAccountId}:${day}:${amount}:${currency}`
     )
   )
   const h = hex.padEnd(32, "0").slice(0, 32)
@@ -402,7 +409,6 @@ interface PreflightAccountFacts {
   accountType: AccountType
   accountClass: AccountClass
   balanceSource: string
-  isImportable: boolean
 }
 
 // -Infinity when there is no anchor at all — every promotable flow counts,
@@ -423,6 +429,11 @@ export interface SureMigrationAccountProjection {
   accountType: AccountType
   accountClass: AccountClass
   projectedBalance: bigint
+  // ISO day (YYYY-MM-DD) of the account's latest known activity (anchor or
+  // any Sure leg), or null if the account has neither. Consumed by
+  // writeSureFinalReconciliationAnchors to date the final anchor safely
+  // after every real event, so zero flow is ever counted after it.
+  lastActivityDay: string | null
 }
 
 /**
@@ -433,9 +444,7 @@ export interface SureMigrationAccountProjection {
  * every account, pinning the two formulas together (ADR-0043 §6 discipline).
  */
 export function projectSureMigrationBalances(
-  bundle: ParsedSureBundle,
-  transferPairing: SureTransferPairingResult,
-  transferMeta: ReadonlyMap<string, SureTransferAccountMeta>
+  bundle: ParsedSureBundle
 ): Map<string, SureMigrationAccountProjection> {
   const now = Date.now()
   const factsById = new Map<string, PreflightAccountFacts>()
@@ -450,7 +459,6 @@ export function projectSureMigrationBalances(
       accountType: taxonomy.accountType,
       accountClass: taxonomy.accountClass,
       balanceSource: taxonomy.balanceSource,
-      isImportable: taxonomy.isImportable,
     })
   }
 
@@ -489,53 +497,71 @@ export function projectSureMigrationBalances(
   }
 
   const projected = new Map<string, bigint>()
-  for (const accountId of factsById.keys()) {
-    projected.set(accountId, anchorById.get(accountId)?.value ?? 0n)
+  const lastActivityDay = new Map<string, string>()
+  for (const [accountId, anchor] of anchorById) {
+    projected.set(accountId, anchor.value)
+    lastActivityDay.set(accountId, anchor.day)
   }
-  const addFlow = (accountId: string, date: Date, delta: bigint) => {
+  const addFlow = (
+    accountId: string,
+    date: Date,
+    day: string,
+    delta: bigint
+  ) => {
     if (!factsById.has(accountId)) return
+    const existingLast = lastActivityDay.get(accountId)
+    if (!existingLast || day > existingLast) {
+      lastActivityDay.set(accountId, day)
+    }
     const cutoff = anchorCutoffMillis(anchorById.get(accountId)?.day ?? null)
     if (date.getTime() <= cutoff) return
     projected.set(accountId, (projected.get(accountId) ?? 0n) + delta)
   }
 
-  // Standard transaction flow (transfer legs are handled separately below,
-  // using the exact same promotable/held decision the real pairer made).
+  // ADR-0045/ADR-0044 §8 (revised, PER-182 head-eng adu 2026-07-06): the flow
+  // sum is over EVERY Sure leg for the account — standard transactions AND
+  // transfer legs, PROMOTED or HELD alike — using each leg's OWN signed
+  // amount and currency directly. This is deliberately NOT the "promoted
+  // set": Permoney's own gating (non-importable counterpart, ambiguous
+  // cluster, currency mismatch, orphan…) is a Permoney-side staging concern
+  // that Sure's own forward-calculator knows nothing about. Projecting the
+  // promoted-only set was the earlier design and produced false-positive
+  // violations whenever a real account had ANY held leg (Tabungan Nikah and
+  // others) — this "all legs" sum is exactly what the new post-promote final
+  // reconciliation anchor (writeSureFinalReconciliationAnchors) asserts, so
+  // pre-flight and the final anchor can never disagree (ADR-0043 §6
+  // discipline: one segmentation function, not two).
+  //
+  // EXCEPTION (ADR-0034 §5, unchanged by any of the above): a
+  // balanceSource="valuation" account (TRACKED_ASSET) never derives its
+  // balance from transaction flow at all — its balance is strictly the
+  // latest valuation. Flow must not be applied here regardless of promoted/
+  // held status, or a held (never-promoted, by taxonomy) standard
+  // transaction on a tracked account would corrupt its projection.
+  //
+  // A leg whose OWN currency doesn't match its OWN account's currency is
+  // excluded, not converted: `toMinorUnits(txn.amount, txn.currency)` counts
+  // minor units of WHATEVER currency the leg claims, and adding that number
+  // straight onto a balance denominated in the account's (different)
+  // currency is unit-mismatched — mixing cents into a yen balance. This is
+  // NOT the same case as a legitimate cross-currency TRANSFER pair (e.g. an
+  // IDR outflow leg paired with a USD inflow leg): there, each leg's OWN
+  // currency already matches its OWN account, so each is counted correctly
+  // in isolation — no pairing logic is needed here at all, only a per-leg
+  // self-consistency check. FX conversion for a real mismatch is ADR-0035/
+  // PER-147's job, not this projection's; excluding it here matches
+  // `isPromotable`'s own currency gate for the promoted-only path.
   for (const txn of bundle.transactions) {
-    if (isSureTransferLeg(txn)) continue
     const facts = factsById.get(txn.account_id)
-    if (!facts) continue
+    if (!facts || facts.balanceSource !== "transaction_flow") continue
+    if (txn.currency !== facts.currency) continue
     const date = new Date(txn.date)
     if (Number.isNaN(date.getTime())) continue
-    const infoLike: PermoneyAccountInfo = {
-      id: txn.account_id,
-      currency: facts.currency,
-      isImportable: facts.isImportable,
-      balanceSource: facts.balanceSource,
-      accountType: facts.accountType,
-    }
-    if (!isPromotable(txn, infoLike)) continue
     const minor = toMinorUnits(
       txn.amount,
-      facts.currency as CurrencyCode
+      txn.currency as CurrencyCode
     ) as bigint
-    addFlow(txn.account_id, date, -minor)
-  }
-
-  // Promotable transfer pairs only (pairing.held never promotes). Both legs
-  // share the outflow's date, mirroring pairAndPromoteSureTransfers' single
-  // shared-date dual-leg write exactly.
-  for (const pair of transferPairing.pairs) {
-    const outMeta = transferMeta.get(pair.outflow.account_id)
-    if (!outMeta) continue
-    const date = new Date(pair.outflow.date)
-    if (Number.isNaN(date.getTime())) continue
-    const absMinor = toMinorUnits(
-      pair.outflow.amount,
-      outMeta.currency as CurrencyCode
-    ) as bigint
-    addFlow(pair.outflow.account_id, date, -absMinor)
-    addFlow(pair.inflow.account_id, date, absMinor)
+    addFlow(txn.account_id, date, txn.date.slice(0, 10), -minor)
   }
 
   const result = new Map<string, SureMigrationAccountProjection>()
@@ -546,6 +572,7 @@ export function projectSureMigrationBalances(
       accountType: facts.accountType,
       accountClass: facts.accountClass,
       projectedBalance: projected.get(accountId) ?? 0n,
+      lastActivityDay: lastActivityDay.get(accountId) ?? null,
     })
   }
   return result
@@ -557,15 +584,9 @@ export function projectSureMigrationBalances(
  * bundle with two bad accounts should report both in one pass).
  */
 function findSureMigrationPreflightViolations(
-  bundle: ParsedSureBundle,
-  transferPairing: SureTransferPairingResult,
-  transferMeta: ReadonlyMap<string, SureTransferAccountMeta>
+  bundle: ParsedSureBundle
 ): SureMigrationPreflightViolation[] {
-  const projections = projectSureMigrationBalances(
-    bundle,
-    transferPairing,
-    transferMeta
-  )
+  const projections = projectSureMigrationBalances(bundle)
   const violations: SureMigrationPreflightViolation[] = []
   for (const projection of projections.values()) {
     const { accountClass, accountType, projectedBalance } = projection
@@ -588,6 +609,87 @@ function findSureMigrationPreflightViolations(
     }
   }
   return violations
+}
+
+export interface SureFinalReconciliationSummary {
+  anchorsWritten: number
+}
+
+/**
+ * ADR-0045's PER-182 amendment (head-eng adu 2026-07-06) — the post-promote
+ * closing step. Writes ONE final `type="reconciliation"` Valuation per
+ * account, asserting exactly `projectSureMigrationBalances`' projection — the
+ * same "all legs" value pre-flight already verified is legal. Dated one day
+ * after the account's last known activity (its latest anchor or any Sure
+ * leg), so under ADR-0043's anchor-chain formula this anchor is
+ * unconditionally the effective one with zero flow ever counted after it:
+ * the materialized balance becomes exactly this asserted value, closing any
+ * gap left by legs Permoney's own staging gates held (non-importable
+ * counterpart, ambiguous cluster, currency mismatch, orphan…) — a
+ * source-data ASSERTION, not a fabricated plug (ADR-0043's own anchor
+ * model), functioning as this migration's ground truth. Every account gets
+ * one, unconditionally (not only ones with a detected gap), so the
+ * mechanism needs no per-account special-casing.
+ */
+async function writeSureFinalReconciliationAnchors(
+  bundle: ParsedSureBundle,
+  accountMap: ReadonlyMap<string, string>,
+  familyId: string,
+  user: { id: string; familyId?: string | null },
+  runInTenantTransaction: RunInTenantTransaction
+): Promise<SureFinalReconciliationSummary> {
+  const projections = projectSureMigrationBalances(bundle)
+  const currencyById = new Map(bundle.accounts.map((a) => [a.id, a.currency]))
+  let anchorsWritten = 0
+
+  for (const projection of projections.values()) {
+    if (!projection.lastActivityDay) continue // no activity — nothing to close
+    const permoneyAccountId = accountMap.get(projection.sureAccountId)
+    if (!permoneyAccountId) continue
+    const currency = currencyById.get(projection.sureAccountId)
+    if (!currency) continue
+
+    const anchorDate = new Date(`${projection.lastActivityDay}T00:00:00.000Z`)
+    anchorDate.setUTCDate(anchorDate.getUTCDate() + 1)
+
+    // createValuationForFamily expects a non-negative MAGNITUDE for LIABILITY
+    // (it negates internally via signMagnitudeForAccount, mirroring every
+    // other liability valuation write) but the ALREADY-SIGNED value for
+    // ASSET carve-out types (it uses a negative input as-is). projectedBalance
+    // is always the final Permoney-signed value; convert only for LIABILITY.
+    const magnitudeValue = (
+      projection.accountClass === "LIABILITY" &&
+      projection.projectedBalance < 0n
+        ? -projection.projectedBalance
+        : projection.projectedBalance
+    ).toString()
+
+    const idempotencyKey = await deriveValuationIdempotencyKey(
+      projection.sureAccountId,
+      projection.lastActivityDay,
+      projection.projectedBalance.toString(),
+      currency,
+      "sure-final-reconciliation"
+    )
+
+    await createValuationForFamily({
+      data: {
+        accountId: permoneyAccountId,
+        value: magnitudeValue,
+        currency,
+        valuationDate: anchorDate,
+        type: "reconciliation",
+        source: "migration:sure",
+        idempotencyKey,
+      },
+      familyId,
+      user,
+      runInTenantTransaction,
+    })
+    anchorsWritten += 1
+  }
+
+  return { anchorsWritten }
 }
 
 // ---------------------------------------------------------------------------
@@ -704,6 +806,7 @@ export async function runSureMigrationForFamily({
     transactionsConfirm: 0,
     transactionsPromote: 0,
     transfers: 0,
+    reconciliation: 0,
     rebuild: 0,
   }
 
@@ -726,11 +829,7 @@ export async function runSureMigrationForFamily({
   // Pure in-memory projection of every account's FINAL balance from the
   // bundle alone. Runs before any write (including account shells) so a
   // bundle that would leave any account illegal never touches the database.
-  const preflightViolations = findSureMigrationPreflightViolations(
-    bundle,
-    transferPairing,
-    transferMeta
-  )
+  const preflightViolations = findSureMigrationPreflightViolations(bundle)
   if (preflightViolations.length > 0) {
     throw new SureMigrationPreflightError(preflightViolations)
   }
@@ -1110,15 +1209,34 @@ export async function runSureMigrationForFamily({
   })
   timings.transfers = Date.now() - transfersT0
 
-  // --- 10. Mandatory final rebuild — the correctness guarantee (ADR-0043) ---
-  // During steps 4-9, `Account.balance` is transiently WRONG: step 4 sets it to
-  // the latest anchor's value (via createValuationForFamily's own interim
-  // recompute), then steps 8-9 apply per-transaction increments/decrements that
-  // over-count any PRE-anchor flow (createTransactionForFamily doesn't know
-  // about anchors — it just applies a delta). Nothing reads the balance mid-run,
-  // so this is safe ONLY because this rebuild recomputes the materialized cache
+  // --- 10. Final reconciliation anchor (ADR-0045's PER-182 amendment) -------
+  // Closes any remaining balance gap from legs Permoney's own staging gates
+  // held (non-importable counterpart, ambiguous cluster, currency mismatch,
+  // orphan…) by asserting the "all legs" projection — the same value
+  // pre-flight already verified is legal — as one final, dated-last anchor
+  // per account. See writeSureFinalReconciliationAnchors for the full
+  // reasoning. Runs under the bulk-replay bypass like step 4 (another
+  // anchor-writing phase in the same transient-until-rebuild window).
+  const reconciliationT0 = Date.now()
+  const finalReconciliation = await writeSureFinalReconciliationAnchors(
+    bundle,
+    accountMap,
+    familyId,
+    user,
+    bulkReplayTx
+  )
+  timings.reconciliation = Date.now() - reconciliationT0
+
+  // --- 11. Mandatory final rebuild — the correctness guarantee (ADR-0043) ---
+  // During steps 4-10, `Account.balance` is transiently WRONG: step 4 sets it
+  // to the latest anchor's value (via createValuationForFamily's own interim
+  // recompute), then steps 8-9 apply per-transaction increments/decrements
+  // that over-count any PRE-anchor flow (createTransactionForFamily doesn't
+  // know about anchors — it just applies a delta), and step 10 writes a NEW
+  // latest anchor for every account. Nothing reads the balance mid-run, so
+  // this is safe ONLY because this rebuild recomputes the materialized cache
   // from canonical rows (latest anchor + Σ post-anchor flow, or the existing
-  // no-anchor-found fallback for the handful of accounts with no valuations)
+  // no-anchor-found fallback for the rare account with no valuations at all)
   // — overriding the incremental journey with the calculator's actual answer.
   const rebuildT0 = Date.now()
   await rebuildFamilyBalances({ familyId, user, runInTenantTransaction })
@@ -1146,6 +1264,7 @@ export async function runSureMigrationForFamily({
     },
     transfers,
     valuations: anchorSummary,
+    finalReconciliation,
     valuationsParsed: bundle.valuations.length,
     malformedLines: bundle.malformedLines.length,
     ignoredEntities: bundle.ignoredEntities,

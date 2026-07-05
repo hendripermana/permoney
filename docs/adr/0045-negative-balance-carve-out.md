@@ -211,6 +211,65 @@ A minimal account-creation UI change accompanies the schema change (accept a
 negative amount for carve-out types, reject inline for others); deeper form
 polish, if any is later wanted, is not blocking.
 
+### 6. Pre-flight and the final state project the SAME "all legs" model (amended, 2026-07-06)
+
+Two rounds of head-eng's real `all.ndjson` adu against this ADR's pre-flight
+validator (ADR-0044 §8) each found the check's own projection wrong in a
+different way, both now fixed:
+
+1. **Liability anchor sign.** The projection's anchor-seeding used a Sure
+   valuation's raw (Sure-exported) magnitude directly. The real writer
+   (`createValuationForFamily`, via `signMagnitudeForAccount`) NEGATES a
+   non-negative raw value for `LIABILITY` accounts — Sure exports a loan's
+   valuation as a positive debt magnitude; Permoney stores the anchor
+   negative. The projection was a parallel reimplementation of this sign
+   convention instead of reusing the real one, and silently dropped the
+   negation for every liability-with-anchor account. Fixed by exporting
+   `signMagnitudeForAccount` and calling it directly in the projection's
+   anchor branch — one signing implementation, not two.
+2. **Promoted-set vs. all-legs.** The projection originally summed flow only
+   over the transactions/transfer legs that would actually be _promoted_ as
+   `Transaction` rows. This is wrong: Permoney's own staging gates
+   (non-importable counterpart, ambiguous transfer cluster, currency
+   mismatch, orphan…) are a Permoney-side concern that has nothing to do
+   with what an account's TRUE final value is in Sure's own data. The
+   projection now sums every Sure leg for an account — standard transactions
+   AND transfer legs, promoted or held alike, using each leg's own signed
+   amount directly — mirroring the new final reconciliation anchor (§7
+   below) exactly, so pre-flight and the real final state can never
+   disagree (ADR-0043 §6's "one segmentation function" discipline, applied
+   here to the whole pre-flight/finalization relationship, not just the
+   drift check it originated with).
+
+The one carve-out from "all legs": a `balanceSource="valuation"` account
+(`TRACKED_ASSET`) never derives its balance from transaction flow at all
+(ADR-0034 §5) — the projection skips flow entirely for these regardless of
+promoted/held status, matching the real calculator.
+
+### 7. Final reconciliation anchor closes the promoted/held gap (new, 2026-07-06)
+
+Companion fix to §6.2, and the mechanism that makes "all legs" true of the
+real migrated data, not just of the projection: after transaction and
+transfer promotion (ADR-0042), `writeSureFinalReconciliationAnchors`
+(`src/server/sure-migration.ts`) writes ONE final `type="reconciliation"`
+`Valuation` per account, asserting the exact §6 "all legs" value, dated one
+day after the account's last known activity (its latest anchor or any Sure
+leg). Under ADR-0043's anchor-chain formula this makes the new anchor
+unconditionally the effective one with zero flow ever counted after it — the
+materialized balance becomes exactly this asserted value, closing any gap
+left by legs Permoney's own staging gates held. This is a source-data
+ASSERTION (Sure's own forward-calculated total), not a fabricated plug —
+exactly ADR-0043's existing anchor model, applied at the end of the pipeline
+instead of per-Sure-valuation. Every account gets one, unconditionally (not
+only accounts with a detected gap), so the mechanism needs no per-account
+special-casing. Idempotent via the same content-derived-key discipline as
+every other Sure-written anchor (`deriveValuationIdempotencyKey`, prefixed
+`sure-final-reconciliation` to avoid colliding with the per-valuation anchor
+keys from ADR-0043 §5). See ADR-0041 §5 (amended) for this step's place in
+the overall pipeline, and ADR-0042's dated amendment for the companion
+`liability_draw` gate fix that reduces (but does not eliminate — non-draw
+holds still exist) how often this closing anchor has real work to do.
+
 ## Consequences
 
 ### Positive

@@ -665,10 +665,14 @@ describe("classifyTransferPairGate — precedence importable → currency → ki
     ).toBe("non_importable")
   })
 
-  test("loan-source funds_movement → kind_divergence (derived liability_draw)", () => {
+  test("loan-source funds_movement → promotes as liability_draw (ADR-0042 amendment, PER-182)", () => {
+    // Sure never tags a loan draw with a specialized kind (unlike cc_payment/
+    // loan_payment) — both legs are always generic funds_movement. A clean
+    // pair reaching the gate promotes; see the exception in
+    // classifyTransferPairGate for the full reasoning.
     expect(
       classifyTransferPairGate(meta("a", "A", "LOAN"), meta("b", "B"), o, i)
-    ).toBe("kind_divergence")
+    ).toBeNull()
   })
 
   test("ASYMMETRIC cc_payment ([cc_payment, funds_movement]) promotes", () => {
