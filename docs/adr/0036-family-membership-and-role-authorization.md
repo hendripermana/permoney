@@ -1,15 +1,15 @@
 # ADR-0036 — Family membership and role authorization model
 
-|                   |                                                           |
-| ----------------- | --------------------------------------------------------- |
-| **Status**        | Accepted                                                  |
-| **Date**          | 2026-06-20                                                |
-| **Accepted**      | 2026-06-20                                                |
-| **Deciders**      | Hendri Permana                                            |
-| **Supersedes**    | PER-98, PER-114 (design)                                  |
-| **Superseded by** | —                                                         |
-| **Amended by**    | ADR-0037 (§2 adds `budget:write`)                         |
-| **Amends**        | ADR-0008 §8; ADR-0010 (User actor); ADR-0014 (role split) |
+|                   |                                                                                                              |
+| ----------------- | ------------------------------------------------------------------------------------------------------------ |
+| **Status**        | Accepted                                                                                                     |
+| **Date**          | 2026-06-20                                                                                                   |
+| **Accepted**      | 2026-06-20                                                                                                   |
+| **Deciders**      | Hendri Permana                                                                                               |
+| **Supersedes**    | PER-98, PER-114 (design)                                                                                     |
+| **Superseded by** | —                                                                                                            |
+| **Amended by**    | ADR-0037 (§2 adds `budget:write`); ADR-0044 §7 (PER-181 — §4 `SplitEntry`/`Transfer` policy shape corrected) |
+| **Amends**        | ADR-0008 §8; ADR-0010 (User actor); ADR-0014 (role split)                                                    |
 
 ## Context
 
@@ -185,9 +185,9 @@ upgraded so the **database independently enforces membership** (defense in depth
   $$;
   ```
 
-- Every **data-table** policy (`Account`, `Merchant`, `Transaction`,
-  `SmartRule`, `SplitEntry`, `Transfer`, `Valuation`, `FxRateSnapshot`,
-  `IdempotencyRecord`, `AuditLog`) gains the guard:
+- Every **data-table** policy on a table that carries its own `familyId`
+  column (`Account`, `Merchant`, `Transaction`, `SmartRule`, `Valuation`,
+  `FxRateSnapshot`, `IdempotencyRecord`, `AuditLog`) gains the guard:
 
   ```sql
   USING (
@@ -202,6 +202,36 @@ upgraded so the **database independently enforces membership** (defense in depth
   Because both GUCs are constants, the `app_is_active_member(...)` call is a
   once-per-query InitPlan, not a per-row correlated subquery — the per-row cost
   is negligible.
+
+  > **Amended 2026-07-05, PER-181 (ADR-0044 §7).** `SplitEntry` and `Transfer`
+  > have no `familyId` column of their own — they are scoped indirectly
+  > through their parent `Transaction`. The original migration expressed that
+  > indirection as `"transactionId"`/`"outflowTransactionId"` `IN (SELECT id
+FROM "Transaction" WHERE "familyId" = ...)`. That shape is a
+  > **non-correlated** subquery: Postgres cannot push the outer row's id into
+  > it, so it plans a hashed SubPlan that materializes every `Transaction` row
+  > owned by the family on **every** `SplitEntry`/`Transfer` access — cost
+  > that grows with the family's total transaction count regardless of
+  > indexes. This made Sure-migration transfer promotion (one `Transfer`
+  > read/write per pair, against a `Transaction` table growing throughout the
+  > same run) cost O(pairs²) — see ADR-0044 §7 for the measured evidence. The
+  > corrected shape is a **correlated** `EXISTS`, anchored on
+  > `Transaction.id` (its primary key):
+  >
+  > ```sql
+  > EXISTS (
+  >   SELECT 1 FROM "Transaction"
+  >   WHERE "Transaction"."id" = "Transfer"."outflowTransactionId"
+  >     AND "Transaction"."familyId" = current_setting('app.family_id', true)::text
+  > )
+  > ```
+  >
+  > A correlated `EXISTS` cannot be hash-materialized independently of the
+  > outer row, so Postgres evaluates a per-row Index Scan on
+  > `Transaction_pkey` instead — O(log n) regardless of ledger size. Same two
+  > columns checked, same membership guard, same security semantics — only
+  > the query shape changed (migration
+  > `20260705120000_fix_transfer_split_entry_rls_full_scan`).
 
 - `Category` keeps its `OR "isSystem" = true` branch **outside** the membership
   guard so global system categories stay readable:

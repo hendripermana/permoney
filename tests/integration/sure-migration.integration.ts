@@ -886,23 +886,30 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     }
   }
 
-  // NOTE on scale (1500, not the originally-targeted ~3000): a PER-179 root-
-  // cause probe (2026-07-05) found the UNTOUCHED transfers phase
-  // (`pairAndPromoteSureTransfers`) has a real, reproducible superlinear cost
-  // per pair (222ms/pair @75 pairs -> ~427ms/pair @225 pairs, confirmed on a
-  // freshly-restarted Postgres with realistic account density — hot-row
-  // bloat and container staleness were both ruled out as the primary cause).
-  // At the full ~3000-txn/~450-pair mirror this makes the whole migration
-  // exceed 900s, which is impractical for a committed test. Root cause is
-  // NOT yet isolated (needs EXPLAIN ANALYZE-level profiling) and transfers is
-  // explicitly out of THIS ticket's scope per ADR-0044 §6's measurement-gate
-  // (material -> re-grill, don't build blind) — tracked as a follow-up
-  // ticket. 1500 txns still proves the load-bearing claim (multiple staging
-  // AND promote chunks, real per-account-density proportions) in a wall-time
-  // this suite can reliably run.
-  test("scale: ~1500-txn bundle completes without exceeding a single chunk-bound transaction", async () => {
+  // NOTE on scale: PER-179 first found the UNTOUCHED transfers phase
+  // (`pairAndPromoteSureTransfers`) had a real, reproducible superlinear cost
+  // per pair (222ms/pair @75 pairs -> ~427ms/pair @225 pairs), which made the
+  // full ~3000-txn/~450-pair mirror exceed 900s — impractical for a committed
+  // test, so this test was capped at 1500 and the root cause tracked as
+  // PER-181. PER-181 (2026-07-05) proved via EXPLAIN ANALYZE that the cause
+  // was NOT the per-pair write pattern (createTransactionForFamily, its
+  // try/catch isolation, and SERIALIZABLE retries were all cleared — zero
+  // retries measured at every scale, and the identical growth curve
+  // reproduced under ReadCommitted isolation) but a non-correlated `IN
+  // (subquery)` RLS predicate on `Transfer`/`SplitEntry` (ADR-0036 §4) that
+  // forced Postgres to re-scan the family's ENTIRE `Transaction` table on
+  // every single `Transfer` read/write, making the whole loop O(pairs²).
+  // Fixed as a bounded-query/index-class change (migration
+  // `20260705120000_fix_transfer_split_entry_rls_full_scan`, ADR-0044 §7):
+  // the predicate is now a correlated `EXISTS` anchored on `Transaction`'s
+  // primary key, so cost no longer grows with ledger size. A second,
+  // unrelated `gzipBytes` stream write-before-read deadlock (same ADR §7)
+  // was found and fixed alongside once the RLS fix exposed it as the next
+  // blocker at this scale. The test is restored to the originally-targeted
+  // ~3000 txns / ~450 pairs (measured: completes in ~123s wall-time).
+  test("scale: ~3000-txn bundle completes without exceeding a single chunk-bound transaction", async () => {
     const tenant = await setupTenant()
-    const fixture = buildLargeSureBundle(1500)
+    const fixture = buildLargeSureBundle(3000)
     const tracker = createChunkBoundTracker()
 
     const startedAt = Date.now()
@@ -959,11 +966,9 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     expect(tracker.maxRawDelta()).toBeLessThanOrEqual(STAGING_CHUNK_SIZE)
     expect(tracker.maxTxnDelta()).toBeLessThanOrEqual(PROMOTE_CHUNK_SIZE)
     // The tracker doubles round-trips (1 extra query transaction per real
-    // one) on top of the transfers phase's own already-slow, separately-
-    // tracked cost (see the scale-note above) — this generous budget covers
-    // THAT combined test-harness overhead, not the production migration
-    // itself (which stays governed by the untouched 5s Prisma default per
-    // ADR-0044 §1).
+    // one) — this generous budget covers that test-harness overhead, not the
+    // production migration itself (which stays governed by the untouched 5s
+    // Prisma default per ADR-0044 §1).
   }, 600_000)
 
   test("crash-resume: mid-staging crash resumes via count-prefix skip, matches a clean control run", async () => {

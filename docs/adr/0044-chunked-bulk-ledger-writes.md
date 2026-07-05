@@ -1,14 +1,14 @@
 # ADR-0044 — Chunked bulk ledger writes (bounded transactions + resumable staging)
 
-|                   |                                                                                                                   |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **Status**        | Accepted                                                                                                          |
-| **Date**          | 2026-07-04                                                                                                        |
-| **Accepted**      | 2026-07-04                                                                                                        |
-| **Deciders**      | Hendri Permana                                                                                                    |
-| **Supersedes**    | —                                                                                                                 |
-| **Superseded by** | —                                                                                                                 |
-| **Amends**        | ADR-0039 §1/§9 (staging insert + promotion orchestration become chunked); ADR-0041 §1 (step 5 orchestration loop) |
+|                   |                                                                                                                                                                                     |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Status**        | Accepted                                                                                                                                                                            |
+| **Date**          | 2026-07-04                                                                                                                                                                          |
+| **Accepted**      | 2026-07-04                                                                                                                                                                          |
+| **Deciders**      | Hendri Permana                                                                                                                                                                      |
+| **Supersedes**    | —                                                                                                                                                                                   |
+| **Superseded by** | —                                                                                                                                                                                   |
+| **Amends**        | ADR-0039 §1/§9 (staging insert + promotion orchestration become chunked); ADR-0041 §1 (step 5 orchestration loop); ADR-0036 §4 (`SplitEntry`/`Transfer` RLS policy shape, §7 below) |
 
 ## Context
 
@@ -250,6 +250,87 @@ transfer-pair round-trips — are **not** built speculatively. The methodology:
    `createTransactionForFamily`'s own P2002 recovery. Any such change needs
    its own design grill against the measured number, not a guess made
    alongside this ADR.
+
+### 7. Outcome (PER-181): the `transfers` phase gate fired, root cause was an RLS query shape, not the write pattern
+
+The scale test built for this ADR (§5's `timings`, run at a real-shape
+≥1500-txn bundle) showed the `transfers` phase was material — not a trivial
+fraction of total time, the opposite of the `valuations`-phase outcome. Per §6,
+this triggered a **profile-first, no-guessing** investigation (PER-181,
+`/diagnose`), rather than jumping to the shared-transaction/SAVEPOINT batching
+approach §6.5 explicitly declined to pre-design.
+
+**Measured before any fix**, real-shape bundles: 222ms/pair @75 pairs → 400–
+578ms/pair @225 pairs → did not finish in 900s (synthetic) / 1800s (real
+`all.ndjson`, ~324 pairs) @~450 pairs. Hypotheses ruled out with evidence, not
+guesses: FX cross-currency (fixture is single-currency, short-circuits before
+any query), hot-row/account density (spreading pairs over more accounts made
+it _worse_), container staleness (a fresh Postgres restart gave only ~26%
+improvement, did not fix the trend), and — the two most likely candidates
+given `createTransactionForFamily`'s transfer branch runs under
+`scopedTenantTransaction`'s forced `SERIALIZABLE` isolation —
+**Postgres SSI/retry overhead**: `withSerializableRetry`'s retry counter was
+**zero** at every scale tested (no retries at all — not a retry storm), and
+re-running the identical path under `ReadCommitted` isolation reproduced the
+**same** growth curve, proving the isolation level was not the driver.
+
+**Root cause, proven via `EXPLAIN (ANALYZE, BUFFERS)`** against a populated
+test database: the `Transfer` and `SplitEntry` RLS policies (ADR-0036 §4)
+authorize each row via a **non-correlated** `outflowTransactionId IN (SELECT
+id FROM "Transaction" WHERE "familyId" = ...)` subquery. Postgres cannot
+decorrelate this — it plans a hashed SubPlan that materializes **every**
+`Transaction` row belonging to the family, on **every** `Transfer`/
+`SplitEntry` SELECT or INSERT. Measured cost: 493 existing transactions →
+subplan `rows=493`, query total 28.6ms; 1493 existing transactions → subplan
+`rows=1493`, query total 86.2ms (≈0.058ms per existing family transaction,
+i.e. linear in **current ledger size**, not pair count). Since
+`pairAndPromoteSureTransfers` reads/writes `Transfer` once per pair while the
+family's `Transaction` table is simultaneously growing throughout the same
+run, total transfer-phase cost is the sum over an increasing table size —
+**O(pairs²)** — exactly matching the measured cliff (a quadratic curve looks
+mild, then explodes, which is why 1500→3000 was a DNF rather than gradual
+growth).
+
+**Fix: a bounded-query/index-class change, not a write-pattern change.**
+Migration `20260705120000_fix_transfer_split_entry_rls_full_scan` rewrites
+both policies' `USING`/`WITH CHECK` predicates as a **correlated** `EXISTS`
+anchored on `Transaction.id` (its primary key) instead of the non-correlated
+`IN (subquery)` — same two columns checked, same membership guard, same
+security semantics, only the query shape changes. A correlated `EXISTS`
+cannot be hash-materialized independently of the outer row, so Postgres
+evaluates a per-row Index Scan on `Transaction_pkey` — O(log n) regardless of
+ledger size. **No change to `createTransactionForFamily`, no batching, no
+SAVEPOINTs, no shared transaction** — §6.5's declined approach was correctly
+declined; the per-pair write pattern and its `db_rejected` try/catch isolation
+are untouched. Re-measured post-fix: msPerPair did not grow with scale
+(≈140–315ms/pair across 500/1500-txn runs, noise-dominated rather than
+trending upward) — the O(pairs²) mechanism this ticket set out to fix is
+confirmed gone. See ADR-0036 §4 (amended alongside) for the corrected policy
+shape.
+
+**A second, unrelated bug was found (and fixed alongside) while validating at
+3000-txn scale.** With the RLS fix alone, a 3000-txn run still did not
+complete — but per-phase tracing showed it now hung much earlier, between the
+`transactionsStage` and `transactionsPromote` phases, with zero Postgres
+backend activity and ~0% CPU (idle, not busy — not a query problem at all).
+Isolated to `gzipBytes` (this file, §"Retain the raw bundle" step): it called
+`writer.write(input)` / `writer.close()` on a `CompressionStream` and only
+started `stream.readable.getReader()` afterward — a classic WHATWG-streams
+write-before-read deadlock. Reproduced standalone (outside Postgres/Prisma
+entirely): highly-compressible input (repeated bytes) never hung even at 8MB,
+but realistic incompressible/JSON-shaped input hung from a few hundred KB up,
+because the transform's internal readable-side queue fills faster than it
+can be drained when nothing is reading concurrently. This is almost certainly
+**why the original pre-fix investigation attributed the entire 3000-txn DNF
+to the `transfers` phase** — no per-phase trace existed at the time, and this
+`gzipBytes` hang triggers earlier in the pipeline, before `transfers` is ever
+reached, independent of the RLS bug above. Fixed by starting the reader loop
+concurrently with the write instead of after it (same file). This is a
+distinct file/mechanism from the RLS fix — a stream-handling bug, not a
+ledger-write-pattern change — so it carries none of §6.5's write-pattern
+concerns. Re-measured post-both-fixes: the 3000-txn scale test (previously
+DNF at 900s) completes in ~123s wall-time, with msPerPair=102.53 — still not
+growing with scale.
 
 ## Consequences
 

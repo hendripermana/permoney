@@ -178,19 +178,33 @@ async function gzipBytes(
 ): Promise<Uint8Array<ArrayBuffer>> {
   const stream = new CompressionStream("gzip")
   const writer = stream.writable.getWriter()
-  await writer.write(input)
-  await writer.close()
   const reader = stream.readable.getReader()
+
+  // The reader MUST drain concurrently with the write below, not after
+  // (PER-181). A CompressionStream's internal readable-side queue has bounded
+  // capacity; write()/close() can block on backpressure until it's drained.
+  // Starting the read loop only after write()+close() deadlocks once the
+  // compressed output exceeds that internal queue — reproduced standalone
+  // with ordinary incompressible/JSON-shaped input from a few hundred KB up
+  // (never triggers with highly-compressible input, which is why small
+  // fixtures never caught this).
   const chunks: Uint8Array[] = []
   let total = 0
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (value) {
-      chunks.push(value)
-      total += value.length
+  const drain = (async () => {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value) {
+        chunks.push(value)
+        total += value.length
+      }
     }
-  }
+  })()
+
+  await writer.write(input)
+  await writer.close()
+  await drain
+
   const out = new Uint8Array(total)
   let offset = 0
   for (const chunk of chunks) {
