@@ -1486,23 +1486,57 @@ export function buildLargeSureBundle(
 
 export interface SurePer182CarveOutFixture {
   ndjson: string
-  accountIds: { dana: string; abah: string }
-  expectedBalancesMinor: { dana: bigint; abah: bigint }
+  accountIds: {
+    dana: string
+    abah: string
+    ccBankMega: string
+    assetAnchorFlows: string
+    assetTransferSource: string
+  }
+  expectedBalancesMinor: {
+    dana: bigint
+    abah: bigint
+    ccBankMega: bigint
+    assetAnchorFlows: bigint
+    assetTransferSource: bigint
+  }
 }
 
 /**
  * Happy-path carve-out bundle, verified against real data (head-eng adu,
- * 2026-07-05): `dana` is a DEPOSITORY account (Sure `Depository`) whose only
- * anchor is already negative (a real overdrawn e-wallet/checking balance) —
- * legal under ADR-0045's carve-out, no further flow needed. `abah` is a LOAN
- * (LIABILITY) with NO valuation at all — resolves via the pre-existing
- * no-anchor fallback (PER-176 Q2's "Borrow money from Abah" correction:
- * no-valuation does NOT mean zero, it means pure Σ promotable flow).
+ * 2026-07-05) — covers every structurally distinct projection shape ADR-0045's
+ * pre-flight must handle correctly, per the locked design:
+ *
+ * - `dana` (DEPOSITORY, carve-out): anchor already negative, no flow after —
+ *   the ADR-0045 carve-out itself.
+ * - `abah` (LOAN, LIABILITY): NO valuation at all — pure Σ promotable flow
+ *   (PER-176 Q2's "no-valuation != zero" correction).
+ * - `ccBankMega` (CREDIT, LIABILITY, WITH an anchor): the exact real numbers
+ *   head-eng verified against the Sure UI (anchor magnitude 1,899,346, one
+ *   flow of -1,359,346 after it, final -540,000) — this is the fixture that
+ *   catches the sign bug an earlier cut of the projection had: the anchor
+ *   must be signed via signMagnitudeForAccount (LIABILITY negates), not used
+ *   as Sure's raw positive magnitude directly. A fixture with NO anchor
+ *   (`abah`) cannot exercise this path — the bug was invisible to it.
+ * - `assetAnchorFlows` (DEPOSITORY, ASSET, WITH an anchor and >1 flow,
+ *   INCLUDING a transfer leg): anchor 500,000 + a standalone expense
+ *   (-10,000) + a promoted transfer inflow (+50,000) = 540,000. Paired with
+ *   `assetTransferSource`, the outflow leg (ends at 950,000, unaffected by
+ *   this scenario's assertions but must itself stay legal).
  */
 export function buildSureBundlePer182CarveOut(): SurePer182CarveOutFixture {
   const accountIds = {
     dana: "sure-acc-per182-dana",
     abah: "sure-acc-per182-abah",
+    ccBankMega: "sure-acc-per182-cc-bank-mega",
+    assetAnchorFlows: "sure-acc-per182-asset-anchor-flows",
+    assetTransferSource: "sure-acc-per182-asset-transfer-source",
+  }
+  const legIds = {
+    ccBankMegaFlow: "sure-txn-per182-cc-bank-mega-flow",
+    assetExpense: "sure-txn-per182-asset-expense",
+    transferOut: "sure-txn-per182-transfer-out",
+    transferIn: "sure-txn-per182-transfer-in",
   }
 
   const lines = [
@@ -1513,6 +1547,25 @@ export function buildSureBundlePer182CarveOut(): SurePer182CarveOutFixture {
       "Loan",
       "personal_loan"
     ),
+    sureAccount(
+      accountIds.ccBankMega,
+      "CC Bank Mega Syariah",
+      "CreditCard",
+      "credit_card"
+    ),
+    sureAccount(
+      accountIds.assetAnchorFlows,
+      "Asset With Anchor And Flows",
+      "Depository",
+      "checking"
+    ),
+    sureAccount(
+      accountIds.assetTransferSource,
+      "Asset Transfer Source",
+      "Depository",
+      "checking"
+    ),
+
     // Real Dana anchor: -164298 minor units, no flow after it — final balance
     // IS the anchor. Legal only because DEPOSITORY is carve-out-eligible.
     sureVal({
@@ -1530,6 +1583,65 @@ export function buildSureBundlePer182CarveOut(): SurePer182CarveOutFixture {
       name: "Borrowed from Abah",
       date: "2026-02-01",
     }),
+
+    // ccBankMega: LIABILITY WITH an anchor — the exact real head-eng-verified
+    // numbers. Anchor is a POSITIVE Sure magnitude (debt owed); the writer
+    // (createValuationForFamily / signMagnitudeForAccount) negates it, so the
+    // stored anchor is -1,899,346. One flow after: Sure amount -13593.46 →
+    // minor -1,359,346 → Permoney delta +1,359,346 (a credit/refund posted
+    // directly to the card). Final: -1,899,346 + 1,359,346 = -540,000.
+    sureVal({
+      accountId: accountIds.ccBankMega,
+      amount: "18993.46",
+      date: "2026-01-01",
+    }),
+    sureTxn({
+      id: legIds.ccBankMegaFlow,
+      accountId: accountIds.ccBankMega,
+      amount: "-13593.46",
+      kind: "standard",
+      name: "Card credit",
+      date: "2026-02-01",
+    }),
+
+    // assetAnchorFlows: ASSET WITH an anchor and TWO flows after it (a
+    // standalone expense + a promoted transfer inflow) — anchor 500,000
+    // - 10,000 (expense) + 50,000 (transfer in) = 540,000.
+    sureVal({
+      accountId: accountIds.assetAnchorFlows,
+      amount: "5000.00",
+      date: "2026-01-01",
+    }),
+    sureTxn({
+      id: legIds.assetExpense,
+      accountId: accountIds.assetAnchorFlows,
+      amount: "100.00",
+      kind: "standard",
+      name: "Groceries",
+      date: "2026-02-01",
+    }),
+    sureVal({
+      accountId: accountIds.assetTransferSource,
+      amount: "10000.00",
+      date: "2026-01-01",
+    }),
+    sureTxn({
+      id: legIds.transferOut,
+      accountId: accountIds.assetTransferSource,
+      amount: "500.00",
+      kind: "funds_movement",
+      name: "Transfer to Asset With Anchor And Flows",
+      date: "2026-02-02",
+    }),
+    sureTxn({
+      id: legIds.transferIn,
+      accountId: accountIds.assetAnchorFlows,
+      amount: "-500.00",
+      kind: "funds_movement",
+      name: "Transfer from Asset Transfer Source",
+      date: "2026-02-02",
+    }),
+    sureTransfer(legIds.transferOut, legIds.transferIn),
   ]
 
   return {
@@ -1538,6 +1650,9 @@ export function buildSureBundlePer182CarveOut(): SurePer182CarveOutFixture {
     expectedBalancesMinor: {
       dana: -164298n,
       abah: -1_500_000n,
+      ccBankMega: -540_000n,
+      assetAnchorFlows: 540_000n,
+      assetTransferSource: 950_000n,
     },
   }
 }

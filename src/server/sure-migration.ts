@@ -42,7 +42,11 @@ import {
 import { withBulkLedgerReplayBypass } from "./bulk-ledger-replay"
 import type { RunInTenantTransaction } from "./mutation-kit"
 import { createTransactionForFamily, createdAuditEntries } from "./transactions"
-import { createValuationForFamily, rebuildFamilyBalances } from "./valuations"
+import {
+  createValuationForFamily,
+  rebuildFamilyBalances,
+  signMagnitudeForAccount,
+} from "./valuations"
 
 // ============================================================================
 // PER-170 / ADR-0041 — Sure full-family migration (Phase 1), orchestration.
@@ -465,10 +469,22 @@ export function projectSureMigrationBalances(
       valuation.currency as CurrencyCode
     ) as bigint
     if (minor < 0n && !allowsNegativeAssetBalance(facts.accountType)) continue
+    // Mirror createValuationForFamily's EXACT signing branch (ADR-0045): a
+    // negative raw value (carve-out only) is used as-is; a non-negative raw
+    // value is signed via signMagnitudeForAccount, which NEGATES it for
+    // LIABILITY — Sure exports a loan's valuation as a positive magnitude
+    // (debt owed), Permoney stores the anchor negative. Reusing the real
+    // writer's own signing helper (not reimplementing it) is load-bearing:
+    // an earlier cut of this projection reimplemented the sign logic
+    // independently and silently dropped this negation, producing
+    // false-positive pre-flight rejections on the real bundle (verified by
+    // head-eng against the real Sure UI: CC Bank Mega, Tunaiku, Abah, Pinjem).
+    const signedValue: bigint =
+      minor < 0n ? minor : signMagnitudeForAccount(facts.accountClass, minor)
     const day = valuation.date.slice(0, 10)
     const existing = anchorById.get(valuation.account_id)
     if (!existing || day >= existing.day) {
-      anchorById.set(valuation.account_id, { value: minor, day })
+      anchorById.set(valuation.account_id, { value: signedValue, day })
     }
   }
 

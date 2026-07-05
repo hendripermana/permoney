@@ -229,7 +229,7 @@ function normalBalanceForClass(accountClass: string): "POSITIVE" | "NEGATIVE" {
 }
 
 // Sign a non-negative magnitude by the account's normal balance.
-function signMagnitudeForAccount(
+export function signMagnitudeForAccount(
   accountClass: string,
   magnitude: bigint
 ): Money {
