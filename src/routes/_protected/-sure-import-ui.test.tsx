@@ -54,6 +54,17 @@ function makeResult(
         ambiguous_cluster: 0,
       },
     },
+    timings: {
+      accounts: 0,
+      categories: 0,
+      merchants: 0,
+      valuations: 0,
+      transactionsStage: 0,
+      transactionsConfirm: 0,
+      transactionsPromote: 0,
+      transfers: 0,
+      rebuild: 0,
+    },
     ...rest,
   }
 }

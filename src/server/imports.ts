@@ -57,6 +57,14 @@ import { validateTenantReferences } from "./validation/tenant-references"
 const PROMOTE_IMPORT_BATCH_ENDPOINT = "promoteImportBatch"
 const REVIEW_IMPORT_ROWS_ENDPOINT = "reviewImportRows"
 
+// ADR-0044: bounded-transaction chunk size for the staging insert loop.
+// createMany-batched insert of pre-computed rows; per-row cost here is
+// in-memory fingerprint/dedup only (no DB round-trip per row) — 250 is
+// inherited-conservative from PROMOTE_CHUNK_SIZE's measured profile below,
+// not independently measured. Raise only with a measured number, never a
+// guess (ADR-0044 §2/§6).
+export const STAGING_CHUNK_SIZE = 250
+
 // Absolute minor-unit amount over the wire (JSON has no bigint). Accepts an
 // integer string/number/bigint; the row's signed value is derived from `type`.
 const absAmountSchema = z
@@ -226,9 +234,13 @@ export async function createImportBatchForFamily({
   const data = createImportBatchInputSchema.parse(rawData)
   const auditCtx = await createAuditContext({ user }, data.idempotencyKey)
 
-  return runInTenantTransaction(familyId, user.id, async (tx) => {
-    // Per-file batch dedup (ADR-0039 §5): the identical file in this family +
-    // source returns the existing batch, never re-stages.
+  // --- Phase 1: setup (one short transaction) ------------------------------
+  // Per-file batch dedup (ADR-0039 §5): the identical file in this family +
+  // source returns the existing batch IF it is genuinely complete. A
+  // `status="pending"` existing batch means a prior run crashed mid-staging
+  // (or completed every chunk but crashed before finalize) — ADR-0044 §3
+  // resumes it instead of declaring it replayed.
+  const setup = await runInTenantTransaction(familyId, user.id, async (tx) => {
     const existing = await tx.importBatch.findUnique({
       where: {
         import_batch_content_dedup: {
@@ -238,22 +250,13 @@ export async function createImportBatchForFamily({
         },
       },
     })
-    if (existing) {
-      return {
-        id: existing.id,
-        sourceKind: existing.sourceKind,
-        status: existing.status,
-        contentHash: existing.contentHash,
-        totalRows: existing.totalRows,
-        duplicateRows: existing.duplicateRows,
-        errorRows: existing.errorRows,
-        promotedRows: existing.promotedRows,
-        replayed: true,
-      }
+    if (existing && existing.status !== "pending") {
+      return { kind: "replay" as const, batch: existing }
     }
 
-    // Validate every distinct target account up-front (tenant isolation — a
-    // cross-tenant accountId fails closed before any staging row is written).
+    // Validate every distinct target account up-front (tenant isolation —
+    // a cross-tenant accountId fails closed before any staging row is
+    // written).
     const distinctAccountIds = Array.from(
       new Set(data.rows.map((row) => row.accountId))
     )
@@ -283,22 +286,9 @@ export async function createImportBatchForFamily({
       },
     })
 
-    const batch = await tx.importBatch.create({
-      data: {
-        familyId,
-        createdById: user.id,
-        sourceKind: data.sourceKind,
-        provider: data.provider ?? null,
-        accountId: data.accountId ?? null,
-        contentHash: data.contentHash,
-        idempotencyKey: data.idempotencyKey ?? null,
-        status: "pending",
-        totalRows: data.rows.length,
-      },
-    })
-
-    // Existing canonical fingerprints + coarse keys, derived on read (no column
-    // on Transaction). Window the ledger to the accounts + date span touched.
+    // Existing canonical fingerprints + coarse keys, derived on read (no
+    // column on Transaction). Window the ledger to the accounts + date span
+    // touched.
     const { fingerprintToTxnId, coarseToTxnId } = await loadCanonicalDedupIndex(
       tx,
       familyId,
@@ -306,106 +296,191 @@ export async function createImportBatchForFamily({
       data.rows
     )
 
-    const seenFingerprints = new Map<string, string>() // fp -> rawRowId (in batch)
-    let duplicateRows = 0
-
-    for (const row of data.rows) {
-      const currency = currencyByAccount.get(row.accountId) ?? "IDR"
-      const signedAmount = signImportAmount(
-        row.type as ImportRowType,
-        row.amount
-      )
-      const day = importCalendarDay(row.date, family.timezone)
-      const normalizedDescription = normalizeImportDescription(row.description)
-      const fingerprint = await computeRowFingerprint({
-        familyId,
-        accountId: row.accountId,
-        calendarDay: day,
-        signedAmountMinorUnits: signedAmount,
-        currency,
-        normalizedDescription,
-        externalId: row.externalId ?? null,
+    let batchId: string
+    let alreadyPersisted = 0
+    if (existing) {
+      // Resume: header already exists with status="pending" from a crashed
+      // prior run. Count what's already landed — never guess past it.
+      batchId = existing.id
+      alreadyPersisted = await tx.rawImportedTransaction.count({
+        where: { familyId, importBatchId: existing.id },
       })
-
-      // Dedup verdict (ADR-0039 §4).
-      const canonicalMatch = fingerprintToTxnId.get(fingerprint)
-      const inBatchMatch = seenFingerprints.get(fingerprint)
-      let rowStatus = "normalized"
-      let duplicateOfTransactionId: string | null = null
-      let possibleDuplicate = false
-      if (canonicalMatch) {
-        rowStatus = "duplicate"
-        duplicateOfTransactionId = canonicalMatch
-      } else if (inBatchMatch) {
-        rowStatus = "duplicate"
-      } else {
-        // Near-duplicate: same account+day+amount, different description.
-        const coarse = coarseKey(row.accountId, day, signedAmount)
-        if (coarseToTxnId.has(coarse)) possibleDuplicate = true
+      if (alreadyPersisted > data.rows.length) {
+        throw new Error(
+          `Import batch ${existing.id} has ${alreadyPersisted} staged rows but the resumed bundle only derives ${data.rows.length} rows — refusing to guess; this is corruption, not a resumable state`
+        )
       }
-      if (rowStatus === "duplicate") duplicateRows += 1
-
-      // Enrichment (suggestion columns only).
-      const suggestion = applySmartRules(smartRules, normalizedDescription)
-
-      await tx.rawImportedTransaction.create({
+    } else {
+      const created = await tx.importBatch.create({
         data: {
           familyId,
-          importBatchId: batch.id,
-          accountId: row.accountId,
-          rawPayload: (row.rawPayload ?? {}) as Prisma.InputJsonValue,
-          externalId: row.externalId ?? null,
-          type: row.type,
-          amount: signedAmount,
-          currency,
-          date: row.date,
-          description: row.description,
-          fingerprint,
-          rowStatus,
-          possibleDuplicate,
-          duplicateOfTransactionId,
-          suggestedCategoryId:
-            row.suggestedCategoryId ?? suggestion.suggestedCategoryId,
-          suggestedMerchantId:
-            row.suggestedMerchantId ?? suggestion.suggestedMerchantId,
-          matchedSmartRuleId: suggestion.matchedSmartRuleId,
-          promotionIdempotencyKey: createUuidV7(),
+          createdById: user.id,
+          sourceKind: data.sourceKind,
+          provider: data.provider ?? null,
+          accountId: data.accountId ?? null,
+          contentHash: data.contentHash,
+          idempotencyKey: data.idempotencyKey ?? null,
+          status: "pending",
+          totalRows: data.rows.length,
         },
       })
-      seenFingerprints.set(fingerprint, batch.id)
+      batchId = created.id
     }
 
-    const batchStatus = "ready_for_review"
-    await tx.importBatch.update({
-      where: { id: batch.id },
-      data: { duplicateRows, status: batchStatus },
+    return {
+      kind: "proceed" as const,
+      batchId,
+      currencyByAccount,
+      timezone: family.timezone,
+      smartRules,
+      fingerprintToTxnId,
+      coarseToTxnId,
+      alreadyPersisted,
+    }
+  })
+
+  if (setup.kind === "replay") {
+    return {
+      id: setup.batch.id,
+      sourceKind: setup.batch.sourceKind,
+      status: setup.batch.status,
+      contentHash: setup.batch.contentHash,
+      totalRows: setup.batch.totalRows,
+      duplicateRows: setup.batch.duplicateRows,
+      errorRows: setup.batch.errorRows,
+      promotedRows: setup.batch.promotedRows,
+      replayed: true,
+    }
+  }
+
+  const {
+    batchId,
+    currencyByAccount,
+    timezone,
+    smartRules,
+    fingerprintToTxnId,
+    coarseToTxnId,
+    alreadyPersisted,
+  } = setup
+
+  // --- Phase 2: pure in-memory classification pass (no transaction) -------
+  // Every row's fingerprint/dedup-verdict/smart-rule suggestion is computed
+  // here, over the FULL row array (including any already-persisted prefix on
+  // resume) so in-batch dedup ordering stays correct regardless of where a
+  // prior crash landed (ADR-0044 §3 condition 3). Only phase 3 skips the
+  // already-persisted prefix; classification never does.
+  const seenFingerprints = new Set<string>()
+  const prepared: Prisma.RawImportedTransactionCreateManyInput[] = []
+
+  for (const row of data.rows) {
+    const currency = currencyByAccount.get(row.accountId) ?? "IDR"
+    const signedAmount = signImportAmount(row.type as ImportRowType, row.amount)
+    const day = importCalendarDay(row.date, timezone)
+    const normalizedDescription = normalizeImportDescription(row.description)
+    const fingerprint = await computeRowFingerprint({
+      familyId,
+      accountId: row.accountId,
+      calendarDay: day,
+      signedAmountMinorUnits: signedAmount,
+      currency,
+      normalizedDescription,
+      externalId: row.externalId ?? null,
     })
 
+    // Dedup verdict (ADR-0039 §4).
+    const canonicalMatch = fingerprintToTxnId.get(fingerprint)
+    const inBatchMatch = seenFingerprints.has(fingerprint)
+    let rowStatus = "normalized"
+    let duplicateOfTransactionId: string | null = null
+    let possibleDuplicate = false
+    if (canonicalMatch) {
+      rowStatus = "duplicate"
+      duplicateOfTransactionId = canonicalMatch
+    } else if (inBatchMatch) {
+      rowStatus = "duplicate"
+    } else {
+      // Near-duplicate: same account+day+amount, different description.
+      const coarse = coarseKey(row.accountId, day, signedAmount)
+      if (coarseToTxnId.has(coarse)) possibleDuplicate = true
+    }
+    seenFingerprints.add(fingerprint)
+
+    // Enrichment (suggestion columns only).
+    const suggestion = applySmartRules(smartRules, normalizedDescription)
+
+    prepared.push({
+      familyId,
+      importBatchId: batchId,
+      accountId: row.accountId,
+      rawPayload: (row.rawPayload ?? {}) as Prisma.InputJsonValue,
+      externalId: row.externalId ?? null,
+      type: row.type,
+      amount: signedAmount,
+      currency,
+      date: row.date,
+      description: row.description,
+      fingerprint,
+      rowStatus,
+      possibleDuplicate,
+      duplicateOfTransactionId,
+      suggestedCategoryId:
+        row.suggestedCategoryId ?? suggestion.suggestedCategoryId,
+      suggestedMerchantId:
+        row.suggestedMerchantId ?? suggestion.suggestedMerchantId,
+      matchedSmartRuleId: suggestion.matchedSmartRuleId,
+      // Minted fresh even for the already-persisted prefix (those entries are
+      // never inserted, just discarded) — a resumed row is NEVER re-inserted,
+      // so no key is ever assigned twice (ADR-0044 §3 condition 2).
+      promotionIdempotencyKey: createUuidV7(),
+    })
+  }
+
+  // --- Phase 3: chunked insert, resume-safe (skip already-persisted prefix) -
+  for (
+    let start = alreadyPersisted;
+    start < prepared.length;
+    start += STAGING_CHUNK_SIZE
+  ) {
+    const chunk = prepared.slice(start, start + STAGING_CHUNK_SIZE)
+    await runInTenantTransaction(familyId, user.id, async (tx) => {
+      await tx.rawImportedTransaction.createMany({ data: chunk })
+    })
+  }
+
+  // --- Phase 4: finalize (one short transaction) ---------------------------
+  // Rollup is ALWAYS recomputed from persisted DB rows here, never carried
+  // forward from an in-memory counter — the resumed remainder's dedup verdict
+  // may legitimately differ from what a crashed run would have computed if
+  // the canonical ledger changed in between (ADR-0044 §3 condition 3).
+  return await runInTenantTransaction(familyId, user.id, async (tx) => {
+    await recomputeBatchRollup(tx, familyId, batchId)
+    const finalBatch = await tx.importBatch.findUniqueOrThrow({
+      where: { id: batchId },
+    })
     await auditLogs(tx, auditCtx, [
       {
         action: "create",
         entityType: "ImportBatch",
-        entityId: batch.id,
+        entityId: batchId,
         before: null,
         after: {
-          id: batch.id,
-          sourceKind: batch.sourceKind,
-          contentHash: batch.contentHash,
-          totalRows: data.rows.length,
-          duplicateRows,
+          id: batchId,
+          sourceKind: finalBatch.sourceKind,
+          contentHash: finalBatch.contentHash,
+          totalRows: finalBatch.totalRows,
+          duplicateRows: finalBatch.duplicateRows,
         },
       },
     ])
-
     return {
-      id: batch.id,
-      sourceKind: batch.sourceKind,
-      status: batchStatus,
-      contentHash: batch.contentHash,
-      totalRows: data.rows.length,
-      duplicateRows,
-      errorRows: 0,
-      promotedRows: 0,
+      id: finalBatch.id,
+      sourceKind: finalBatch.sourceKind,
+      status: finalBatch.status,
+      contentHash: finalBatch.contentHash,
+      totalRows: finalBatch.totalRows,
+      duplicateRows: finalBatch.duplicateRows,
+      errorRows: finalBatch.errorRows,
+      promotedRows: finalBatch.promotedRows,
       replayed: false,
     }
   })

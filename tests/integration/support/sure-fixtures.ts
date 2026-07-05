@@ -1243,3 +1243,233 @@ export function buildSureBundleAnchorEdgeCases(): SureAnchorEdgeCaseFixture {
     },
   }
 }
+
+// ---------------------------------------------------------------------------
+// PER-179 / ADR-0044 — large-scale procedural generator (scale + crash tests).
+//
+// Deterministic, index-derived (NO Math.random()) — a static NDJSON blob this
+// size would be unreviewable and non-parametric (ADR-0044 §8 lock). Fixed
+// proportions regardless of `txnCount`: ~30% of rows are transfer legs
+// (paired via an explicit `Transfer` entity for deterministic Tier-0
+// pairing), a small fixed overhead of zero-amount and held (unpaired
+// transfer) rows, and ~8 valuations per account (accounts scale with
+// txnCount, one anchor written per account up front plus 7 more spread
+// across the timeline — 10 accounts × 8 = 80 for the canonical 3000-txn
+// case, mirroring the real bundle's ~84).
+//
+// Deliberately OUT of scope (already covered by the small fixtures above):
+// currency-mismatch accounts, non-importable accounts, split_lines, malformed
+// lines, near-duplicate/in-batch-dedup rows. This generator exists to prove
+// SCALE + chunk-boundary + resume correctness (ADR-0044), not to re-prove
+// dedup/gating logic that already has dedicated coverage.
+//
+// All valuations are dated AFTER every transaction, so every account's final
+// balance is simply its last-written valuation's amount (no post-anchor flow
+// to reason about) — a deliberate simplification that keeps balance
+// assertions trivial while still exercising ~80 real
+// `createValuationForFamily` calls end-to-end.
+// ---------------------------------------------------------------------------
+
+export interface LargeSureBundleManifest {
+  ndjson: string
+  txnCount: number
+  accountCount: number
+  expected: {
+    accountsCreated: number
+    transactionsTotal: number
+    staged: number
+    promotedThisRun: number
+    held: number
+    zeroAmountSkipped: number
+    malformedLines: number
+    valuationsParsed: number
+    valuations: { anchorsWritten: number; negativeSkipped: number }
+    transfers: {
+      legsSeen: number
+      legsStaged: number
+      pairsPromotedThisRun: number
+      legsPromotedTotal: number
+      heldLegsByReason: Record<SureTransferHeldReason, number>
+    }
+  }
+}
+
+const LARGE_BUNDLE_START_DATE = "2020-01-01"
+const LARGE_BUNDLE_ZERO_AMOUNT_COUNT = 3
+const LARGE_BUNDLE_HELD_COUNT = 4
+
+export function buildLargeSureBundle(
+  txnCount: number
+): LargeSureBundleManifest {
+  if (txnCount < 50) {
+    throw new Error(
+      "buildLargeSureBundle requires txnCount >= 50 for its fixed overhead rows to stay a small fraction of the total"
+    )
+  }
+
+  // Real bundle ratio: 3002 txns / 41 accounts ≈ 73 txns/account (928 legs /
+  // 41 accounts ≈ 23 legs/account). An earlier version of this formula used
+  // txnCount/300, which concentrated ~90 legs on each of only 5-10 accounts
+  // (4x denser than real) — an artificial hot-row UPDATE-churn pattern on a
+  // small set of Account rows that made the transfers phase look far worse
+  // than real-world density would (PER-179 root-cause probe, 2026-07-05).
+  const accountCount = Math.min(60, Math.max(5, Math.round(txnCount / 73)))
+  const accountIds = Array.from(
+    { length: accountCount },
+    (_, i) => `sure-acc-large-${i}`
+  )
+
+  const transferPairCount = Math.floor((txnCount * 0.3) / 2)
+  const transferLegCount = transferPairCount * 2
+  const zeroAmountCount = LARGE_BUNDLE_ZERO_AMOUNT_COUNT
+  const heldCount = LARGE_BUNDLE_HELD_COUNT
+  const standardCount =
+    txnCount - transferLegCount - zeroAmountCount - heldCount
+
+  const lines: string[] = []
+
+  for (const id of accountIds) {
+    lines.push(sureAccount(id, `Large Account ${id}`, "Depository", "checking"))
+  }
+
+  // Opening anchor per account (day 0) — index-derived, strictly positive.
+  accountIds.forEach((id, i) => {
+    lines.push(
+      sureVal({
+        accountId: id,
+        amount: `${500_000 + i * 137_000}.0`,
+        date: LARGE_BUNDLE_START_DATE,
+      })
+    )
+  })
+
+  let dayOffset = 1
+  const nextDate = (): string => {
+    const d = new Date(`${LARGE_BUNDLE_START_DATE}T00:00:00Z`)
+    d.setUTCDate(d.getUTCDate() + dayOffset)
+    dayOffset += 1
+    return d.toISOString().slice(0, 10)
+  }
+
+  // Standard promotable transactions, alternating income/expense (Sure sign:
+  // inflow/income negative, outflow/expense positive), round-robin accounts.
+  for (let i = 0; i < standardCount; i += 1) {
+    const accountId = accountIds[i % accountIds.length] as string
+    const isIncome = i % 2 === 0
+    const magnitude = `${1000 + (i % 500) * 37}.0`
+    lines.push(
+      sureTxn({
+        id: `sure-txn-large-std-${i}`,
+        accountId,
+        amount: isIncome ? `-${magnitude}` : magnitude,
+        kind: "standard",
+        name: `Standard ${i}`,
+        date: nextDate(),
+      })
+    )
+  }
+
+  // Transfer pairs — Tier-0 deterministic via explicit Transfer entity.
+  for (let p = 0; p < transferPairCount; p += 1) {
+    const fromAccount = accountIds[p % accountIds.length] as string
+    const toAccount = accountIds[(p + 1) % accountIds.length] as string
+    const magnitude = `${5000 + (p % 200) * 91}.0`
+    const date = nextDate()
+    const outId = `sure-txn-large-xfer-out-${p}`
+    const inId = `sure-txn-large-xfer-in-${p}`
+    lines.push(
+      sureTxn({
+        id: outId,
+        accountId: fromAccount,
+        amount: magnitude,
+        kind: "funds_movement",
+        name: `Transfer out ${p}`,
+        date,
+      })
+    )
+    lines.push(
+      sureTxn({
+        id: inId,
+        accountId: toAccount,
+        amount: `-${magnitude}`,
+        kind: "funds_movement",
+        name: `Transfer in ${p}`,
+        date,
+      })
+    )
+    lines.push(sureTransfer(outId, inId))
+  }
+
+  // Zero-amount rows — skipped before staging (ADR-0041 §4.C).
+  for (let z = 0; z < zeroAmountCount; z += 1) {
+    lines.push(
+      sureTxn({
+        id: `sure-txn-large-zero-${z}`,
+        accountId: accountIds[0] as string,
+        amount: "0",
+        kind: "standard",
+        name: `Zero ${z}`,
+        date: nextDate(),
+      })
+    )
+  }
+
+  // Held rows — lone funds_movement legs with no pairing partner and no
+  // `Transfer` entity, so they resolve to `unpaired_orphan`.
+  for (let h = 0; h < heldCount; h += 1) {
+    lines.push(
+      sureTxn({
+        id: `sure-txn-large-held-${h}`,
+        accountId: accountIds[0] as string,
+        amount: `${9000 + h * 13}.0`,
+        kind: "funds_movement",
+        name: `Orphan transfer ${h}`,
+        date: nextDate(),
+      })
+    )
+  }
+
+  // Periodic reconciliation valuations, spread across accounts + time — all
+  // dated after every transaction above (see file-header note).
+  const valuationsPerAccount = 7 // + 1 opening = 8/account
+  accountIds.forEach((id, i) => {
+    for (let v = 0; v < valuationsPerAccount; v += 1) {
+      lines.push(
+        sureVal({
+          accountId: id,
+          amount: `${600_000 + i * 137_000 + v * 5_000}.0`,
+          date: nextDate(),
+        })
+      )
+    }
+  })
+
+  const valuationsWritten = accountCount * (1 + valuationsPerAccount)
+  const heldLegsByReason = emptyHeld()
+  heldLegsByReason.unpaired_orphan = heldCount
+
+  return {
+    ndjson: lines.join("\n"),
+    txnCount,
+    accountCount,
+    expected: {
+      accountsCreated: accountCount,
+      transactionsTotal:
+        standardCount + transferLegCount + heldCount + zeroAmountCount,
+      staged: standardCount + transferLegCount + heldCount,
+      promotedThisRun: standardCount,
+      held: 0, // no standard-held case in this generator (see header note)
+      zeroAmountSkipped: zeroAmountCount,
+      malformedLines: 0,
+      valuationsParsed: valuationsWritten,
+      valuations: { anchorsWritten: valuationsWritten, negativeSkipped: 0 },
+      transfers: {
+        legsSeen: transferLegCount + heldCount,
+        legsStaged: transferLegCount + heldCount,
+        pairsPromotedThisRun: transferPairCount,
+        legsPromotedTotal: transferLegCount,
+        heldLegsByReason,
+      },
+    },
+  }
+}

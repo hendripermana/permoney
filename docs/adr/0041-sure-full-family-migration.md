@@ -1,17 +1,17 @@
 # ADR-0041 — Sure full-family migration (accounts + categories + merchants + transactions)
 
-|                   |                                                                                                                                                                                          |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**        | Accepted                                                                                                                                                                                 |
-| **Date**          | 2026-06-27                                                                                                                                                                               |
-| **Accepted**      | 2026-06-27                                                                                                                                                                               |
-| **Deciders**      | Hendri Permana                                                                                                                                                                           |
-| **Supersedes**    | —                                                                                                                                                                                        |
-| **Superseded by** | —                                                                                                                                                                                        |
-| **Builds on**     | ADR-0039 (import staging spine, PER-82), ADR-0008 §5, `docs/account-taxonomy.md`                                                                                                         |
-| **Amends**        | ADR-0039 §1/§10 (adds `migration` source kind + bundle artifact retention)                                                                                                               |
-| **Amended by**    | ADR-0042 (2026-06-28, PER-175): §5 posting predicate + §10 Phase 1.5; ADR-0043 (2026-07-04, PER-176): §5 superseded by the reconciliation-anchor calculator, §2/§6 Investment importable |
-| **Reserves for**  | Phase 2 transfers/trades (PER-150/PER-146), Phase 3 rules (smart-rule engine)                                                                                                            |
+|                   |                                                                                                                                                                                                                                                                            |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Status**        | Accepted                                                                                                                                                                                                                                                                   |
+| **Date**          | 2026-06-27                                                                                                                                                                                                                                                                 |
+| **Accepted**      | 2026-06-27                                                                                                                                                                                                                                                                 |
+| **Deciders**      | Hendri Permana                                                                                                                                                                                                                                                             |
+| **Supersedes**    | —                                                                                                                                                                                                                                                                          |
+| **Superseded by** | —                                                                                                                                                                                                                                                                          |
+| **Builds on**     | ADR-0039 (import staging spine, PER-82), ADR-0008 §5, `docs/account-taxonomy.md`                                                                                                                                                                                           |
+| **Amends**        | ADR-0039 §1/§10 (adds `migration` source kind + bundle artifact retention)                                                                                                                                                                                                 |
+| **Amended by**    | ADR-0042 (2026-06-28, PER-175): §5 posting predicate + §10 Phase 1.5; ADR-0043 (2026-07-04, PER-176): §5 superseded by the reconciliation-anchor calculator, §2/§6 Investment importable; ADR-0044 (2026-07-04, PER-179): §1 step 5's confirm→promote is chunked, lockstep |
+| **Reserves for**  | Phase 2 transfers/trades (PER-150/PER-146), Phase 3 rules (smart-rule engine)                                                                                                                                                                                              |
 
 ## Context
 
@@ -107,6 +107,15 @@ Strict dependency order, each step resolving the prior step's id-map:
 Accounts/categories/merchants are created **before** transactions so every
 per-row reference resolves (no dangling refs). The transaction step is **pure
 reuse** of PER-82; the migration never re-implements ledger writes.
+
+> **Amended by ADR-0044 (2026-07-04, PER-179).** Step 5's "stage → dedup →
+> confirm → promote" is no longer confirm-everything-then-promote-once for a
+> real-sized bundle: the orchestrator confirms and promotes in lockstep
+> `PROMOTE_CHUNK_SIZE`-sized slices (confirm slice → promote slice → repeat),
+> because `promoteImportBatchForFamily` has no row-subset filter and would
+> otherwise promote the entire confirmed set in one physical transaction —
+> exactly the timeout PER-179 fixes. Staging itself (the "stage" sub-step) is
+> also now internally chunked + resumable. See ADR-0044 for the full design.
 
 ### 2. Account mapping (Sure `accountable_type` → Permoney taxonomy)
 

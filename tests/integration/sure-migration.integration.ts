@@ -8,7 +8,12 @@ import {
 } from "vite-plus/test"
 import { IDENTITY_RATE } from "@/lib/fx"
 import { SURE_PROVIDER } from "@/lib/sure-migration"
-import { runSureMigrationForFamily } from "@/server/sure-migration"
+import { STAGING_CHUNK_SIZE } from "@/server/imports"
+import type { RunInTenantTransaction } from "@/server/mutation-kit"
+import {
+  PROMOTE_CHUNK_SIZE,
+  runSureMigrationForFamily,
+} from "@/server/sure-migration"
 import { detectBalanceDriftForFamily } from "@/server/valuations"
 import {
   createIntegrationHarness,
@@ -16,6 +21,7 @@ import {
 } from "./support/database"
 import { createTestFactories, type TestFactories } from "./support/factories"
 import {
+  buildLargeSureBundle,
   buildSureBundleAnchorEdgeCases,
   buildSureBundleV1Degraded,
   buildSureBundleV1DegradedTransfers,
@@ -100,6 +106,86 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
         },
       })
     )
+
+  // ---- PER-179 / ADR-0044 — chunk-bound + crash/resume helpers -------------
+
+  // Tracks the max per-physical-transaction row delta for the two chunked
+  // tables (RawImportedTransaction = staging, Transaction = promote/transfers).
+  // Each `runInTenantTransaction` invocation IS exactly one physical Postgres
+  // transaction (scopedTenantTransaction/harness.withMember), so measuring the
+  // observable row-count delta across each call directly proves "no single
+  // transaction processed more rows than its chunk-bound constant" — the
+  // load-bearing structural claim of ADR-0044, without needing to introspect
+  // query internals.
+  const createChunkBoundTracker = (): {
+    runner: RunInTenantTransaction
+    maxRawDelta: () => number
+    maxTxnDelta: () => number
+  } => {
+    let lastRaw = 0
+    let lastTxn = 0
+    let maxRaw = 0
+    let maxTxn = 0
+    const runnerFn: RunInTenantTransaction = async (familyId, userId, fn) => {
+      const result = await harness.withMember(familyId, userId, fn)
+      const [rawCount, txnCount] = await harness.withMember(
+        familyId,
+        userId,
+        async (tx) => [
+          await tx.rawImportedTransaction.count({ where: { familyId } }),
+          await tx.transaction.count({ where: { familyId } }),
+        ]
+      )
+      maxRaw = Math.max(maxRaw, rawCount - lastRaw)
+      maxTxn = Math.max(maxTxn, txnCount - lastTxn)
+      lastRaw = rawCount
+      lastTxn = txnCount
+      return result
+    }
+    return {
+      runner: runnerFn,
+      maxRawDelta: () => maxRaw,
+      maxTxnDelta: () => maxTxn,
+    }
+  }
+
+  // A crash-injection runner keyed to OBSERVABLE DATA STATE rather than a raw
+  // call-count — a blind Nth-invocation counter is fragile (an unrelated
+  // refactor that adds/removes one internal call silently shifts which phase
+  // "call N" lands in, and the test would stop proving what it claims). This
+  // predicate instead throws the FIRST time a real state condition is met, so
+  // the crash always lands in the intended phase regardless of how many other
+  // calls precede it.
+  const crashWhen = (
+    predicate: (state: { rawCount: number; promotedCount: number }) => boolean
+  ): RunInTenantTransaction => {
+    let thrown = false
+    const runnerFn: RunInTenantTransaction = async (familyId, userId, fn) => {
+      if (!thrown) {
+        // Only rawCount + promotedCount — every predicate used in this file
+        // needs just these two; a third (confirmedCount) was dead weight
+        // that measurably added to this checker's own per-call overhead.
+        const state = await harness.withMember(
+          familyId,
+          userId,
+          async (tx) => ({
+            rawCount: await tx.rawImportedTransaction.count({
+              where: { familyId },
+            }),
+            promotedCount: await tx.rawImportedTransaction.count({
+              where: { familyId, rowStatus: "promoted" },
+            }),
+          })
+        )
+        if (predicate(state)) {
+          thrown = true
+          throw new Error("[PER-179 test] simulated crash")
+        }
+      }
+      return harness.withMember(familyId, userId, fn)
+    }
+    return runnerFn
+  }
 
   // ---- full v2 bundle ------------------------------------------------------
 
@@ -689,4 +775,392 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     expect(leaked.transferLegs).toBe(0)
     expect(leaked.rawRows).toBe(0)
   })
+
+  // ---- PER-179 / ADR-0044 — scale + chunk-bound + crash/resume ------------
+
+  // Strongest assertion available for the crash/resume tests: the resumed
+  // tenant's ledger must be indistinguishable from a clean single-pass run of
+  // the SAME deterministic bundle against a fresh tenant — not just "some
+  // rows exist," but the exact same row counts and the exact same per-account
+  // final balances (matched by the shared, deterministic `externalAccountId`).
+  const assertLedgerMatchesControl = async (
+    tenant: Tenant,
+    control: Tenant
+  ) => {
+    const rawCount = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      (tx) =>
+        tx.rawImportedTransaction.count({
+          where: { familyId: tenant.familyId },
+        })
+    )
+    const controlRawCount = await harness.withMember(
+      control.familyId,
+      control.userId,
+      (tx) =>
+        tx.rawImportedTransaction.count({
+          where: { familyId: control.familyId },
+        })
+    )
+    expect(rawCount).toBe(controlRawCount)
+
+    const txnCount = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      (tx) => tx.transaction.count({ where: { familyId: tenant.familyId } })
+    )
+    const controlTxnCount = await harness.withMember(
+      control.familyId,
+      control.userId,
+      (tx) => tx.transaction.count({ where: { familyId: control.familyId } })
+    )
+    expect(txnCount).toBe(controlTxnCount)
+
+    const accounts = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      (tx) =>
+        tx.account.findMany({
+          where: { familyId: tenant.familyId },
+          select: { externalAccountId: true, balance: true },
+        })
+    )
+    const controlAccounts = await harness.withMember(
+      control.familyId,
+      control.userId,
+      (tx) =>
+        tx.account.findMany({
+          where: { familyId: control.familyId },
+          select: { externalAccountId: true, balance: true },
+        })
+    )
+    const balanceByExtId = new Map(
+      accounts.map((a) => [a.externalAccountId, a.balance])
+    )
+    expect(controlAccounts.length).toBeGreaterThan(0)
+    for (const ca of controlAccounts) {
+      expect(balanceByExtId.get(ca.externalAccountId)).toBe(ca.balance)
+    }
+  }
+
+  // NOTE on scale (1500, not the originally-targeted ~3000): a PER-179 root-
+  // cause probe (2026-07-05) found the UNTOUCHED transfers phase
+  // (`pairAndPromoteSureTransfers`) has a real, reproducible superlinear cost
+  // per pair (222ms/pair @75 pairs -> ~427ms/pair @225 pairs, confirmed on a
+  // freshly-restarted Postgres with realistic account density — hot-row
+  // bloat and container staleness were both ruled out as the primary cause).
+  // At the full ~3000-txn/~450-pair mirror this makes the whole migration
+  // exceed 900s, which is impractical for a committed test. Root cause is
+  // NOT yet isolated (needs EXPLAIN ANALYZE-level profiling) and transfers is
+  // explicitly out of THIS ticket's scope per ADR-0044 §6's measurement-gate
+  // (material -> re-grill, don't build blind) — tracked as a follow-up
+  // ticket. 1500 txns still proves the load-bearing claim (multiple staging
+  // AND promote chunks, real per-account-density proportions) in a wall-time
+  // this suite can reliably run.
+  test("scale: ~1500-txn bundle completes without exceeding a single chunk-bound transaction", async () => {
+    const tenant = await setupTenant()
+    const fixture = buildLargeSureBundle(1500)
+    const tracker = createChunkBoundTracker()
+
+    const startedAt = Date.now()
+    const result = await runSureMigrationForFamily({
+      data: { filename: "large.ndjson", bundle: fixture.ndjson },
+      familyId: tenant.familyId,
+      user: { id: tenant.userId, familyId: tenant.familyId },
+      runInTenantTransaction: tracker.runner,
+    })
+    const wallMs = Date.now() - startedAt
+
+    // Structural, not wall-time (ADR-0044 §6 — wall-time is nondeterministic
+    // and must never be a CI assertion). Printed for human inspection only.
+    console.log("[PER-179 scale test] wall time ms:", wallMs)
+    console.log("[PER-179 scale test] per-phase timings ms:", result.timings)
+
+    expect(result.replayed).toBe(false)
+    expect(result.accounts).toEqual({
+      created: fixture.accountCount,
+      reused: 0,
+    })
+    expect(result.transactions.total).toBe(fixture.expected.transactionsTotal)
+    expect(result.transactions.staged).toBe(fixture.expected.staged)
+    expect(result.transactions.promotedThisRun).toBe(
+      fixture.expected.promotedThisRun
+    )
+    expect(result.transactions.held).toBe(fixture.expected.held)
+    expect(result.transactions.zeroAmountSkipped).toBe(
+      fixture.expected.zeroAmountSkipped
+    )
+    expect(result.malformedLines).toBe(0)
+    expect(result.valuationsParsed).toBe(fixture.expected.valuationsParsed)
+    expect(result.valuations).toEqual(fixture.expected.valuations)
+    expect(result.transfers.legsSeen).toBe(fixture.expected.transfers.legsSeen)
+    expect(result.transfers.legsStaged).toBe(
+      fixture.expected.transfers.legsStaged
+    )
+    expect(result.transfers.pairsPromotedThisRun).toBe(
+      fixture.expected.transfers.pairsPromotedThisRun
+    )
+    expect(result.transfers.legsPromotedTotal).toBe(
+      fixture.expected.transfers.legsPromotedTotal
+    )
+    expect(result.transfers.heldLegsByReason).toEqual(
+      fixture.expected.transfers.heldLegsByReason
+    )
+
+    // Every phase was measured (ADR-0044 §5) — printed above, not asserted
+    // numerically here (that would be a wall-time assertion in disguise).
+    for (const ms of Object.values(result.timings)) {
+      expect(ms).toBeGreaterThanOrEqual(0)
+    }
+
+    // The load-bearing structural proof (ADR-0044 §1/§2/§4): no single
+    // physical transaction ever inserted more RawImportedTransaction rows
+    // than STAGING_CHUNK_SIZE, nor more Transaction rows than
+    // PROMOTE_CHUNK_SIZE — completing without hitting the interactive-tx
+    // timeout is a consequence of this, not a separate thing to assert.
+    expect(tracker.maxRawDelta()).toBeLessThanOrEqual(STAGING_CHUNK_SIZE)
+    expect(tracker.maxTxnDelta()).toBeLessThanOrEqual(PROMOTE_CHUNK_SIZE)
+    // The tracker doubles round-trips (1 extra query transaction per real
+    // one) on top of the transfers phase's own already-slow, separately-
+    // tracked cost (see the scale-note above) — this generous budget covers
+    // THAT combined test-harness overhead, not the production migration
+    // itself (which stays governed by the untouched 5s Prisma default per
+    // ADR-0044 §1).
+  }, 600_000)
+
+  test("crash-resume: mid-staging crash resumes via count-prefix skip, matches a clean control run", async () => {
+    const tenant = await setupTenant()
+    const control = await setupTenant()
+    const fixture = buildLargeSureBundle(800)
+
+    await runSureMigrationForFamily({
+      data: { filename: "large.ndjson", bundle: fixture.ndjson },
+      familyId: control.familyId,
+      user: { id: control.userId, familyId: control.familyId },
+      runInTenantTransaction: runner(),
+    })
+
+    const crashRunner = crashWhen(
+      (state) =>
+        state.rawCount >= 2 * STAGING_CHUNK_SIZE &&
+        state.rawCount < fixture.expected.staged
+    )
+    await expect(
+      runSureMigrationForFamily({
+        data: { filename: "large.ndjson", bundle: fixture.ndjson },
+        familyId: tenant.familyId,
+        user: { id: tenant.userId, familyId: tenant.familyId },
+        runInTenantTransaction: crashRunner,
+      })
+    ).rejects.toThrow()
+
+    // Precondition guard (ADR-0044 / Q6 lock): assert the crash landed
+    // genuinely mid-staging, not somewhere else — a data-state check, not
+    // trust in a call-count. If this fails, the test is not proving what it
+    // claims and must fail loudly rather than silently pass as a no-op.
+    const preCrash = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      async (tx) => ({
+        batch: await tx.importBatch.findFirst({
+          where: { familyId: tenant.familyId },
+        }),
+        rawCount: await tx.rawImportedTransaction.count({
+          where: { familyId: tenant.familyId },
+        }),
+      })
+    )
+    expect(preCrash.batch?.status).toBe("pending")
+    expect(preCrash.rawCount).toBeGreaterThan(0)
+    expect(preCrash.rawCount).toBeLessThan(fixture.expected.staged)
+
+    const resumed = await runSureMigrationForFamily({
+      data: { filename: "large.ndjson", bundle: fixture.ndjson },
+      familyId: tenant.familyId,
+      user: { id: tenant.userId, familyId: tenant.familyId },
+      runInTenantTransaction: runner(),
+    })
+    expect(resumed.replayed).toBe(false)
+
+    const post = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      async (tx) => ({
+        batch: await tx.importBatch.findFirst({
+          where: { familyId: tenant.familyId },
+        }),
+        rawCount: await tx.rawImportedTransaction.count({
+          where: { familyId: tenant.familyId },
+        }),
+      })
+    )
+    // The batch rollup is recomputed again by the promote step later in this
+    // same resumed call, and the fixture's 4 orphan transfer legs never
+    // promote (by design — they have no pairing partner) — so the batch's
+    // terminal status is `partially_promoted`, not `ready_for_review`. What
+    // matters here is that staging itself finalized (status left "pending"
+    // would mean it never completed); the exact terminal value is a fact of
+    // the promote rollup, not the staging fix this test targets.
+    expect(post.batch?.status).not.toBe("pending")
+    // Exact count, not >=: proves the resumed prefix-skip never re-inserted
+    // the already-persisted rows (which would inflate this past the total).
+    expect(post.rawCount).toBe(fixture.expected.staged)
+
+    await assertLedgerMatchesControl(tenant, control)
+  }, 300_000)
+
+  test("crash-resume: pending-but-complete crash (all chunks landed, finalize never ran) resumes directly", async () => {
+    const tenant = await setupTenant()
+    const control = await setupTenant()
+    const fixture = buildLargeSureBundle(800)
+
+    await runSureMigrationForFamily({
+      data: { filename: "large.ndjson", bundle: fixture.ndjson },
+      familyId: control.familyId,
+      user: { id: control.userId, familyId: control.familyId },
+      runInTenantTransaction: runner(),
+    })
+
+    // Crash the FIRST call after every staging row has landed — i.e. finalize
+    // itself, not any of the chunk inserts (a distinct code branch from the
+    // mid-staging case per the Q6 lock: count === total, not count < total).
+    const crashRunner = crashWhen(
+      (state) => state.rawCount >= fixture.expected.staged
+    )
+    await expect(
+      runSureMigrationForFamily({
+        data: { filename: "large.ndjson", bundle: fixture.ndjson },
+        familyId: tenant.familyId,
+        user: { id: tenant.userId, familyId: tenant.familyId },
+        runInTenantTransaction: crashRunner,
+      })
+    ).rejects.toThrow()
+
+    const preCrash = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      async (tx) => ({
+        batch: await tx.importBatch.findFirst({
+          where: { familyId: tenant.familyId },
+        }),
+        rawCount: await tx.rawImportedTransaction.count({
+          where: { familyId: tenant.familyId },
+        }),
+      })
+    )
+    expect(preCrash.batch?.status).toBe("pending")
+    expect(preCrash.rawCount).toBe(fixture.expected.staged)
+
+    const resumed = await runSureMigrationForFamily({
+      data: { filename: "large.ndjson", bundle: fixture.ndjson },
+      familyId: tenant.familyId,
+      user: { id: tenant.userId, familyId: tenant.familyId },
+      runInTenantTransaction: runner(),
+    })
+    expect(resumed.replayed).toBe(false)
+
+    const post = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      async (tx) =>
+        tx.importBatch.findFirst({ where: { familyId: tenant.familyId } })
+    )
+    // See the mid-staging test above: the fixture's 4 permanently-orphan
+    // transfer legs mean the terminal rollup is `partially_promoted`, not
+    // `ready_for_review` — what this proves is finalize actually ran.
+    expect(post?.status).not.toBe("pending")
+
+    await assertLedgerMatchesControl(tenant, control)
+  }, 300_000)
+
+  test("crash-resume: mid-promote crash self-heals via confirmed-only selection, no double-promotion", async () => {
+    const tenant = await setupTenant()
+    const control = await setupTenant()
+    const fixture = buildLargeSureBundle(800)
+
+    await runSureMigrationForFamily({
+      data: { filename: "large.ndjson", bundle: fixture.ndjson },
+      familyId: control.familyId,
+      user: { id: control.userId, familyId: control.familyId },
+      runInTenantTransaction: runner(),
+    })
+
+    const crashRunner = crashWhen(
+      (state) =>
+        state.rawCount >= fixture.expected.staged &&
+        state.promotedCount >= 2 * PROMOTE_CHUNK_SIZE &&
+        state.promotedCount < fixture.expected.promotedThisRun
+    )
+    await expect(
+      runSureMigrationForFamily({
+        data: { filename: "large.ndjson", bundle: fixture.ndjson },
+        familyId: tenant.familyId,
+        user: { id: tenant.userId, familyId: tenant.familyId },
+        runInTenantTransaction: crashRunner,
+      })
+    ).rejects.toThrow()
+
+    const endpoint = "promoteImportBatch" // must match imports.ts's PROMOTE_IMPORT_BATCH_ENDPOINT
+
+    const preCrash = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      async (tx) => ({
+        promotedCount: await tx.rawImportedTransaction.count({
+          where: { familyId: tenant.familyId, rowStatus: "promoted" },
+        }),
+        idempotencyRecords: await tx.idempotencyRecord.count({
+          where: { familyId: tenant.familyId, endpoint },
+        }),
+      })
+    )
+    expect(preCrash.promotedCount).toBeGreaterThan(0)
+    expect(preCrash.promotedCount).toBeLessThan(
+      fixture.expected.promotedThisRun
+    )
+    const preCrashRecords = preCrash.idempotencyRecords
+
+    // NOT asserting `resumed.replayed === false` here: by the time a
+    // mid-PROMOTE crash happens, staging already finalized in the crashed
+    // run, so a full resume's staging step correctly reports
+    // `replayed: true` (its own content-hash lookup finds a genuinely
+    // complete batch) — `replayed` reflects the STAGING sub-step only, not
+    // "did the whole migration do net-new work." The real proof of self-heal
+    // is the promoted-count and idempotency-record assertions below.
+    await runSureMigrationForFamily({
+      data: { filename: "large.ndjson", bundle: fixture.ndjson },
+      familyId: tenant.familyId,
+      user: { id: tenant.userId, familyId: tenant.familyId },
+      runInTenantTransaction: runner(),
+    })
+
+    const post = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      async (tx) => ({
+        promotedCount: await tx.rawImportedTransaction.count({
+          where: { familyId: tenant.familyId, rowStatus: "promoted" },
+        }),
+        idempotencyRecords: await tx.idempotencyRecord.count({
+          where: { familyId: tenant.familyId, endpoint },
+        }),
+      })
+    )
+    // Every promotable row ends up promoted exactly once — no double-promotion,
+    // no gap left behind by the crash. `rowStatus="promoted"` counts BOTH
+    // standard rows (promoted via promoteImportBatchForFamily, the path this
+    // test crashes) AND transfer legs (promoted via the separate dual-leg
+    // path, `markSureTransferRowPromoted`) — the 4 permanently-orphan legs
+    // never reach "promoted", so the total excludes them.
+    expect(post.promotedCount).toBe(
+      fixture.expected.promotedThisRun +
+        fixture.expected.transfers.legsPromotedTotal
+    )
+    // A new IdempotencyRecord was persisted for the resumed chunk(s) — the
+    // crashed chunk's call never started, so it never wrote one either.
+    expect(post.idempotencyRecords).toBeGreaterThan(preCrashRecords)
+
+    await assertLedgerMatchesControl(tenant, control)
+  }, 300_000)
 })
