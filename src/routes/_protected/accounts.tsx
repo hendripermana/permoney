@@ -58,6 +58,7 @@ import {
 import {
   ACCOUNT_SUBTYPE_VALUES,
   ACCOUNT_TYPE_VALUES,
+  allowsNegativeAssetBalance,
   getAccountClassForType,
   isCashLikeAccount,
   type AccountClass,
@@ -656,6 +657,9 @@ function AccountFormDialog({
                 {previewCashLike
                   ? "Cash-like — balance follows transactions."
                   : "Tracked asset — balance follows valuations."}
+                {allowsNegativeAssetBalance(accountType)
+                  ? " Already overdrawn? Enter a negative amount."
+                  : null}
               </p>
             </div>
           )}

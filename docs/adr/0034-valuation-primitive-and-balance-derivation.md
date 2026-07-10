@@ -1,15 +1,15 @@
 # ADR-0034 — Valuation primitive and balance-derivation rules
 
-|                   |                              |
-| ----------------- | ---------------------------- |
-| **Status**        | Accepted                     |
-| **Date**          | 2026-06-17                   |
-| **Accepted**      | 2026-06-17                   |
-| **Deciders**      | Hendri Permana               |
-| **Amends**        | ADR-0008                     |
-| **Supersedes**    | PER-78, PER-79 (design only) |
-| **Superseded by** | —                            |
-| **Amended by**    | ADR-0043 (§4, §7)            |
+|                   |                                  |
+| ----------------- | -------------------------------- |
+| **Status**        | Accepted                         |
+| **Date**          | 2026-06-17                       |
+| **Accepted**      | 2026-06-17                       |
+| **Deciders**      | Hendri Permana                   |
+| **Amends**        | ADR-0008                         |
+| **Supersedes**    | PER-78, PER-79 (design only)     |
+| **Superseded by** | —                                |
+| **Amended by**    | ADR-0043 (§4, §7); ADR-0045 (§9) |
 
 ## Context
 
@@ -273,3 +273,25 @@ balance as a valuation) are unchanged. See ADR-0043 for the full formula,
 drift redesign, and the live-reconcile-UI consequence (the compensating
 `balance_adjustment` transaction that flow used to require is removed as a
 now-unnecessary plug).
+
+## Amendment — Negative-balance carve-out (ADR-0045)
+
+§9's `account_normal_balance_sign` and `valuation_value_sign` CHECKs, as
+originally stated above, enforce `ASSET >= 0` / `LIABILITY <= 0`
+unconditionally for every `accountType`. **ADR-0045** (PER-182) reverses the
+ASSET side of that absolute rule for `DEPOSITORY` and `E_WALLET` accounts
+only: real bank/e-wallet accounts can legitimately hold a negative balance
+(overdraft), verified against the real Sure UI (`Dana`, an `E_WALLET`
+account, at −Rp164,298) during the Sure migration's final ground-truth run.
+`CASH`, `INVESTMENT`, `RECEIVABLE`, `TRACKED_ASSET`, and both `LIABILITY`
+types keep this section's original unconditional rule verbatim — the
+carve-out is scoped by a single SQL/TypeScript-coherent predicate
+(`app_allows_negative_asset`/`allowsNegativeAssetBalance`), not a blanket
+relaxation. See ADR-0045 for the full scope table, the `Valuation`-side
+`allowsNegativeAsset` denormalization, and the writer-contract changes
+(`createValuationForFamily`, `createAccountForFamily`'s
+`openingBalanceSchema`) that let application code actually produce the
+values the relaxed constraints now accept. ADR-0044 §8 separately documents
+the transaction-scoped CHECK bypass bulk replay uses while migrating
+historical data that may transiently violate either constraint mid-replay —
+a mechanics concern this amendment does not itself define.

@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start"
 import type { Valuation } from "@prisma/client"
 import { z } from "zod"
+import { allowsNegativeAssetBalance, type AccountType } from "@/lib/accounts"
 import {
   absMoney,
   addMoney,
@@ -89,12 +90,17 @@ const currencySchema = z
   .regex(/^[A-Za-z]{3}$/, "currency must be a 3-letter ISO 4217 code")
   .transform((value) => value.toUpperCase())
 
-// Value is a non-negative magnitude in MINOR UNITS; the server signs it by the
-// account's normal balance (liabilities store negative), exactly like the
-// opening-balance contract in accounts.ts.
+// Value is normally a non-negative magnitude in MINOR UNITS, signed by the
+// account's normal balance (liabilities store negative) — exactly like the
+// opening-balance contract in accounts.ts. ADR-0045: an explicit leading `-`
+// is accepted at the schema level so a carve-out account (DEPOSITORY/
+// E_WALLET) can express a genuinely negative anchor (a real overdrawn
+// balance); createValuationForFamily rejects a negative value at the
+// application boundary for every other accountType (validated error, never a
+// raw DB CHECK failure) before any write.
 const valueMagnitudeSchema = z
   .string()
-  .regex(/^\d+$/, "value must be a string of digits")
+  .regex(/^-?\d+$/, "value must be a string of digits, optionally signed")
 
 export const createValuationInputSchema = z.object({
   accountId: z.string().min(1),
@@ -134,6 +140,10 @@ export interface SerializedValuation {
   source: string
   note: string | null
   normalBalance: string
+  // ADR-0045: whether this row's account is in the negative-balance
+  // carve-out (DEPOSITORY/E_WALLET) — a denormalized fact about the account,
+  // not about whether THIS row's value happens to be negative.
+  allowsNegativeAsset: boolean
   createdById: string
   createdAt: string
 }
@@ -150,6 +160,7 @@ function serializeValuation(valuation: Valuation): SerializedValuation {
     source: valuation.source,
     note: valuation.note,
     normalBalance: valuation.normalBalance,
+    allowsNegativeAsset: valuation.allowsNegativeAsset,
     createdById: valuation.createdById,
     createdAt: valuation.createdAt.toISOString(),
   }
@@ -194,6 +205,7 @@ interface ServerActor {
 interface AccountBalanceFacts {
   id: string
   accountClass: string
+  accountType: AccountType
   balanceSource: string
   balance: bigint
   version: number
@@ -204,6 +216,7 @@ interface AccountBalanceFacts {
 const ACCOUNT_BALANCE_SELECT = {
   id: true,
   accountClass: true,
+  accountType: true,
   balanceSource: true,
   balance: true,
   version: true,
@@ -216,7 +229,7 @@ function normalBalanceForClass(accountClass: string): "POSITIVE" | "NEGATIVE" {
 }
 
 // Sign a non-negative magnitude by the account's normal balance.
-function signMagnitudeForAccount(
+export function signMagnitudeForAccount(
   accountClass: string,
   magnitude: bigint
 ): Money {
@@ -363,10 +376,13 @@ async function fetchAccountFacts(
   familyId: string,
   accountId: string
 ): Promise<AccountBalanceFacts | null> {
-  return await tx.account.findFirst({
+  const account = await tx.account.findFirst({
     where: { id: accountId, familyId },
     select: ACCOUNT_BALANCE_SELECT,
   })
+  return account
+    ? { ...account, accountType: account.accountType as AccountType }
+    : null
 }
 
 // =============================================================================
@@ -392,7 +408,11 @@ export async function createValuationForFamily({
     )
   }
   const valuationType = data.type as PublicValuationType
-  const magnitude = BigInt(data.value)
+  // Normally a non-negative magnitude, auto-signed below by the account's
+  // normal balance. ADR-0045: a caller may pass an explicit negative value
+  // (e.g. reconciling an overdrawn e-wallet) — validated per-account below,
+  // once accountType is known, before any write.
+  const rawValue = BigInt(data.value)
   const requestHash = await hashCanonicalPayload({
     accountId: data.accountId,
     currency: data.currency ?? null,
@@ -436,10 +456,21 @@ export async function createValuationForFamily({
         )
       }
 
-      const signedValue = signMagnitudeForAccount(
-        account.accountClass,
-        magnitude
+      // ADR-0045: a negative input is only meaningful for a carve-out ASSET
+      // account (DEPOSITORY/E_WALLET, real overdraft). Every other accountType
+      // rejects it here — a validated 422, never a raw DB CHECK failure.
+      const accountAllowsNegative = allowsNegativeAssetBalance(
+        account.accountType
       )
+      if (rawValue < 0n && !accountAllowsNegative) {
+        throw new ValuationError(
+          `Valuation value cannot be negative for account type ${account.accountType}`
+        )
+      }
+      const signedValue =
+        rawValue < 0n
+          ? toMoney(rawValue)
+          : signMagnitudeForAccount(account.accountClass, rawValue)
 
       // Base-currency projection (PER-147 / ADR-0035 §4/§7), keyed off the
       // valuation date so historical net worth stays stable.
@@ -463,6 +494,7 @@ export async function createValuationForFamily({
           source: data.source ?? "manual",
           note: data.note ?? null,
           normalBalance: normalBalanceForClass(account.accountClass),
+          allowsNegativeAsset: accountAllowsNegative,
           createdById: user.id,
           baseValue: projection.baseAmount,
           baseCurrency: projection.baseCurrency,
@@ -618,10 +650,15 @@ export async function rebuildFamilyBalances({
 }): Promise<BalanceRebuildResult[]> {
   const auditCtx = await createAuditContext({ user: { id: user.id, familyId } })
   return await runInTenantTransaction(familyId, user.id, async (tx) => {
-    const accounts = await tx.account.findMany({
-      where: { familyId },
-      select: ACCOUNT_BALANCE_SELECT,
-    })
+    const accounts = (
+      await tx.account.findMany({
+        where: { familyId },
+        select: ACCOUNT_BALANCE_SELECT,
+      })
+    ).map((account) => ({
+      ...account,
+      accountType: account.accountType as AccountType,
+    }))
     const results: BalanceRebuildResult[] = []
     // Sequential on purpose: one pg connection backs the interactive
     // transaction, and each rebuild re-reads the row it locks.
@@ -719,10 +756,15 @@ export async function detectBalanceDriftForFamily({
   runInTenantTransaction?: RunInTenantTransaction
 }): Promise<BalanceDriftReport[]> {
   return await runInTenantTransaction(familyId, userId, async (tx) => {
-    const accounts = await tx.account.findMany({
-      where: { familyId },
-      select: ACCOUNT_BALANCE_SELECT,
-    })
+    const accounts = (
+      await tx.account.findMany({
+        where: { familyId },
+        select: ACCOUNT_BALANCE_SELECT,
+      })
+    ).map((account) => ({
+      ...account,
+      accountType: account.accountType as AccountType,
+    }))
     const reports: BalanceDriftReport[] = []
     const today = new Date().toISOString().slice(0, 10)
 

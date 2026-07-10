@@ -59,10 +59,14 @@ const REVIEW_IMPORT_ROWS_ENDPOINT = "reviewImportRows"
 
 // ADR-0044: bounded-transaction chunk size for the staging insert loop.
 // createMany-batched insert of pre-computed rows; per-row cost here is
-// in-memory fingerprint/dedup only (no DB round-trip per row) — 250 is
-// inherited-conservative from PROMOTE_CHUNK_SIZE's measured profile below,
-// not independently measured. Raise only with a measured number, never a
-// guess (ADR-0044 §2/§6).
+// in-memory fingerprint/dedup only (no DB round-trip per row). Originally
+// inherited-conservative from PROMOTE_CHUNK_SIZE's then-current value; now
+// independently confirmed by head-eng's real all.ndjson measurement
+// (PER-182, 2026-07-06): ~530ms/chunk at 250 rows, comfortably under the
+// 5000ms budget (~9x margin) — unaffected by PROMOTE_CHUNK_SIZE's own
+// downward retune to 100 (`sure-migration.ts`), since the two constants were
+// deliberately never coupled (ADR-0044 §2). Raise only with a measured
+// number, never a guess (ADR-0044 §2/§6).
 export const STAGING_CHUNK_SIZE = 250
 
 // Absolute minor-unit amount over the wire (JSON has no bigint). Accepts an

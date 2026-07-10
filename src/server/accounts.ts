@@ -3,6 +3,7 @@ import type { Account } from "@prisma/client"
 import { z } from "zod"
 import {
   ACCOUNT_TYPE_VALUES,
+  allowsNegativeAssetBalance,
   normalizeAccountTaxonomy,
   type AccountType,
 } from "@/lib/accounts"
@@ -59,6 +60,19 @@ export class AccountNotFoundError extends Error {
   }
 }
 
+/**
+ * Raised for account-input rejections that are real domain violations, not
+ * schema shape errors (e.g. a negative opening balance for a non-carve-out
+ * accountType, ADR-0045). Mirrors ValuationError's 422 shape.
+ */
+export class AccountValidationError extends Error {
+  override readonly name = "AccountValidationError"
+  readonly statusCode = 422
+  constructor(message: string) {
+    super(message)
+  }
+}
+
 // Kept transform-free so the schema's input and output shapes match (the server
 // function validator and the `*ForFamily` callers share one type). Defaulting
 // and upper-casing happen in `createAccountForFamily`.
@@ -72,11 +86,21 @@ const hexColorSchema = z
   .trim()
   .regex(/^#[0-9a-fA-F]{6}$/, "color must be a #RRGGBB hex value")
 
-// Opening balance is a non-negative magnitude in MINOR UNITS. The server signs
-// it according to the account's normal balance (liabilities store negative).
+// Opening balance is normally a non-negative magnitude in MINOR UNITS, signed
+// by the account's normal balance (liabilities store negative). ADR-0045: an
+// explicit leading `-` is accepted here so a carve-out account (DEPOSITORY/
+// E_WALLET) can be onboarded already-overdrawn (a real, common situation —
+// e.g. an e-wallet that is negative today) without a fabricated "create at
+// zero + adjustment" plug. createAccountForFamily rejects a negative value
+// for every other accountType with a validated error, before any write.
 const openingBalanceSchema = z.union([
-  z.string().regex(/^\d+$/, "openingBalance must be a string of digits"),
-  z.number().int().nonnegative(),
+  z
+    .string()
+    .regex(
+      /^-?\d+$/,
+      "openingBalance must be a string of digits, optionally signed"
+    ),
+  z.number().int(),
 ])
 
 const nameSchema = z.string().trim().min(1).max(120)
@@ -223,8 +247,21 @@ export async function createAccountForFamily({
     accountSubtype: data.accountSubtype,
   })
   const currency = (data.currency ?? "IDR").toUpperCase()
-  const openingMagnitude =
+  const openingRawValue =
     data.openingBalance === undefined ? 0n : BigInt(data.openingBalance)
+
+  // ADR-0045: a negative opening balance is only meaningful for a carve-out
+  // ASSET account (DEPOSITORY/E_WALLET, real overdraft) — e.g. onboarding an
+  // e-wallet that is already negative today. Every other accountType rejects
+  // it here as a validated error, before any write.
+  const accountAllowsNegative = allowsNegativeAssetBalance(taxonomy.accountType)
+  if (openingRawValue < 0n && !accountAllowsNegative) {
+    throw new AccountValidationError(
+      `openingBalance cannot be negative for account type ${taxonomy.accountType}`
+    )
+  }
+  const openingMagnitude =
+    openingRawValue < 0n ? -openingRawValue : openingRawValue
   const requestHash = await hashCanonicalPayload({
     accountSubtype: taxonomy.accountSubtype,
     accountType: taxonomy.accountType,
@@ -232,7 +269,7 @@ export async function createAccountForFamily({
     currency,
     institutionName: data.institutionName ?? null,
     name: data.name,
-    openingBalance: openingMagnitude.toString(),
+    openingBalance: openingRawValue.toString(),
   })
   const auditCtx = await createAuditContext(
     { user: { id: user.id, familyId } },
@@ -240,9 +277,15 @@ export async function createAccountForFamily({
   )
 
   // The opening balance is signed by the account's normal balance: assets are
-  // stored non-negative, liabilities non-positive. The DB CHECK is the backstop.
+  // stored non-negative, liabilities non-positive — UNLESS the caller passed
+  // an explicit negative value for a carve-out account, which is already the
+  // exact signed value they mean (ADR-0045). The DB CHECK is the backstop.
   const signedOpeningBalance =
-    taxonomy.accountClass === "LIABILITY" ? -openingMagnitude : openingMagnitude
+    openingRawValue < 0n
+      ? openingRawValue
+      : taxonomy.accountClass === "LIABILITY"
+        ? -openingMagnitude
+        : openingMagnitude
 
   const runOnce = async () =>
     await runInTenantTransaction(familyId, user.id, async (tx) => {
@@ -287,6 +330,7 @@ export async function createAccountForFamily({
           source: "manual",
           normalBalance:
             taxonomy.accountClass === "LIABILITY" ? "NEGATIVE" : "POSITIVE",
+          allowsNegativeAsset: accountAllowsNegative,
           createdById: user.id,
         },
       })

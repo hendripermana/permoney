@@ -332,6 +332,153 @@ concerns. Re-measured post-both-fixes: the 3000-txn scale test (previously
 DNF at 900s) completes in ~123s wall-time, with msPerPair=102.53 — still not
 growing with scale.
 
+### 8. Bulk-replay CHECK bypass + pre-flight backstop (PER-182, 2026-07-05)
+
+PER-181 unblocked the real `all.ndjson` migration from timing out; running it
+end-to-end for the first time then failed on a different invariant:
+`account_normal_balance_sign` (ADR-0034 §9, relaxed for two `accountType`s by
+ADR-0045). Two distinct problems surfaced, and this section documents the
+mechanics fix for the second one — ADR-0045 owns the domain question of
+which final balances are legal; this section owns how bulk replay reaches a
+legal final state without tripping the constraint on intermediate writes.
+
+Chronological replay of a real transaction history can cross zero mid-replay
+for an account whose **final** balance is entirely legal — an account whose
+spends are recorded before its offsetting top-ups. Per PER-176 Q1 (§7 of this
+ADR's history, and this ADR's own Context/§6), `Account.balance` is already
+**known to be transiently wrong during a migration run** — the mandatory
+final `rebuildFamilyBalances()` step is what makes the run correct, not the
+incremental per-transaction increments along the way. The sign CHECK,
+however, fires immediately on every row, including these known-transient
+values — validating a number the codebase has already declared meaningless
+mid-run.
+
+Postgres CHECK constraints are **never deferrable** (only `UNIQUE`,
+`PRIMARY KEY`, `FOREIGN KEY`, and `EXCLUDE` constraints support
+`SET CONSTRAINTS ... DEFERRED`); converting to a `CONSTRAINT TRIGGER
+DEFERRABLE INITIALLY DEFERRED` was considered and rejected (§Alternatives) —
+it would only defer to the end of the current chunk's own transaction, not
+the whole migration, and ADR-0034 §9 already rejected trigger machinery once
+for this exact constraint family.
+
+**The fix is a transaction-scoped bypass GUC, paired unconditionally with a
+pre-flight validator and an un-bypassed final rebuild — the three are one
+mandatory unit, not independent pieces:**
+
+```sql
+-- account_normal_balance_sign, ADR-0045 §3 (COALESCE is load-bearing — see
+-- that section for why an un-coalesced current_setting silently disables
+-- the entire CHECK via SQL's NULL-is-satisfied semantics):
+COALESCE(current_setting('app.bulk_ledger_replay', true), 'off') = 'on' OR ...
+```
+
+`app.bulk_ledger_replay` is `SET LOCAL`'d to `'on'` inside a transaction,
+exactly mirroring the existing `app.family_id` RLS GUC idiom already used
+throughout this codebase (transaction-scoped via `set_config(..., true)`,
+never a connection-level or global setting). One helper owns every legitimate
+use:
+
+```ts
+// src/server/bulk-ledger-replay.ts (single anchor for the GUC)
+async function runBulkLedgerReplayTransaction<T>(
+  familyId: string,
+  userId: string,
+  fn: (tx: PrismaTransactionClient) => Promise<T>
+): Promise<T> {
+  return scopedTenantTransaction(familyId, userId, async (tx) => {
+    await tx.$executeRaw`SELECT set_config('app.bulk_ledger_replay', 'on', true)`
+    return fn(tx)
+  })
+}
+```
+
+This is injected as the `runInTenantTransaction` parameter (the same
+dependency-injection shape every `*ForFamily` function already accepts) into
+**exactly three** call sites in `runSureMigrationForFamily` — the only places
+that do incremental `Account.balance` writes before the final rebuild:
+
+| Step | Function                         | Wrapped?  | Why                                                                                                                                          |
+| ---- | -------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2    | account shells                   | No        | `balance = 0`, always valid both directions.                                                                                                 |
+| 3    | categories/merchants             | No        | Never touches `Account.balance`.                                                                                                             |
+| 4    | valuations (anchor writes)       | **Yes**   | Interim `computeCanonicalBalance` rebuild (PER-176 Q1) sees partial flow on resume-after-crash, can be transiently illegal for strict types. |
+| 5    | transactions — staging/confirm   | No        | No `Account.balance` write at all.                                                                                                           |
+| 5    | transactions — **promote-chunk** | **Yes**   | The originating bug: per-row `{increment: delta}` inside a 250-row chunk transaction.                                                        |
+| 6    | transfer pairs                   | **Yes**   | Per-pair increments on both legs; a pair can promote before its dated counterpart.                                                           |
+| 7    | `rebuildFamilyBalances()`        | **Never** | This is the backstop. Wrapping it would disable the one check that makes the bypass safe.                                                    |
+
+The GUC scope is kept as narrow as the underlying privilege it grants —
+promote-chunk is wrapped, staging/confirm are not, even though all three are
+"step 5," because only promote-chunk writes `Account.balance`.
+
+**Why this is not the shared-transaction injection PER-175/ADR-0042 (and this
+ADR's own §6.5) rejected.** That prior rejection was about injecting one
+**outer** transaction shared across multiple logical operations, which
+disarms `createTransactionForFamily`'s own P2002-conflict retry (a retry
+needs to open a **fresh** transaction to see a clean slate; sharing one
+outer transaction across retries defeats that). `runBulkLedgerReplayTransaction`
+does the opposite: it is a **fresh transaction per call**, identical in
+lifecycle to the `scopedTenantTransaction` it wraps — it only runs one extra
+`SET LOCAL` statement first. A P2002 retry inside a wrapped call opens a new
+transaction the normal way, through the same wrapper, and the GUC is set
+again. Nothing about retry recovery changes.
+
+**Pre-flight validator: the actual first line of defense.** Relying solely on
+"the final rebuild will fail loudly" is expensive — by the time rebuild runs,
+every chunk has already committed, leaving the family stranded mid-migration
+with transient-garbage balances persisted. Before step 2 (account shells) —
+i.e., immediately after step 1's parse, before any DB write — a pure,
+in-memory pass projects every account's **final** balance directly from the
+parsed bundle (the same anchor-plus-post-anchor-flow arithmetic as ADR-0043
+§2, applied to in-memory data instead of a DB query) and evaluates it against
+the same predicate the DB CHECKs use (ADR-0045's `app_allows_negative_asset`
+for the ASSET branch, the unconditional rule for `LIABILITY`). Violations are
+collected across **every** account (not fail-on-first — a bundle with two bad
+accounts should report both in one pass) into a typed
+`SureMigrationPreflightError`, surfaced by the importer UI as a plain-language
+list ("account X will end at Y, not permitted for type Z"), never a raw
+500/stack trace. A bundle that would fail never writes anything to the
+database.
+
+Because the projection formula and the final rebuild's `computeCanonicalBalance`
+must never independently disagree (the exact "one segmentation function, not
+two" discipline ADR-0043 §6 already established for `ANCHOR_CHAIN`), an
+integration test asserts `preflight.projectedBalance === Account.balance`
+after `rebuildFamilyBalances()`, per account, for every fixture.
+
+**The bypass is only as safe as its backstop.** `app.bulk_ledger_replay`
+disables the CHECK in **both** directions (ASSET and LIABILITY) for **every**
+account type during a wrapped transaction — it has no per-type scoping of its
+own. This is acceptable **only** because (a) the pre-flight pass has already
+proven every account's projected final state is legal before any write
+happens, and (b) `rebuildFamilyBalances()` (step 7) always runs outside the
+bypass and re-validates every account's actual final state. Shipping the
+bypass without either half is a real weakening of the invariant, not an
+equivalent design — both are load-bearing, not redundant.
+
+**Grep-proof enforcement**: `set_config('app.bulk_ledger_replay'` appears in
+exactly one file (`runBulkLedgerReplayTransaction`'s own definition) —
+asserted by a source-grep test. A companion integration test proves the
+bypass does not leak: calling `createTransactionForFamily` directly (its
+normal, unwrapped `scopedTenantTransaction` path) with a balance-illegal
+input still trips the CHECK exactly as before.
+
+### 9. `PROMOTE_CHUNK_SIZE` corrected from measurement, not estimate (PER-182, 2026-07-06)
+
+§2's original 250 was sized from a ~2.5ms/row estimate. Head-eng's real
+`all.ndjson` end-to-end run measured the actual cost at that chunk size:
+30.1s / ~9 chunks ≈ 3.3s/chunk (~13ms/row, over 5x the estimate) — only a
+~1.5x margin under the 5000ms interactive-transaction budget, not the
+intended 5-8x, and head-eng observed one real 5039ms expired-transaction
+flake under load at 250. Per §2's own stated principle ("a future
+measurement showing one call site can safely run at a larger chunk size
+changes only that site's constant" — the same applies in reverse), lowered
+to 100 (≈1.3s/chunk at the same measured per-row cost, ~3.8x margin).
+`STAGING_CHUNK_SIZE` is unaffected (measured separately at ~530ms/chunk,
+comfortably under budget) — the two constants were deliberately never
+coupled (§2), and this is exactly the kind of independent retune that
+decision anticipated.
+
 ## Consequences
 
 ### Positive
@@ -350,6 +497,14 @@ growing with scale.
 - The measurement-gate discipline prevents two more speculative changes
   (valuation rebuild suppression, transfer-pair batching) from being built,
   reviewed, and tested without evidence they matter.
+- §8's bypass+pre-flight pattern is written down once as the general answer
+  for "how does bulk replay of historical ledger data avoid tripping an
+  invariant that only needs to hold at rest" — future bulk importers (e.g.
+  bank-sync) inherit `runBulkLedgerReplayTransaction` and the pre-flight
+  discipline instead of re-deriving them.
+- The pre-flight pass turns a class of migration failure that used to be
+  discovered expensively (mid-run, after partial commits) into a zero-write
+  rejection before the migration touches the database at all.
 
 ### Negative
 
@@ -396,6 +551,23 @@ growing with scale.
    measurement-gate principle this ADR itself establishes — building a fix
    for a cost that measurement may show is trivial is exactly the guessing
    this ADR exists to stop doing.
+6. **Convert `account_normal_balance_sign`/`valuation_value_sign` to
+   `CONSTRAINT TRIGGER ... DEFERRABLE INITIALLY DEFERRED`** (§8). Rejected:
+   Postgres would only defer validation to the end of each chunk's own
+   transaction, not the whole migration, so it would not even fully solve
+   the interim-dip problem; it also reverses ADR-0034 §9's own explicit
+   rejection of trigger machinery for this constraint family.
+7. **Rely solely on the final `rebuildFamilyBalances()` failing loudly, with
+   no pre-flight pass** (§8). Rejected: by the time rebuild runs, every
+   chunk has already committed, so a real violation is discovered only after
+   the family is left stranded mid-migration with transient-garbage balances
+   persisted — expensive compared to a zero-write rejection before any write
+   happens.
+8. **A blanket, unscoped CHECK bypass with no pre-flight validator** (§8).
+   Rejected: the bypass disables the invariant in both directions for every
+   account type; without the pre-flight pass proving legality up front, this
+   would be a real weakening of the invariant rather than a safe mechanism —
+   the two must ship together.
 
 ## References
 
@@ -409,3 +581,7 @@ growing with scale.
   `promoteImportBatchForFamily`, amended here for chunking/resume)
 - ADR-0041 (Sure full-family migration — orchestration pipeline, amended here
   for the lockstep confirm→promote loop)
+- PER-182 / ADR-0045 (Negative-balance carve-out — the domain decision that
+  surfaced this ADR's §8 mechanics fix; ADR-0045 owns which final balances
+  are legal, this ADR owns how bulk replay reaches a legal final state
+  without tripping the constraint mid-replay)

@@ -879,15 +879,24 @@ export function buildSureBundleV2Transfers(): SureTransferFixture {
       heldLegsByReason: held,
     },
     balancesMinor: {
-      // 20_000_000 open − 4_000_000 (fm) − 5_000_000 (cc) − 6_000_000 (loan).
-      checking: 5_000_000n,
-      // 0 + 4_000_000 (fm in); the ns inflow is HELD, never posted.
-      savings: 4_000_000n,
+      // 20_000_000 open − 4_000_000 (fm) − 5_000_000 (cc) − 6_000_000 (loan)
+      // − 1_000_000 (cm out, HELD currency_mismatch) − 2_000_000 (orphan,
+      // HELD unpaired_orphan) — PER-182's final reconciliation anchor closes
+      // both held-leg gaps by construction (ADR-0045 amendment): the account
+      // never posts these as Transaction rows, but the closing anchor
+      // asserts the true final value Sure itself would show.
+      checking: 2_000_000n,
+      // 0 + 4_000_000 (fm in) + 1_500_000 (ns in, HELD not_staged, now
+      // closed) = 5_500_000.
+      savings: 5_500_000n,
       // −10_000_000 debt + 5_000_000 (cc payment) = −5_000_000 (toward zero).
+      // No held legs on this account — unaffected by the closing anchor.
       card: -5_000_000n,
-      // −20_000_000 debt + 6_000_000 (loan payment) = −14_000_000 (toward zero).
+      // −20_000_000 debt + 6_000_000 (loan payment) = −14_000_000 (toward
+      // zero). No held legs on this account — unaffected.
       loan: -14_000_000n,
-      usd: 0n,
+      // 0 + 100 (cm in, HELD currency_mismatch, now closed).
+      usd: 100n,
     },
   }
 }
@@ -1059,8 +1068,12 @@ export function buildSureBundleV1DegradedTransfers(): SureTransferFixture {
       name: "Cash move",
       date: "2026-05-09",
     }),
-    // kind_divergence: a loan-SOURCED funds_movement → Permoney derives liability_draw
-    // ≠ Sure funds_movement → HELD (never invents a borrowing event).
+    // A loan-SOURCED funds_movement → Permoney derives liability_draw; both
+    // legs are the generic Sure funds_movement (never specially tagged for a
+    // draw) → PROMOTES under the ADR-0042 amendment (PER-182, head-eng adu
+    // 2026-07-06): a clean, uniquely-matched draw pair posts as a real
+    // liability_draw transfer rather than being held (which used to silently
+    // understate debt — the draw never posted, only a later repayment did).
     sureTxn({
       id: legIds.kdOut,
       accountId: accountIds.loan,
@@ -1110,7 +1123,6 @@ export function buildSureBundleV1DegradedTransfers(): SureTransferFixture {
 
   const held = emptyHeld()
   held.ambiguous_cluster = 4
-  held.kind_divergence = 2
   held.unpaired_orphan = 1
 
   return {
@@ -1123,32 +1135,46 @@ export function buildSureBundleV1DegradedTransfers(): SureTransferFixture {
       transferLegsStaged: 15,
       // PER-176: the invest<->cash pair (`ni`) now promotes (Tier-1 clean —
       // unique amount/date/currency), since Investment is importable.
-      pairsPromotedThisRun: 4,
-      legsPromotedTotal: 8,
-      pairedByTier: { deterministic: 0, clean: 2, resolvedCluster: 2 },
+      // PER-182 (ADR-0042 amendment): the loan-sourced draw pair (`kd`) now
+      // also promotes (Tier-1 clean, unique amount/date/currency).
+      pairsPromotedThisRun: 5,
+      legsPromotedTotal: 10,
+      pairedByTier: { deterministic: 0, clean: 3, resolvedCluster: 2 },
       heldLegsByReason: held,
     },
     balancesMinor: {
-      // 5_000_000 anchor − 3_700_000 (clean out).
+      // 5_000_000 anchor − 3_700_000 (clean out). No held legs on this
+      // account — unaffected by the PER-182 closing anchor.
       main: 1_300_000n,
       // Anchor-chain double-count guard: nikah's anchor (3_700_000, dated
       // AFTER the inbound transfer) absorbs that transfer — final balance is
       // the anchor value alone, NOT anchor + the transfer again (7_400_000).
       nikah: 3_700_000n,
-      // 3_000_000 anchor − 1_200_000 (resolved out); amb leg HELD.
-      wallet: 1_800_000n,
-      dana: 1_800_000n,
-      gopay: 1_200_000n, // 0 + 1_200_000 (resolved in)
-      ovo: 1_200_000n,
-      loan: 0n, // kd leg HELD, never posted
+      // PER-182: 3_000_000 anchor − 1_200_000 (resolved out, promoted)
+      // − 800_000 (amb leg, HELD ambiguous_cluster, now closed by the final
+      // reconciliation anchor) = 1_000_000.
+      wallet: 1_000_000n,
+      // PER-182: same shape as wallet — anchor 3_000_000 − 1_200_000
+      // (resolved out) − 800_000 (amb, held, now closed) = 1_000_000.
+      dana: 1_000_000n,
+      // PER-182: 0 (no anchor) + 1_200_000 (resolved in, promoted)
+      // + 800_000 (amb leg, HELD, now closed) = 2_000_000.
+      gopay: 2_000_000n,
+      ovo: 2_000_000n,
+      // PER-182: the draw now posts — 0 (no anchor) - 2_500_000 (kd out,
+      // promoted liability_draw) = more debt, not the un-posted 0 it used
+      // to be under the reversed Q5 gate.
+      loan: -2_500_000n,
       // PER-176 grill Q8 #8: invest<->cash transfer with anchors/no-anchor on
       // each side both promote dual-leg, and each account's OWN calculator
       // independently derives its balance — zero special-case code needed.
-      // invest: anchor 5_000_000 - 1_800_000 (ni out, promoted).
+      // invest: anchor 5_000_000 - 1_800_000 (ni out, promoted). No held
+      // legs on this account — unaffected by the closing anchor.
       invest: 3_200_000n,
-      // cash: no anchor, so balance = Σ(promoted flow) = +1_800_000 (ni in);
-      // kd-in and orphan stay held, contributing nothing.
-      cash: 1_800_000n,
+      // PER-182: no anchor, so balance = Σ(ALL legs, not just promoted) =
+      // 1_800_000 (ni in, promoted) + 2_500_000 (kd in, now promoted)
+      // − 900_000 (orphan, HELD unpaired_orphan, now closed) = 3_400_000.
+      cash: 3_400_000n,
     },
   }
 }
@@ -1184,7 +1210,13 @@ export function buildSureBundleAnchorEdgeCases(): SureAnchorEdgeCaseFixture {
       "OtherAsset",
       "generic_asset"
     ),
-    sureAccount(accountIds.cash, "Edge Checking", "Depository", "checking"),
+    // Investment (transaction_flow, NOT in the ADR-0045 negative-balance
+    // carve-out — unlike DEPOSITORY/E_WALLET) so this fixture's "negative
+    // valuation is always skipped as an anomaly" intent (PER-176 Q8 #3)
+    // stays valid regardless of the carve-out; PER-182's own fixtures
+    // (buildSureBundlePer182CarveOut) cover the DEPOSITORY/E_WALLET case
+    // where a negative valuation IS legitimately written.
+    sureAccount(accountIds.cash, "Edge Checking", "Investment", "brokerage"),
     sureVal({
       accountId: accountIds.tracked,
       amount: "75000.0",
@@ -1471,5 +1503,221 @@ export function buildLargeSureBundle(
         heldLegsByReason,
       },
     },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PER-182 / ADR-0045 — negative-balance carve-out fixtures.
+// ---------------------------------------------------------------------------
+
+export interface SurePer182CarveOutFixture {
+  ndjson: string
+  accountIds: {
+    dana: string
+    abah: string
+    ccBankMega: string
+    assetAnchorFlows: string
+    assetTransferSource: string
+  }
+  expectedBalancesMinor: {
+    dana: bigint
+    abah: bigint
+    ccBankMega: bigint
+    assetAnchorFlows: bigint
+    assetTransferSource: bigint
+  }
+}
+
+/**
+ * Happy-path carve-out bundle, verified against real data (head-eng adu,
+ * 2026-07-05) — covers every structurally distinct projection shape ADR-0045's
+ * pre-flight must handle correctly, per the locked design:
+ *
+ * - `dana` (DEPOSITORY, carve-out): anchor already negative, no flow after —
+ *   the ADR-0045 carve-out itself.
+ * - `abah` (LOAN, LIABILITY): NO valuation at all — pure Σ promotable flow
+ *   (PER-176 Q2's "no-valuation != zero" correction).
+ * - `ccBankMega` (CREDIT, LIABILITY, WITH an anchor): the exact real numbers
+ *   head-eng verified against the Sure UI (anchor magnitude 1,899,346, one
+ *   flow of -1,359,346 after it, final -540,000) — this is the fixture that
+ *   catches the sign bug an earlier cut of the projection had: the anchor
+ *   must be signed via signMagnitudeForAccount (LIABILITY negates), not used
+ *   as Sure's raw positive magnitude directly. A fixture with NO anchor
+ *   (`abah`) cannot exercise this path — the bug was invisible to it.
+ * - `assetAnchorFlows` (DEPOSITORY, ASSET, WITH an anchor and >1 flow,
+ *   INCLUDING a transfer leg): anchor 500,000 + a standalone expense
+ *   (-10,000) + a promoted transfer inflow (+50,000) = 540,000. Paired with
+ *   `assetTransferSource`, the outflow leg (ends at 950,000, unaffected by
+ *   this scenario's assertions but must itself stay legal).
+ */
+export function buildSureBundlePer182CarveOut(): SurePer182CarveOutFixture {
+  const accountIds = {
+    dana: "sure-acc-per182-dana",
+    abah: "sure-acc-per182-abah",
+    ccBankMega: "sure-acc-per182-cc-bank-mega",
+    assetAnchorFlows: "sure-acc-per182-asset-anchor-flows",
+    assetTransferSource: "sure-acc-per182-asset-transfer-source",
+  }
+  const legIds = {
+    ccBankMegaFlow: "sure-txn-per182-cc-bank-mega-flow",
+    assetExpense: "sure-txn-per182-asset-expense",
+    transferOut: "sure-txn-per182-transfer-out",
+    transferIn: "sure-txn-per182-transfer-in",
+  }
+
+  const lines = [
+    sureAccount(accountIds.dana, "Dana", "Depository", "checking"),
+    sureAccount(
+      accountIds.abah,
+      "Borrow money from Abah",
+      "Loan",
+      "personal_loan"
+    ),
+    sureAccount(
+      accountIds.ccBankMega,
+      "CC Bank Mega Syariah",
+      "CreditCard",
+      "credit_card"
+    ),
+    sureAccount(
+      accountIds.assetAnchorFlows,
+      "Asset With Anchor And Flows",
+      "Depository",
+      "checking"
+    ),
+    sureAccount(
+      accountIds.assetTransferSource,
+      "Asset Transfer Source",
+      "Depository",
+      "checking"
+    ),
+
+    // Real Dana anchor: -164298 minor units, no flow after it — final balance
+    // IS the anchor. Legal only because DEPOSITORY is carve-out-eligible.
+    sureVal({
+      accountId: accountIds.dana,
+      amount: "-1642.98",
+      date: "2026-01-01",
+    }),
+    // Abah: no valuation at all — balance is pure Σ promotable flow. Sure
+    // amount positive (expense-shaped) → Permoney delta -1_500_000 (more debt).
+    sureTxn({
+      id: "sure-txn-per182-abah-draw",
+      accountId: accountIds.abah,
+      amount: "15000.00",
+      kind: "standard",
+      name: "Borrowed from Abah",
+      date: "2026-02-01",
+    }),
+
+    // ccBankMega: LIABILITY WITH an anchor — the exact real head-eng-verified
+    // numbers. Anchor is a POSITIVE Sure magnitude (debt owed); the writer
+    // (createValuationForFamily / signMagnitudeForAccount) negates it, so the
+    // stored anchor is -1,899,346. One flow after: Sure amount -13593.46 →
+    // minor -1,359,346 → Permoney delta +1,359,346 (a credit/refund posted
+    // directly to the card). Final: -1,899,346 + 1,359,346 = -540,000.
+    sureVal({
+      accountId: accountIds.ccBankMega,
+      amount: "18993.46",
+      date: "2026-01-01",
+    }),
+    sureTxn({
+      id: legIds.ccBankMegaFlow,
+      accountId: accountIds.ccBankMega,
+      amount: "-13593.46",
+      kind: "standard",
+      name: "Card credit",
+      date: "2026-02-01",
+    }),
+
+    // assetAnchorFlows: ASSET WITH an anchor and TWO flows after it (a
+    // standalone expense + a promoted transfer inflow) — anchor 500,000
+    // - 10,000 (expense) + 50,000 (transfer in) = 540,000.
+    sureVal({
+      accountId: accountIds.assetAnchorFlows,
+      amount: "5000.00",
+      date: "2026-01-01",
+    }),
+    sureTxn({
+      id: legIds.assetExpense,
+      accountId: accountIds.assetAnchorFlows,
+      amount: "100.00",
+      kind: "standard",
+      name: "Groceries",
+      date: "2026-02-01",
+    }),
+    sureVal({
+      accountId: accountIds.assetTransferSource,
+      amount: "10000.00",
+      date: "2026-01-01",
+    }),
+    sureTxn({
+      id: legIds.transferOut,
+      accountId: accountIds.assetTransferSource,
+      amount: "500.00",
+      kind: "funds_movement",
+      name: "Transfer to Asset With Anchor And Flows",
+      date: "2026-02-02",
+    }),
+    sureTxn({
+      id: legIds.transferIn,
+      accountId: accountIds.assetAnchorFlows,
+      amount: "-500.00",
+      kind: "funds_movement",
+      name: "Transfer from Asset Transfer Source",
+      date: "2026-02-02",
+    }),
+    sureTransfer(legIds.transferOut, legIds.transferIn),
+  ]
+
+  return {
+    ndjson: lines.join("\n"),
+    accountIds,
+    expectedBalancesMinor: {
+      dana: -164298n,
+      abah: -1_500_000n,
+      ccBankMega: -540_000n,
+      assetAnchorFlows: 540_000n,
+      assetTransferSource: 950_000n,
+    },
+  }
+}
+
+export interface SurePer182PreflightViolationFixture {
+  ndjson: string
+  accountIds: { investment: string }
+}
+
+/**
+ * A single INVESTMENT account (transaction_flow, NOT in the ADR-0045
+ * carve-out) with no anchor and a net-negative promotable flow — its
+ * projected final balance is illegal. The whole migration must throw
+ * `SureMigrationPreflightError` before any DB write (zero accounts created).
+ */
+export function buildSureBundlePer182PreflightViolation(): SurePer182PreflightViolationFixture {
+  const accountIds = {
+    investment: "sure-acc-per182-investment-illegal",
+  }
+
+  const lines = [
+    sureAccount(
+      accountIds.investment,
+      "Illegal Brokerage",
+      "Investment",
+      "brokerage"
+    ),
+    sureTxn({
+      id: "sure-txn-per182-investment-illegal",
+      accountId: accountIds.investment,
+      amount: "50000.00", // Sure positive (expense-shaped) → Permoney -5_000_000
+      kind: "standard",
+      name: "Withdrawal exceeding balance",
+      date: "2026-02-01",
+    }),
+  ]
+
+  return {
+    ndjson: lines.join("\n"),
+    accountIds,
   }
 }

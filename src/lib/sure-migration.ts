@@ -813,9 +813,22 @@ export function classifyTransferPairGate(
   if (!allowsLeg(outflowKind) || !allowsLeg(inflowKind)) {
     return "kind_divergence"
   }
-  // …and at least one leg actually carries the derived kind (so a pair Sure never
-  // tagged with the specialized kind — e.g. a loan-sourced liability_draw — holds).
-  if (outflowKind !== derived && inflowKind !== derived) {
+  // …and at least one leg actually carries the derived kind — EXCEPT for
+  // `liability_draw` (ADR-0042 amendment, head-eng adu 2026-07-06, PER-182).
+  // Sure never tags a loan/liability draw with a specialized kind at all
+  // (unlike cc_payment/loan_payment, where the cash-side leg IS tagged): both
+  // legs are always the generic `funds_movement`. The original Q5 rule held
+  // every real draw regardless of pairing quality, silently understating
+  // liability debt — the draw leg never posted, only a later repayment did,
+  // producing an illegal positive LIABILITY balance. A pair reaching this
+  // point was already formed by a clean Tier 0/1/2 match (an ambiguous
+  // candidate never becomes a pair at all — it's held before the gate runs),
+  // so no additional "bidirectional" check is needed here.
+  if (
+    derived !== "liability_draw" &&
+    outflowKind !== derived &&
+    inflowKind !== derived
+  ) {
     return "kind_divergence"
   }
   return null

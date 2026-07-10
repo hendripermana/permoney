@@ -4,6 +4,7 @@ import {
   ACCOUNT_SUBTYPE_VALUES,
   ACCOUNT_TYPE_VALUES,
   BALANCE_SOURCE_VALUES,
+  allowsNegativeAssetBalance,
   getAccountClassForType,
   getAccountNormalBalance,
   getBalanceSourceForType,
@@ -131,5 +132,17 @@ describe("account taxonomy", () => {
         accountType: "LOAN",
       })
     ).toThrow(/lowercase snake case/i)
+  })
+
+  test("ADR-0045: only DEPOSITORY/E_WALLET allow a negative final ASSET balance", () => {
+    expect(allowsNegativeAssetBalance("DEPOSITORY")).toBe(true)
+    expect(allowsNegativeAssetBalance("E_WALLET")).toBe(true)
+
+    expect(allowsNegativeAssetBalance("CASH")).toBe(false)
+    expect(allowsNegativeAssetBalance("INVESTMENT")).toBe(false)
+    expect(allowsNegativeAssetBalance("RECEIVABLE")).toBe(false)
+    expect(allowsNegativeAssetBalance("TRACKED_ASSET")).toBe(false)
+    expect(allowsNegativeAssetBalance("CREDIT")).toBe(false)
+    expect(allowsNegativeAssetBalance("LOAN")).toBe(false)
   })
 })

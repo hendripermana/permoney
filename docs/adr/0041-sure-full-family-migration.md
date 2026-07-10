@@ -276,6 +276,21 @@ reconciliation-anchor valuation (≤ now) + Σ(transactions strictly after it)`.
 > PER-176 for the implementation and ADR-0043 §5 for the calculator-side
 > contract this section now defers to entirely.
 
+> **Amended by ADR-0045's PER-182 amendment (2026-07-06, head-eng adu).** A
+> new pipeline step runs after transfer promotion and before the mandatory
+> final `rebuildFamilyBalances` pass: `writeSureFinalReconciliationAnchors`
+> writes one final `type="reconciliation"` Valuation per account, asserting
+> a "forward-calc over ALL Sure legs for that account — promoted or held
+> alike" value, dated one day after the account's last known activity. This
+> closes any balance gap left by legs Permoney's own staging gates held
+> (non-importable counterpart, ambiguous transfer cluster, currency
+> mismatch, orphan…), which the anchor-chain formula alone does not close —
+> it only reproduces Sure's balance when the anchor-to-anchor flow segments
+> are complete, and a held leg is a hole in that segment. See ADR-0045 §§6-7
+> for the full formula and reasoning (shared with the pre-flight validator,
+> which projects the identical "all legs" value so the two can never
+> disagree).
+
 PER-82 promotion applies signed deltas onto the account's **current** balance, so
 the opening balance matters. It is set **once at account creation**, only for
 **ASSET `transaction_flow`** accounts, and re-runs reuse the account and never

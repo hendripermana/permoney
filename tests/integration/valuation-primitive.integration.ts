@@ -848,5 +848,51 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
         })
       ).rejects.toThrow()
     })
+
+    test("ADR-0045: accepts a negative value under POSITIVE normalBalance when allowsNegativeAsset is set", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "1")
+      const negative = await harness.withFamily(owner.family.id, (tx) =>
+        tx.valuation.create({
+          data: {
+            accountId: account.id,
+            familyId: owner.family.id,
+            currency: "IDR",
+            valuationDate: new Date(),
+            createdById: owner.user.id,
+            value: -164298n,
+            type: "reconciliation",
+            normalBalance: "POSITIVE",
+            allowsNegativeAsset: true,
+          },
+        })
+      )
+      expect(negative.value).toBe(-164298n)
+    })
+
+    test("ADR-0045: allowsNegativeAsset does not exempt the LIABILITY (NEGATIVE) branch", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "1")
+      // The exemption is written to attach only to the POSITIVE/ASSET branch
+      // (ADR-0045 §4) — a positive value under a NEGATIVE normalBalance must
+      // still be rejected even if allowsNegativeAsset is (incorrectly) true.
+      await expect(
+        harness.withFamily(owner.family.id, (tx) =>
+          tx.valuation.create({
+            data: {
+              accountId: account.id,
+              familyId: owner.family.id,
+              currency: "IDR",
+              valuationDate: new Date(),
+              createdById: owner.user.id,
+              value: 5n,
+              type: "manual",
+              normalBalance: "NEGATIVE",
+              allowsNegativeAsset: true,
+            },
+          })
+        )
+      ).rejects.toThrow()
+    })
   })
 })

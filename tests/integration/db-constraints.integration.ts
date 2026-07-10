@@ -6,6 +6,10 @@ import {
   expect,
   test,
 } from "vite-plus/test"
+import {
+  ACCOUNT_TYPE_VALUES,
+  allowsNegativeAssetBalance,
+} from "../../src/lib/accounts"
 import { CURRENCIES } from "../../src/lib/data/currencies"
 import {
   createIntegrationHarness,
@@ -348,8 +352,29 @@ describe("M2 data-integrity database constraints", () => {
     )
   })
 
-  test("rejects negative balances for asset account classes", async () => {
+  test("rejects negative balances for asset account classes outside the ADR-0045 carve-out", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
+
+    // CASH: a physical wallet cannot be negative — always a data error, never
+    // legitimate (ADR-0045 §1). DEPOSITORY/E_WALLET are the only carve-out
+    // types; every other ASSET type keeps the original unconditional rule.
+    await expectDatabaseRejection(() =>
+      harness.withFamily(owner.family.id, (tx) =>
+        tx.account.create({
+          data: {
+            balance: -100n,
+            color: "#2563eb",
+            currency: "IDR",
+            familyId: owner.family.id,
+            name: "Invalid negative cash wallet",
+            status: "active",
+            accountClass: "ASSET",
+            accountSubtype: "cash",
+            accountType: "CASH",
+          },
+        })
+      )
+    )
 
     await expectDatabaseRejection(() =>
       harness.withFamily(owner.family.id, (tx) =>
@@ -359,11 +384,147 @@ describe("M2 data-integrity database constraints", () => {
             color: "#2563eb",
             currency: "IDR",
             familyId: owner.family.id,
-            name: "Invalid negative depository",
+            name: "Invalid negative receivable",
             status: "active",
             accountClass: "ASSET",
-            accountSubtype: "checking",
-            accountType: "DEPOSITORY",
+            accountSubtype: "receivable",
+            accountType: "RECEIVABLE",
+          },
+        })
+      )
+    )
+  })
+
+  test("ADR-0045: allows a final-negative balance for DEPOSITORY/E_WALLET (real overdraft)", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+
+    const depository = await harness.withFamily(owner.family.id, (tx) =>
+      tx.account.create({
+        data: {
+          balance: -164298n,
+          color: "#2563eb",
+          currency: "IDR",
+          familyId: owner.family.id,
+          name: "Overdrawn checking",
+          status: "active",
+          accountClass: "ASSET",
+          accountSubtype: "checking",
+          accountType: "DEPOSITORY",
+        },
+      })
+    )
+    expect(depository.balance).toBe(-164298n)
+
+    const eWallet = await harness.withFamily(owner.family.id, (tx) =>
+      tx.account.create({
+        data: {
+          balance: -164298n,
+          color: "#2563eb",
+          currency: "IDR",
+          familyId: owner.family.id,
+          name: "Dana",
+          status: "active",
+          accountClass: "ASSET",
+          accountSubtype: "cash",
+          accountType: "E_WALLET",
+        },
+      })
+    )
+    expect(eWallet.balance).toBe(-164298n)
+  })
+
+  test("ADR-0045: app_allows_negative_asset() and allowsNegativeAssetBalance() agree for every accountType", async () => {
+    interface AllowedRow {
+      allowed: boolean
+    }
+
+    for (const accountType of ACCOUNT_TYPE_VALUES) {
+      const [row] = await harness.prisma.$queryRaw<AllowedRow[]>`
+        SELECT app_allows_negative_asset(${accountType}) AS allowed
+      `
+      expect(row?.allowed, `mismatch for accountType=${accountType}`).toBe(
+        allowsNegativeAssetBalance(accountType)
+      )
+    }
+  })
+
+  test("ADR-0044 §8: app.bulk_ledger_replay bypass is transaction-scoped and covers both directions", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+
+    // Without the GUC, a strict-type negative ASSET balance is rejected —
+    // the live-path baseline every wrapped bulk-replay call relies on.
+    await expectDatabaseRejection(() =>
+      harness.withFamily(owner.family.id, (tx) =>
+        tx.account.create({
+          data: {
+            balance: -1n,
+            color: "#2563eb",
+            currency: "IDR",
+            familyId: owner.family.id,
+            name: "Strict type, no bypass",
+            status: "active",
+            accountClass: "ASSET",
+            accountSubtype: "cash",
+            accountType: "CASH",
+          },
+        })
+      )
+    )
+
+    // With the GUC set (mirroring runBulkLedgerReplayTransaction), the same
+    // otherwise-illegal write succeeds inside that transaction only — proving
+    // the bypass clause disables BOTH directions (ASSET and LIABILITY) while
+    // active, exactly as ADR-0044 §8 documents (the pre-flight validator +
+    // un-bypassed rebuild are what keep this safe in production, not this
+    // clause alone).
+    await harness.withFamily(owner.family.id, async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.bulk_ledger_replay', 'on', true)`
+      const cash = await tx.account.create({
+        data: {
+          balance: -1n,
+          color: "#2563eb",
+          currency: "IDR",
+          familyId: owner.family.id,
+          name: "Strict type, bypassed",
+          status: "active",
+          accountClass: "ASSET",
+          accountSubtype: "cash",
+          accountType: "CASH",
+        },
+      })
+      expect(cash.balance).toBe(-1n)
+
+      const loan = await tx.account.create({
+        data: {
+          balance: 1n,
+          color: "#2563eb",
+          currency: "IDR",
+          familyId: owner.family.id,
+          name: "Liability, bypassed",
+          status: "active",
+          accountClass: "LIABILITY",
+          accountSubtype: "personal_loan",
+          accountType: "LOAN",
+        },
+      })
+      expect(loan.balance).toBe(1n)
+    })
+
+    // Bypass never leaks across transactions — a fresh transaction on the
+    // same connection pool is strictly enforced again.
+    await expectDatabaseRejection(() =>
+      harness.withFamily(owner.family.id, (tx) =>
+        tx.account.create({
+          data: {
+            balance: -1n,
+            color: "#2563eb",
+            currency: "IDR",
+            familyId: owner.family.id,
+            name: "Strict type, no bypass again",
+            status: "active",
+            accountClass: "ASSET",
+            accountSubtype: "cash",
+            accountType: "CASH",
           },
         })
       )
