@@ -463,6 +463,22 @@ bypass does not leak: calling `createTransactionForFamily` directly (its
 normal, unwrapped `scopedTenantTransaction` path) with a balance-illegal
 input still trips the CHECK exactly as before.
 
+### 9. `PROMOTE_CHUNK_SIZE` corrected from measurement, not estimate (PER-182, 2026-07-06)
+
+§2's original 250 was sized from a ~2.5ms/row estimate. Head-eng's real
+`all.ndjson` end-to-end run measured the actual cost at that chunk size:
+30.1s / ~9 chunks ≈ 3.3s/chunk (~13ms/row, over 5x the estimate) — only a
+~1.5x margin under the 5000ms interactive-transaction budget, not the
+intended 5-8x, and head-eng observed one real 5039ms expired-transaction
+flake under load at 250. Per §2's own stated principle ("a future
+measurement showing one call site can safely run at a larger chunk size
+changes only that site's constant" — the same applies in reverse), lowered
+to 100 (≈1.3s/chunk at the same measured per-row cost, ~3.8x margin).
+`STAGING_CHUNK_SIZE` is unaffected (measured separately at ~530ms/chunk,
+comfortably under budget) — the two constants were deliberately never
+coupled (§2), and this is exactly the kind of independent retune that
+decision anticipated.
+
 ## Consequences
 
 ### Positive

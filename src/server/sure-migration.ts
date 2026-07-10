@@ -77,15 +77,22 @@ import {
 const MAX_BUNDLE_BYTES = 64 * 1024 * 1024
 
 // ADR-0044 §2/§4: bounded-transaction chunk size for the confirm→promote
-// orchestration loop. ~2050 real promotable rows measured to exceed Prisma's
-// 5000ms interactive-tx default (>= ~2.5ms/row); 250 rows/chunk is a 5-8x
-// margin under that default even at 2x the measured per-row cost. LOCKSTEP
-// INVARIANT (load-bearing): confirmation must never run more than one chunk
-// ahead of promotion — `promoteImportBatchForFamily` has no row-subset
-// filter, it always promotes every currently-`confirmed` row in the batch, so
-// confirming the whole set up front before "promoting per chunk" would
-// silently reproduce a single oversized promote transaction (ADR-0044 §4).
-export const PROMOTE_CHUNK_SIZE = 250
+// orchestration loop. Originally set to 250 from a ~2.5ms/row estimate (5-8x
+// margin under Prisma's 5000ms interactive-tx default). Head-eng's real
+// all.ndjson run (PER-182, 2026-07-06) measured the ACTUAL per-chunk cost at
+// 250: 30.1s / ~9 chunks ≈ 3.3s/chunk (~13ms/row, not 2.5ms) — only a ~1.5x
+// margin under the 5000ms budget, and head-eng hit one real 5039ms
+// expired-transaction flake under load at that chunk size. Per ADR-0044 §2's
+// own principle ("a future measurement showing a call site needs a different
+// chunk size changes only that site's constant"), lowered to 100
+// (≈1.3s/chunk at the same measured per-row cost, ~3.8x margin) — a
+// measured correction, not a guess. LOCKSTEP INVARIANT (load-bearing):
+// confirmation must never run more than one chunk ahead of promotion —
+// `promoteImportBatchForFamily` has no row-subset filter, it always promotes
+// every currently-`confirmed` row in the batch, so confirming the whole set
+// up front before "promoting per chunk" would silently reproduce a single
+// oversized promote transaction (ADR-0044 §4).
+export const PROMOTE_CHUNK_SIZE = 100
 
 // Per-phase wall-clock timings (ms) — ADR-0044 §5. Permanent import-
 // observability, not throwaway diagnostic code; also what the ADR-0044 §6
