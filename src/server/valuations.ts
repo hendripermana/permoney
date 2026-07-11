@@ -195,6 +195,14 @@ export interface BalanceDriftReport {
   // look up both anchors' `source` to contextualize a migrated-anchor warning
   // differently from a live user-reconciliation warning (ADR-0043 §6).
   fromAnchorDate?: string
+  // ANCHOR_CHAIN only: both anchors' own `Valuation.source`, carried directly
+  // off the same ordered anchor query that computed the drift (never a
+  // separate date-keyed lookup, which could be ambiguous). Lets a consumer
+  // classify a migration-origin restatement (e.g. both sides written by the
+  // Sure importer) differently from a live user reconciliation, per ADR-0043
+  // §6's deferred UI-presentation decision (see src/lib/account-drift-presentation.ts).
+  fromAnchorSource?: string
+  toAnchorSource?: string
 }
 
 interface ServerActor {
@@ -712,7 +720,7 @@ async function detectAnchorChainDrift(
       type: { in: [...ANCHOR_VALUATION_TYPES] },
     },
     orderBy: [{ valuationDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
-    select: { value: true, valuationDate: true },
+    select: { value: true, valuationDate: true, source: true },
   })
 
   const reports: BalanceDriftReport[] = []
@@ -740,6 +748,8 @@ async function detectAnchorChainDrift(
         drift: subMoney(actual, expected).toString(),
         asOf: to.valuationDate.toISOString().slice(0, 10),
         fromAnchorDate: from.valuationDate.toISOString().slice(0, 10),
+        fromAnchorSource: from.source,
+        toAnchorSource: to.source,
       })
     }
   }
