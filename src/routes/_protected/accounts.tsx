@@ -5,23 +5,14 @@ import {
 } from "@tanstack/react-router"
 import { useLiveQuery } from "@tanstack/react-db"
 import { useQuery } from "@tanstack/react-query"
-import {
-  Archive,
-  Landmark,
-  Pencil,
-  Plus,
-  RotateCcw,
-  Scale,
-  TrendingUp,
-  TriangleAlert,
-  Wallet,
-} from "lucide-react"
+import { Plus, TriangleAlert, Wallet } from "lucide-react"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Badge } from "@/components/ui/badge"
+import { AccountCard, ACCOUNT_TYPE_LABEL } from "./-account-card"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -48,7 +39,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { cn } from "@/lib/utils"
 import {
   accountCollection,
   balanceDriftCollection,
@@ -103,17 +93,6 @@ const CLASS_ORDER: ReadonlyArray<AccountClass> = ["ASSET", "LIABILITY"]
 const CLASS_LABEL: Record<AccountClass, string> = {
   ASSET: "Assets",
   LIABILITY: "Liabilities",
-}
-
-const ACCOUNT_TYPE_LABEL: Record<AccountType, string> = {
-  CASH: "Cash",
-  DEPOSITORY: "Bank / Depository",
-  E_WALLET: "E-Wallet",
-  CREDIT: "Credit Card",
-  LOAN: "Loan",
-  INVESTMENT: "Investment",
-  RECEIVABLE: "Receivable",
-  TRACKED_ASSET: "Tracked Asset",
 }
 
 function AccountsPendingComponent() {
@@ -336,126 +315,6 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
           <Plus className="size-4" />
           New account
         </Button>
-      </CardContent>
-    </Card>
-  )
-}
-
-function AccountCard({
-  account,
-  drift,
-  busy,
-  onEdit,
-  onValuation,
-  onArchive,
-  onReactivate,
-}: {
-  account: AccountRecord
-  drift: ReadonlyArray<DriftRecord>
-  busy: boolean
-  onEdit: () => void
-  onValuation: () => void
-  onArchive: () => void
-  onReactivate: () => void
-}) {
-  const archived = account.status !== "active"
-  const cashLike = account.balanceSource === "transaction_flow"
-  const Icon = account.accountClass === "LIABILITY" ? Landmark : Wallet
-  // Surface the worst drift: a materialization error outranks a reconciliation
-  // warning. Read-only — the badge never mutates anything (ADR-0034 §7).
-  const hasError = drift.some((d) => d.severity === "error")
-  const driftEntry = hasError
-    ? drift.find((d) => d.severity === "error")
-    : drift[0]
-  return (
-    <Card className={cn(archived && "opacity-60")}>
-      <CardHeader>
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <Icon className="size-4 text-muted-foreground" />
-            <CardTitle className="text-base">{account.name}</CardTitle>
-          </div>
-          {archived ? <Badge variant="outline">Archived</Badge> : null}
-        </div>
-        <CardDescription className="flex flex-wrap gap-1.5 pt-1">
-          <Badge variant="secondary">
-            {ACCOUNT_TYPE_LABEL[account.accountType as AccountType] ??
-              account.accountType}
-          </Badge>
-          <Badge variant="outline">{account.accountSubtype}</Badge>
-          <Badge variant={cashLike ? "default" : "outline"}>
-            {cashLike ? "Cash-like" : "Tracked asset"}
-          </Badge>
-          {driftEntry ? (
-            <Badge
-              variant={hasError ? "destructive" : "outline"}
-              className={cn(
-                !hasError &&
-                  "border-amber-500/50 text-amber-600 dark:text-amber-400"
-              )}
-            >
-              <TriangleAlert className="size-3" />
-              {driftEntry.kind === "MATERIALIZATION"
-                ? "Balance drift"
-                : `Needs reconcile (${formatCurrency(driftEntry.drift, account.currency)})`}
-            </Badge>
-          ) : null}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex items-end justify-between gap-2">
-        <div>
-          <p className="text-xs text-muted-foreground">Balance</p>
-          <p className="text-lg font-semibold tabular-nums">
-            {formatCurrency(account.balance, account.currency)}
-          </p>
-        </div>
-        <div className="flex gap-1">
-          {!archived ? (
-            <Button
-              size="icon"
-              variant="ghost"
-              disabled={busy}
-              onClick={onValuation}
-              aria-label={cashLike ? "Reconcile account" : "Update value"}
-            >
-              {cashLike ? (
-                <Scale className="size-4" />
-              ) : (
-                <TrendingUp className="size-4" />
-              )}
-            </Button>
-          ) : null}
-          <Button
-            size="icon"
-            variant="ghost"
-            disabled={busy}
-            onClick={onEdit}
-            aria-label="Edit account"
-          >
-            <Pencil className="size-4" />
-          </Button>
-          {archived ? (
-            <Button
-              size="icon"
-              variant="ghost"
-              disabled={busy}
-              onClick={onReactivate}
-              aria-label="Reactivate account"
-            >
-              <RotateCcw className="size-4" />
-            </Button>
-          ) : (
-            <Button
-              size="icon"
-              variant="ghost"
-              disabled={busy}
-              onClick={onArchive}
-              aria-label="Archive account"
-            >
-              <Archive className="size-4" />
-            </Button>
-          )}
-        </div>
       </CardContent>
     </Card>
   )
