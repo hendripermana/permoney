@@ -246,6 +246,27 @@ The one carve-out from "all legs": a `balanceSource="valuation"` account
 (ADR-0034 §5) — the projection skips flow entirely for these regardless of
 promoted/held status, matching the real calculator.
 
+> **Second carve-out added (2026-07-11, PER-184).** `excluded: true` on a Sure
+> `Transaction` is NOT an ordinary "Permoney couldn't place this" hold — it is
+> Sure's own split-transaction PARENT representation (full receipt amount;
+> the child rows are separate, normal, categorized legs that sum exactly to
+> it — verified to the rupiah on real data: 57,000 = 22,000 + 35,000; 83,000 =
+> 45,000 + 38,000; 89,500 = 11,900 + 77,600; this also explains PER-173's
+> "real exports never populate `split_lines`" finding — splits appear as
+> excluded-parent + sibling children instead). Because the money is _already_
+> counted once via the children, an excluded leg is skipped in the flow sum
+> unconditionally — unlike every other held reason (non-importable
+> counterpart, currency mismatch, ambiguous cluster…), where the money is
+> real and uncounted elsewhere, so the final anchor must absorb it. Applying
+> this skip identically inside `isPromotable` (the promotion gate,
+> `src/server/sure-migration.ts`) and `projectSureMigrationBalances` (the
+> forward-calc) keeps §6's "one segmentation function" discipline intact —
+> pre-flight, the final reconciliation anchor, and the actual promoted set
+> can never disagree about an excluded parent. See ADR-0041 §4/§6 (amended)
+> for the corrected field semantics and the promotion-gate change; Permoney
+> gains no new "excluded transaction" concept — the parent is simply held as
+> provenance, exactly like any other held row (ADR-0039 §3/§7).
+
 ### 7. Final reconciliation anchor closes the promoted/held gap (new, 2026-07-06)
 
 Companion fix to §6.2, and the mechanism that makes "all legs" true of the

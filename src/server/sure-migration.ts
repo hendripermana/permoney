@@ -558,7 +558,18 @@ export function projectSureMigrationBalances(
   // self-consistency check. FX conversion for a real mismatch is ADR-0035/
   // PER-147's job, not this projection's; excluding it here matches
   // `isPromotable`'s own currency gate for the promoted-only path.
+  // PER-184 carve-out from the "all legs, promoted or held alike" doctrine
+  // above: `excluded: true` marks a Sure split-transaction PARENT row (full
+  // receipt amount) whose CHILD rows are separate, normal legs in this same
+  // `bundle.transactions` array that already sum to the parent. Unlike an
+  // ordinary held leg (non-importable counterpart, currency mismatch,
+  // ambiguous cluster…) — where the money is real and uncounted anywhere else,
+  // so the final anchor must absorb it — an excluded parent's money is ALREADY
+  // counted via its children. Including it here would double it. This applies
+  // regardless of `kind` (defensive: no real-data evidence of an excluded
+  // transfer leg, but the check is free and keeps this loop's predicate exact).
   for (const txn of bundle.transactions) {
+    if (txn.excluded === true) continue
     const facts = factsById.get(txn.account_id)
     if (!facts || facts.balanceSource !== "transaction_flow") continue
     if (txn.currency !== facts.currency) continue
@@ -772,6 +783,12 @@ export function isPromotable(
   }
   if (txn.currency !== account.currency) return false
   if (txn.split_lines && txn.split_lines.length > 0) return false
+  // PER-184: `excluded: true` is Sure's split-transaction representation (the
+  // full-amount parent row); its child rows are separate normal, categorized
+  // transactions that already sum to the parent. Promoting the parent too
+  // would double the flow — hold it as provenance, mirroring `sureHeldReason`
+  // (src/lib/sure-migration.ts) precedence exactly.
+  if (txn.excluded === true) return false
   return true
 }
 

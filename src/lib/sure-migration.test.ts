@@ -258,7 +258,8 @@ describe("sureHeldReason parity with the server's isPromotable", () => {
   )
 
   // One transaction per gate branch: standard, currency mismatch, transfer
-  // kinds, defaulted/blank kind, and split parent.
+  // kinds, defaulted/blank kind, split_lines parent, and PER-184 excluded
+  // (split) parent.
   const txnVariants: Array<Partial<SureTransaction>> = [
     { kind: "standard", currency: "IDR" },
     { kind: "standard", currency: "EUR" }, // currency mismatch
@@ -267,6 +268,7 @@ describe("sureHeldReason parity with the server's isPromotable", () => {
     { kind: undefined, currency: "IDR" }, // defaults to standard
     { kind: "   ", currency: "IDR" }, // blank → standard
     { kind: "standard", currency: "IDR", split_lines: [{}] }, // split parent
+    { kind: "standard", currency: "IDR", excluded: true }, // PER-184 split parent
   ]
 
   test("identical verdict for every account × transaction branch", () => {
@@ -312,6 +314,36 @@ describe("sureHeldReason parity with the server's isPromotable", () => {
       }
     }
   })
+
+  test("PER-184: excluded:true on an otherwise-standard txn is held as splitParent, never promoted", () => {
+    const account = accounts[0] // Depository, importable, transaction_flow
+    const txn: SureTransaction = {
+      id: "t",
+      account_id: account.id,
+      date: "2026-01-01",
+      amount: "895.00",
+      currency: "IDR",
+      kind: "standard",
+      excluded: true,
+    }
+    expect(sureHeldReason(txn, account)).toBe("splitParent")
+    expect(isPromotable(txn, account)).toBe(false)
+  })
+
+  test("PER-184: excluded:false (or omitted) does not affect an otherwise-promotable standard txn", () => {
+    const account = accounts[0]
+    const promotable: SureTransaction = {
+      id: "t",
+      account_id: account.id,
+      date: "2026-01-01",
+      amount: "895.00",
+      currency: "IDR",
+      kind: "standard",
+      excluded: false,
+    }
+    expect(sureHeldReason(promotable, account)).toBeNull()
+    expect(isPromotable(promotable, account)).toBe(true)
+  })
 })
 
 // The preview must fully reconcile to the SureMigrationResult: every bucket the
@@ -338,7 +370,8 @@ describe("summarizeSureBundle reconciliation", () => {
       t.heldByReason.transfer +
         t.heldByReason.nonImportableAccount +
         t.heldByReason.currencyMismatch +
-        t.heldByReason.split
+        t.heldByReason.split +
+        t.heldByReason.splitParent
     ).toBe(t.held)
 
     expect(t.promotable).toBe(manifest.expected.promotedThisRun)

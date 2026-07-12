@@ -27,6 +27,7 @@ import {
   buildSureBundleAnchorEdgeCases,
   buildSureBundlePer182CarveOut,
   buildSureBundlePer182PreflightViolation,
+  buildSureBundlePer184SplitParent,
   buildSureBundleV1Degraded,
   buildSureBundleV1DegradedTransfers,
   buildSureBundleV2Complete,
@@ -698,6 +699,70 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
         projected: account?.balance,
       })
     }
+  })
+
+  test("PER-184: excluded split-parent held (never promoted), children promote normally, no double count", async () => {
+    const tenant = await setupTenant()
+    const fixture = buildSureBundlePer184SplitParent()
+
+    const result = await migrate(tenant, "split-parent.ndjson", fixture.ndjson)
+
+    await assertBalances(
+      tenant,
+      fixture.accountIds,
+      fixture.expectedBalancesMinor
+    )
+
+    // Only the 2 children promote this run; the excluded parent stays held.
+    expect(result.transactions.promotedThisRun).toBe(2)
+    expect(result.transactions.held).toBe(1)
+
+    const checking = await accountByBinding(tenant, fixture.accountIds.checking)
+    const rawRows = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      (tx) =>
+        tx.rawImportedTransaction.findMany({
+          where: { familyId: tenant.familyId, accountId: checking!.id },
+          select: {
+            externalId: true,
+            rowStatus: true,
+            promotedTransactionId: true,
+          },
+        })
+    )
+    const parentRow = rawRows.find(
+      (r) => r.externalId === "sure-txn-per184-parent"
+    )
+    // The parent stays staged as provenance (rawPayload is retained), but is
+    // never confirmed/promoted — same treatment as every other held reason.
+    expect(parentRow?.rowStatus).not.toBe("promoted")
+    expect(parentRow?.promotedTransactionId).toBeNull()
+
+    const childRows = rawRows.filter(
+      (r) => r.externalId !== "sure-txn-per184-parent"
+    )
+    expect(childRows).toHaveLength(2)
+    expect(childRows.every((r) => r.rowStatus === "promoted")).toBe(true)
+
+    // The excluded parent must never have become a real Transaction.
+    const transactionCount = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      (tx) => tx.transaction.count({ where: { accountId: checking!.id } })
+    )
+    expect(transactionCount).toBe(2) // children only
+
+    // Equivalence: the pre-flight projection (the SAME formula the migration's
+    // preflight validator and the final-reconciliation-anchor both use) matches
+    // the real, post-rebuild account balance exactly — proving the excluded
+    // skip is applied identically in the promotion gate (isPromotable) and the
+    // forward-calc (projectSureMigrationBalances) — ONE shared predicate, per
+    // ADR-0043 §6 discipline, never two that can silently drift apart.
+    const bundle = parseSureBundle(fixture.ndjson)
+    const projections = projectSureMigrationBalances(bundle)
+    const projection = projections.get(fixture.accountIds.checking)
+    expect(projection?.projectedBalance).toEqual(checking?.balance)
   })
 
   // ======================================================================

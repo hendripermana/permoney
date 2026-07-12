@@ -3,6 +3,7 @@ import { parseSureBundle } from "@/lib/sure-migration"
 import {
   buildSureBundleAnchorEdgeCases,
   buildSureBundlePer182CarveOut,
+  buildSureBundlePer184SplitParent,
   buildSureBundleV1DegradedTransfers,
   buildSureBundleV2Transfers,
 } from "../../tests/integration/support/sure-fixtures"
@@ -71,5 +72,14 @@ describe("projectSureMigrationBalances (ADR-0045/ADR-0044 §8 pre-flight math)",
         `mismatch for ${key}`
       ).toBe(fixture.balancesMinor[key as keyof typeof fixture.balancesMinor])
     }
+  })
+
+  test("PER-184: excluded split-parent is skipped, only children's flow counts (no double count)", () => {
+    const fixture = buildSureBundlePer184SplitParent()
+    const bundle = parseSureBundle(fixture.ndjson)
+    const projections = projectSureMigrationBalances(bundle)
+    expect(projections.get(fixture.accountIds.checking)?.projectedBalance).toBe(
+      fixture.expectedBalancesMinor.checking
+    )
   })
 })
