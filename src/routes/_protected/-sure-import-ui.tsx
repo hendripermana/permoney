@@ -60,6 +60,11 @@ const HELD_REASONS: Record<
     detail: "One payment divided across several categories.",
     icon: Layers,
   },
+  splitParent: {
+    label: "Split transactions",
+    detail: "One payment divided across several categories.",
+    icon: Layers,
+  },
   nonImportableAccount: {
     label: "Investment & tracked-asset activity",
     detail: "These balances are tracked by valuation, not by each transaction.",

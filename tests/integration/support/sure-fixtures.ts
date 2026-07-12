@@ -646,6 +646,9 @@ const sureTxn = (args: {
   name: string
   date: string
   currency?: string
+  // PER-184: true marks a Sure split-transaction PARENT row (full receipt
+  // amount) — must never promote nor post to balance.
+  excluded?: boolean
 }): string =>
   envelope("Transaction", {
     id: args.id,
@@ -659,7 +662,7 @@ const sureTxn = (args: {
     name: args.name,
     kind: args.kind,
     notes: null,
-    excluded: false,
+    excluded: args.excluded ?? false,
     tag_ids: [],
     created_at: `${args.date}T00:00:00Z`,
     updated_at: `${args.date}T00:00:00Z`,
@@ -1719,5 +1722,68 @@ export function buildSureBundlePer182PreflightViolation(): SurePer182PreflightVi
   return {
     ndjson: lines.join("\n"),
     accountIds,
+  }
+}
+
+export interface SurePer184SplitParentFixture {
+  ndjson: string
+  accountIds: { checking: string }
+  expectedBalancesMinor: { checking: bigint }
+}
+
+/**
+ * PER-184 — a real-shaped Sure split transaction: one `excluded: true` PARENT
+ * row (full receipt amount, no category) plus two normal CHILD rows (own
+ * category, `excluded: false`) that sum exactly to the parent, mirroring the
+ * verified real cases (57,000 = 22,000 + 35,000; 83,000 = 45,000 + 38,000;
+ * 89,500 = 11,900 + 77,600). Uses the 89,500 shape. If the parent is wrongly
+ * promoted (pre-PER-184 bug), the account is short by exactly the parent's
+ * magnitude (89,500) relative to `expectedBalancesMinor`.
+ */
+export function buildSureBundlePer184SplitParent(): SurePer184SplitParentFixture {
+  const accountIds = {
+    checking: "sure-acc-per184-checking",
+  }
+
+  const lines = [
+    sureAccount(accountIds.checking, "Bank Jago", "Depository", "checking"),
+
+    // Parent: full receipt amount, excluded — must NOT promote, must NOT post.
+    sureTxn({
+      id: "sure-txn-per184-parent",
+      accountId: accountIds.checking,
+      amount: "895.00", // Sure positive (expense-shaped) minor 89_500
+      kind: "standard",
+      name: "Belanja di indomaret",
+      date: "2026-03-01",
+      excluded: true,
+    }),
+    // Children: real categorized legs, already carry the money — promote
+    // normally, unaffected by PER-184 (excluded is false / omitted).
+    sureTxn({
+      id: "sure-txn-per184-child-1",
+      accountId: accountIds.checking,
+      amount: "119.00", // minor 11_900
+      kind: "standard",
+      name: "Belanja di indomaret — Snacks",
+      date: "2026-03-01",
+    }),
+    sureTxn({
+      id: "sure-txn-per184-child-2",
+      accountId: accountIds.checking,
+      amount: "776.00", // minor 77_600
+      kind: "standard",
+      name: "Belanja di indomaret — Groceries",
+      date: "2026-03-01",
+    }),
+  ]
+
+  return {
+    ndjson: lines.join("\n"),
+    accountIds,
+    // Sure expense-shaped positive amounts → Permoney negative deltas.
+    // Only the two children post: -11_900 + -77_600 = -89_500. If the parent
+    // were also promoted (pre-fix bug), this would be -179_000 instead.
+    expectedBalancesMinor: { checking: -89_500n },
   }
 }

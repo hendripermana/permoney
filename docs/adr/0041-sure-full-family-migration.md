@@ -1,17 +1,17 @@
 # ADR-0041 — Sure full-family migration (accounts + categories + merchants + transactions)
 
-|                   |                                                                                                                                                                                                                                                                            |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**        | Accepted                                                                                                                                                                                                                                                                   |
-| **Date**          | 2026-06-27                                                                                                                                                                                                                                                                 |
-| **Accepted**      | 2026-06-27                                                                                                                                                                                                                                                                 |
-| **Deciders**      | Hendri Permana                                                                                                                                                                                                                                                             |
-| **Supersedes**    | —                                                                                                                                                                                                                                                                          |
-| **Superseded by** | —                                                                                                                                                                                                                                                                          |
-| **Builds on**     | ADR-0039 (import staging spine, PER-82), ADR-0008 §5, `docs/account-taxonomy.md`                                                                                                                                                                                           |
-| **Amends**        | ADR-0039 §1/§10 (adds `migration` source kind + bundle artifact retention)                                                                                                                                                                                                 |
-| **Amended by**    | ADR-0042 (2026-06-28, PER-175): §5 posting predicate + §10 Phase 1.5; ADR-0043 (2026-07-04, PER-176): §5 superseded by the reconciliation-anchor calculator, §2/§6 Investment importable; ADR-0044 (2026-07-04, PER-179): §1 step 5's confirm→promote is chunked, lockstep |
-| **Reserves for**  | Phase 2 transfers/trades (PER-150/PER-146), Phase 3 rules (smart-rule engine)                                                                                                                                                                                              |
+|                   |                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Status**        | Accepted                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| **Date**          | 2026-06-27                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| **Accepted**      | 2026-06-27                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| **Deciders**      | Hendri Permana                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| **Supersedes**    | —                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| **Superseded by** | —                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| **Builds on**     | ADR-0039 (import staging spine, PER-82), ADR-0008 §5, `docs/account-taxonomy.md`                                                                                                                                                                                                                                                                                                                                                  |
+| **Amends**        | ADR-0039 §1/§10 (adds `migration` source kind + bundle artifact retention)                                                                                                                                                                                                                                                                                                                                                        |
+| **Amended by**    | ADR-0042 (2026-06-28, PER-175): §5 posting predicate + §10 Phase 1.5; ADR-0043 (2026-07-04, PER-176): §5 superseded by the reconciliation-anchor calculator, §2/§6 Investment importable; ADR-0044 (2026-07-04, PER-179): §1 step 5's confirm→promote is chunked, lockstep; ADR-0045 (2026-07-11, PER-184): §4 `excluded` field semantics corrected (Sure split-parent, not user-exclusion), §6 promotion gate gains a 5th branch |
+| **Reserves for**  | Phase 2 transfers/trades (PER-150/PER-146), Phase 3 rules (smart-rule engine)                                                                                                                                                                                                                                                                                                                                                     |
 
 ## Context
 
@@ -197,18 +197,19 @@ extra audited `merchantId` relink on already-promoted transactions).
 
 ### 4. Transaction mapping (through the PER-82 seam, unchanged)
 
-| Sure `Transaction` field       | Handling                                                                                  |
-| ------------------------------ | ----------------------------------------------------------------------------------------- |
-| `id`                           | retained in `rawPayload` (provenance); not a Permoney PK                                  |
-| `account_id`                   | → per-row `StagedRowInput.accountId` via account id-map (**ADR-0039 §1 per-row account**) |
-| `category_id`                  | → `suggestedCategoryId` via category id-map; re-validated at promote                      |
-| `merchant_id`                  | → `suggestedMerchantId` via merchant id-map; re-validated at promote                      |
-| `date`                         | → `StagedRowInput.date`; bucketed family-tz at normalize (`calendarDateInZone`, §4.B)     |
-| `amount` + `currency`          | → `type` + **abs** minor units (§4.C)                                                     |
-| `name`                         | → `StagedRowInput.description`                                                            |
-| `kind`                         | gates promotion: `standard`→promote; transfer kinds→**held** (§6)                         |
-| `notes`, `excluded`, `tag_ids` | retained in `rawPayload`; no Permoney `excluded` field in Phase 1 (deferred fidelity)     |
-| `split_lines` (v2)             | **out of scope** Phase 1 (PER-82 is income/expense only); held + retained                 |
+| Sure `Transaction` field | Handling                                                                                                           |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `id`                     | retained in `rawPayload` (provenance); not a Permoney PK                                                           |
+| `account_id`             | → per-row `StagedRowInput.accountId` via account id-map (**ADR-0039 §1 per-row account**)                          |
+| `category_id`            | → `suggestedCategoryId` via category id-map; re-validated at promote                                               |
+| `merchant_id`            | → `suggestedMerchantId` via merchant id-map; re-validated at promote                                               |
+| `date`                   | → `StagedRowInput.date`; bucketed family-tz at normalize (`calendarDateInZone`, §4.B)                              |
+| `amount` + `currency`    | → `type` + **abs** minor units (§4.C)                                                                              |
+| `name`                   | → `StagedRowInput.description`                                                                                     |
+| `kind`                   | gates promotion: `standard`→promote; transfer kinds→**held** (§6)                                                  |
+| `notes`, `tag_ids`       | retained in `rawPayload`; no Permoney equivalent field in Phase 1 (deferred fidelity)                              |
+| `excluded`               | **Corrected 2026-07-11, PER-184** — see §4.E; gates promotion (§6), no new Permoney field                          |
+| `split_lines` (v2)       | **out of scope** Phase 1 (PER-82 is income/expense only); held + retained; real exports never populate this (§4.E) |
 
 **A. Currency.** Per ADR-0039 §4, the staged row's currency is **the target
 account's currency**. A Sure transaction whose `currency` differs from its account
@@ -237,6 +238,36 @@ classifies. `sureMinor == 0` is treated as `expense` and flagged for review.
 (`getFamilyBaseCurrency` + `computeBaseProjectionForAmount`) exactly as PER-82 §9
 — no migration-specific FX. The integration test **asserts `baseAmount` is set**
 (PER-159 lesson).
+
+**E. `excluded` — corrected 2026-07-11, PER-184 (root cause corrected during
+dogfooding, verified to the rupiah).** The original assumption above (`excluded`
+is a deferred user-exclusion flag with no Permoney effect) was **wrong**.
+`excluded: true` is Sure's own SPLIT-transaction representation: Sure exports a
+split as the PARENT row (full receipt amount, `excluded: true`) plus the CHILD
+rows as separate, normal, categorized transactions that sum **exactly** to the
+parent — verified on three real cases (57,000 = 22,000 + 35,000; 83,000 =
+45,000 + 38,000; 89,500 = 11,900 + 77,600). Permoney previously ignored the
+flag, promoted the parent AND the children, and double-counted the flow —
+balances were low by exactly Σ(excluded parents). This also resolves PER-173's
+"real exports never populate `split_lines`" finding: splits appear as
+excluded-parent + sibling children instead of nested `split_lines`, so both
+representations are held (§6), but for different, now-documented reasons.
+
+Fix: `excluded: true` gates promotion exactly like every other §6 branch — the
+parent is held as pure provenance (`rowStatus` stays `normalized`, never
+`promoted`; `rawPayload` retains the original Sure row), same treatment as a
+non-importable-account or currency-mismatch hold. The children carry their own
+money and category already, so they promote completely unchanged. Permoney
+gains **no new "excluded transaction" concept** — there is deliberately no live
+Transaction row for the parent, no new column, and no balance-skip branch added
+to `createTransactionForFamily`. The same `excluded` check is also applied in
+`projectSureMigrationBalances` (the pre-flight/final-reconciliation-anchor
+forward-calc, ADR-0045 §6) so the promotion gate and the forward-calc can never
+disagree about a split parent — see ADR-0045 §6's dated amendment for the
+forward-calc side of this fix. Reconstructing a real Permoney `SplitEntry`
+(parent + children, matched by account/date/Σamount) is explicitly deferred to
+a follow-up slice — this fix only needs the balance to be correct, which
+requires no matching logic at all.
 
 ### 5. Opening balance for cash-like accounts (transfer-independent, additive)
 
@@ -378,7 +409,11 @@ Phase 1 promotes a transaction row only when **all** hold:
    (Amended 2026-07-04, PER-176: only `TRACKED_ASSET` accounts — `PreciousMetal`/
    `OtherAsset` — are held by this gate now; Investment is importable, §2),
 3. row currency == account currency (foreign-into-domestic held — §4.A),
-4. not a split parent (`split_lines` held — §4).
+4. not a `split_lines` parent (§4 — real exports have never populated this),
+5. not an `excluded` split parent (Amended 2026-07-11, PER-184: `excluded == true`
+   is Sure's ACTUAL split-parent marker — see §4.E. Applied identically inside
+   `projectSureMigrationBalances`'s forward-calc, ADR-0045 §6, so this gate and
+   the forward-calc can never disagree about which rows post).
 
 "Held" rows are **staged and retained** (`rowStatus` stays `normalized`/`skipped`,
 never `promoted`) as provenance, exactly per ADR-0039 §3/§7 — what was deliberately

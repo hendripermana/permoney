@@ -452,6 +452,7 @@ export type SureHeldReason =
   | "nonImportableAccount"
   | "currencyMismatch"
   | "split"
+  | "splitParent"
 
 export interface SurePreviewAccount extends NormalizedSureAccount {
   currency: string
@@ -465,7 +466,21 @@ function isImportableSureAccount(account: NormalizedSureAccount): boolean {
 /**
  * Why a staged Sure transaction is held in Phase 1, or `null` if it will promote.
  * Precedence matches the server's `isPromotable`: non-standard kind, then a
- * non-importable account, then a currency mismatch, then a split parent.
+ * non-importable account, then a currency mismatch, then a `split_lines`
+ * parent, then an `excluded` split parent.
+ *
+ * PER-184: `excluded: true` is Sure's SPLIT-transaction representation, not a
+ * user-exclusion flag — Sure exports a split as the PARENT row (full receipt
+ * amount, `excluded: true`) plus the CHILD rows as separate normal, categorized
+ * transactions that sum exactly to the parent. The children already carry the
+ * money and category, so the parent must never promote (it would double the
+ * flow) — held as pure provenance, same as every other held reason, with no
+ * new Permoney "excluded transaction" concept. This is distinct from the
+ * `split_lines` (v2 embedded splits) case above: real Sure exports have never
+ * been observed populating `split_lines` (that was PER-173's "missing
+ * split_lines" mystery — splits appear as excluded-parent + sibling children
+ * instead), so the two reasons are kept separately countable rather than
+ * merged, in case a future export shape does populate `split_lines`.
  */
 export function sureHeldReason(
   txn: SureTransaction,
@@ -476,6 +491,7 @@ export function sureHeldReason(
   if (!isImportableSureAccount(account)) return "nonImportableAccount"
   if (txn.currency !== account.currency) return "currencyMismatch"
   if (txn.split_lines && txn.split_lines.length > 0) return "split"
+  if (txn.excluded === true) return "splitParent"
   return null
 }
 
@@ -530,6 +546,7 @@ export function summarizeSureBundle(
     nonImportableAccount: 0,
     currencyMismatch: 0,
     split: 0,
+    splitParent: 0,
   }
   let promotable = 0
   let held = 0
