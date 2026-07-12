@@ -46,6 +46,14 @@ function InputGroupAddon({
   align = "inline-start",
   ...props
 }: React.ComponentProps<"div"> & VariantProps<typeof inputGroupAddonVariants>) {
+  // Clicking anywhere in the addon focuses the sibling input — a mouse-only
+  // convenience mirrored here for keyboard users too (Enter/Space), so a
+  // visible click handler on this non-interactive wrapper is never
+  // keyboard-inoperable (WCAG 2.1.1 / SonarCloud S1082, S6847).
+  const focusSiblingInput = (target: HTMLElement) => {
+    target.parentElement?.querySelector("input")?.focus()
+  }
+
   return (
     <div
       role="group"
@@ -56,7 +64,13 @@ function InputGroupAddon({
         if ((e.target as HTMLElement).closest("button")) {
           return
         }
-        e.currentTarget.parentElement?.querySelector("input")?.focus()
+        focusSiblingInput(e.currentTarget)
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== "Enter" && e.key !== " ") return
+        if ((e.target as HTMLElement).closest("button")) return
+        e.preventDefault()
+        focusSiblingInput(e.currentTarget)
       }}
       {...props}
     />

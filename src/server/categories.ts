@@ -63,9 +63,6 @@ export class CategoryNotFoundError extends Error {
 export class CategoryValidationError extends Error {
   override readonly name = "CategoryValidationError"
   readonly statusCode = 422
-  constructor(message: string) {
-    super(message)
-  }
 }
 
 const nameSchema = z.string().trim().min(1).max(120)

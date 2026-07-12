@@ -1787,3 +1787,82 @@ export function buildSureBundlePer184SplitParent(): SurePer184SplitParentFixture
     expectedBalancesMinor: { checking: -89_500n },
   }
 }
+
+// ---------------------------------------------------------------------------
+// PER-189 follow-up — case-insensitive-duplicate Category/Merchant names
+// across a Sure bundle. Real Sure exports bind category/merchant identity by
+// `externalId`, NEVER by name — two DIFFERENT Sure entities in the same
+// family can legitimately be named "Food" and "food" (a user who renamed a
+// category, or merged accounts from two Sure workspaces). The PER-189
+// quick-create dedup index (`merchant_category_name_dedup_exempt_migrated`)
+// excludes `externalProvider IS NOT NULL` rows for exactly this reason — this
+// fixture is the regression proof that a migration import carrying such a
+// pair still creates BOTH rows instead of tripping the unique index.
+// ---------------------------------------------------------------------------
+
+export interface SureCiDuplicateNamesFixture {
+  ndjson: string
+  accountIds: { checking: string }
+  expected: { categoriesCreated: number; merchantsCreated: number }
+}
+
+export function buildSureBundleCiDuplicateNames(): SureCiDuplicateNamesFixture {
+  const accountIds = {
+    checking: "sure-acc-per189-checking",
+  }
+
+  const lines = [
+    sureAccount(accountIds.checking, "Bank Jago", "Depository", "checking"),
+
+    // Two DIFFERENT Sure categories that happen to be case-insensitive
+    // duplicates by name — bound by distinct externalId, not name.
+    envelope("Category", {
+      id: "sure-cat-per189-food-upper",
+      name: "Food",
+      classification: "expense",
+      parent_id: null,
+      color: "#6172F3",
+      lucide_icon: "apple",
+      key: null,
+      created_at: "2026-01-02T00:00:00Z",
+      updated_at: "2026-01-02T00:00:00Z",
+    }),
+    envelope("Category", {
+      id: "sure-cat-per189-food-lower",
+      name: "food",
+      classification: "expense",
+      parent_id: null,
+      color: "#FF8A00",
+      lucide_icon: "utensils",
+      key: null,
+      created_at: "2026-01-02T00:00:00Z",
+      updated_at: "2026-01-02T00:00:00Z",
+    }),
+
+    // Two DIFFERENT Sure merchants, same case-insensitive-duplicate shape.
+    envelope("Merchant", {
+      id: "sure-mer-per189-food-upper",
+      name: "Food Mart",
+      color: null,
+      logo_url: null,
+      source: "manual",
+      created_at: "2026-01-03T00:00:00Z",
+      updated_at: "2026-01-03T00:00:00Z",
+    }),
+    envelope("Merchant", {
+      id: "sure-mer-per189-food-lower",
+      name: "food mart",
+      color: null,
+      logo_url: null,
+      source: "manual",
+      created_at: "2026-01-03T00:00:00Z",
+      updated_at: "2026-01-03T00:00:00Z",
+    }),
+  ]
+
+  return {
+    ndjson: lines.join("\n"),
+    accountIds,
+    expected: { categoriesCreated: 2, merchantsCreated: 2 },
+  }
+}

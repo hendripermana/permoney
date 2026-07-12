@@ -22,19 +22,19 @@ export interface EntityComboboxItem {
 }
 
 interface EntityComboboxProps {
-  id?: string
-  items: Array<EntityComboboxItem>
-  value: string
-  onChange: (id: string) => void
-  onCreate: (name: string) => Promise<EntityComboboxItem>
-  placeholder: string
-  searchPlaceholder: string
-  emptyLabel: string
-  createLabel: (query: string) => string
-  disabled?: boolean
-  "aria-invalid"?: boolean
+  readonly id?: string
+  readonly items: Array<EntityComboboxItem>
+  readonly value: string
+  readonly onChange: (id: string) => void
+  readonly onCreate: (name: string) => Promise<EntityComboboxItem>
+  readonly placeholder: string
+  readonly searchPlaceholder: string
+  readonly emptyLabel: string
+  readonly createLabel: (query: string) => string
+  readonly disabled?: boolean
+  readonly "aria-invalid"?: boolean
   /** Optional fields (e.g. Merchant) surface a "-- clear --" item. */
-  clearLabel?: string
+  readonly clearLabel?: string
 }
 
 /**

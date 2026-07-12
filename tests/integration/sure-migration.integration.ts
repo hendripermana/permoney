@@ -25,6 +25,7 @@ import { createTestFactories, type TestFactories } from "./support/factories"
 import {
   buildLargeSureBundle,
   buildSureBundleAnchorEdgeCases,
+  buildSureBundleCiDuplicateNames,
   buildSureBundlePer182CarveOut,
   buildSureBundlePer182PreflightViolation,
   buildSureBundlePer184SplitParent,
@@ -1276,4 +1277,57 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
 
     await assertLedgerMatchesControl(tenant, control)
   }, 300_000)
+
+  // PER-189 follow-up (head-eng review, PR #158): the quick-create dedup
+  // index must never reach into migration-bound rows. Real Sure exports bind
+  // Category/Merchant identity by externalId, not name — two legitimately
+  // distinct entities can share a case-insensitive name ("Food" / "food").
+  // The dedup index now excludes externalProvider IS NOT NULL rows
+  // (migration `merchant_category_name_dedup_exempt_migrated`); this proves
+  // an import carrying such a pair creates BOTH rows instead of tripping the
+  // unique constraint.
+  test("PER-189: case-insensitive-duplicate Category/Merchant names across a migration import both get created", async () => {
+    const tenant = await setupTenant()
+    const fixture = buildSureBundleCiDuplicateNames()
+
+    const result = await migrate(
+      tenant,
+      "ci-duplicate-names.ndjson",
+      fixture.ndjson
+    )
+
+    expect(result.categories).toEqual({
+      created: fixture.expected.categoriesCreated,
+      reused: 0,
+    })
+    expect(result.merchants).toEqual({
+      created: fixture.expected.merchantsCreated,
+      reused: 0,
+    })
+
+    const categories = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      (tx) =>
+        tx.category.findMany({
+          where: { familyId: tenant.familyId, isSystem: false },
+          select: { name: true },
+        })
+    )
+    expect(categories.map((c) => c.name).sort()).toEqual(["Food", "food"])
+
+    const merchants = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      (tx) =>
+        tx.merchant.findMany({
+          where: { familyId: tenant.familyId },
+          select: { name: true },
+        })
+    )
+    expect(merchants.map((m) => m.name).sort()).toEqual([
+      "Food Mart",
+      "food mart",
+    ])
+  })
 })
