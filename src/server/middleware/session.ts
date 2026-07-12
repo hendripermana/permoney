@@ -1,4 +1,5 @@
 import { createMiddleware } from "@tanstack/react-start"
+import { AppError } from "@/lib/auth-errors"
 import {
   resolveActiveMembership,
   roleCan,
@@ -21,7 +22,7 @@ export async function getSession() {
 export async function requireSession() {
   const session = await getSession()
   if (!session) {
-    throw new Error("UNAUTHENTICATED") // M3-5 will change this to AppError
+    throw new AppError("UNAUTHENTICATED")
   }
   return session
 }
@@ -48,7 +49,7 @@ export const familyMiddleware = createMiddleware()
       context.user.id
     )
     if (!membership) {
-      throw new Error("NOT_A_MEMBER")
+      throw new AppError("NOT_A_MEMBER")
     }
     const role: FamilyRole = membership.role
     return next({
@@ -72,7 +73,7 @@ export function requireCapability(capability: Capability) {
     .middleware([familyMiddleware])
     .server(async ({ next, context }) => {
       if (!roleCan(context.role, capability)) {
-        throw new Error("FORBIDDEN")
+        throw new AppError("FORBIDDEN")
       }
       return next()
     })
