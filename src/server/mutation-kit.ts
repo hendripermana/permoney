@@ -34,6 +34,41 @@ export function isUniqueConstraintError(error: unknown): boolean {
   )
 }
 
+// Raised when a quick-create mutation targets a name that already exists
+// (case/whitespace-insensitive) within the family — Merchant and Category
+// (PER-189) both enforce this at the DB layer with a functional unique index,
+// not just an app-level check (see migration `merchant_category_name_dedup`).
+export class DuplicateNameError extends Error {
+  override readonly name = "DuplicateNameError"
+  readonly statusCode = 409
+  constructor(
+    readonly entityType: string,
+    readonly attemptedName: string
+  ) {
+    super(
+      `A ${entityType.toLowerCase()} named "${attemptedName}" already exists`
+    )
+  }
+}
+
+// P2002 raised specifically by a name-dedup functional unique index (as
+// opposed to the IdempotencyRecord unique race, which callers already handle
+// via isUniqueConstraintError + replay). Prisma reports the violated index
+// name as `meta.target` — either a bare string or an array — for indexes not
+// modeled in schema.prisma, since it cannot map back to column names.
+export function isNameDedupConstraintError(
+  error: unknown,
+  indexName: string
+): boolean {
+  if (!isUniqueConstraintError(error)) return false
+  const target = (error as { meta?: { target?: unknown } }).meta?.target
+  if (typeof target === "string") return target.includes(indexName)
+  if (Array.isArray(target)) {
+    return target.some((t) => typeof t === "string" && t.includes(indexName))
+  }
+  return false
+}
+
 // A tenant-scoped interactive transaction runner. Production callers default to
 // `scopedTenantTransaction`; tests inject a harness-scoped runner. `userId` is
 // the acting member, set into the `app.user_id` GUC for the RLS membership

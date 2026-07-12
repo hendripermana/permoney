@@ -217,6 +217,10 @@ model Merchant {
   smartRules   SmartRule[]
 
   // Tenant scoping (see ADR-0003).
+  // PER-189: case/whitespace-insensitive per-family name uniqueness — a
+  // functional UNIQUE INDEX (familyId, lower(btrim(name))) is created in raw
+  // SQL (migration `merchant_category_name_dedup`); Prisma cannot express a
+  // functional index in the schema DSL.
   @@unique([id, familyId], map: "Merchant_id_familyId_key")
   @@index([familyId])
 }
@@ -252,6 +256,11 @@ model Category {
 
   // Tenant scoping (see ADR-0003). `familyId` is nullable for system
   // categories; the index still helps the common per-family scan.
+  // PER-189: case/whitespace-insensitive per-family name uniqueness — a
+  // functional UNIQUE INDEX (familyId, lower(btrim(name))) WHERE familyId IS
+  // NOT NULL is created in raw SQL (migration
+  // `merchant_category_name_dedup`); system categories (familyId NULL) are
+  // out of scope. Prisma cannot express a functional index in the schema DSL.
   @@index([familyId])
 }
 

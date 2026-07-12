@@ -3,7 +3,7 @@
 import * as React from "react"
 import { useForm, type ReactFormExtendedApi } from "@tanstack/react-form"
 import { useHotkeys } from "@tanstack/react-hotkeys"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   IconArrowDownLeft,
   IconArrowUpRight,
@@ -21,9 +21,15 @@ import { format } from "date-fns"
 import { getCurrencySymbol } from "@/lib/currency"
 import { cn } from "@/lib/utils"
 import { getTransactionFormData } from "@/server/transactions"
+import { createMerchantFn } from "@/server/merchants"
+import { createCategoryFn } from "@/server/categories"
 import { toDisplayNumber, toMinorUnits, type Money } from "@/lib/money"
 import { CURRENCIES, type CurrencyCode } from "@/lib/data/currencies"
 import { createUuidV7 } from "@/lib/uuid-v7"
+import {
+  EntityCombobox,
+  type EntityComboboxItem,
+} from "@/components/blocks/entity-combobox"
 
 type TransactionFormData = Awaited<ReturnType<typeof getTransactionFormData>>
 type FormAccount = TransactionFormData["accounts"][number]
@@ -835,29 +841,35 @@ function MerchantField({
   form,
   formData,
   isLoading,
-}: TransactionFormSectionProps) {
+  onCreateMerchant,
+}: TransactionFormSectionProps & {
+  onCreateMerchant: (name: string) => Promise<EntityComboboxItem>
+}) {
   if (activeTab === "transfer") return null
+
+  const items: Array<EntityComboboxItem> =
+    formData?.merchants.map((m) => ({ id: m.id, label: m.name })) ?? []
 
   return (
     <form.Field name="merchantId">
       {(field) => (
         <div className="space-y-2">
           <Label htmlFor={field.name}>Merchant (Optional)</Label>
-          <select
+          <EntityCombobox
             id={field.name}
-            name={field.name}
-            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-            value={field.state.value}
-            onChange={(e) => field.handleChange(e.target.value)}
+            items={items}
+            value={field.state.value ?? ""}
+            onChange={field.handleChange}
+            onCreate={onCreateMerchant}
             disabled={isLoading}
-          >
-            <option value="">-- No Merchant / General --</option>
-            {formData?.merchants.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-              </option>
-            ))}
-          </select>
+            placeholder={
+              isLoading ? "Loading..." : "-- No Merchant / General --"
+            }
+            searchPlaceholder="Search merchants..."
+            emptyLabel="No merchants yet"
+            createLabel={(query) => `Create merchant "${query}"`}
+            clearLabel="-- No Merchant / General --"
+          />
         </div>
       )}
     </form.Field>
@@ -906,8 +918,16 @@ function CategoryField({
   formData,
   isLoading,
   isSplit,
-}: TransactionFormSectionProps & { isSplit: boolean }) {
+  onCreateCategory,
+}: TransactionFormSectionProps & {
+  isSplit: boolean
+  onCreateCategory: (name: string) => Promise<EntityComboboxItem>
+}) {
   if (activeTab === "transfer" || isSplit) return null
+
+  const items: Array<EntityComboboxItem> = (formData?.categories ?? [])
+    .filter((c) => c.type === activeTab)
+    .map((c) => ({ id: c.id, label: c.name }))
 
   return (
     <form.Field
@@ -919,28 +939,19 @@ function CategoryField({
       {(field) => (
         <div className="space-y-2">
           <Label htmlFor={field.name}>Category *</Label>
-          <select
+          <EntityCombobox
             id={field.name}
-            name={field.name}
-            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-1 aria-[invalid=true]:ring-destructive/30"
-            value={field.state.value}
-            onChange={(e) => field.handleChange(e.target.value)}
+            items={items}
+            value={field.state.value ?? ""}
+            onChange={field.handleChange}
+            onCreate={onCreateCategory}
             disabled={isLoading}
+            placeholder={isLoading ? "Loading..." : "Select Category"}
+            searchPlaceholder="Search categories..."
+            emptyLabel="No categories yet"
+            createLabel={(query) => `Create category "${query}"`}
             aria-invalid={field.state.meta.errors.length > 0}
-            aria-describedby={
-              field.state.meta.errors.length > 0
-                ? `${field.name}-error`
-                : undefined
-            }
-          >
-            <option value="" disabled>
-              {isLoading ? "Loading..." : "Select Category"}
-            </option>
-            <CategoryOptions
-              categories={formData?.categories}
-              type={activeTab}
-            />
-          </select>
+          />
           <FieldError
             id={`${field.name}-error`}
             errors={field.state.meta.errors}
@@ -1340,6 +1351,42 @@ function useTransactionFormModalController({
     queryFn: () => getTransactionFormData(),
   })
 
+  // Quick-create (PER-189): the combobox calls these, then the lookup query
+  // is invalidated so the newly created merchant/category is immediately
+  // selectable — the canonical createMerchantFn/createCategoryFn server fns
+  // own tenant scoping, audit, idempotency, and duplicate-name rejection.
+  const queryClient = useQueryClient()
+
+  const createMerchantOption = React.useCallback(
+    async (name: string): Promise<EntityComboboxItem> => {
+      const created = await createMerchantFn({
+        data: { name, idempotencyKey: createUuidV7() },
+      })
+      await queryClient.invalidateQueries({
+        queryKey: ["transactionFormData"],
+      })
+      return { id: created.id, label: created.name }
+    },
+    [queryClient]
+  )
+
+  const createCategoryOption = React.useCallback(
+    async (name: string): Promise<EntityComboboxItem> => {
+      const created = await createCategoryFn({
+        data: {
+          name,
+          type: activeTab === "income" ? "income" : "expense",
+          idempotencyKey: createUuidV7(),
+        },
+      })
+      await queryClient.invalidateQueries({
+        queryKey: ["transactionFormData"],
+      })
+      return { id: created.id, label: created.name }
+    },
+    [activeTab, queryClient]
+  )
+
   const defaultFormValues: TransactionFormValues = isEditMode
     ? {
         type: editData.type,
@@ -1687,6 +1734,8 @@ function useTransactionFormModalController({
 
   return {
     activeTab,
+    createCategoryOption,
+    createMerchantOption,
     form,
     formData,
     formError,
@@ -1711,6 +1760,8 @@ export function TransactionFormModal({
 }: TransactionFormModalProps) {
   const {
     activeTab,
+    createCategoryOption,
+    createMerchantOption,
     form,
     formData,
     formError,
@@ -1784,6 +1835,7 @@ export function TransactionFormModal({
             form={form}
             formData={formData}
             isLoading={isLoading}
+            onCreateMerchant={createMerchantOption}
           />
           <SplitModeToggle
             activeTab={activeTab}
@@ -1796,6 +1848,7 @@ export function TransactionFormModal({
             formData={formData}
             isLoading={isLoading}
             isSplit={isSplit}
+            onCreateCategory={createCategoryOption}
           />
           <SplitEntriesPanel
             activeTab={activeTab}
