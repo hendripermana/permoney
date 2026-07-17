@@ -32,7 +32,7 @@ export async function waitForHydration(page: Page): Promise<void> {
 }
 
 /** Sign up a fresh user and complete onboarding, ending on /dashboard. */
-export async function onboard(page: Page): Promise<void> {
+export async function onboard(page: Page): Promise<Identity> {
   const identity = createIdentity()
   await page.goto("/signup")
   await waitForHydration(page)
@@ -46,4 +46,5 @@ export async function onboard(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Get Started" }).click()
   await expect(page).toHaveURL(/\/dashboard(?:\?.*)?$/)
   await waitForHydration(page)
+  return identity
 }

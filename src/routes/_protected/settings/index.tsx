@@ -24,9 +24,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
-import { getSettingsOverviewFn } from "@/server/settings"
-
-export const SETTINGS_OVERVIEW_KEY = ["settings-overview"] as const
+import { getSettingsOverviewFn, SETTINGS_OVERVIEW_KEY } from "@/server/settings"
 
 export const Route = createFileRoute("/_protected/settings/")({
   ssr: false,

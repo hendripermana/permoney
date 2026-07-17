@@ -2,8 +2,9 @@
 import { afterEach, describe, expect, it } from "vite-plus/test"
 import { cleanup, render, screen } from "@testing-library/react"
 
-import { DoneStage } from "./-sure-import-ui"
+import { DoneStage, ReviewStage } from "./-sure-import-ui"
 import type { SureMigrationResult } from "@/server/sure-migration"
+import type { SureBundlePreview } from "@/lib/sure-migration"
 
 // PER-171 — the Done screen must read as success in the real-world degraded case
 // where a bundle stages accounts/categories/merchants but promotes ZERO
@@ -128,5 +129,79 @@ describe("DoneStage", () => {
     expect(screen.getByText("Already imported")).toBeTruthy()
     expect(screen.getByText(/nothing was duplicated/i)).toBeTruthy()
     expect(screen.queryByText("Accounts & details imported")).toBeNull()
+  })
+})
+
+// PER-186 — the confirm step is exactly where the original incident happened
+// (import landed in the wrong account, silently). These prove the acting
+// identity is always named at that step, never silently omitted.
+function makePreview(
+  overrides: Partial<SureBundlePreview> = {}
+): SureBundlePreview {
+  return {
+    accounts: { total: 2, importable: 2, held: 0 },
+    categories: 3,
+    merchants: 1,
+    transactions: {
+      total: 5,
+      promotable: 5,
+      held: 0,
+      heldByReason: {
+        transfer: 0,
+        split: 0,
+        splitParent: 0,
+        nonImportableAccount: 0,
+        currencyMismatch: 0,
+      },
+      zeroAmountSkipped: 0,
+      invalidDateSkipped: 0,
+      unmappable: 0,
+    },
+    transfers: 0,
+    valuations: 0,
+    malformedLines: 0,
+    ignoredEntities: {},
+    ...overrides,
+  }
+}
+
+describe("ReviewStage", () => {
+  it("names the acting identity the import will land under", () => {
+    render(
+      <ReviewStage
+        fileName="all.ndjson"
+        preview={makePreview()}
+        actingEmail="hendri@permana.icu"
+        onBack={noop}
+        onConfirm={noop}
+        running={false}
+      />
+    )
+
+    expect(screen.getByText("hendri@permana.icu")).toBeTruthy()
+    expect(
+      screen.getByText(
+        (_, el) =>
+          el?.tagName === "SPAN" &&
+          el.textContent === "Importing into hendri@permana.icu's family."
+      )
+    ).toBeTruthy()
+  })
+
+  it("falls back to a neutral message while the identity is still loading", () => {
+    render(
+      <ReviewStage
+        fileName="all.ndjson"
+        preview={makePreview()}
+        actingEmail={undefined}
+        onBack={noop}
+        onConfirm={noop}
+        running={false}
+      />
+    )
+
+    expect(
+      screen.getByText("Importing into your family.", { selector: "span" })
+    ).toBeTruthy()
   })
 })

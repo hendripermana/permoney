@@ -63,12 +63,20 @@ export interface FamilyPreferences {
 export interface ProfilePreferences {
   name: string
   email: string
+  image: string | null
   theme: Theme
 }
 export interface SettingsOverview {
   family: FamilyPreferences
   profile: ProfilePreferences
 }
+
+// PER-186 — shared react-query key for the current user's identity (name,
+// email, avatar). Defined once here, next to `getSettingsOverviewFn`, so every
+// consumer (settings pages, the sidebar identity indicator, the Sure importer
+// confirm step) reads the SAME cache entry instead of re-fetching or drifting
+// out of sync with each other.
+export const SETTINGS_OVERVIEW_KEY = ["settings-overview"] as const
 
 // ---------------------------------------------------------------------------
 // Domain helpers (test-injectable tenant runner, exactly like family-members).
@@ -90,13 +98,14 @@ export async function readSettingsOverviewForFamily({
     })
     const user = await tx.user.findUniqueOrThrow({
       where: { id: userId },
-      select: { name: true, email: true, theme: true },
+      select: { name: true, email: true, image: true, theme: true },
     })
     return {
       family: { currency: family.currency, timezone: family.timezone },
       profile: {
         name: user.name,
         email: user.email,
+        image: user.image,
         theme: normalizeTheme(user.theme),
       },
     }
@@ -155,12 +164,12 @@ export async function updateProfileForUser({
   return await runInTenantTransaction(familyId, userId, async (tx) => {
     const before = await tx.user.findUniqueOrThrow({
       where: { id: userId },
-      select: { name: true, email: true, theme: true },
+      select: { name: true, email: true, image: true, theme: true },
     })
     const after = await tx.user.update({
       where: { id: userId },
       data: { name: data.name, theme: data.theme },
-      select: { name: true, email: true, theme: true },
+      select: { name: true, email: true, image: true, theme: true },
     })
     await auditLog(tx, auditCtx, {
       action: "update",
@@ -172,6 +181,7 @@ export async function updateProfileForUser({
     return {
       name: after.name,
       email: after.email,
+      image: after.image,
       theme: normalizeTheme(after.theme),
     }
   })

@@ -1,6 +1,6 @@
 import * as React from "react"
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router"
-import { useMutation } from "@tanstack/react-query"
+import { useMutation, useQuery } from "@tanstack/react-query"
 import { toast } from "sonner"
 
 import { AppSidebar } from "@/components/app-sidebar"
@@ -9,6 +9,7 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { parseSureBundle, summarizeSureBundle } from "@/lib/sure-migration"
 import { runSureMigrationFn } from "@/server/sure-migration"
+import { getSettingsOverviewFn, SETTINGS_OVERVIEW_KEY } from "@/server/settings"
 import { transactionCollection } from "@/lib/collections"
 import {
   DoneStage,
@@ -47,6 +48,16 @@ const MAX_BUNDLE_BYTES = 64 * 1024 * 1024
 
 function SureImportPage() {
   const router = useRouter()
+
+  // PER-186 — the confirm step is the exact place the original incident
+  // happened (import landed in the wrong account, silently, because nothing on
+  // screen said which family it was going into). Shares the sidebar's
+  // SETTINGS_OVERVIEW_KEY cache entry, so this is normally already resolved by
+  // the time the user reaches the review stage — no extra request.
+  const { data: overview } = useQuery({
+    queryKey: SETTINGS_OVERVIEW_KEY,
+    queryFn: () => getSettingsOverviewFn(),
+  })
 
   const [stage, setStage] = React.useState<Stage>("upload")
   const [fileName, setFileName] = React.useState("")
@@ -132,6 +143,7 @@ function SureImportPage() {
               <ReviewStage
                 fileName={fileName}
                 preview={preview}
+                actingEmail={overview?.profile.email}
                 onBack={restart}
                 onConfirm={() => runMutation.mutate()}
                 running={runMutation.isPending}
