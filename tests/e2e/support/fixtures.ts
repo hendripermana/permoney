@@ -8,6 +8,12 @@ const FORBIDDEN_CONSOLE_FRAGMENTS = [
   "SECURITY BREACH",
   "PrismaClient is unable to run in this browser",
   "Calling 'require' for '.prisma/client/index-browser'",
+  // PER-187: the router TypeError reported alongside the UNAUTHENTICATED
+  // live-query hang. Root-cause analysis judged it a downstream symptom of
+  // the auth-error retry storm, not an independent router bug — this
+  // fragment turns that judgment into a standing regression check across
+  // every e2e spec, instead of a one-off manual confirmation.
+  "reading '_nonReactive'",
 ] as const
 
 function containsForbiddenFragment(message: string): boolean {

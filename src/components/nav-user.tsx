@@ -48,10 +48,22 @@ export function NavUser({
   // data, then land on the public landing at "/". On failure surface a toast
   // instead of leaving the user in silent limbo (the failure mode this ticket
   // exists to kill).
+  //
+  // PER-187 follow-up: this used to call `queryClient.invalidateQueries()`,
+  // which means "refetch this, it's still relevant" — but the session was
+  // just killed, so every actively-mounted query on this page (dashboard's
+  // net-worth/cash-flow/budget/etc.) immediately refetched against a dead
+  // session. `query-client.ts`'s global auth-error handler now hard-redirects
+  // to /login the instant one of those refetches fails, which raced (and
+  // beat) the `router.navigate({ to: "/" })` below. `clear()` matches what
+  // this code actually intends ("drop cached tenant data") — it empties the
+  // cache with no network calls, so there is nothing left to fail and
+  // nothing for that handler to react to.
   const logoutMutation = useMutation({
     mutationFn: () => logout(),
     onSuccess: async () => {
-      await Promise.all([queryClient.invalidateQueries(), router.invalidate()])
+      queryClient.clear()
+      await router.invalidate()
       await router.navigate({ to: "/" })
     },
     onError: () => {
