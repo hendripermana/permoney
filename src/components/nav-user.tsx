@@ -14,6 +14,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   RiMore2Line,
   RiUserLine,
@@ -27,15 +28,29 @@ import { useServerFn } from "@tanstack/react-start"
 import { toast } from "sonner"
 import { logoutFn } from "@/server/auth-fns"
 
-export function NavUser({
-  user,
-}: {
-  user: {
-    name: string
-    email: string
-    avatar: string
+// PER-186 — a multi-account user cannot tell which account is live from a name
+// alone (two Permoney accounts belonging to the same person share a display
+// name). Initials come from the email local-part when it's ambiguous, so the
+// avatar itself doesn't repeat the same misleading "same person" impression.
+function initialsFor(name: string, email: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean)
+  if (words.length >= 2) {
+    return (words[0][0] + words[1][0]).toUpperCase()
   }
-}) {
+  if (words.length === 1 && words[0].length >= 2) {
+    return words[0].slice(0, 2).toUpperCase()
+  }
+  const local = email.split("@")[0] ?? ""
+  return (local.slice(0, 2) || "?").toUpperCase()
+}
+
+export interface NavUserIdentity {
+  name: string
+  email: string
+  avatar?: string | null
+}
+
+export function NavUser({ user }: { user: NavUserIdentity | undefined }) {
   const { isMobile } = useSidebar()
   const router = useRouter()
   const queryClient = useQueryClient()
@@ -71,6 +86,29 @@ export function NavUser({
     },
   })
 
+  // PER-186 — the sidebar identity is fetched from the server on mount (see
+  // AppSidebar), so there's a brief window with no data yet. Show a skeleton
+  // rather than a placeholder name/email: a fake-but-plausible identity in
+  // that gap is exactly the kind of "looks like a real account" ambiguity
+  // this ticket exists to remove.
+  if (!user) {
+    return (
+      <SidebarMenu>
+        <SidebarMenuItem>
+          <SidebarMenuButton size="lg" disabled className="cursor-default">
+            <Skeleton className="h-8 w-8 shrink-0 rounded-lg" />
+            <div className="grid flex-1 gap-1.5">
+              <Skeleton className="h-3.5 w-24 rounded" />
+              <Skeleton className="h-3 w-32 rounded" />
+            </div>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      </SidebarMenu>
+    )
+  }
+
+  const initials = initialsFor(user.name, user.email)
+
   return (
     <SidebarMenu>
       <SidebarMenuItem>
@@ -81,8 +119,10 @@ export function NavUser({
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
             >
               <Avatar className="h-8 w-8 rounded-lg grayscale">
-                <AvatarImage src={user.avatar} alt={user.name} />
-                <AvatarFallback className="rounded-lg">CN</AvatarFallback>
+                <AvatarImage src={user.avatar ?? undefined} alt={user.name} />
+                <AvatarFallback className="rounded-lg">
+                  {initials}
+                </AvatarFallback>
               </Avatar>
               <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-medium">{user.name}</span>
@@ -102,8 +142,10 @@ export function NavUser({
             <DropdownMenuLabel className="p-0 font-normal">
               <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
                 <Avatar className="h-8 w-8 rounded-lg">
-                  <AvatarImage src={user.avatar} alt={user.name} />
-                  <AvatarFallback className="rounded-lg">CN</AvatarFallback>
+                  <AvatarImage src={user.avatar ?? undefined} alt={user.name} />
+                  <AvatarFallback className="rounded-lg">
+                    {initials}
+                  </AvatarFallback>
                 </Avatar>
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">{user.name}</span>

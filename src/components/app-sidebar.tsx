@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { Link } from "@tanstack/react-router"
+import { useQuery } from "@tanstack/react-query"
 import {
   IconChartBar,
   IconDashboard,
@@ -23,18 +24,13 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
+import { getSettingsOverviewFn, SETTINGS_OVERVIEW_KEY } from "@/server/settings"
 
 // Kita ubah data navigasinya khusus untuk Permoney
 const data: {
-  user: { name: string; email: string; avatar: string }
   navMain: NavItem[]
   navSecondary: NavItem[]
 } = {
-  user: {
-    name: "Hendri Permana",
-    email: "hendripermana13@gmail.com",
-    avatar: "/avatars/shadcn.jpg", // Nanti bisa diganti foto profilmu
-  },
   navMain: [
     {
       title: "Dashboard",
@@ -77,6 +73,16 @@ const data: {
 }
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+  // PER-186 — the sidebar is the one surface visible on every protected page,
+  // so it's the canonical place to show WHICH account is live. Reading the
+  // real session identity (instead of a hardcoded name/email) is the actual
+  // fix: a multi-account user must never see a plausible-looking identity
+  // that isn't the one they're actually acting as.
+  const { data: overview } = useQuery({
+    queryKey: SETTINGS_OVERVIEW_KEY,
+    queryFn: () => getSettingsOverviewFn(),
+  })
+
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
@@ -105,7 +111,17 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <NavSecondary items={data.navSecondary} className="mt-auto" />
       </SidebarContent>
       <SidebarFooter>
-        <NavUser user={data.user} />
+        <NavUser
+          user={
+            overview
+              ? {
+                  name: overview.profile.name,
+                  email: overview.profile.email,
+                  avatar: overview.profile.image,
+                }
+              : undefined
+          }
+        />
       </SidebarFooter>
     </Sidebar>
   )

@@ -15,7 +15,7 @@ test.describe("Sure guided migration", () => {
   test("upload → honest preview → promote → idempotent re-run", async ({
     page,
   }) => {
-    await onboard(page)
+    const identity = await onboard(page)
 
     // 1. The CSV import page links to the guided Sure importer (entry point).
     await page.goto("/import")
@@ -40,6 +40,14 @@ test.describe("Sure guided migration", () => {
     await expect(page.getByText(/A few balances won't match yet/)).toBeVisible()
     // Every bucket reconciles back to the file total — no unexplained gap.
     await expect(page.getByText(/transactions in this file/)).toBeVisible()
+
+    // 3b. PER-186 — the confirm step is exactly where the original incident
+    // happened (import silently landed in the wrong account). The acting
+    // identity must be named right here, not just somewhere in the sidebar.
+    // Scoped to <main> (SidebarInset) since the sidebar's own identity
+    // indicator shows the SAME email at the same time — both are correct,
+    // but the assertion needs to target the confirm-step banner specifically.
+    await expect(page.getByRole("main").getByText(identity.email)).toBeVisible()
 
     // 4. Confirm: the 3 promotable standard rows import (expense + income on
     // the depository, plus the Investment account's standard txn — ADR-0043

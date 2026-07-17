@@ -109,14 +109,19 @@ test.describe("public surface & auth UX cohesion", () => {
   })
 
   test("logout from the app lands on the public landing", async ({ page }) => {
-    await onboard(page)
+    const identity = await onboard(page)
     await page.goto("/dashboard")
     await waitForHydration(page)
 
     // Open the sidebar user menu, then choose Log out. Goes through the logoutFn
     // server function (relative path) — proves it no longer silently fails the
     // way the old :3006-pinned auth-client signOut did off the dev port.
-    await page.getByRole("button", { name: /Hendri Permana/ }).click()
+    // PER-186 — the trigger's accessible name is now the REAL signed-in
+    // identity (previously a hardcoded "Hendri Permana" that every account
+    // showed regardless of who was actually logged in).
+    await page
+      .getByRole("button", { name: new RegExp(identity.fullName) })
+      .click()
     await page.getByRole("menuitem", { name: "Log out" }).click()
 
     await expect(page).toHaveURL(/\/(?:\?.*)?$/)

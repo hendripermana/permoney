@@ -82,4 +82,32 @@ test.describe("settings hub & nav cohesion", () => {
     await page.getByRole("button", { name: "Save timezone" }).click()
     await expect(page.getByText("Timezone updated.")).toBeVisible()
   })
+
+  // PER-186 — dogfooding incident: the sidebar showed a hardcoded name/email
+  // on every account, so a multi-account user genuinely could not tell which
+  // account a tab was signed in as. This proves the sidebar reads the REAL
+  // signed-in identity, and that it survives a real logout → login round trip
+  // (not just whatever session state happened to exist right after signup).
+  test("shows the real signed-in identity in the sidebar after logging back in", async ({
+    page,
+  }) => {
+    const identity = await onboard(page)
+
+    await page
+      .getByRole("button", { name: new RegExp(identity.fullName) })
+      .click()
+    await page.getByRole("menuitem", { name: "Log out" }).click()
+    await expect(page).toHaveURL(/\/(?:\?.*)?$/)
+
+    await page.goto("/login")
+    await waitForHydration(page)
+    await page.getByLabel("Email").fill(identity.email)
+    await page.getByLabel("Password").fill(identity.password)
+    await page.getByRole("button", { name: "Login" }).click()
+    await expect(page).toHaveURL(/\/dashboard(?:\?.*)?$/)
+    await waitForHydration(page)
+
+    await expect(page.getByText(identity.email)).toBeVisible()
+    await expect(page.getByText(new RegExp(identity.fullName))).toBeVisible()
+  })
 })

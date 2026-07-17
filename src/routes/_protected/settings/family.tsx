@@ -27,9 +27,9 @@ import {
 } from "@/components/ui/select"
 import {
   getSettingsOverviewFn,
+  SETTINGS_OVERVIEW_KEY,
   updateFamilyPreferencesFn,
 } from "@/server/settings"
-import { SETTINGS_OVERVIEW_KEY } from "./index"
 
 export const Route = createFileRoute("/_protected/settings/family")({
   ssr: false,

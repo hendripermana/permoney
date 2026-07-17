@@ -18,6 +18,7 @@ import {
   ShieldCheck,
   Store,
   Tags,
+  UserRound,
   Wallet,
 } from "lucide-react"
 
@@ -203,12 +204,15 @@ export function UploadStage({
 export function ReviewStage({
   fileName,
   preview,
+  actingEmail,
   onBack,
   onConfirm,
   running,
 }: {
   fileName: string
   preview: SureBundlePreview
+  /** The signed-in identity this import will land under (PER-186). */
+  actingEmail: string | undefined
   onBack: () => void
   onConfirm: () => void
   running: boolean
@@ -229,6 +233,24 @@ export function ReviewStage({
       <p className="text-sm text-muted-foreground">
         Reviewing <span className="font-semibold">{fileName}</span>
       </p>
+
+      {/* PER-186 — a mistaken-identity import feels identical to a data leak
+          from the user's seat, so the acting account is named right where the
+          user commits to importing, not buried in a menu they'd have to think
+          to check. */}
+      <div className="flex items-center gap-2 rounded-2xl border border-border bg-muted/40 px-4 py-3 text-sm">
+        <UserRound size={16} className="shrink-0 text-muted-foreground" />
+        {actingEmail ? (
+          <span>
+            Importing into <span className="font-semibold">{actingEmail}</span>
+            &apos;s family.
+          </span>
+        ) : (
+          <span className="text-muted-foreground">
+            Importing into your family.
+          </span>
+        )}
+      </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Crossing now */}
