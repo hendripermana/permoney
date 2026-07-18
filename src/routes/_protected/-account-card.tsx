@@ -1,10 +1,12 @@
 import {
   Archive,
   Landmark,
+  MoreVertical,
   Pencil,
   RotateCcw,
   Scale,
   ShieldCheck,
+  Trash2,
   TrendingUp,
   TriangleAlert,
   Wallet,
@@ -19,6 +21,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Tooltip,
   TooltipContent,
@@ -54,6 +62,7 @@ export function AccountCard({
   onValuation,
   onArchive,
   onReactivate,
+  onDelete,
 }: {
   account: AccountRecord
   drift: ReadonlyArray<DriftRecord>
@@ -62,6 +71,7 @@ export function AccountCard({
   onValuation: () => void
   onArchive: () => void
   onReactivate: () => void
+  onDelete: () => void
 }) {
   const archived = account.status !== "active"
   const cashLike = account.balanceSource === "transaction_flow"
@@ -171,6 +181,27 @@ export function AccountCard({
               <Archive className="size-4" />
             </Button>
           )}
+          {/* Delete lives one click deeper than Edit/Archive/Reactivate —
+              destructive and irreversible-feeling, so it must never read as
+              equal-weight with them (PER-183 locked design). */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                disabled={busy}
+                aria-label="More account actions"
+              >
+                <MoreVertical className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem variant="destructive" onSelect={onDelete}>
+                <Trash2 className="size-4" />
+                Delete account…
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </CardContent>
     </Card>

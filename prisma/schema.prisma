@@ -166,6 +166,15 @@ model Account {
   status     String    @default("active") // "active" atau "closed"
   archivedAt DateTime?
 
+  // Soft Delete (PER-183): a deleted account is set to status="closed" +
+  // archivedAt together with deletedAt, so every existing status/archivedAt
+  // filter already excludes it defensively. deletedAt is the authoritative
+  // "is this account gone" signal. NULL = active-or-archived, timestamp =
+  // deleted (audit trail preserved; the row itself is only ever physically
+  // removed when it never had any transaction/valuation history — see
+  // deleteAccountForFamily in src/server/accounts.ts).
+  deletedAt DateTime?
+
   // Optional provider/capability metadata. These fields describe integrations
   // and product behaviour; they do not change ledger semantics.
   institutionName   String?
@@ -192,6 +201,7 @@ model Account {
   @@index([familyId])
   @@index([familyId, accountClass, accountType])
   @@index([familyId, status])
+  @@index([familyId, deletedAt])
   @@index([familyId, externalProvider, externalAccountId])
 }
 

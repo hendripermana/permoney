@@ -887,23 +887,15 @@ describe("AuditLog Integration & Security Tests", () => {
       })
     )
 
-    expect(logs.map((log) => log.entityType)).toEqual([
-      "Account",
-      "Family",
-      "Transaction",
-    ])
+    // PER-183: onboarding only creates the Family now — no seeded starter
+    // account/sample transaction, so no Account/Transaction audit rows.
+    expect(logs.map((log) => log.entityType)).toEqual(["Family"])
     expect(logs.every((log) => log.action === "create")).toBe(true)
     expect(logs.every((log) => log.idempotencyKey === idempotencyKey)).toBe(
       true
     )
     expect(logs.find((log) => log.entityType === "Family")?.entityId).toBe(
       result.familyId
-    )
-    expect(logs.find((log) => log.entityType === "Account")?.entityId).toBe(
-      result.accountId
-    )
-    expect(logs.find((log) => log.entityType === "Transaction")?.entityId).toBe(
-      result.sampleTransactionId
     )
   })
 })

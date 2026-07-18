@@ -1,8 +1,14 @@
 import * as React from "react"
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, Link } from "@tanstack/react-router"
 import { useQuery } from "@tanstack/react-query"
 import { z } from "zod"
-import { LayoutDashboard, RefreshCw, TriangleAlert } from "lucide-react"
+import {
+  LayoutDashboard,
+  Plus,
+  RefreshCw,
+  TriangleAlert,
+  Upload,
+} from "lucide-react"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
@@ -28,6 +34,7 @@ import {
 } from "@/components/blocks/dashboard-cards"
 import { getCashFlowReportFn, getNetWorthSeriesFn } from "@/server/reporting"
 import { getBudgetForPeriodFn, listExpenseCategoriesFn } from "@/server/budgets"
+import { getAccountsFn } from "@/server/accounts"
 
 // =============================================================================
 // PER-156 / R3 — Dashboard realization (rendering layer only).
@@ -114,6 +121,15 @@ function DashboardPage() {
     queryKey: ["dashboard", "expense-categories"],
     queryFn: async () => await listExpenseCategoriesFn(),
   })
+  // PER-183: a brand-new family has zero accounts (onboarding no longer
+  // seeds a demo one). Net worth/cash flow/budget cards are meaningless
+  // against nothing, so a fresh user gets a clear next step instead of a
+  // wall of empty charts.
+  const accountsQuery = useQuery({
+    queryKey: ["dashboard", "accounts"],
+    queryFn: async () => await getAccountsFn(),
+  })
+  const hasNoAccounts = accountsQuery.data?.length === 0
 
   return (
     <TooltipProvider>
@@ -142,79 +158,93 @@ function DashboardPage() {
                   </p>
                 </div>
               </div>
-              <div className="flex flex-wrap items-end gap-3">
-                <div className="grid gap-1.5">
-                  <Label>Period</Label>
-                  <PermoneyDateRangePicker
-                    date={{ from: parseDateOnly(from), to: parseDateOnly(to) }}
-                    onUpdate={(range) => {
-                      if (!range?.from || !range?.to) return
-                      void navigate({
-                        search: {
-                          from: toDateOnly(range.from),
-                          to: toDateOnly(range.to),
-                          interval,
-                        },
-                      })
-                    }}
-                    className="w-[260px]"
-                  />
+              {hasNoAccounts ? null : (
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="grid gap-1.5">
+                    <Label>Period</Label>
+                    <PermoneyDateRangePicker
+                      date={{
+                        from: parseDateOnly(from),
+                        to: parseDateOnly(to),
+                      }}
+                      onUpdate={(range) => {
+                        if (!range?.from || !range?.to) return
+                        void navigate({
+                          search: {
+                            from: toDateOnly(range.from),
+                            to: toDateOnly(range.to),
+                            interval,
+                          },
+                        })
+                      }}
+                      className="w-[260px]"
+                    />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label>Interval</Label>
+                    <ToggleGroup
+                      type="single"
+                      variant="outline"
+                      value={interval}
+                      onValueChange={(value) => {
+                        if (!value) return
+                        void navigate({
+                          search: { from, to, interval: value as Interval },
+                        })
+                      }}
+                    >
+                      <ToggleGroupItem value="day">Day</ToggleGroupItem>
+                      <ToggleGroupItem value="week">Week</ToggleGroupItem>
+                      <ToggleGroupItem value="month">Month</ToggleGroupItem>
+                    </ToggleGroup>
+                  </div>
                 </div>
-                <div className="grid gap-1.5">
-                  <Label>Interval</Label>
-                  <ToggleGroup
-                    type="single"
-                    variant="outline"
-                    value={interval}
-                    onValueChange={(value) => {
-                      if (!value) return
-                      void navigate({
-                        search: { from, to, interval: value as Interval },
-                      })
-                    }}
+              )}
+            </div>
+
+            {hasNoAccounts ? (
+              <DashboardEmptyState />
+            ) : (
+              <>
+                <Section
+                  query={netWorth}
+                  skeletonHeight="h-[300px]"
+                  label="net worth"
+                >
+                  {(data) => <NetWorthCard data={data} />}
+                </Section>
+
+                <div className="grid gap-6 lg:grid-cols-2">
+                  <Section
+                    query={cashFlow}
+                    skeletonHeight="h-[360px]"
+                    label="cash flow"
                   >
-                    <ToggleGroupItem value="day">Day</ToggleGroupItem>
-                    <ToggleGroupItem value="week">Week</ToggleGroupItem>
-                    <ToggleGroupItem value="month">Month</ToggleGroupItem>
-                  </ToggleGroup>
+                    {(data) => <CashFlowCard data={data} />}
+                  </Section>
+                  <Section
+                    query={cashFlow}
+                    skeletonHeight="h-[360px]"
+                    label="top categories"
+                  >
+                    {(data) => (
+                      <TopCategoriesCard
+                        data={data}
+                        categories={categories.data}
+                      />
+                    )}
+                  </Section>
                 </div>
-              </div>
-            </div>
 
-            <Section
-              query={netWorth}
-              skeletonHeight="h-[300px]"
-              label="net worth"
-            >
-              {(data) => <NetWorthCard data={data} />}
-            </Section>
-
-            <div className="grid gap-6 lg:grid-cols-2">
-              <Section
-                query={cashFlow}
-                skeletonHeight="h-[360px]"
-                label="cash flow"
-              >
-                {(data) => <CashFlowCard data={data} />}
-              </Section>
-              <Section
-                query={cashFlow}
-                skeletonHeight="h-[360px]"
-                label="top categories"
-              >
-                {(data) => (
-                  <TopCategoriesCard data={data} categories={categories.data} />
-                )}
-              </Section>
-            </div>
-
-            <Section
-              query={budget}
-              skeletonHeight="h-[360px]"
-              label="budget progress"
-            >
-              {(data) => <BudgetProgressCard progress={data} />}
-            </Section>
+                <Section
+                  query={budget}
+                  skeletonHeight="h-[360px]"
+                  label="budget progress"
+                >
+                  {(data) => <BudgetProgressCard progress={data} />}
+                </Section>
+              </>
+            )}
           </div>
         </SidebarInset>
       </SidebarProvider>
@@ -229,6 +259,40 @@ interface SectionQuery<TData> {
   isFetching: boolean
   error: unknown
   refetch: () => void
+}
+
+function DashboardEmptyState() {
+  return (
+    <Card className="border-dashed">
+      <CardContent className="flex flex-col items-center gap-4 py-16 text-center">
+        <LayoutDashboard
+          className="size-10 text-muted-foreground"
+          aria-hidden
+        />
+        <div className="max-w-sm">
+          <p className="text-lg font-medium">Nothing tracked yet</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Add an account to start seeing your net worth, cash flow, and budget
+            here.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <Button asChild>
+            <Link to="/accounts">
+              <Plus className="size-4" />
+              Add your first account
+            </Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link to="/import/sure">
+              <Upload className="size-4" />
+              Moving from Sure? Import your data
+            </Link>
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
 }
 
 function Section<TData>({

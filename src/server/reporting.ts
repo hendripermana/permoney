@@ -129,7 +129,7 @@ export async function getNetWorthSeriesForFamily({
     // Four queries total — never one per sample date (ADR-0038 §7).
     const [accounts, valuations, transactions, snapshots] = await Promise.all([
       tx.account.findMany({
-        where: { familyId },
+        where: { familyId, deletedAt: null },
         select: {
           id: true,
           accountClass: true,

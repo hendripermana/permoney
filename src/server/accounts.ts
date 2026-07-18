@@ -7,7 +7,12 @@ import {
   normalizeAccountTaxonomy,
   type AccountType,
 } from "@/lib/accounts"
-import { auditLog, createAuditContext } from "./middleware/audit"
+import {
+  auditLog,
+  auditLogs,
+  createAuditContext,
+  type AuditContext,
+} from "./middleware/audit"
 import {
   familyMiddleware,
   requireCapability,
@@ -23,6 +28,10 @@ import {
   uuidV7Schema,
   type RunInTenantTransaction,
 } from "./mutation-kit"
+import {
+  softDeleteTransactionWithinTenantTransaction,
+  TransactionGoneError,
+} from "./transactions"
 
 // =============================================================================
 // PER-143 — Account manual UX vertical slice (CRUD, archive, cash-vs-tracked).
@@ -210,7 +219,7 @@ export async function getAccountsForFamily({
 }): Promise<SerializedAccount[]> {
   return await runInTenantTransaction(familyId, userId, async (tx) => {
     const accounts = await tx.account.findMany({
-      where: { familyId },
+      where: { familyId, deletedAt: null },
       orderBy: [{ status: "asc" }, { accountClass: "asc" }, { name: "asc" }],
     })
     return accounts.map(serializeAccount)
@@ -690,6 +699,380 @@ export const reactivateAccountFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data, context }) => {
     return await reactivateAccountForFamily({
+      data,
+      familyId: context.familyId,
+      user: context.user,
+    })
+  })
+
+// ============================================================================
+// DELETE (PER-183)
+// ============================================================================
+//
+// Accounts are never hard-deleted while they carry real financial history —
+// see the file-level doctrine at the top of this file. But
+// `Transaction.accountId`/`toAccountId`, `Valuation.accountId`, and
+// `RawImportedTransaction.accountId` are all `onDelete: Restrict` FKs, so a
+// physical `DELETE FROM "Account"` is only ever possible when the account
+// never had a single Transaction row (active OR soft-deleted, in either
+// direction) pointing at it. That fact drives two branches:
+//
+//   - Branch A (has transaction history): cascade soft-delete every
+//     transaction on the account by reusing the canonical, transfer-
+//     symmetric `softDeleteTransactionWithinTenantTransaction`
+//     (src/server/transactions.ts) — chunked across multiple physical
+//     transactions so an account with thousands of rows (a Sure-migrated
+//     account) never risks a single-transaction timeout (ADR-0044 pattern:
+//     bounded chunks, idempotent-resumable by re-querying remaining
+//     `deletedAt: null` rows, no separate cursor bookkeeping). Once every
+//     transaction is drained, the account's Valuations and the Account row
+//     itself are soft-deleted (`deletedAt`) in one final transaction.
+//   - Branch B (zero transaction rows ever): the account never had any
+//     ledger history to protect, so its shell — plus any opening/manual
+//     Valuations and unpromoted import staging rows, neither of which is
+//     canonical ledger data (ADR-0008) — is physically removed in one
+//     transaction.
+//
+// Delete is idempotent toward its END STATE, not just its idempotency key: a
+// second attempt against an already-gone (hard-deleted) or already-soft-
+// deleted account is a quiet success, not a 404/conflict — mirroring HTTP
+// DELETE idempotency. This is a deliberate difference from archive/
+// reactivate's `AccountNotFoundError`, because "gone" is delete's natural
+// end state, not an error condition.
+//
+// See docs memory `per-183-onboarding-empty-and-account-delete-design` for
+// the full locked design (this was a manually-conducted grill interview).
+
+const DELETE_ACCOUNT_ENDPOINT = "deleteAccountFn"
+
+// Chunk size for the cascade-soft-delete loop. Reuses the value proven safe
+// by ADR-0044's staging/promote chunking for a comparable per-row cost
+// profile (multiple queries + an audited write per row inside one
+// interactive transaction) — not re-derived from scratch here.
+export const DELETE_ACCOUNT_CASCADE_CHUNK_SIZE = 250
+
+const accountIdQuerySchema = z.object({
+  id: z.string().min(1),
+})
+
+export interface AccountDeletionImpact {
+  isEmpty: boolean
+  transactionCount: number
+  transferCount: number
+  otherAccountNames: string[]
+  valuationCount: number
+}
+
+/**
+ * Read-only preview backing the delete confirmation dialog: what would this
+ * delete touch? Never mutates anything. `isEmpty` tells the client which
+ * dialog branch to render (simple confirm vs. blast-radius confirm).
+ */
+export async function getAccountDeletionImpactForFamily({
+  data: rawData,
+  familyId,
+  userId,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  data: z.input<typeof accountIdQuerySchema>
+  familyId: string
+  userId: string
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<AccountDeletionImpact> {
+  const data = accountIdQuerySchema.parse(rawData)
+
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
+    const [transactionCount, valuationCount, transfers] = await Promise.all([
+      tx.transaction.count({
+        where: {
+          familyId,
+          deletedAt: null,
+          OR: [{ accountId: data.id }, { toAccountId: data.id }],
+        },
+      }),
+      tx.valuation.count({
+        where: { familyId, accountId: data.id, deletedAt: null },
+      }),
+      tx.transfer.findMany({
+        where: {
+          deletedAt: null,
+          OR: [
+            { outflowTransaction: { accountId: data.id, deletedAt: null } },
+            { inflowTransaction: { accountId: data.id, deletedAt: null } },
+          ],
+        },
+        select: {
+          outflowTransaction: { select: { accountId: true } },
+          inflowTransaction: { select: { accountId: true } },
+        },
+      }),
+    ])
+
+    const otherAccountIds = new Set<string>()
+    for (const transfer of transfers) {
+      if (transfer.outflowTransaction.accountId !== data.id) {
+        otherAccountIds.add(transfer.outflowTransaction.accountId)
+      }
+      if (transfer.inflowTransaction.accountId !== data.id) {
+        otherAccountIds.add(transfer.inflowTransaction.accountId)
+      }
+    }
+
+    const otherAccounts = otherAccountIds.size
+      ? await tx.account.findMany({
+          where: { id: { in: [...otherAccountIds] }, familyId },
+          select: { name: true },
+        })
+      : []
+
+    return {
+      isEmpty: transactionCount === 0,
+      transactionCount,
+      transferCount: transfers.length,
+      otherAccountNames: otherAccounts.map((account) => account.name),
+      valuationCount,
+    }
+  })
+}
+
+export const getAccountDeletionImpactFn = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .inputValidator((data: z.input<typeof accountIdQuerySchema>) =>
+    accountIdQuerySchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await getAccountDeletionImpactForFamily({
+      data,
+      familyId: context.familyId,
+      userId: context.user.id,
+    })
+  })
+
+/**
+ * Drains every active transaction referencing this account (either leg) in
+ * bounded chunks, reusing the canonical per-transaction soft delete. Safe to
+ * resume from a crash: each chunk re-queries `deletedAt: null` rows, so
+ * already-processed rows simply stop showing up — no cursor to lose.
+ */
+async function cascadeSoftDeleteAccountTransactions({
+  auditCtx,
+  familyId,
+  id,
+  runInTenantTransaction,
+  userId,
+}: {
+  auditCtx: AuditContext
+  familyId: string
+  id: string
+  runInTenantTransaction: RunInTenantTransaction
+  userId: string
+}): Promise<void> {
+  for (;;) {
+    const drained = await runInTenantTransaction(
+      familyId,
+      userId,
+      async (tx) => {
+        const chunk = await tx.transaction.findMany({
+          where: {
+            familyId,
+            deletedAt: null,
+            OR: [{ accountId: id }, { toAccountId: id }],
+          },
+          select: { id: true },
+          orderBy: { id: "asc" },
+          take: DELETE_ACCOUNT_CASCADE_CHUNK_SIZE,
+        })
+        if (chunk.length === 0) return true
+
+        for (const row of chunk) {
+          try {
+            await softDeleteTransactionWithinTenantTransaction(tx, {
+              auditCtx,
+              familyId,
+              id: row.id,
+            })
+          } catch (error) {
+            // Already handled as the paired leg of a transfer earlier in
+            // this same chunk (soft-deleting either leg drains both).
+            if (!(error instanceof TransactionGoneError)) throw error
+          }
+        }
+        return false
+      }
+    )
+    if (drained) return
+  }
+}
+
+export async function deleteAccountForFamily({
+  data: rawData,
+  familyId,
+  user,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  data: z.input<typeof accountIdActionInputSchema>
+  familyId: string
+  user: ServerUser
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<{ accountId: string; deleted: true; hardDeleted: boolean }> {
+  const data = accountIdActionInputSchema.parse(rawData)
+  const requestHash = await hashCanonicalPayload({ id: data.id })
+  const auditCtx = await createAuditContext(
+    { user: { id: user.id, familyId } },
+    data.idempotencyKey
+  )
+
+  type Response = { accountId: string; deleted: true; hardDeleted: boolean }
+
+  const replay = await runInTenantTransaction(familyId, user.id, (tx) =>
+    replayIdempotentEndpointResponse<Response>(tx, {
+      endpoint: DELETE_ACCOUNT_ENDPOINT,
+      familyId,
+      key: data.idempotencyKey,
+      requestHash,
+    })
+  )
+  if (replay) return replay
+
+  const before = await runInTenantTransaction(familyId, user.id, (tx) =>
+    tx.account.findFirst({ where: { id: data.id, familyId } })
+  )
+
+  if (!before || before.deletedAt !== null) {
+    const response: Response = {
+      accountId: data.id,
+      deleted: true,
+      hardDeleted: !before,
+    }
+    await runInTenantTransaction(familyId, user.id, (tx) =>
+      persistIdempotentEndpointResponse(tx, {
+        endpoint: DELETE_ACCOUNT_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+        response,
+      })
+    )
+    return response
+  }
+
+  const hasHistory =
+    (await runInTenantTransaction(familyId, user.id, (tx) =>
+      tx.transaction.count({
+        where: {
+          familyId,
+          OR: [{ accountId: data.id }, { toAccountId: data.id }],
+        },
+      })
+    )) > 0
+
+  if (hasHistory) {
+    await cascadeSoftDeleteAccountTransactions({
+      auditCtx,
+      familyId,
+      id: data.id,
+      runInTenantTransaction,
+      userId: user.id,
+    })
+  }
+
+  const response = await runInTenantTransaction(
+    familyId,
+    user.id,
+    async (tx): Promise<Response> => {
+      if (!hasHistory) {
+        const valuations = await tx.valuation.findMany({
+          where: { familyId, accountId: data.id },
+        })
+        for (const valuation of valuations) {
+          await tx.valuation.delete({ where: { id: valuation.id } })
+        }
+        await tx.rawImportedTransaction.deleteMany({
+          where: { familyId, accountId: data.id },
+        })
+        await tx.account.delete({ where: { id: data.id } })
+
+        await auditLogs(tx, auditCtx, [
+          ...valuations.map((valuation) => ({
+            action: "delete" as const,
+            entityType: "Valuation",
+            entityId: valuation.id,
+            before: valuation,
+            after: null,
+            familyId,
+          })),
+          {
+            action: "delete" as const,
+            entityType: "Account",
+            entityId: before.id,
+            before,
+            after: null,
+            familyId,
+          },
+        ])
+
+        return { accountId: data.id, deleted: true, hardDeleted: true }
+      }
+
+      const activeValuations = await tx.valuation.findMany({
+        where: { familyId, accountId: data.id, deletedAt: null },
+      })
+      const deletedAt = new Date()
+      if (activeValuations.length > 0) {
+        await tx.valuation.updateMany({
+          where: { familyId, accountId: data.id, deletedAt: null },
+          data: { deletedAt },
+        })
+      }
+
+      const updated = await tx.account.update({
+        where: { id: data.id },
+        data: { archivedAt: deletedAt, deletedAt, status: "closed" },
+      })
+
+      await auditLogs(tx, auditCtx, [
+        ...activeValuations.map((valuation) => ({
+          action: "soft_delete" as const,
+          entityType: "Valuation",
+          entityId: valuation.id,
+          before: valuation,
+          after: { ...valuation, deletedAt },
+          familyId,
+        })),
+        {
+          action: "soft_delete" as const,
+          entityType: "Account",
+          entityId: updated.id,
+          before,
+          after: updated,
+          familyId,
+        },
+      ])
+
+      return { accountId: data.id, deleted: true, hardDeleted: false }
+    }
+  )
+
+  await runInTenantTransaction(familyId, user.id, (tx) =>
+    persistIdempotentEndpointResponse(tx, {
+      endpoint: DELETE_ACCOUNT_ENDPOINT,
+      familyId,
+      key: data.idempotencyKey,
+      requestHash,
+      response,
+    })
+  )
+
+  return response
+}
+
+export const deleteAccountFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("account:write")])
+  .inputValidator((data: z.input<typeof accountIdActionInputSchema>) =>
+    accountIdActionInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await deleteAccountForFamily({
       data,
       familyId: context.familyId,
       user: context.user,

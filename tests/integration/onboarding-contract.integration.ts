@@ -109,27 +109,15 @@ describe("onboarding contract", () => {
     expect(families).toHaveLength(1)
     expect(families[0]?.name).toBe("Onboarding Replay's Family")
 
-    expect(scopedRows.accounts).toHaveLength(1)
-    expect(scopedRows.transactions).toHaveLength(1)
+    // PER-183: onboarding no longer seeds a starter account/sample
+    // transaction — a new family must be genuinely empty.
+    expect(scopedRows.accounts).toHaveLength(0)
+    expect(scopedRows.transactions).toHaveLength(0)
     expect(scopedRows.idempotencyRecords).toHaveLength(1)
 
-    const account = scopedRows.accounts[0]!
-    const transaction = scopedRows.transactions[0]!
-
-    expect(first.accountId).toBe(account.id)
-    expect(first.sampleTransactionId).toBe(transaction.id)
-    expect(account.familyId).toBe(first.familyId)
-    expect(transaction.familyId).toBe(first.familyId)
-    expect(transaction.accountId).toBe(account.id)
-    expect(transaction.userId).toBe(user.id)
-    expect(transaction.type).toBe("expense")
-    expect(transaction.amount).toBeLessThan(0n)
-    expect(transaction.idempotencyKey).toBe(idempotencyKey)
-    expect(transaction.accountBalanceAfter).toBe(account.balance)
-
     const replayRows = await harness.withFamily(first.familyId, async (tx) => {
-      const accountAfterReplay = await tx.account.findUniqueOrThrow({
-        where: { id: account.id },
+      const accountCount = await tx.account.count({
+        where: { familyId: first.familyId },
       })
       const transactionCount = await tx.transaction.count({
         where: { familyId: first.familyId },
@@ -137,12 +125,12 @@ describe("onboarding contract", () => {
       const auditCount = await tx.auditLog.count({
         where: { familyId: first.familyId },
       })
-      return { accountAfterReplay, auditCount, transactionCount }
+      return { accountCount, auditCount, transactionCount }
     })
 
-    expect(replayRows.accountAfterReplay.balance).toBe(account.balance)
-    expect(replayRows.transactionCount).toBe(1)
-    expect(replayRows.auditCount).toBe(3)
+    expect(replayRows.accountCount).toBe(0)
+    expect(replayRows.transactionCount).toBe(0)
+    expect(replayRows.auditCount).toBe(1)
 
     expect(
       scopedRows.auditLogs.map((log) => ({
@@ -154,20 +142,8 @@ describe("onboarding contract", () => {
     ).toEqual([
       {
         action: "create",
-        entityId: account.id,
-        entityType: "Account",
-        idempotencyKey,
-      },
-      {
-        action: "create",
         entityId: first.familyId,
         entityType: "Family",
-        idempotencyKey,
-      },
-      {
-        action: "create",
-        entityId: transaction.id,
-        entityType: "Transaction",
         idempotencyKey,
       },
     ])
@@ -227,9 +203,9 @@ describe("onboarding contract", () => {
     expect(second).toEqual(first)
     expect(storedUser.familyId).toBe(first.familyId)
     expect(familyCount).toBe(1)
-    expect(scopedCounts.accountCount).toBe(1)
-    expect(scopedCounts.transactionCount).toBe(1)
-    expect(scopedCounts.auditCount).toBe(3)
+    expect(scopedCounts.accountCount).toBe(0)
+    expect(scopedCounts.transactionCount).toBe(0)
+    expect(scopedCounts.auditCount).toBe(1)
     expect(scopedCounts.idempotencyRecordCount).toBe(1)
   })
 })
