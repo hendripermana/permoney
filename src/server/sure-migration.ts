@@ -40,7 +40,10 @@ import {
   type TenantTransactionClient,
 } from "./middleware/with-family"
 import { withBulkLedgerReplayBypass } from "./bulk-ledger-replay"
-import type { RunInTenantTransaction } from "./mutation-kit"
+import {
+  isUniqueConstraintError,
+  type RunInTenantTransaction,
+} from "./mutation-kit"
 import { createTransactionForFamily, createdAuditEntries } from "./transactions"
 import {
   createValuationForFamily,
@@ -104,6 +107,7 @@ export interface SureMigrationTimings {
   merchants: number
   valuations: number
   transactionsStage: number
+  artifactRetention: number
   transactionsConfirm: number
   transactionsPromote: number
   transfers: number
@@ -827,6 +831,7 @@ export async function runSureMigrationForFamily({
     merchants: 0,
     valuations: 0,
     transactionsStage: 0,
+    artifactRetention: 0,
     transactionsConfirm: 0,
     transactionsPromote: 0,
     transfers: 0,
@@ -1102,33 +1107,54 @@ export async function runSureMigrationForFamily({
   timings.transactionsStage = Date.now() - transactionsStageT0
 
   // --- 7. Retain the raw bundle (gzip BYTEA artifact, one-shot per content) --
+  // PER-190: the existence-check is its own quick read, OUTSIDE the insert+
+  // audit transaction, so that transaction stays minimal and well under the
+  // 5s interactive-tx budget (ADR-0044 §5) — this gzip'd BYTEA insert sat
+  // right at the edge under load with the check folded in. Splitting it opens
+  // a theoretical TOCTOU gap (two imports of identical content racing between
+  // the check and the insert), but that gap is already closed by the
+  // `import_artifact_batch_content` unique index (PER-170): a losing insert
+  // surfaces as P2002, caught below and treated as an idempotent no-op since
+  // the artifact is already retained by the winner.
+  const artifactRetentionT0 = Date.now()
   const gzip = await gzipBytes(rawBytes)
-  await runInTenantTransaction(familyId, user.id, async (tx) => {
-    const existing = await tx.importBatchArtifact.findFirst({
-      where: { importBatchId: batchId, contentHash },
-      select: { id: true },
-    })
-    if (existing) return
-    const created = await tx.importBatchArtifact.create({
-      data: {
-        familyId,
-        importBatchId: batchId,
-        filename: data.filename,
-        storageKind: "inline_bytea",
-        contentHash,
-        byteSize: rawBytes.length,
-        bytes: Buffer.from(gzip),
-      },
-    })
-    await auditLogs(
-      tx,
-      auditCtx,
-      withFamily(
-        createdAuditEntries("ImportBatchArtifact", [created]),
-        familyId
-      )
-    )
-  })
+  const existingArtifact = await runInTenantTransaction(
+    familyId,
+    user.id,
+    async (tx) =>
+      tx.importBatchArtifact.findFirst({
+        where: { importBatchId: batchId, contentHash },
+        select: { id: true },
+      })
+  )
+  if (!existingArtifact) {
+    try {
+      await runInTenantTransaction(familyId, user.id, async (tx) => {
+        const created = await tx.importBatchArtifact.create({
+          data: {
+            familyId,
+            importBatchId: batchId,
+            filename: data.filename,
+            storageKind: "inline_bytea",
+            contentHash,
+            byteSize: rawBytes.length,
+            bytes: Buffer.from(gzip),
+          },
+        })
+        await auditLogs(
+          tx,
+          auditCtx,
+          withFamily(
+            createdAuditEntries("ImportBatchArtifact", [created]),
+            familyId
+          )
+        )
+      })
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error
+    }
+  }
+  timings.artifactRetention = Date.now() - artifactRetentionT0
 
   // --- 8. Confirm gated rows that are still normalized, then promote --------
   // ADR-0044 §4 LOCKSTEP INVARIANT (load-bearing): confirm and promote exactly

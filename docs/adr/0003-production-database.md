@@ -1,13 +1,14 @@
 # ADR-0003 — Production database = managed Postgres (Postgres 16+), with Docker Compose for dev parity
 
-|                   |                |
-| ----------------- | -------------- |
-| **Status**        | Accepted       |
-| **Date**          | 2026-04-26     |
-| **Accepted**      | 2026-04-26     |
-| **Deciders**      | Hendri Permana |
-| **Supersedes**    | —              |
-| **Superseded by** | —              |
+|                   |                                         |
+| ----------------- | --------------------------------------- |
+| **Status**        | Accepted                                |
+| **Date**          | 2026-04-26                              |
+| **Accepted**      | 2026-04-26                              |
+| **Deciders**      | Hendri Permana                          |
+| **Supersedes**    | —                                       |
+| **Superseded by** | —                                       |
+| **Amended by**    | ADR-0047 (§"Alternatives considered" D) |
 
 ## Context
 
