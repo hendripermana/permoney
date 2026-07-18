@@ -1,0 +1,75 @@
+# =============================================================================
+# Permoney — production stack (PER-192)
+# =============================================================================
+# Runs alongside Sure (finance.permana.icu) and the dev `docker-compose.yml`
+# stack on the same Oracle VM. Fully isolated from both: its own Compose
+# project name (set via `-p permoney-prod` or COMPOSE_PROJECT_NAME, see
+# docs/runbook-production.md), its own network, its own named volume.
+#
+# Postgres is NOT published to a host port — reachable only from the app
+# container over the internal `permoney-prod` network. This is stricter than
+# both the existing dev Postgres (:5433, host-published) and Sure's Postgres
+# (:5435, host-published-to-loopback) on this same box.
+#
+# The app container publishes to 127.0.0.1:3005 only (loopback) — Caddy
+# (running on the host, see /etc/caddy/Caddyfile's permana.icu block) is the
+# sole ingress. This closes the direct-port-bypass pattern Sure's own
+# 0.0.0.0:3000 publish has (tracked as a Phase-B hardening follow-up).
+#
+# See docs/adr/0047-self-hosted-production-postgres.md for the decision
+# record (amends ADR-0003's rejection of self-hosted Postgres on a VPS).
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: permoney_prod_pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: permoney_admin
+      # POSTGRES_PASSWORD read from the server-side .env — never committed,
+      # never echoed. See docs/runbook-production.md for provisioning.
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
+      POSTGRES_DB: permoney_prod
+    volumes:
+      - permoney_prod_pg_data:/var/lib/postgresql/data
+    networks:
+      - permoney_prod_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U permoney_admin -d permoney_prod"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    # No `ports:` — intentionally not host-published. See header note.
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: permoney_prod_app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3005
+      HOST: 0.0.0.0
+      # Runtime app role (non-superuser, non-bypassrls — see
+      # docs/runbook-production.md's role-provisioning step), NOT
+      # POSTGRES_ADMIN_PASSWORD above. Set via server-side .env.
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:?BETTER_AUTH_URL is required}
+    ports:
+      - "127.0.0.1:3005:3005"
+    networks:
+      - permoney_prod_net
+
+networks:
+  permoney_prod_net:
+    driver: bridge
+
+volumes:
+  permoney_prod_pg_data:

@@ -62,6 +62,7 @@ function makeResult(
       merchants: 0,
       valuations: 0,
       transactionsStage: 0,
+      artifactRetention: 0,
       transactionsConfirm: 0,
       transactionsPromote: 0,
       transfers: 0,
