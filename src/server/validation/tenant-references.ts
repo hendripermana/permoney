@@ -112,9 +112,13 @@ async function assertAccountInFamily(
   familyId: string,
   field: string
 ): Promise<void> {
+  // PER-183: a soft-deleted account is not a valid write target — it must
+  // stay gone for every future mutation, not just disappear from the UI.
+  // `deletedAt: null` here means "not found" for a deleted account, same as
+  // for a genuinely cross-tenant one.
   const row = await tx.account.findFirst({
     select: { id: true },
-    where: { id, familyId },
+    where: { id, familyId, deletedAt: null },
   })
   if (!row) {
     throw new TenantReferenceError(field, id, familyId)

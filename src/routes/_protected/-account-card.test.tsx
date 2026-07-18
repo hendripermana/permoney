@@ -50,6 +50,7 @@ function renderCard(drift: ReadonlyArray<DriftRecord>) {
         onValuation={noop}
         onArchive={noop}
         onReactivate={noop}
+        onDelete={noop}
       />
     </TooltipProvider>
   )

@@ -1,11 +1,12 @@
 import * as React from "react"
 import {
   createFileRoute,
+  Link,
   type ErrorComponentProps,
 } from "@tanstack/react-router"
 import { useLiveQuery } from "@tanstack/react-db"
 import { useQuery } from "@tanstack/react-query"
-import { Plus, TriangleAlert, Wallet } from "lucide-react"
+import { Plus, TriangleAlert, Upload, Wallet } from "lucide-react"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
@@ -21,6 +22,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import {
   Dialog,
   DialogContent,
@@ -63,6 +72,8 @@ import { createUuidV7 } from "@/lib/uuid-v7"
 import {
   archiveAccountFn,
   createAccountFn,
+  deleteAccountFn,
+  getAccountDeletionImpactFn,
   reactivateAccountFn,
   updateAccountFn,
 } from "@/server/accounts"
@@ -120,6 +131,7 @@ type DialogState =
   | { mode: "create" }
   | { mode: "edit"; account: AccountRecord }
   | { mode: "valuation"; account: AccountRecord }
+  | { mode: "delete"; account: AccountRecord }
   | null
 
 function AccountsPage() {
@@ -260,6 +272,9 @@ function AccountsPage() {
                             }
                             onArchive={() => handleArchive(account)}
                             onReactivate={() => handleReactivate(account)}
+                            onDelete={() =>
+                              setDialog({ mode: "delete", account })
+                            }
                           />
                         ))}
                       </div>
@@ -279,6 +294,16 @@ function AccountsPage() {
           account={dialog.account}
           onClose={() => setDialog(null)}
           onSaved={async () => {
+            await refreshAfterMutation()
+            setDialog(null)
+          }}
+        />
+      ) : dialog && dialog.mode === "delete" ? (
+        <DeleteAccountDialog
+          key={`delete-${dialog.account.id}`}
+          account={dialog.account}
+          onClose={() => setDialog(null)}
+          onDeleted={async () => {
             await refreshAfterMutation()
             setDialog(null)
           }}
@@ -303,20 +328,157 @@ function AccountsPage() {
 function EmptyState({ onCreate }: { onCreate: () => void }) {
   return (
     <Card className="border-dashed">
-      <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
+      <CardContent className="flex flex-col items-center gap-4 py-12 text-center">
         <Wallet className="size-8 text-muted-foreground" />
         <div>
           <p className="font-medium">No accounts yet</p>
           <p className="text-sm text-muted-foreground">
-            Create your first account to start tracking balances.
+            A fresh Permoney starts empty — add your own account, or bring over
+            what you already track elsewhere.
           </p>
         </div>
-        <Button onClick={onCreate}>
-          <Plus className="size-4" />
-          New account
-        </Button>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <Button onClick={onCreate}>
+            <Plus className="size-4" />
+            Add your first account
+          </Button>
+          <Button asChild variant="outline">
+            <Link to="/import/sure">
+              <Upload className="size-4" />
+              Moving from Sure? Import your data
+            </Link>
+          </Button>
+        </div>
       </CardContent>
     </Card>
+  )
+}
+
+function DeleteAccountDialog({
+  account,
+  onClose,
+  onDeleted,
+}: {
+  account: AccountRecord
+  onClose: () => void
+  onDeleted: () => Promise<void>
+}) {
+  const [confirmText, setConfirmText] = React.useState("")
+  const [error, setError] = React.useState<string | null>(null)
+  const [submitting, setSubmitting] = React.useState(false)
+
+  // Read-only preview backing the two dialog branches below — never mutates
+  // anything (PER-183 locked design).
+  const { data: impact, isLoading } = useQuery({
+    queryKey: ["account_deletion_impact", account.id],
+    queryFn: async () =>
+      await getAccountDeletionImpactFn({ data: { id: account.id } }),
+  })
+
+  const hasHistory = impact ? !impact.isEmpty : false
+  const nameMatches = confirmText.trim() === account.name
+  const canConfirm = !isLoading && (!hasHistory || nameMatches)
+
+  async function handleConfirm() {
+    setError(null)
+    setSubmitting(true)
+    try {
+      await deleteAccountFn({
+        data: { id: account.id, idempotencyKey: createUuidV7() },
+      })
+      await onDeleted()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.")
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <AlertDialog open onOpenChange={(open) => (open ? null : onClose())}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete “{account.name}”?</AlertDialogTitle>
+          <AlertDialogDescription asChild>
+            <div className="space-y-3 text-left">
+              {isLoading ? (
+                <p>Checking what this account holds…</p>
+              ) : hasHistory && impact ? (
+                <>
+                  <p>
+                    This permanently deletes{" "}
+                    <strong>{impact.transactionCount}</strong> transaction
+                    {impact.transactionCount === 1 ? "" : "s"} on this account,
+                    recorded in the audit log.
+                  </p>
+                  {impact.transferCount > 0 ? (
+                    <p className="rounded-md border border-amber-500/50 bg-amber-50 p-2 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                      Including{" "}
+                      <strong>
+                        {impact.transferCount} transfer
+                        {impact.transferCount === 1 ? "" : "s"}
+                      </strong>
+                      {impact.otherAccountNames.length > 0
+                        ? ` with ${impact.otherAccountNames.join(", ")}`
+                        : ""}{" "}
+                      — their balances will be adjusted too.
+                    </p>
+                  ) : null}
+                  <p className="text-muted-foreground">
+                    Real account you don’t use anymore? Archive keeps your
+                    history instead of deleting it.
+                  </p>
+                  <div className="space-y-1.5 pt-1">
+                    <Label htmlFor="delete-confirm-name">
+                      Type <strong>{account.name}</strong> to confirm
+                    </Label>
+                    <Input
+                      id="delete-confirm-name"
+                      value={confirmText}
+                      onChange={(event) => setConfirmText(event.target.value)}
+                      autoComplete="off"
+                    />
+                  </div>
+                </>
+              ) : (
+                <p>
+                  This account has no transactions. It will be permanently
+                  deleted and recorded in the audit log
+                  {impact && impact.valuationCount > 0
+                    ? ` along with ${impact.valuationCount} recorded value update${impact.valuationCount === 1 ? "" : "s"}`
+                    : ""}
+                  .
+                </p>
+              )}
+            </div>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+
+        {error ? (
+          <p className="text-sm text-destructive" role="alert">
+            {error}
+          </p>
+        ) : null}
+
+        <AlertDialogFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={onClose}
+            disabled={submitting}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={submitting || !canConfirm}
+            onClick={handleConfirm}
+          >
+            {submitting ? "Deleting…" : "Delete account"}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }
 

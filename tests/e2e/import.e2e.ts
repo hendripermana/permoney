@@ -19,9 +19,16 @@ test.describe("CSV import wizard", () => {
   }) => {
     await onboard(page)
 
-    // 1. Mark the starter account importable (the promotion gate, ADR-0039 §6).
+    // 0. PER-183: onboarding no longer seeds a starter account — a fresh
+    // family is genuinely empty, so this test creates its own fixture.
     await page.goto("/accounts")
     await waitForHydration(page)
+    await page.getByRole("button", { name: "New account" }).click()
+    await page.getByLabel("Name").fill("Everyday Cash")
+    await page.getByRole("button", { name: "Create" }).click()
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+
+    // 1. Mark the account importable (the promotion gate, ADR-0039 §6).
     await page.getByRole("button", { name: "Edit account" }).first().click()
     await page.getByLabel("Allow imports").click()
     await page.getByRole("button", { name: "Save changes" }).click()

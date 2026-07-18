@@ -14,6 +14,15 @@ test.describe("quick-create merchant & category from the transaction form", () =
   }) => {
     await onboard(page)
 
+    // PER-183: onboarding no longer seeds a starter account — create one so
+    // the transaction form's account dropdown has something to select.
+    await page.goto("/accounts")
+    await waitForHydration(page)
+    await page.getByRole("button", { name: "New account" }).click()
+    await page.getByLabel("Name").fill("E2E Quick-Create Fixture")
+    await page.getByRole("button", { name: "Create" }).click()
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+
     await page.goto("/transactions")
     await waitForHydration(page)
 

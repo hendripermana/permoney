@@ -1833,7 +1833,10 @@ export const createTransactionFn = createServerFn({ method: "POST" })
     })
   })
 
-async function softDeleteTransactionWithinTenantTransaction(
+// Exported for reuse by src/server/accounts.ts (PER-183 cascade account
+// delete): this is the canonical, transfer-symmetric, audited, balance-
+// correct per-transaction soft delete. Do not reimplement it elsewhere.
+export async function softDeleteTransactionWithinTenantTransaction(
   tx: TenantTransactionClient,
   {
     auditCtx,

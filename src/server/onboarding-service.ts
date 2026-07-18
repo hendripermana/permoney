@@ -20,19 +20,15 @@ interface LockedOnboardingUser {
   name: string
 }
 
+// PER-183: onboarding creates the family only. A brand-new family must be
+// truly empty — a finance app must never show money the user never entered.
+// See docs memory `per-183-onboarding-empty-and-account-delete-design`.
 export interface OnboardingInitializationResult {
-  accountId: string | null
   created: boolean
   familyId: string
-  sampleTransactionId: string | null
 }
 
 const INITIALIZE_ONBOARDING_ENDPOINT = "initializeOnboardingForUser"
-const STARTER_ACCOUNT_OPENING_BALANCE = 10_000_000n
-const SAMPLE_TRANSACTION_AMOUNT = -1_250_000n
-const STARTER_ACCOUNT_NAME = "Everyday Cash"
-const SAMPLE_TRANSACTION_DESCRIPTION = "Welcome coffee"
-const STARTER_ACCOUNT_COLOR = "#2563eb"
 
 export async function initializeOnboardingForUser(
   client: PrismaClient,
@@ -67,10 +63,8 @@ export async function initializeOnboardingForUser(
       })
       if (replay) return replay
       return {
-        accountId: null,
         created: false,
         familyId: scopedFamilyId,
-        sampleTransactionId: null,
       }
     }
 
@@ -78,7 +72,8 @@ export async function initializeOnboardingForUser(
       data: {
         name: deriveDefaultFamilyName(user),
         // Base reporting currency, chosen at onboarding and immutable after
-        // (ADR-0035). The starter account below inherits it via family.currency.
+        // (ADR-0035). No starter account inherits it anymore (PER-183) — kept
+        // here for the family's own reports.
         currency: data.currency,
       },
     })
@@ -105,66 +100,6 @@ export async function initializeOnboardingForUser(
       },
     })
 
-    const account = await tx.account.create({
-      data: {
-        accountClass: "ASSET",
-        accountSubtype: "checking",
-        accountType: "DEPOSITORY",
-        balance: STARTER_ACCOUNT_OPENING_BALANCE,
-        color: STARTER_ACCOUNT_COLOR,
-        currency: family.currency,
-        familyId: scopedFamilyId,
-        name: STARTER_ACCOUNT_NAME,
-        status: "active",
-      },
-    })
-
-    const finalBalance =
-      STARTER_ACCOUNT_OPENING_BALANCE + SAMPLE_TRANSACTION_AMOUNT
-    const balanceUpdate = await tx.account.updateMany({
-      where: {
-        familyId: scopedFamilyId,
-        id: account.id,
-        version: account.version,
-      },
-      data: {
-        balance: { increment: SAMPLE_TRANSACTION_AMOUNT },
-        version: { increment: 1 },
-      },
-    })
-    if (balanceUpdate.count !== 1) {
-      throw new Error("Starter account balance version drift detected")
-    }
-
-    const finalAccount = await tx.account.findFirstOrThrow({
-      where: { familyId: scopedFamilyId, id: account.id },
-    })
-    if (finalAccount.balance !== finalBalance) {
-      throw new Error("Starter account balance did not reflect sample expense")
-    }
-
-    const sampleTransaction = await tx.transaction.create({
-      data: {
-        accountBalanceAfter: finalAccount.balance,
-        accountId: finalAccount.id,
-        amount: SAMPLE_TRANSACTION_AMOUNT,
-        categoryId: null,
-        currency: family.currency,
-        date: new Date(),
-        description: SAMPLE_TRANSACTION_DESCRIPTION,
-        familyId: scopedFamilyId,
-        idempotencyKey: data.idempotencyKey,
-        isSplit: false,
-        kind: "standard",
-        merchantId: null,
-        notes: null,
-        status: "CLEARED",
-        toAccountId: null,
-        type: "expense",
-        userId: user.id,
-      },
-    })
-
     const scopedAuditCtx = {
       ...auditCtx,
       session: {
@@ -184,29 +119,11 @@ export async function initializeOnboardingForUser(
         entityType: "Family",
         familyId: scopedFamilyId,
       },
-      {
-        action: "create",
-        after: finalAccount,
-        before: null,
-        entityId: finalAccount.id,
-        entityType: "Account",
-        familyId: scopedFamilyId,
-      },
-      {
-        action: "create",
-        after: sampleTransaction,
-        before: null,
-        entityId: sampleTransaction.id,
-        entityType: "Transaction",
-        familyId: scopedFamilyId,
-      },
     ])
 
     const result: OnboardingInitializationResult = {
-      accountId: finalAccount.id,
       created: true,
       familyId: scopedFamilyId,
-      sampleTransactionId: sampleTransaction.id,
     }
 
     await persistOnboardingResponse(tx, {
@@ -282,17 +199,14 @@ function parseStoredOnboardingResult(
     throw new TypeError("Stored onboarding idempotency response is invalid")
   }
 
-  const { accountId, created, familyId, sampleTransactionId } = value
+  const { created, familyId } = value
   if (typeof created !== "boolean" || typeof familyId !== "string") {
     throw new TypeError("Stored onboarding idempotency response is invalid")
   }
 
   return {
-    accountId: typeof accountId === "string" ? accountId : null,
     created,
     familyId,
-    sampleTransactionId:
-      typeof sampleTransactionId === "string" ? sampleTransactionId : null,
   }
 }
 

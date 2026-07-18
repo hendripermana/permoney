@@ -76,26 +76,17 @@ describe("onboarding idempotency replay", () => {
     expect(first.created).toBe(true)
     expect(storedUser.familyId).toBe(first.familyId)
     expect(state.families).toHaveLength(1)
-    expect(state.accounts).toHaveLength(1)
-    expect(state.transactions).toHaveLength(1)
-    expect(state.auditLogs).toHaveLength(3)
+    // PER-183: onboarding no longer seeds a starter account/sample
+    // transaction — a new family must be genuinely empty.
+    expect(state.accounts).toHaveLength(0)
+    expect(state.transactions).toHaveLength(0)
+    expect(state.auditLogs).toHaveLength(1)
     expect(state.idempotencyRecords).toHaveLength(1)
 
     const family = state.families[0]!
-    const account = state.accounts[0]!
-    const transaction = state.transactions[0]!
     const idempotencyRecord = state.idempotencyRecords[0]!
 
     expect(family.id).toBe(first.familyId)
-    expect(account.id).toBe(first.accountId)
-    expect(transaction.id).toBe(first.sampleTransactionId)
-    expect(account.balance).toBe(8_750_000n)
-    expect(transaction.amount).toBe(-1_250_000n)
-    expect(transaction.accountBalanceAfter).toBe(account.balance)
-    expect(transaction.familyId).toBe(first.familyId)
-    expect(transaction.accountId).toBe(account.id)
-    expect(transaction.userId).toBe(signedUpUser.user.id)
-    expect(transaction.idempotencyKey).toBe(idempotencyKey)
     expect(idempotencyRecord.endpoint).toBe("initializeOnboardingForUser")
     expect(idempotencyRecord.key).toBe(idempotencyKey)
     expect(idempotencyRecord.responseJson).toEqual(first)
@@ -111,20 +102,8 @@ describe("onboarding idempotency replay", () => {
     ).toEqual([
       {
         action: "create",
-        entityId: account.id,
-        entityType: "Account",
-        idempotencyKey,
-      },
-      {
-        action: "create",
         entityId: family.id,
         entityType: "Family",
-        idempotencyKey,
-      },
-      {
-        action: "create",
-        entityId: transaction.id,
-        entityType: "Transaction",
         idempotencyKey,
       },
     ])
