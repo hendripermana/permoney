@@ -1,9 +1,24 @@
 -- =============================================================================
 -- Permoney production Postgres role provisioning (PER-192)
 -- =============================================================================
--- Run ONCE against a fresh production database, connected as the Postgres
+-- Run TWICE against a fresh production database, connected as the Postgres
 -- superuser the `postgres:16` image bootstraps (POSTGRES_USER from
--- docker-compose.prod.yml). Idempotent — safe to re-run.
+-- docker-compose.prod.yml). Idempotent — safe to re-run either pass any
+-- number of times.
+--
+--   Pass 1, BEFORE `prisma migrate deploy`: creates the login roles and sets
+--   ALTER DEFAULT PRIVILEGES. Because this runs before permoney_migrator has
+--   created any tables, every table the migration subsequently creates
+--   inherits permoney_app's grants automatically — the explicit
+--   "GRANT ... ON ALL TABLES" and the AuditLog REVOKE below will error
+--   harmlessly (no tables exist yet; psql continues past errors by default
+--   with a plain `-f` invocation) — that's expected on this pass.
+--
+--   Pass 2, AFTER `prisma migrate deploy`: re-run the same file. Role
+--   creation/password-setting and the default-privileges declaration are
+--   no-ops the second time; what actually matters on this pass is the
+--   AuditLog REVOKE, which can only succeed once the table exists (default
+--   privileges are schema-wide and cannot selectively exclude one table).
 --
 -- Usage (never puts real passwords in this file or in shell history in
 -- plaintext-on-disk; pass them as psql variables from the server-side .env):
@@ -34,12 +49,16 @@
 --     before the app is ever allowed to trust it.
 -- =============================================================================
 
+-- psql's `:'var'` client-side substitution does NOT apply inside dollar-quoted
+-- (DO $$...$$) bodies — it's plain text to the substitution engine, so a
+-- password interpolated there would send a literal, invalid ":'name'" token
+-- to the server. Split role creation (idempotent, no password, safe inside
+-- $$...$$) from attribute/password assignment (plain top-level ALTER ROLE,
+-- where substitution works, and safely re-appliable on every run).
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'permoney_migrator') THEN
-    CREATE ROLE permoney_migrator LOGIN CREATEROLE NOSUPERUSER NOBYPASSRLS PASSWORD :'migrator_password';
-  ELSE
-    ALTER ROLE permoney_migrator PASSWORD :'migrator_password';
+    CREATE ROLE permoney_migrator NOLOGIN;
   END IF;
 END
 $$;
@@ -47,12 +66,13 @@ $$;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'permoney_app') THEN
-    CREATE ROLE permoney_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB PASSWORD :'app_password';
-  ELSE
-    ALTER ROLE permoney_app PASSWORD :'app_password';
+    CREATE ROLE permoney_app NOLOGIN;
   END IF;
 END
 $$;
+
+ALTER ROLE permoney_migrator LOGIN CREATEROLE NOSUPERUSER NOBYPASSRLS PASSWORD :'migrator_password';
+ALTER ROLE permoney_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB PASSWORD :'app_password';
 
 GRANT CONNECT ON DATABASE permoney_prod TO permoney_migrator;
 GRANT CONNECT ON DATABASE permoney_prod TO permoney_app;
