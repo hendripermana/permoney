@@ -18,7 +18,7 @@
 #                                   incident, never for routine testing.
 #
 # Config: same env vars as backup-postgres.sh (COMPOSE_FILE, RCLONE_CONFIG,
-# POSTGRES_ADMIN_PASSWORD, R2_BUCKET).
+# POSTGRES_ADMIN_PASSWORD, R2_REMOTE, R2_PATH).
 # =============================================================================
 set -euo pipefail
 
@@ -34,10 +34,11 @@ fetch_dump() {
     echo "$source"
     return
   fi
-  : "${R2_BUCKET:?R2_BUCKET is required to fetch a dump by R2 key}"
+  : "${R2_REMOTE:?R2_REMOTE is required to fetch a dump by R2 key}"
+  : "${R2_PATH:?R2_PATH is required to fetch a dump by R2 key}"
   : "${RCLONE_CONFIG:?RCLONE_CONFIG is required to fetch a dump by R2 key}"
   local local_path="/tmp/$(basename "$source")"
-  rclone --config "$RCLONE_CONFIG" copyto "r2:${R2_BUCKET}/postgres/${source}" "$local_path" >&2
+  rclone --config "$RCLONE_CONFIG" copyto "${R2_REMOTE}/${R2_PATH}/${source}" "$local_path" >&2
   echo "$local_path"
 }
 
