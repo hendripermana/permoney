@@ -220,6 +220,7 @@ export type AccountDeltaMap = Record<string, bigint>
 
 interface AccountBalanceVersion {
   balance: bigint
+  balanceSource: string
   id: string
   version: number
 }
@@ -552,6 +553,51 @@ export async function applyAccountDeltas(
   return mutations
 }
 
+// PER-196 / ADR-0048 §3: a `balanceSource === "valuation"` account's balance
+// may only change through a Valuation write (`setAccountBalanceTo`, the
+// single choke point `createValuationForFamily` and `rebuildFamilyBalances`
+// route through) — never through the incremental single-transaction delta
+// path. This is the typed error `applyAccountBalanceDelta` raises instead of
+// issuing that write; ADR-0048 §3 documents why there is no per-call-site
+// carve-out (standalone manual expense/income included).
+export class ValuationAccountLedgerError extends Error {
+  override readonly name = "ValuationAccountLedgerError"
+  readonly statusCode = 422
+  constructor(message: string) {
+    super(message)
+  }
+}
+
+// Reads the ADR-0044 §8 bulk-replay bypass GUC (`app.bulk_ledger_replay`,
+// SET LOCAL by `withBulkLedgerReplayBypass`, `src/server/bulk-ledger-replay.ts`
+// — the single anchor that sets it). This is a READ only; it must never call
+// `set_config` itself, or it would become a second anchor and break the
+// source-grep test that keeps every legitimate bypass site visible in one
+// place.
+async function isBulkLedgerReplayActive(
+  tx: TenantTransactionClient
+): Promise<boolean> {
+  const [row] = await tx.$queryRaw<{ bypass: string }[]>`
+    SELECT COALESCE(current_setting('app.bulk_ledger_replay', true), 'off') AS bypass
+  `
+  return row?.bypass === "on"
+}
+
+async function assertIncrementalBalanceWriteAllowed(
+  tx: TenantTransactionClient,
+  account: { id: string; balanceSource: string }
+): Promise<void> {
+  if (account.balanceSource !== "valuation") return
+  if (await isBulkLedgerReplayActive(tx)) return
+  throw new ValuationAccountLedgerError(
+    `Account ${account.id} is balanceSource="valuation" (ADR-0048): its balance ` +
+      `can only change through a new Valuation, never an incremental transaction ` +
+      `delta. Record this as an investment value update instead of a standard ` +
+      `transaction, or (for a cash move into/out of this account) use the ` +
+      `valuation-linked transfer flow.`
+  )
+}
+
 async function applyAccountBalanceDelta(
   tx: TenantTransactionClient,
   {
@@ -572,6 +618,8 @@ async function applyAccountBalanceDelta(
     familyId,
     notFoundMessage
   )
+
+  await assertIncrementalBalanceWriteAllowed(tx, before)
 
   const update = await tx.account.updateMany({
     where: { id: accountId, familyId, version: before.version },
@@ -612,7 +660,7 @@ async function findAccountBalanceVersion(
 ): Promise<AccountBalanceVersion> {
   const account = await tx.account.findFirst({
     where: { id: accountId, familyId },
-    select: { balance: true, id: true, version: true },
+    select: { balance: true, balanceSource: true, id: true, version: true },
   })
   if (!account) {
     throw new Error(notFoundMessage)

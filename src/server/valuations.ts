@@ -368,6 +368,15 @@ async function setAccountBalanceTo(
     currentVersion: number
   }
 ): Promise<void> {
+  // PER-196 / ADR-0048 §3: this is the single legitimate absolute-set writer
+  // for a valuation-tracked account's balance (the other, forbidden, path is
+  // the incremental delta in `applyAccountBalanceDelta`,
+  // `src/server/transactions.ts`). Set the transaction-scoped bypass GUC the
+  // new `Account.balance` constraint trigger requires immediately before the
+  // write it guards, mirroring the `app.bulk_ledger_replay`
+  // (ADR-0044 §8) SET LOCAL idiom exactly.
+  await tx.$executeRaw`SELECT set_config('app.valuation_balance_write', 'on', true)`
+
   const update = await tx.account.updateMany({
     where: { id: accountId, familyId, version: currentVersion },
     data: { balance: target, version: { increment: 1 } },
