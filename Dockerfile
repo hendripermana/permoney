@@ -25,6 +25,14 @@
 FROM node:24-bookworm-slim AS build
 WORKDIR /app
 
+# git: the package.json "prepare" lifecycle script (`vp config`) shells out to
+# git. openssl: Prisma's engine-selection at `prisma generate` time probes
+# libssl and silently defaults to the wrong variant without it (CI's
+# ubuntu-latest runners have both preinstalled already, which is why this
+# never surfaced there).
+RUN apt-get update && apt-get install -y --no-install-recommends git openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN corepack enable
 
 # Layer-cache dependency install separately from source changes.
@@ -38,6 +46,12 @@ RUN pnpm run build
 # -----------------------------------------------------------------------------
 FROM node:24-bookworm-slim AS runtime
 WORKDIR /app
+
+# Prisma's query engine binary needs libssl at RUNTIME too, not just at
+# `prisma generate` time — same reason as the build stage.
+RUN apt-get update && apt-get install -y --no-install-recommends openssl \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=3005
