@@ -33,10 +33,18 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
-import type { SureBundlePreview, SureHeldReason } from "@/lib/sure-migration"
+import { useMountEffect } from "@/hooks/use-mount-effect"
+import type {
+  SureBundlePreview,
+  SureHeldReason,
+  SureTransferHeldReason,
+} from "@/lib/sure-migration"
 // Type-only import — erased at build, so this presentational module stays free
 // of the server fn's runtime graph and remains unit-testable in jsdom.
-import type { SureMigrationResult } from "@/server/sure-migration"
+import type {
+  SureImportPhase,
+  SureMigrationResult,
+} from "@/server/sure-migration"
 
 // PER-171 — presentational layer for the guided Sure importer. Kept separate
 // from the route (`import_.sure.tsx`) so the orchestration (file read, server
@@ -46,6 +54,16 @@ import type { SureMigrationResult } from "@/server/sure-migration"
 
 export type Stage = "upload" | "review" | "done"
 
+// PER-188 — live progress for the running import, polled from
+// getSureImportProgressFn (see the locked polling design in the
+// per-188-importer-copy-progress-design memory). `phase: null` means the
+// poll hasn't resolved a snapshot yet (just started, or the server-side
+// entry is unknown/expired) — an indeterminate, not an error, state.
+export interface ImportProgress {
+  phase: SureImportPhase | null
+  startedAt: number
+}
+
 const HELD_REASONS: Record<
   SureHeldReason,
   { label: string; detail: string; icon: typeof ArrowRightLeft }
@@ -53,7 +71,7 @@ const HELD_REASONS: Record<
   transfer: {
     label: "Transfers",
     detail:
-      "Paired moves between your own accounts — imported in a later step.",
+      "Paired moves between your own accounts — imported this run as linked transfers. Any that can't be safely paired are kept, not dropped.",
     icon: ArrowRightLeft,
   },
   split: {
@@ -94,8 +112,8 @@ export function SureImportHeader({ stage }: { stage: Stage }) {
       </h1>
       <p className="text-lg text-muted-foreground">
         Upload your Sure export and we'll account for every line — what crosses
-        into your ledger now, and what we hold for a later step. Nothing is
-        dropped.
+        into your ledger now, and what needs extra care before it can. Nothing
+        is dropped.
       </p>
       <StageRail stage={stage} />
     </header>
@@ -198,6 +216,89 @@ export function UploadStage({
 }
 
 // ===========================================================================
+// Live import progress (PER-188) — rendered inside ReviewStage while running.
+// ===========================================================================
+
+const IMPORT_PHASES: { id: SureImportPhase; label: string }[] = [
+  { id: "staging", label: "Staging" },
+  { id: "pairing_transfers", label: "Pairing transfers" },
+  { id: "reconciling", label: "Reconciling" },
+  { id: "finalizing", label: "Finalizing" },
+]
+
+function ImportElapsedTimer({ startedAt }: { startedAt: number }) {
+  const [, forceTick] = React.useState(0)
+  // Browser-timer subscription — the documented useMountEffect escape hatch
+  // (no-use-effect skill, Rule 4), not a derived-state effect. Only ever
+  // mounted while the import is running (see ImportProgressPanel's caller),
+  // so it naturally starts/stops with the run instead of needing a guard.
+  useMountEffect(() => {
+    const id = setInterval(() => forceTick((tick) => tick + 1), 1000)
+    return () => clearInterval(id)
+  })
+  const elapsedSeconds = Math.max(
+    0,
+    Math.floor((Date.now() - startedAt) / 1000)
+  )
+  const minutes = Math.floor(elapsedSeconds / 60)
+  const seconds = elapsedSeconds % 60
+  return (
+    <span className="font-mono text-xs text-muted-foreground tabular-nums">
+      {minutes}:{seconds.toString().padStart(2, "0")}
+    </span>
+  )
+}
+
+// Progress is OBSERVATIONAL (PER-188 locked design): the import's own
+// correctness never depends on this panel ever showing anything. A `phase:
+// null` snapshot (poll hasn't landed yet, or the server-side entry expired /
+// belongs to a different instance) degrades to an indeterminate "Starting…"
+// state rather than an error — closing this tab and reopening later, or a
+// poll that never resolves, is always safe.
+function ImportProgressPanel({ progress }: { progress: ImportProgress }) {
+  const activeIndex = progress.phase
+    ? IMPORT_PHASES.findIndex((phase) => phase.id === progress.phase)
+    : -1
+
+  return (
+    <div className="flex flex-col gap-3 rounded-2xl border bg-muted/30 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <ol className="flex flex-wrap items-center gap-2 text-sm">
+          {IMPORT_PHASES.map((phase, index) => (
+            <li
+              key={phase.id}
+              className={cn(
+                "flex items-center gap-1.5 rounded-full px-2.5 py-1 font-medium transition-colors",
+                index === activeIndex &&
+                  "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+                activeIndex !== -1 &&
+                  index < activeIndex &&
+                  "text-emerald-600 dark:text-emerald-400",
+                (activeIndex === -1 || index > activeIndex) &&
+                  "text-muted-foreground"
+              )}
+            >
+              {index === activeIndex ? (
+                <Loader2 size={12} className="animate-spin" />
+              ) : (
+                index < activeIndex && <CircleCheckBig size={12} />
+              )}
+              {phase.label}
+            </li>
+          ))}
+        </ol>
+        <ImportElapsedTimer startedAt={progress.startedAt} />
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {activeIndex === -1
+          ? "Starting…"
+          : "Keep this tab open to watch progress. Closing it is safe — the import keeps running on our side, and reopening this page picks up where you left off."}
+      </p>
+    </div>
+  )
+}
+
+// ===========================================================================
 // Stage 2 — review (client preview; the honest, fully-reconciled manifest)
 // ===========================================================================
 
@@ -208,6 +309,7 @@ export function ReviewStage({
   onBack,
   onConfirm,
   running,
+  progress,
 }: {
   fileName: string
   preview: SureBundlePreview
@@ -216,6 +318,8 @@ export function ReviewStage({
   onBack: () => void
   onConfirm: () => void
   running: boolean
+  /** Live phase progress while `running` (PER-188). Absent/null = no poll yet. */
+  progress?: ImportProgress | null
 }) {
   const t = preview.transactions
   const ignoredTotal = sumValues(preview.ignoredEntities)
@@ -381,7 +485,7 @@ export function ReviewStage({
         ignoredTotal={ignoredTotal}
       />
 
-      {t.held > 0 && <ReconciliationNote />}
+      {running && progress && <ImportProgressPanel progress={progress} />}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Button variant="ghost" onClick={onBack} disabled={running}>
@@ -515,7 +619,7 @@ export function DoneStage({
                     variant="outline"
                     className="border-amber-400 text-amber-700 dark:text-amber-300"
                   >
-                    {t.held} held for transfers
+                    {t.held} held for review
                   </Badge>
                 )}
                 {t.zeroAmountSkipped > 0 && (
@@ -541,7 +645,7 @@ export function DoneStage({
             </div>
           )}
 
-          {t.held > 0 && <ReconciliationNote />}
+          <BalanceReconciliationSummary transfers={result.transfers} />
         </CardContent>
       </Card>
 
@@ -752,19 +856,82 @@ function ResultStat({
   )
 }
 
-function ReconciliationNote() {
+// PER-188 — human-readable copy for each DB-anchored reason a transfer leg
+// couldn't be paired & promoted this run (see SureTransferHeldReason). Shown
+// only on the Done screen, sourced from the RESULT (never the preview).
+const TRANSFER_HELD_REASON_LABEL: Record<SureTransferHeldReason, string> = {
+  not_staged: "not staged for import",
+  non_importable: "counterpart account isn't imported",
+  currency_mismatch: "currency mismatch with its account",
+  kind_divergence: "conflicting transfer type",
+  db_rejected: "rejected by a ledger safety check",
+  unpaired_orphan: "no matching counterpart found",
+  ambiguous_cluster: "more than one possible match",
+}
+
+// PER-188 — the Done-screen truth about balances. Every migration run ends
+// with a mandatory final-reconciliation anchor + balance rebuild (ADR-0043,
+// ADR-0045's PER-182 amendment), so "every balance matches" is true
+// unconditionally, regardless of how many transfer legs got held — held legs
+// are a HISTORY-completeness gap, never a balance gap. Driven entirely by
+// `result.transfers`, never the step-2 preview's staging counts.
+function BalanceReconciliationSummary({
+  transfers,
+}: {
+  transfers: SureMigrationResult["transfers"]
+}) {
+  const heldReasons = (
+    Object.keys(transfers.heldLegsByReason) as SureTransferHeldReason[]
+  ).filter((reason) => transfers.heldLegsByReason[reason] > 0)
+  const heldTotal = sumValues(transfers.heldLegsByReason)
+
   return (
-    <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm dark:border-amber-900/60 dark:bg-amber-950/30">
-      <ArrowRightLeft
-        size={18}
-        className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400"
-      />
-      <p className="text-amber-900 dark:text-amber-100">
-        <span className="font-semibold">A few balances won't match yet.</span>{" "}
-        Transfers and split transactions aren't migrated in this step, so any
-        account that used them will finish reconciling once transfers are
-        imported in a later step. Your full export is kept safely until then.
-      </p>
+    <div className="flex flex-col gap-3">
+      <div className="flex items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm dark:border-emerald-900/60 dark:bg-emerald-950/30">
+        <CircleCheckBig
+          size={18}
+          className="mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-400"
+        />
+        <div className="text-emerald-900 dark:text-emerald-100">
+          <p className="font-semibold">
+            All account balances reconciled — every account matches your Sure
+            closing figures.
+          </p>
+          {transfers.legsPromotedTotal > 0 && (
+            <p className="mt-1 text-emerald-800/90 dark:text-emerald-200/90">
+              {transfers.legsPromotedTotal} transfer transaction
+              {transfers.legsPromotedTotal === 1 ? "" : "s"} imported as paired
+              moves between your accounts.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {heldTotal > 0 && (
+        <div className="flex items-start gap-3 rounded-2xl border border-border bg-muted/40 p-4 text-sm">
+          <CircleSlash
+            size={18}
+            className="mt-0.5 shrink-0 text-muted-foreground"
+          />
+          <div>
+            <p className="font-medium">
+              {heldTotal} transfer leg{heldTotal === 1 ? "" : "s"} kept for
+              review, not yet in your history.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Your balances already account for this — only the transaction
+              history entry is pending:{" "}
+              {heldReasons
+                .map(
+                  (reason) =>
+                    `${transfers.heldLegsByReason[reason]} ${TRANSFER_HELD_REASON_LABEL[reason]}`
+                )
+                .join(", ")}
+              .
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

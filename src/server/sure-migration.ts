@@ -120,6 +120,11 @@ const sureMigrationInputSchema = z.object({
   // Raw `all.ndjson` content. Phase 1a accepts it as a UTF-8 string over the
   // server-fn POST; a future slice may switch to multipart upload.
   bundle: z.string().min(1),
+  // PER-188 — client-minted UUIDv7, the key into the ephemeral progress Map
+  // below. Optional so existing callers (integration tests, any future
+  // caller that doesn't care about live progress) don't have to pass one;
+  // the function mints its own fallback when absent.
+  importId: z.string().min(1).optional(),
 })
 
 export type SureMigrationInput = z.input<typeof sureMigrationInputSchema>
@@ -800,6 +805,99 @@ export function isPromotable(
 // Orchestration (testable entry — mirrors createImportBatchForFamily shape)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// PER-188 — ephemeral, observational import progress (polling side-channel).
+//
+// Grilled decision (see per-188-importer-copy-progress-design memory, locked
+// decision 4): NOT a streamed Response. `runSureMigrationFn` stays a normal
+// awaited call returning the typed `SureMigrationResult` above — that typed
+// contract is load-bearing (CLAUDE.md "return values are the type
+// contract") and a long-lived streaming response sits behind Cloudflare's
+// ~100s origin timeout for no benefit here. Instead: the client polls
+// `getSureImportProgressFn` every ~1s while the main request is in flight.
+//
+// This Map is a side-effect-free module-scope singleton (same discipline as
+// `fallbackMap` in `middleware/rate-limit.ts`) — NEVER the source of truth.
+// The import's actual correctness comes entirely from the idempotent,
+// awaited `runSureMigrationForFamily` call; if the client's poll never sees a
+// single update (process restart, wrong instance, tab closed and reopened),
+// the import itself is unaffected and a re-call with the same `importId`
+// replays safely (PER-179/190 structural idempotency).
+//
+// CAVEAT (documented, not hidden): this Map is single-instance. Permoney
+// runs one prod container today, so "poll lands on the instance running the
+// migration" always holds. If Permoney horizontal-scales, a poll can land on
+// a different instance and see nothing — move this to Redis/DB at that point
+// (the client already degrades gracefully to an indeterminate state on a
+// miss, so this isn't a correctness cliff, just a UX one).
+export type SureImportPhase =
+  | "staging"
+  | "pairing_transfers"
+  | "reconciling"
+  | "finalizing"
+
+export interface SureImportProgressSnapshot {
+  phase: SureImportPhase
+  staged: number
+  promoted: number
+  heldSoFar: number
+  updatedAt: number
+}
+
+interface SureImportProgressEntry extends SureImportProgressSnapshot {
+  familyId: string
+}
+
+const IMPORT_PROGRESS_MAX_AGE_MS = 10 * 60 * 1000 // 10 min — sweep window
+
+const importProgress = new Map<string, SureImportProgressEntry>()
+
+function sweepStaleImportProgress(): void {
+  const cutoff = Date.now() - IMPORT_PROGRESS_MAX_AGE_MS
+  for (const [id, entry] of importProgress) {
+    if (entry.updatedAt < cutoff) importProgress.delete(id)
+  }
+}
+
+function setImportProgress(
+  importId: string,
+  familyId: string,
+  patch: Partial<Omit<SureImportProgressSnapshot, "updatedAt">> & {
+    phase: SureImportPhase
+  }
+): void {
+  sweepStaleImportProgress()
+  const previous = importProgress.get(importId)
+  importProgress.set(importId, {
+    staged: previous?.staged ?? 0,
+    promoted: previous?.promoted ?? 0,
+    heldSoFar: previous?.heldSoFar ?? 0,
+    ...patch,
+    familyId,
+    updatedAt: Date.now(),
+  })
+}
+
+const sureImportProgressInputSchema = z.object({
+  importId: z.string().min(1),
+})
+
+// GET, not POST — this is a pure, cheap, idempotent read (no DB, no mutation).
+export const getSureImportProgressFn = createServerFn({ method: "GET" })
+  .middleware([requireCapability("ledger:write")])
+  .inputValidator((data: unknown) => sureImportProgressInputSchema.parse(data))
+  .handler(
+    async ({ data, context }): Promise<SureImportProgressSnapshot | null> => {
+      const entry = importProgress.get(data.importId)
+      // Tenant isolation even though a UUIDv7 importId is practically
+      // unguessable: never let one family's poll read another family's
+      // in-flight progress counters.
+      if (!entry || entry.familyId !== context.familyId) return null
+      const { familyId: _familyId, ...snapshot } = entry
+      return snapshot
+    }
+  )
+
 export async function runSureMigrationForFamily({
   data: rawData,
   familyId,
@@ -812,6 +910,13 @@ export async function runSureMigrationForFamily({
   runInTenantTransaction?: RunInTenantTransaction
 }): Promise<SureMigrationResult> {
   const data = sureMigrationInputSchema.parse(rawData)
+  const importId = data.importId ?? createUuidV7()
+  setImportProgress(importId, familyId, {
+    phase: "staging",
+    staged: 0,
+    promoted: 0,
+    heldSoFar: 0,
+  })
 
   const rawBytes = new TextEncoder().encode(data.bundle)
   if (rawBytes.length > MAX_BUNDLE_BYTES) {
@@ -1233,6 +1338,14 @@ export async function runSureMigrationForFamily({
       })
       timings.transactionsPromote += Date.now() - chunkPromoteT0
       promotedThisRun += promotion.promotedCount
+
+      // PER-188 — emitted at the existing PER-179 chunk boundary, between
+      // the confirm and promote transactions above, never inside either one.
+      setImportProgress(importId, familyId, {
+        phase: "staging",
+        staged: rows.length,
+        promoted: promotedThisRun,
+      })
     }
   }
 
@@ -1244,6 +1357,7 @@ export async function runSureMigrationForFamily({
   // Reuses the SAME pure pairing computed up-front; promotes each pair through the
   // canonical `createTransactionForFamily` core (no new ledger writer), holding
   // anything ambiguous/orphan/gated with a DB-anchored typed reason.
+  setImportProgress(importId, familyId, { phase: "pairing_transfers" })
   const transfersT0 = Date.now()
   const transfers = await pairAndPromoteSureTransfers({
     pairing: transferPairing,
@@ -1267,6 +1381,13 @@ export async function runSureMigrationForFamily({
   // per account. See writeSureFinalReconciliationAnchors for the full
   // reasoning. Runs under the bulk-replay bypass like step 4 (another
   // anchor-writing phase in the same transient-until-rebuild window).
+  setImportProgress(importId, familyId, {
+    phase: "reconciling",
+    heldSoFar: Object.values(transfers.heldLegsByReason).reduce(
+      (sum, n) => sum + n,
+      0
+    ),
+  })
   const reconciliationT0 = Date.now()
   const finalReconciliation = await writeSureFinalReconciliationAnchors(
     bundle,
@@ -1288,9 +1409,14 @@ export async function runSureMigrationForFamily({
   // from canonical rows (latest anchor + Σ post-anchor flow, or the existing
   // no-anchor-found fallback for the rare account with no valuations at all)
   // — overriding the incremental journey with the calculator's actual answer.
+  setImportProgress(importId, familyId, { phase: "finalizing" })
   const rebuildT0 = Date.now()
   await rebuildFamilyBalances({ familyId, user, runInTenantTransaction })
   timings.rebuild = Date.now() - rebuildT0
+
+  // Success — the typed result below is the source of truth from here on;
+  // the observational progress entry has served its purpose.
+  importProgress.delete(importId)
 
   return {
     batchId,
