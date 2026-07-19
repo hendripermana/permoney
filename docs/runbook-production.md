@@ -42,22 +42,52 @@ for why Postgres is self-hosted here instead of managed.
    VM — see the Dockerfile's ARM64 note; do not copy an x86-built image over).
 4. `docker compose -f docker-compose.prod.yml up -d postgres` — wait for
    healthy.
-5. Provision roles: run `deploy/provision-postgres-roles.sql` against the
-   fresh database (see the script's header comment for the exact
-   `psql -v migrator_password=... -v app_password=...` invocation). Use the
-   same passwords as step 2's `.env`.
-6. `docker compose -f docker-compose.prod.yml run --rm app npx prisma migrate deploy`
-   using a `DATABASE_URL` pointed at `permoney_migrator` (not `permoney_app` —
-   the app role must never run migrations).
-7. Seed system data only: `docker compose -f docker-compose.prod.yml run --rm app npx tsx prisma/seed-production.ts`
-   with `PERMONEY_SEED_PRIVILEGED_DATABASE_URL` set to the `permoney_migrator`
-   connection string. This must NEVER be `prisma db seed` (that also creates
-   a demo tenant — see `prisma/seed-production.ts`'s header comment).
-8. `docker compose -f docker-compose.prod.yml up -d app`.
-9. Confirm the existing Caddy block for `permana.icu` (already present,
-   proxying to `127.0.0.1:3005`) now gets a real response instead of 502:
-   `curl -H "Host: permana.icu" http://127.0.0.1/` on the VM.
-10. Confirm `https://permana.icu` from outside the VM is green.
+5. Provision roles, PASS 1 (before migrating): run `deploy/provision-postgres-roles.sql`
+   against the fresh database (see the script's header comment for the exact
+   `psql -v migrator_password=... -v app_password=...` invocation, run through
+   `docker compose exec postgres psql ...`). Use the same passwords as step
+   2's `.env`. Expect the AuditLog `REVOKE` and the `GRANT ... ON ALL TABLES`
+   line to error harmlessly on this pass — no tables exist yet. That's fine;
+   `psql -f` continues past errors by default.
+6. The runtime `app` image only ships the traced `.output/` — it does NOT
+   contain the Prisma CLI or a full `node_modules`, so migrations/seeding
+   can't run through it. Build the intermediate `build` stage as its own
+   image instead (reuses the exact same layer cache):
+   ```bash
+   docker build --target build -t permoney-prod-migrator:latest .
+   ```
+   Then run migrations through it, on the same Docker network, with
+   `DATABASE_URL` pointed at `permoney_migrator` (never `permoney_app` — the
+   app role must never run migrations):
+   ```bash
+   docker run --rm --network permoney-prod_permoney_prod_net \
+     -e DATABASE_URL="postgres://permoney_migrator:<migrator-password>@postgres:5432/permoney_prod" \
+     permoney-prod-migrator:latest \
+     node node_modules/prisma/build/index.js migrate deploy
+   ```
+7. Provision roles, PASS 2 (after migrating): re-run the same
+   `provision-postgres-roles.sql` invocation from step 5. This time the
+   AuditLog `REVOKE` succeeds (the table now exists) — this is the pass that
+   actually closes that gap. Verify with the script's own trailing
+   `SELECT ... FROM pg_roles` output: both roles must show
+   `rolsuper = f, rolbypassrls = f`.
+8. Seed system data only, using the same migrator image (note: it's
+   `./node_modules/.bin/tsx`, run directly so its own shebang invokes node —
+   `node node_modules/.bin/tsx ...` fails with a syntax error, since that file
+   is a shell shim, not a JS entrypoint):
+   ```bash
+   docker run --rm --network permoney-prod_permoney_prod_net \
+     -e DATABASE_URL="..." -e PERMONEY_SEED_PRIVILEGED_DATABASE_URL="postgres://permoney_migrator:<migrator-password>@postgres:5432/permoney_prod" \
+     permoney-prod-migrator:latest \
+     ./node_modules/.bin/tsx prisma/seed-production.ts
+   ```
+   This must NEVER be `prisma db seed` (that also creates a demo tenant — see
+   `prisma/seed-production.ts`'s header comment).
+9. `docker compose -f docker-compose.prod.yml up -d app`.
+10. Confirm the existing Caddy block for `permana.icu` (already present,
+    proxying to `127.0.0.1:3005`) now gets a real response instead of 502:
+    `curl -H "Host: permana.icu" http://127.0.0.1/` on the VM.
+11. Confirm `https://permana.icu` from outside the VM is green.
 
 ## Deploy (subsequent releases)
 
@@ -65,10 +95,18 @@ for why Postgres is self-hosted here instead of managed.
 cd /home/ubuntu/permoney-prod
 git fetch origin && git checkout main && git pull
 docker compose -f docker-compose.prod.yml build app
-docker compose -f docker-compose.prod.yml run --rm app npx prisma migrate deploy   # migrator DATABASE_URL
+docker build --target build -t permoney-prod-migrator:latest .
+docker run --rm --network permoney-prod_permoney_prod_net \
+  -e DATABASE_URL="postgres://permoney_migrator:<migrator-password>@postgres:5432/permoney_prod" \
+  permoney-prod-migrator:latest \
+  node node_modules/prisma/build/index.js migrate deploy
 docker compose -f docker-compose.prod.yml up -d app
 curl -s http://127.0.0.1:3005/api/health   # expect {"status":"ok"}
 ```
+
+If the new release adds a migration that creates a new audit/immutable-ledger
+table, re-run `deploy/provision-postgres-roles.sql` afterward (pass 2 style)
+to apply that table's REVOKE — see the SQL file's own caveat comment.
 
 ## Rollback
 
@@ -95,7 +133,15 @@ env vars, sourced from `/home/ubuntu/permoney-prod/.env.backup`, chmod 600):
 Uploads to Cloudflare R2 via `rclone` using a **dedicated R2 API token**
 (never reuse the leaked/legacy tokens found during PER-192 discovery — those
 belonged to a different, unrelated legacy backup path and are documented as
-compromised/deprecated in the PER-192 history).
+compromised/deprecated in the PER-192 history). Reuses the same `r2backup`
+rclone remote (`/home/ubuntu/.config/rclone/rclone.conf`) the legacy Sure
+backup already uses against the `maybe-backup-data` bucket — just a separate
+`permoney/` prefix (`R2_PATH`) within it, not a second remote.
+
+Known quirk: a single `NotImplemented: 501` error from R2 on the first
+upload attempt is normal (an R2/S3-compatibility gap on some operations);
+`rclone`'s built-in retry succeeds on attempt 2 without intervention. Only
+worth investigating if all 3 retry attempts fail.
 
 ## Restore (tested, non-negotiable)
 
@@ -112,8 +158,11 @@ sanity row counts (`Family`/`Transaction`/`Account`/`AuditLog`), then drops
 the scratch database. It never touches `permoney_prod`. Record the date of
 the last successful verify run here:
 
-- 2026-07-18: _(fill in once the first real backup + verify run completes on
-  the production box)_
+- 2026-07-19: first real production backup + verify run, executed live during
+  initial deploy. `permoney_prod_20260719T044517Z.dump` backed up and
+  restored cleanly into `permoney_restore_test` (all sanity counts 0 — correct
+  for a freshly-seeded, pre-signup production database; re-verify with
+  non-zero counts after the first real import).
 
 Actual disaster recovery (destructive, only for a real incident) uses
 `./deploy/restore-postgres.sh disaster-recovery <dump>` — requires typing a
@@ -140,9 +189,17 @@ originally) and re-persist with `sudo netfilter-persistent save`. Automating
 this refresh is deferred to the Phase-B hardening ticket.
 
 Oracle Cloud Security List/NSG is a **second, separate** layer (control-plane,
-not visible from inside the VM) — confirm it also restricts 80/443 to
-Cloudflare's ranges; the host firewall alone is not sufficient defense in
-depth if the NSG is wide open.
+not visible from inside the VM, so this repo's tooling can't verify or
+automate it — no `oci` CLI/API credentials exist on the box). Applied and
+three-way-verified live on 2026-07-19: 30 ingress rules (15 Cloudflare IPv4
+CIDRs × ports 80/443) added in the OCI Console. Verification: (a) direct
+`curl` to the VM's IP on :80/:443 from an external non-Cloudflare source
+times out/refused, (b) `https://finance.permana.icu` via Cloudflare
+unaffected (Sure undisturbed), (c) `kucai.permana.icu` (netdata behind
+Cloudflare Access) still reachable. Only Cloudflare's IPv4 ranges are
+enrolled — confirmed the VM itself has no public IPv6 address (`ip -6 addr
+show` shows nothing beyond link-local), so Cloudflare necessarily connects
+over IPv4 only and there is nothing for an IPv6 allowlist to protect.
 
 netdata (`:19999`) is bound to `127.0.0.1` only — reachable exclusively via
 `kucai.permana.icu` behind Cloudflare Access. Do not rebind it to `0.0.0.0`.
