@@ -80,61 +80,17 @@ describe("PER-196 / ADR-0048 §3 — valuation account balance write guard", () 
     return account.balance
   }
 
-  test("rejects a transfer INTO a tracked-asset account (contribution) and leaves both balances untouched", async () => {
-    const fx = await createFixture()
-
-    await expect(
-      createTransactionForFamily({
-        data: {
-          accountId: fx.cash.id,
-          amount: 100_000n,
-          currency: "IDR",
-          date: TEST_DATE,
-          description: "Top up reksadana",
-          idempotencyKey: factories.createIdempotencyKey(),
-          isSplit: false,
-          status: "CLEARED",
-          toAccountId: fx.tracked.id,
-          type: "transfer",
-        },
-        familyId: fx.familyId,
-        user: fx.user,
-      })
-    ).rejects.toThrow(ValuationAccountLedgerError)
-
-    expect(await readBalance(fx.familyId, fx.cash.id)).toBe(fx.cash.balance)
-    expect(await readBalance(fx.familyId, fx.tracked.id)).toBe(
-      fx.tracked.balance
-    )
-  })
-
-  test("rejects a transfer OUT OF a tracked-asset account (redemption) and leaves both balances untouched — the PER-196 repro", async () => {
-    const fx = await createFixture()
-
-    await expect(
-      createTransactionForFamily({
-        data: {
-          accountId: fx.tracked.id,
-          amount: 250_000n,
-          currency: "IDR",
-          date: TEST_DATE,
-          description: "Pencairan reksadana",
-          idempotencyKey: factories.createIdempotencyKey(),
-          isSplit: false,
-          status: "CLEARED",
-          toAccountId: fx.cash.id,
-          type: "transfer",
-        },
-        familyId: fx.familyId,
-        user: fx.user,
-      })
-    ).rejects.toThrow(ValuationAccountLedgerError)
-
-    expect(await readBalance(fx.familyId, fx.tracked.id)).toBe(
-      fx.tracked.balance
-    )
-    expect(await readBalance(fx.familyId, fx.cash.id)).toBe(fx.cash.balance)
-  })
+  // A transfer INTO/OUT OF a tracked-asset account (contribution/redemption)
+  // no longer hits this guard as of the ADR-0048 §1/§4 valuation-linked
+  // transfer model: createTransactionForFamily routes it to
+  // createValuationLinkedTransferWithinTx, which never calls
+  // applyAccountBalanceDelta on the tracked-asset side at all (it writes a
+  // Valuation via setAccountBalanceTo instead). Full coverage of that
+  // success path — both directions, atomicity, the editable prefill, the
+  // negative-value rejection — lives in
+  // valuation-linked-transfer.integration.ts. This file's job is the
+  // invariant that remains true after that feature: no code path may ever
+  // apply an incremental delta to a valuation-tracked account's balance.
 
   test("rejects a standalone manual expense on a tracked-asset account — no carve-out", async () => {
     const fx = await createFixture()

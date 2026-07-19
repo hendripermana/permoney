@@ -434,6 +434,9 @@ async function placeTransfer(
       where: { outflowTransactionId },
     })
   )
+  if (!transfer.inflowTransactionId) {
+    throw new Error("Expected a classic dual-leg transfer fixture")
+  }
 
   return {
     inflowTransactionId: transfer.inflowTransactionId,

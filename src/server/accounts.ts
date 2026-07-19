@@ -799,22 +799,36 @@ export async function getAccountDeletionImpactForFamily({
           OR: [
             { outflowTransaction: { accountId: data.id, deletedAt: null } },
             { inflowTransaction: { accountId: data.id, deletedAt: null } },
+            // PER-196 / ADR-0048 §4: a valuation-linked transfer's
+            // tracked-asset side has no Transaction leg at all — only
+            // reachable via the linked Valuation's accountId.
+            { valuation: { accountId: data.id, deletedAt: null } },
           ],
         },
         select: {
           outflowTransaction: { select: { accountId: true } },
           inflowTransaction: { select: { accountId: true } },
+          valuation: { select: { accountId: true } },
         },
       }),
     ])
 
     const otherAccountIds = new Set<string>()
     for (const transfer of transfers) {
-      if (transfer.outflowTransaction.accountId !== data.id) {
+      if (
+        transfer.outflowTransaction &&
+        transfer.outflowTransaction.accountId !== data.id
+      ) {
         otherAccountIds.add(transfer.outflowTransaction.accountId)
       }
-      if (transfer.inflowTransaction.accountId !== data.id) {
+      if (
+        transfer.inflowTransaction &&
+        transfer.inflowTransaction.accountId !== data.id
+      ) {
         otherAccountIds.add(transfer.inflowTransaction.accountId)
+      }
+      if (transfer.valuation && transfer.valuation.accountId !== data.id) {
+        otherAccountIds.add(transfer.valuation.accountId)
       }
     }
 

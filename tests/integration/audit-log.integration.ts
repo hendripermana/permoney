@@ -469,8 +469,10 @@ describe("AuditLog Integration & Security Tests", () => {
       ),
     ])
 
-    expect(transferAfterDelete.outflowTransaction.deletedAt).not.toBeNull()
-    expect(transferAfterDelete.inflowTransaction.deletedAt).not.toBeNull()
+    expect(transferAfterDelete.outflowTransaction).not.toBeNull()
+    expect(transferAfterDelete.inflowTransaction).not.toBeNull()
+    expect(transferAfterDelete.outflowTransaction?.deletedAt).not.toBeNull()
+    expect(transferAfterDelete.inflowTransaction?.deletedAt).not.toBeNull()
     expect(transferLogs.map((log) => log.action).sort()).toEqual([
       "create",
       "soft_delete",
