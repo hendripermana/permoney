@@ -8,11 +8,16 @@ import { SiteHeader } from "@/components/site-header"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { parseSureBundle, summarizeSureBundle } from "@/lib/sure-migration"
-import { runSureMigrationFn } from "@/server/sure-migration"
+import { createUuidV7 } from "@/lib/uuid-v7"
+import {
+  getSureImportProgressFn,
+  runSureMigrationFn,
+} from "@/server/sure-migration"
 import { getSettingsOverviewFn, SETTINGS_OVERVIEW_KEY } from "@/server/settings"
 import { transactionCollection } from "@/lib/collections"
 import {
   DoneStage,
+  type ImportProgress,
   ReviewStage,
   type Stage,
   SureImportHeader,
@@ -87,9 +92,19 @@ function SureImportPage() {
     setStage("review")
   }
 
+  // PER-188 — client-minted UUIDv7, the key `getSureImportProgressFn` polls
+  // by. Minted fresh per attempt (not per page load) so a retry after a
+  // failure gets its own progress lineage instead of resuming a stale one.
+  const [importId, setImportId] = React.useState<string | null>(null)
+  const [importStartedAt, setImportStartedAt] = React.useState<number | null>(
+    null
+  )
+
   const runMutation = useMutation({
-    mutationFn: () =>
-      runSureMigrationFn({ data: { filename: fileName, bundle: bundleText } }),
+    mutationFn: (id: string) =>
+      runSureMigrationFn({
+        data: { filename: fileName, bundle: bundleText, importId: id },
+      }),
     onSuccess: async (migration) => {
       setResult(migration)
       setStage("done")
@@ -108,12 +123,37 @@ function SureImportPage() {
       toast.error(error instanceof Error ? error.message : "Migration failed."),
   })
 
+  // Ephemeral, observational only (PER-188 locked design) — never awaited,
+  // never consulted for correctness. Stops the instant the mutation above
+  // resolves, which is when the typed result actually lands.
+  const { data: progressSnapshot } = useQuery({
+    queryKey: ["sure-import-progress", importId],
+    queryFn: () =>
+      getSureImportProgressFn({ data: { importId: importId as string } }),
+    enabled: runMutation.isPending && importId !== null,
+    refetchInterval: 900,
+  })
+
+  const progress: ImportProgress | null =
+    runMutation.isPending && importStartedAt !== null
+      ? { phase: progressSnapshot?.phase ?? null, startedAt: importStartedAt }
+      : null
+
+  const startImport = () => {
+    const id = createUuidV7()
+    setImportId(id)
+    setImportStartedAt(Date.now())
+    runMutation.mutate(id)
+  }
+
   const restart = () => {
     setStage("upload")
     setFileName("")
     setBundleText("")
     setPreview(null)
     setResult(null)
+    setImportId(null)
+    setImportStartedAt(null)
   }
 
   return (
@@ -145,8 +185,9 @@ function SureImportPage() {
                 preview={preview}
                 actingEmail={overview?.profile.email}
                 onBack={restart}
-                onConfirm={() => runMutation.mutate()}
+                onConfirm={startImport}
                 running={runMutation.isPending}
+                progress={progress}
               />
             )}
 
