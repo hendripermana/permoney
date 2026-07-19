@@ -105,7 +105,6 @@ function createPrismaClient(): PrismaClient {
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
   })
 
-  if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = client
   return client
 }
 
@@ -120,7 +119,23 @@ export const prisma: PrismaClient = /* @__PURE__ */ new Proxy(
   {} as PrismaClient,
   {
     get(_target, prop) {
-      const client = globalForPrisma.prisma ?? createPrismaClient()
+      // Cache the singleton in ALL environments — not just dev. This getter
+      // is the ONLY place the client is memoized: because the lazy-Proxy
+      // pattern constructs the client INSIDE the getter (never at module
+      // scope), skipping the cache in production means every property access
+      // (`prisma.$transaction`, `prisma.account`, …) builds a brand-new
+      // PrismaClient + pg Pool. Under load — e.g. a Sure import's chunked
+      // bulk writes touching prisma hundreds of times — that proliferates
+      // pools until Postgres runs out of connection slots:
+      //   "remaining connection slots are reserved for roles with the
+      //    SUPERUSER attribute" (permoney_app is NOSUPERUSER by design).
+      // One process = one client. The classic Next.js "cache only in dev"
+      // HMR guard is INVERTED here: it is correct only when the client is
+      // built at module scope (evaluated once); with lazy-in-getter
+      // construction, production is exactly where the cache matters most.
+      // In production `globalForPrisma` persists for the process lifetime
+      // (no HMR), which is precisely the singleton we want.
+      const client = (globalForPrisma.prisma ??= createPrismaClient())
       const value = Reflect.get(client, prop) as unknown
       // Bind method agar `this` tetap mereferensikan client asli (penting
       // untuk `prisma.$transaction`, `prisma.$connect`, dsb).
