@@ -33,11 +33,14 @@ test.describe("Sure guided migration", () => {
       buffer: Buffer.from(bundle.ndjson),
     })
 
-    // 3. Preview honestly splits crossing-now from held, with the gap note.
+    // 3. Preview honestly splits crossing-now from held. PER-188 removed the
+    // old "A few balances won't match yet" note here — it was false (transfers
+    // are dual-leg promoted in the same run and every balance reconciles via
+    // the final anchor + rebuild). The honest disclosure is now the bucket
+    // breakdown reconciling back to the file total, asserted below.
     await expect(page.getByText("Crossing into your ledger")).toBeVisible()
     await expect(page.getByText("Held for a later step")).toBeVisible()
     await expect(page.getByText("Transfers", { exact: true })).toBeVisible()
-    await expect(page.getByText(/A few balances won't match yet/)).toBeVisible()
     // Every bucket reconciles back to the file total — no unexplained gap.
     await expect(page.getByText(/transactions in this file/)).toBeVisible()
 
@@ -56,6 +59,12 @@ test.describe("Sure guided migration", () => {
 
     // 5. Done screen reports the authoritative result and a manual navigate.
     await expect(page.getByText("Migration complete")).toBeVisible()
+    // PER-188 — the Done screen now leads with the TRUTH (unconditional,
+    // guaranteed by the mandatory final anchor + rebuild) instead of the old
+    // "balances won't match" lie.
+    await expect(
+      page.getByText(/All account balances reconciled/)
+    ).toBeVisible()
     await page.getByRole("button", { name: /View transactions/ }).click()
 
     await expect(page).toHaveURL(/\/transactions(?:\?.*)?$/)
