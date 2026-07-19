@@ -1753,6 +1753,15 @@ async function pairAndPromoteSureTransfers({
           select: { inflowTransactionId: true },
         })
         if (!transfer) throw new Error("Transfer link row not found")
+        if (!transfer.inflowTransactionId) {
+          // Unreachable: this promotion path only ever creates classic
+          // dual-leg Transfer rows (PER-196 / ADR-0048's valuation-linked
+          // shape is written elsewhere, never by Sure-migration promotion).
+          // Narrows the type below without a cast.
+          throw new Error(
+            `Transfer link row for outflow leg ${outflowLeg.id} is missing its inflow leg`
+          )
+        }
 
         const entries: AuditLogEntry[] = []
         await markSureTransferRowPromoted(tx, outRow.id, outflowLeg.id, entries)

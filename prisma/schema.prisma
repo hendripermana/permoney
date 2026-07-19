@@ -422,13 +422,24 @@ model AuditLog {
 model Transfer {
   id String @id @default(cuid())
 
-  // Transaksi Uang Keluar (Sumber)
-  outflowTransactionId String      @unique
-  outflowTransaction   Transaction @relation("OutflowTransaction", fields: [outflowTransactionId], references: [id], onDelete: Restrict)
+  // Transaksi Uang Keluar (Sumber). ADR-0048 §4: nullable — a valuation-linked
+  // move (one leg cash, one leg a Valuation on a balanceSource="valuation"
+  // account) sets exactly one of outflowTransactionId/inflowTransactionId,
+  // never both null and never both set alongside valuationId. See
+  // transfer_leg_shape CHECK below.
+  outflowTransactionId String?      @unique
+  outflowTransaction   Transaction? @relation("OutflowTransaction", fields: [outflowTransactionId], references: [id], onDelete: Restrict)
 
-  // Transaksi Uang Masuk (Tujuan)
-  inflowTransactionId String      @unique
-  inflowTransaction   Transaction @relation("InflowTransaction", fields: [inflowTransactionId], references: [id], onDelete: Restrict)
+  // Transaksi Uang Masuk (Tujuan). ADR-0048 §4: nullable, see above.
+  inflowTransactionId String?      @unique
+  inflowTransaction   Transaction? @relation("InflowTransaction", fields: [inflowTransactionId], references: [id], onDelete: Restrict)
+
+  // ADR-0048 §4: the valuation-tracked side of a valuation-linked move — the
+  // NEW Valuation written on the balanceSource="valuation" account in the same
+  // $transaction as the one cash Transaction leg above. NULL for a classic
+  // dual-Transaction transfer.
+  valuationId String?    @unique
+  valuation   Valuation? @relation(fields: [valuationId], references: [id], onDelete: Restrict)
 
   // Cross-currency rate recorded on the canonical pairing record (ADR-0035 §5).
   // Implied source->dest rate, 1e12-scaled, DERIVED from the two native legs.
@@ -591,6 +602,11 @@ model Valuation {
 
   familyId String
   family   Family @relation(fields: [familyId], references: [id])
+
+  // ADR-0048 §4: back-relation for the optional Transfer.valuationId leg — a
+  // valuation-linked money move links its Valuation write here. NULL for the
+  // (still-common) standalone valuation with no linked transfer.
+  transfer Transfer?
 
   // Latest-valuation-per-account (tracked balance + rebuild) and
   // type lookups (opening anchor / reconciliation drift).

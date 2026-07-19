@@ -11,7 +11,11 @@ import {
   type Money,
 } from "@/lib/money"
 import { computeBaseProjectionForAmount, getFamilyBaseCurrency } from "./fx"
-import { auditLog, createAuditContext } from "./middleware/audit"
+import {
+  auditLog,
+  createAuditContext,
+  type AuditContext,
+} from "./middleware/audit"
 import {
   familyMiddleware,
   requireCapability,
@@ -98,7 +102,7 @@ const currencySchema = z
 // balance); createValuationForFamily rejects a negative value at the
 // application boundary for every other accountType (validated error, never a
 // raw DB CHECK failure) before any write.
-const valueMagnitudeSchema = z
+export const valueMagnitudeSchema = z
   .string()
   .regex(/^-?\d+$/, "value must be a string of digits, optionally signed")
 
@@ -113,7 +117,7 @@ export const createValuationInputSchema = z.object({
   idempotencyKey: uuidV7Schema,
 })
 
-type CreateValuationInput = z.infer<typeof createValuationInputSchema>
+export type CreateValuationInput = z.infer<typeof createValuationInputSchema>
 
 export const accountBalanceQuerySchema = z.object({
   accountId: z.string().min(1),
@@ -205,7 +209,7 @@ export interface BalanceDriftReport {
   toAnchorSource?: string
 }
 
-interface ServerActor {
+export interface ServerActor {
   id: string
 }
 
@@ -292,7 +296,7 @@ async function sumTransactionFlowInRange(
 // flow (cash) accounts call it with `anchorTypesOnly: true, asOf` — latest
 // balance-assertion anchor (ADR-0043 §1 ANCHOR_VALUATION_TYPES) at or before
 // a given date.
-async function latestValuation(
+export async function latestValuation(
   tx: TenantTransactionClient,
   familyId: string,
   accountId: string,
@@ -406,6 +410,126 @@ async function fetchAccountFacts(
 // CREATE VALUATION
 // =============================================================================
 
+// Tx-scoped primitive shared by `createValuationForFamily` (the standalone
+// endpoint) and PER-196 / ADR-0048's valuation-linked transfer path
+// (`src/server/transactions.ts`): validates, signs, writes one Valuation row,
+// and re-materializes the account's balance if the new valuation changes it.
+// Idempotency (replay + persist) stays the caller's responsibility — each
+// entry point has its own endpoint/operation-scoped idempotency key, and the
+// valuation-linked transfer shares ONE key with its paired Transaction write
+// rather than owning a second one.
+export async function createValuationWithinTx(
+  tx: TenantTransactionClient,
+  familyId: string,
+  data: CreateValuationInput,
+  user: ServerActor,
+  auditCtx: AuditContext
+): Promise<{ serialized: SerializedValuation; valuation: Valuation }> {
+  if (!PUBLIC_VALUATION_TYPE_SET.has(data.type)) {
+    throw new ValuationError(
+      `Valuation type "${data.type}" is not allowed; use one of ${PUBLIC_VALUATION_TYPES.join(", ")}`
+    )
+  }
+  const valuationType = data.type as PublicValuationType
+  const rawValue = BigInt(data.value)
+
+  // Tenant ownership first: a cross-tenant accountId short-circuits with a
+  // typed TenantReferenceError before any write.
+  await validateTenantReferences(tx, familyId, {
+    accountId: data.accountId,
+  })
+
+  const account = await fetchAccountFacts(tx, familyId, data.accountId)
+  if (!account) {
+    throw new ValuationError(`Account ${data.accountId} not found`)
+  }
+
+  const currency = data.currency ?? account.currency
+  if (currency !== account.currency) {
+    throw new ValuationError(
+      `Valuation currency ${currency} must match account currency ${account.currency} (cross-currency is PER-147)`
+    )
+  }
+
+  // ADR-0045: a negative input is only meaningful for a carve-out ASSET
+  // account (DEPOSITORY/E_WALLET, real overdraft). Every other accountType
+  // rejects it here — a validated 422, never a raw DB CHECK failure.
+  const accountAllowsNegative = allowsNegativeAssetBalance(account.accountType)
+  if (rawValue < 0n && !accountAllowsNegative) {
+    throw new ValuationError(
+      `Valuation value cannot be negative for account type ${account.accountType}`
+    )
+  }
+  const signedValue =
+    rawValue < 0n
+      ? toMoney(rawValue)
+      : signMagnitudeForAccount(account.accountClass, rawValue)
+
+  // Base-currency projection (PER-147 / ADR-0035 §4/§7), keyed off the
+  // valuation date so historical net worth stays stable.
+  const valuationDate = data.valuationDate ?? new Date()
+  const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
+  const projection = await computeBaseProjectionForAmount(tx, familyId, {
+    amount: signedValue,
+    currency,
+    date: valuationDate,
+    baseCurrency,
+  })
+
+  const valuation = await tx.valuation.create({
+    data: {
+      accountId: account.id,
+      familyId,
+      value: signedValue,
+      currency,
+      valuationDate,
+      type: valuationType,
+      source: data.source ?? "manual",
+      note: data.note ?? null,
+      normalBalance: normalBalanceForClass(account.accountClass),
+      allowsNegativeAsset: accountAllowsNegative,
+      createdById: user.id,
+      baseValue: projection.baseAmount,
+      baseCurrency: projection.baseCurrency,
+      fxRateScaled: projection.fxRateScaled,
+      fxRateSnapshotId: projection.fxRateSnapshotId,
+    },
+  })
+  const serialized = serializeValuation(valuation)
+
+  await auditLog(tx, auditCtx, {
+    action: "create",
+    entityType: "Valuation",
+    entityId: valuation.id,
+    after: serialized,
+  })
+
+  // Re-materialize the balance from canonical rows (ADR-0043). Tracked
+  // accounts always follow their latest valuation (ADR-0034 §5). Cash
+  // accounts move only when this valuation is an anchor type that is
+  // currently the effective anchor (latest <= now) — a backdated anchor
+  // superseded by a later one, or a "market" observation, leaves the
+  // materialized balance untouched, same as before.
+  const canonical = await computeCanonicalBalance(tx, familyId, account)
+  if (canonical !== toMoney(account.balance)) {
+    await setAccountBalanceTo(tx, {
+      accountId: account.id,
+      familyId,
+      target: canonical,
+      currentVersion: account.version,
+    })
+    await auditLog(tx, auditCtx, {
+      action: "update",
+      entityType: "Account",
+      entityId: account.id,
+      before: { balance: account.balance.toString() },
+      after: { balance: canonical.toString() },
+    })
+  }
+
+  return { serialized, valuation }
+}
+
 export async function createValuationForFamily({
   data: rawData,
   familyId,
@@ -419,23 +543,12 @@ export async function createValuationForFamily({
 }): Promise<SerializedValuation> {
   const data: CreateValuationInput = createValuationInputSchema.parse(rawData)
 
-  if (!PUBLIC_VALUATION_TYPE_SET.has(data.type)) {
-    throw new ValuationError(
-      `Valuation type "${data.type}" is not allowed; use one of ${PUBLIC_VALUATION_TYPES.join(", ")}`
-    )
-  }
-  const valuationType = data.type as PublicValuationType
-  // Normally a non-negative magnitude, auto-signed below by the account's
-  // normal balance. ADR-0045: a caller may pass an explicit negative value
-  // (e.g. reconciling an overdrawn e-wallet) — validated per-account below,
-  // once accountType is known, before any write.
-  const rawValue = BigInt(data.value)
   const requestHash = await hashCanonicalPayload({
     accountId: data.accountId,
     currency: data.currency ?? null,
     note: data.note ?? null,
     source: data.source ?? null,
-    type: valuationType,
+    type: data.type,
     value: data.value,
     valuationDate: data.valuationDate?.toISOString() ?? null,
   })
@@ -455,101 +568,13 @@ export async function createValuationForFamily({
         })
       if (replay) return replay
 
-      // Tenant ownership first: a cross-tenant accountId short-circuits with a
-      // typed TenantReferenceError before any write.
-      await validateTenantReferences(tx, familyId, {
-        accountId: data.accountId,
-      })
-
-      const account = await fetchAccountFacts(tx, familyId, data.accountId)
-      if (!account) {
-        throw new ValuationError(`Account ${data.accountId} not found`)
-      }
-
-      const currency = data.currency ?? account.currency
-      if (currency !== account.currency) {
-        throw new ValuationError(
-          `Valuation currency ${currency} must match account currency ${account.currency} (cross-currency is PER-147)`
-        )
-      }
-
-      // ADR-0045: a negative input is only meaningful for a carve-out ASSET
-      // account (DEPOSITORY/E_WALLET, real overdraft). Every other accountType
-      // rejects it here — a validated 422, never a raw DB CHECK failure.
-      const accountAllowsNegative = allowsNegativeAssetBalance(
-        account.accountType
+      const { serialized } = await createValuationWithinTx(
+        tx,
+        familyId,
+        data,
+        user,
+        auditCtx
       )
-      if (rawValue < 0n && !accountAllowsNegative) {
-        throw new ValuationError(
-          `Valuation value cannot be negative for account type ${account.accountType}`
-        )
-      }
-      const signedValue =
-        rawValue < 0n
-          ? toMoney(rawValue)
-          : signMagnitudeForAccount(account.accountClass, rawValue)
-
-      // Base-currency projection (PER-147 / ADR-0035 §4/§7), keyed off the
-      // valuation date so historical net worth stays stable.
-      const valuationDate = data.valuationDate ?? new Date()
-      const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
-      const projection = await computeBaseProjectionForAmount(tx, familyId, {
-        amount: signedValue,
-        currency,
-        date: valuationDate,
-        baseCurrency,
-      })
-
-      const valuation = await tx.valuation.create({
-        data: {
-          accountId: account.id,
-          familyId,
-          value: signedValue,
-          currency,
-          valuationDate,
-          type: valuationType,
-          source: data.source ?? "manual",
-          note: data.note ?? null,
-          normalBalance: normalBalanceForClass(account.accountClass),
-          allowsNegativeAsset: accountAllowsNegative,
-          createdById: user.id,
-          baseValue: projection.baseAmount,
-          baseCurrency: projection.baseCurrency,
-          fxRateScaled: projection.fxRateScaled,
-          fxRateSnapshotId: projection.fxRateSnapshotId,
-        },
-      })
-      const serialized = serializeValuation(valuation)
-
-      await auditLog(tx, auditCtx, {
-        action: "create",
-        entityType: "Valuation",
-        entityId: valuation.id,
-        after: serialized,
-      })
-
-      // Re-materialize the balance from canonical rows (ADR-0043). Tracked
-      // accounts always follow their latest valuation (ADR-0034 §5). Cash
-      // accounts move only when this valuation is an anchor type that is
-      // currently the effective anchor (latest <= now) — a backdated anchor
-      // superseded by a later one, or a "market" observation, leaves the
-      // materialized balance untouched, same as before.
-      const canonical = await computeCanonicalBalance(tx, familyId, account)
-      if (canonical !== toMoney(account.balance)) {
-        await setAccountBalanceTo(tx, {
-          accountId: account.id,
-          familyId,
-          target: canonical,
-          currentVersion: account.version,
-        })
-        await auditLog(tx, auditCtx, {
-          action: "update",
-          entityType: "Account",
-          entityId: account.id,
-          before: { balance: account.balance.toString() },
-          after: { balance: canonical.toString() },
-        })
-      }
 
       await persistIdempotentEndpointResponse(tx, {
         endpoint: CREATE_VALUATION_ENDPOINT,

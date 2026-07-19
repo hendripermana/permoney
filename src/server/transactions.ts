@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start"
-import type { Prisma } from "@prisma/client"
+import type { Account, Prisma } from "@prisma/client"
 import { z } from "zod"
 import {
   deriveTransferKindForAccounts,
@@ -7,7 +7,15 @@ import {
   parseAccountType,
   TRANSACTION_KIND_VALUES,
 } from "@/lib/liability-semantics"
-import { absMoney, encodeMoney, negateMoney, type Money } from "@/lib/money"
+import {
+  absMoney,
+  addMoney,
+  encodeMoney,
+  negateMoney,
+  subMoney,
+  toMoney,
+  type Money,
+} from "@/lib/money"
 import { deriveTransferFx } from "@/lib/fx"
 import { assertSplitParity } from "@/lib/split-parity"
 import { computeBaseProjectionForAmount, getFamilyBaseCurrency } from "./fx"
@@ -39,6 +47,13 @@ import {
   uuidV7Schema,
   type RunInTenantTransaction,
 } from "./mutation-kit"
+import {
+  createValuationWithinTx,
+  latestValuation,
+  valueMagnitudeSchema,
+  ValuationError,
+  type CreateValuationInput,
+} from "./valuations"
 
 export { IdempotencyConflictError } from "./idempotency"
 
@@ -312,15 +327,31 @@ async function findTransferGraph(tx: TenantTransactionClient, id: string) {
   const transfer = await tx.transfer.findUnique({ where: { id } })
   if (!transfer) return null
 
+  // PER-196 / ADR-0048 §4: editing/deleting a valuation-linked transfer (one
+  // Transaction leg + one Valuation leg) is not yet supported — the
+  // reversal-and-replace machinery below assumes two Transaction legs. Fail
+  // loud here, the single choke point every update/delete path reads a
+  // transfer graph through, rather than let a null leg crash deeper in.
+  if (transfer.valuationId !== null) {
+    throw new ValuationLinkedTransferUnsupportedError()
+  }
+  if (!transfer.outflowTransactionId || !transfer.inflowTransactionId) {
+    // Unreachable given transfer_leg_shape (DB CHECK) once valuationId is
+    // null — narrows the type for the lookups below without a cast.
+    throw new Error(`Transfer ${id} has a malformed leg shape`)
+  }
+  const outflowTransactionId = transfer.outflowTransactionId
+  const inflowTransactionId = transfer.inflowTransactionId
+
   const [outflowTransaction, inflowTransaction] =
     await runTenantTransactionQueriesInOrder([
       () =>
         tx.transaction.findUniqueOrThrow({
-          where: { id: transfer.outflowTransactionId },
+          where: { id: outflowTransactionId },
         }),
       () =>
         tx.transaction.findUniqueOrThrow({
-          where: { id: transfer.inflowTransactionId },
+          where: { id: inflowTransactionId },
         }),
     ] as const)
 
@@ -568,6 +599,22 @@ export class ValuationAccountLedgerError extends Error {
   }
 }
 
+// PER-196 / ADR-0048 §4: a valuation-linked transfer (one Transaction leg +
+// one Valuation leg) does not yet support the update/delete
+// reversal-and-replace path — that machinery assumes two Transaction legs.
+// Raised by `findTransferGraph`, the single choke point every mutation of an
+// EXISTING transfer reads its graph through, so this never reaches deeper
+// null-unsafe code. Creating a new valuation-linked transfer is unaffected.
+export class ValuationLinkedTransferUnsupportedError extends Error {
+  override readonly name = "ValuationLinkedTransferUnsupportedError"
+  readonly statusCode = 422
+  constructor(
+    message = "Editing or deleting a valuation-linked transfer is not yet supported. Delete it and record a new transfer instead."
+  ) {
+    super(message)
+  }
+}
+
 // Reads the ADR-0044 §8 bulk-replay bypass GUC (`app.bulk_ledger_replay`,
 // SET LOCAL by `withBulkLedgerReplayBypass`, `src/server/bulk-ledger-replay.ts`
 // — the single anchor that sets it). This is a READ only; it must never call
@@ -717,6 +764,12 @@ const transactionInputSchema = z.object({
   fxFeeAmount: positiveMoneyInputSchema.nullable().optional(),
   fxFeeAccountId: z.string().nullable().optional(),
   fxFeeCategoryId: z.string().nullable().optional(),
+  // PER-196 / ADR-0048 §1: valuation-linked transfer. When either transfer
+  // side is a balanceSource="valuation" account, this is the new valuation
+  // value for that account (prefilled client-side as latest ∓ amount,
+  // editable). Ignored for non-transfer transactions and for a transfer
+  // between two transaction_flow accounts.
+  newValuationValue: valueMagnitudeSchema.optional(),
 })
 
 const createTransactionTransportInputSchema = transactionInputSchema.extend({
@@ -1139,7 +1192,16 @@ function canonicalSplitEntries(
   }))
 }
 
-function canonicalRequestPayload(data: CreateTransactionInput) {
+function canonicalRequestPayload(
+  data: CreateTransactionInput,
+  // PER-196 / ADR-0048 §4: a valuation-linked transfer has no real second
+  // Transaction leg, so there is nothing comparable to fabricate here.
+  // Defaults to true (existing classic-transfer behavior, and the update
+  // endpoint's own request-hash use at canonicalUpdateRequestPayload, which
+  // never reaches a persisted valuation-linked row anyway since that path
+  // fails loud via ValuationLinkedTransferUnsupportedError first).
+  { hasTransferPartner = true }: { hasTransferPartner?: boolean } = {}
+) {
   return {
     accountId: data.accountId,
     amount: encodeMoney(absMoney(data.amount)),
@@ -1160,7 +1222,7 @@ function canonicalRequestPayload(data: CreateTransactionInput) {
     status: data.status,
     toAccountId: data.toAccountId ?? null,
     transferPartner:
-      data.type === "transfer"
+      data.type === "transfer" && hasTransferPartner
         ? {
             accountId: data.toAccountId ?? null,
             amount: encodeMoney(
@@ -1307,8 +1369,21 @@ function assertIdempotentPayloadMatches(
   data: CreateTransactionInput,
   existing: PersistedTransactionForIdempotency
 ): void {
+  // PER-196 / ADR-0048 §4: `existing` is the Transaction row carrying the
+  // idempotency key — always the cash leg for a valuation-linked transfer,
+  // in whichever FK slot it landed in. It has a real transfer partner only
+  // when it's the outflow leg of a classic dual-leg transfer (transferOut
+  // resolves and its inflowTransaction is non-null); a valuation-linked
+  // contribution's transferOut.inflowTransaction is null, and a
+  // valuation-linked redemption's cash leg has no transferOut at all (it
+  // sits in inflowTransactionId instead).
+  const hasTransferPartner =
+    existing.type === "transfer" &&
+    existing.transferOut !== null &&
+    existing.transferOut.inflowTransaction !== null
+
   if (
-    JSON.stringify(canonicalRequestPayload(data)) !==
+    JSON.stringify(canonicalRequestPayload(data, { hasTransferPartner })) !==
     JSON.stringify(canonicalPersistedPayload(existing))
   ) {
     throw new IdempotencyConflictError()
@@ -1350,9 +1425,14 @@ async function findIdempotentTransaction(
   const transferOutWithInflowTransaction = transferOut
     ? {
         ...transferOut,
-        inflowTransaction: await tx.transaction.findUniqueOrThrow({
-          where: { id: transferOut.inflowTransactionId },
-        }),
+        // PER-196 / ADR-0048 §4: null for a valuation-linked transfer where
+        // THIS transaction is the outflow (contribution) leg — there is no
+        // inflow Transaction, only a linked Valuation.
+        inflowTransaction: transferOut.inflowTransactionId
+          ? await tx.transaction.findUniqueOrThrow({
+              where: { id: transferOut.inflowTransactionId },
+            })
+          : null,
       }
     : null
 
@@ -1500,6 +1580,149 @@ async function normalizeBulkDeleteTransactionsTransportInput(
   })
 }
 
+// PER-196 / ADR-0048 §1/§4: a transfer touching a balanceSource="valuation"
+// account is a valuation-linked move — one Transaction leg on the cash side
+// + one new Valuation on the tracked-asset side, linked by one Transfer row
+// (valuationId set, exactly one of outflowTransactionId/inflowTransactionId
+// set) — never a raw dual-leg transfer. Called from createTransactionForFamily's
+// transfer branch once it detects either side is valuation-tracked.
+async function createValuationLinkedTransferWithinTx(
+  tx: TenantTransactionClient,
+  {
+    cashAccount,
+    trackedAccount,
+    direction,
+    kind,
+    data,
+    familyId,
+    user,
+    auditCtx,
+    baseCurrency,
+  }: {
+    cashAccount: Account
+    trackedAccount: Account
+    direction: "contribution" | "redemption"
+    kind: string
+    data: CreateTransactionInput
+    familyId: string
+    user: { id: string }
+    auditCtx: AuditContext
+    baseCurrency: string
+  }
+) {
+  // v1 scope (ADR-0048 §1): the prefill formula (latest ∓ cashAmount) and the
+  // cash leg's own amount are both denominated in one currency. Cross-
+  // currency valuation-linked transfers need their own FX design and are not
+  // supported yet — fail loud rather than silently mixing currencies.
+  if (cashAccount.currency !== trackedAccount.currency) {
+    throw new ValuationError(
+      `Valuation-linked transfer requires matching currencies (cash account ${cashAccount.currency}, tracked account ${trackedAccount.currency}); cross-currency is not yet supported`
+    )
+  }
+
+  const isContribution = direction === "contribution"
+  const cashAmount = absMoney(data.amount)
+  const cashDelta = isContribution ? negateMoney(cashAmount) : cashAmount
+
+  const cashMutation = await applyAccountBalanceDelta(tx, {
+    accountId: cashAccount.id,
+    delta: cashDelta,
+    familyId,
+    notFoundMessage: "Cash account not found or access denied!",
+  })
+  const cashBalanceAfter = cashMutation.after.balance
+
+  const projection = await computeBaseProjectionForAmount(tx, familyId, {
+    amount: cashDelta,
+    currency: cashAccount.currency,
+    date: data.date,
+    baseCurrency,
+  })
+
+  const cashTx = await tx.transaction.create({
+    data: {
+      ...(data.id ? { id: data.id } : {}),
+      type: "transfer",
+      kind,
+      currency: cashAccount.currency,
+      amount: cashDelta,
+      description: data.description,
+      date: data.date,
+      notes: data.notes || null,
+      accountId: cashAccount.id,
+      toAccountId: trackedAccount.id,
+      categoryId: data.categoryId || null,
+      merchantId: data.merchantId || null,
+      userId: user.id,
+      familyId,
+      status: data.status,
+      baseAmount: projection.baseAmount,
+      baseCurrency: projection.baseCurrency,
+      fxRateScaled: projection.fxRateScaled,
+      fxRateSnapshotId: projection.fxRateSnapshotId,
+      accountBalanceAfter: cashBalanceAfter,
+      attachmentUrl: data.attachmentUrl,
+      idempotencyKey: data.idempotencyKey,
+    },
+  })
+
+  // New valuation value (ADR-0048 §1): prefilled latest ∓ cashAmount,
+  // editable via data.newValuationValue. A redemption that would drive the
+  // tracked value negative is rejected by createValuationWithinTx's existing
+  // ADR-0045 sign check — you cannot redeem more than the tracked asset is
+  // currently worth.
+  const latest = await latestValuation(tx, familyId, trackedAccount.id)
+  const latestValue = latest?.value ?? toMoney(trackedAccount.balance)
+  const prefill = isContribution
+    ? addMoney(latestValue, cashAmount)
+    : subMoney(latestValue, cashAmount)
+  const newValuationMagnitude = data.newValuationValue
+    ? BigInt(data.newValuationValue)
+    : prefill
+
+  const valuationInput: CreateValuationInput = {
+    accountId: trackedAccount.id,
+    value: newValuationMagnitude.toString(),
+    currency: trackedAccount.currency,
+    valuationDate: data.date,
+    type: "manual",
+    source: "transfer",
+    note: null,
+    idempotencyKey: data.idempotencyKey,
+  }
+  const { valuation } = await createValuationWithinTx(
+    tx,
+    familyId,
+    valuationInput,
+    user,
+    auditCtx
+  )
+
+  const createdTransfer = await tx.transfer.create({
+    data: {
+      ...(isContribution
+        ? { outflowTransactionId: cashTx.id }
+        : { inflowTransactionId: cashTx.id }),
+      valuationId: valuation.id,
+    },
+  })
+
+  const newCashAccount = await tx.account.findUniqueOrThrow({
+    where: { id: cashAccount.id },
+  })
+
+  await auditLogs(tx, auditCtx, [
+    ...accountBalanceAuditEntries([cashAccount], [newCashAccount]),
+    ...createdAuditEntries("Transaction", [cashTx]),
+    ...createdAuditEntries("Transfer", [createdTransfer]),
+  ])
+
+  return serializeTransaction({
+    ...cashTx,
+    amount: absMoney(cashTx.amount),
+  })
+}
+
 export async function createTransactionForFamily({
   data: rawData,
   familyId,
@@ -1564,6 +1787,31 @@ export async function createTransactionForFamily({
             fromAccountType: parseAccountType(oldSrcAcc.accountType),
             toAccountType: parseAccountType(oldDstAcc.accountType),
           })
+
+          // PER-196 / ADR-0048 §1/§2: route to the valuation-linked path
+          // whenever either side is balanceSource="valuation" — the classic
+          // dual-leg path below would otherwise hit applyAccountBalanceDelta's
+          // ADR-0048 §3 guard and fail on the destination leg.
+          const srcIsValuation = oldSrcAcc.balanceSource === "valuation"
+          const dstIsValuation = oldDstAcc.balanceSource === "valuation"
+          if (srcIsValuation && dstIsValuation) {
+            throw new ValuationError(
+              "Transfers between two valuation-tracked accounts are not supported (ADR-0048 §2)"
+            )
+          }
+          if (srcIsValuation || dstIsValuation) {
+            return await createValuationLinkedTransferWithinTx(tx, {
+              cashAccount: srcIsValuation ? oldDstAcc : oldSrcAcc,
+              trackedAccount: srcIsValuation ? oldSrcAcc : oldDstAcc,
+              direction: srcIsValuation ? "redemption" : "contribution",
+              kind,
+              data,
+              familyId,
+              user,
+              auditCtx,
+              baseCurrency,
+            })
+          }
 
           const sourceMutation = await applyAccountBalanceDelta(tx, {
             accountId: data.accountId,
@@ -1905,13 +2153,32 @@ export async function softDeleteTransactionWithinTenantTransaction(
     throw new TransactionGoneError()
   }
 
+  // PER-196 / ADR-0048 §4: a valuation-linked transfer's ONE Transaction leg
+  // can sit in either FK slot (outflow for a contribution, inflow for a
+  // redemption) with no Transaction at all on the other side. Detect that
+  // shape before the classic-transfer redirect/reversal logic below, which
+  // assumes two Transaction legs, ever runs.
+  if (
+    oldTx.type === "transfer" &&
+    ((oldTx.transferIn && oldTx.transferIn.outflowTransactionId === null) ||
+      (oldTx.transferOut && oldTx.transferOut.inflowTransactionId === null))
+  ) {
+    throw new ValuationLinkedTransferUnsupportedError()
+  }
+
   // PER-20 / ADR-0012: a transfer is one money movement. If the user clicked
   // the inflow leg, redirect to the outflow leg so the symmetric handler logic
   // below treats outflow as the source of truth.
   if (oldTx.type === "transfer" && oldTx.transferIn && !oldTx.transferOut) {
+    // Guaranteed non-null by the valuation-linked check above (would have
+    // thrown otherwise) — narrows the type for the lookup below.
+    const outflowTransactionId = oldTx.transferIn.outflowTransactionId
+    if (!outflowTransactionId) {
+      throw new ValuationLinkedTransferUnsupportedError()
+    }
     const outflowAuditGraph = await findTransactionAuditGraph(
       tx,
-      oldTx.transferIn.outflowTransactionId
+      outflowTransactionId
     )
     if (!outflowAuditGraph) {
       throw new Error("Transfer outflow leg missing for inflow soft-delete")
@@ -1931,10 +2198,10 @@ export async function softDeleteTransactionWithinTenantTransaction(
   }
 
   const inflowTx =
-    oldTx.type === "transfer" && oldTx.transferOut
+    oldTx.type === "transfer" && oldTransferGraph
       ? await findOptionalTransactionWithSplitEntries(
           tx,
-          oldTx.transferOut.inflowTransactionId
+          oldTransferGraph.inflowTransaction.id
         )
       : null
 
@@ -2247,10 +2514,27 @@ async function replaceTransactionWithinTenantTransaction(
   if (!oldTx) throw new Error("Original transaction not found")
   if (oldTx.deletedAt !== null) throw new TransactionGoneError()
 
+  // PER-196 / ADR-0048 §4: editing a valuation-linked transfer's one
+  // Transaction leg is not yet supported — the reversal/replace logic below
+  // assumes two Transaction legs. Fail loud before any redirect/reversal
+  // step runs.
+  if (
+    oldTx.type === "transfer" &&
+    ((oldTx.transferIn && oldTx.transferIn.outflowTransactionId === null) ||
+      (oldTx.transferOut && oldTx.transferOut.inflowTransactionId === null))
+  ) {
+    throw new ValuationLinkedTransferUnsupportedError()
+  }
+
   if (oldTx.type === "transfer" && oldTx.transferIn && !oldTx.transferOut) {
+    // Guaranteed non-null by the valuation-linked check above.
+    const outflowTransactionId = oldTx.transferIn.outflowTransactionId
+    if (!outflowTransactionId) {
+      throw new ValuationLinkedTransferUnsupportedError()
+    }
     const outflowAuditGraph = await findTransactionAuditGraph(
       tx,
-      oldTx.transferIn.outflowTransactionId
+      outflowTransactionId
     )
     if (!outflowAuditGraph) {
       throw new Error("Transfer outflow leg missing for update")
@@ -2261,13 +2545,6 @@ async function replaceTransactionWithinTenantTransaction(
     oldTx = outflowAuditGraph
   }
 
-  const oldInflowTx =
-    oldTx.type === "transfer" && oldTx.transferOut
-      ? await findTransactionWithSplitEntries(
-          tx,
-          oldTx.transferOut.inflowTransactionId
-        )
-      : null
   const oldTransferGraph =
     oldTx.type === "transfer" && oldTx.transferOut
       ? await findTransferGraph(tx, oldTx.transferOut.id)
@@ -2275,6 +2552,13 @@ async function replaceTransactionWithinTenantTransaction(
   if (oldTransferGraph?.deletedAt !== null && oldTransferGraph) {
     throw new TransactionGoneError()
   }
+  const oldInflowTx =
+    oldTx.type === "transfer" && oldTransferGraph
+      ? await findTransactionWithSplitEntries(
+          tx,
+          oldTransferGraph.inflowTransaction.id
+        )
+      : null
 
   // Kumpulkan semua akun yang terpengaruh (sebelum dan sesudah).
   const touchedAccountIds = new Set([oldTx.accountId, data.accountId])
