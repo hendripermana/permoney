@@ -275,33 +275,34 @@ describe("idempotent update/delete ledger mutations (PER-93)", () => {
     )
     expect(newTransfer.id).not.toBe(oldTransfer.id)
 
+    // Classic dual-leg transfer fixture: both legs are always present.
+    const oldOutflowId = oldTransfer.outflowTransactionId
+    const oldInflowId = oldTransfer.inflowTransactionId
+    const newOutflowId = newTransfer.outflowTransactionId
+    const newInflowId = newTransfer.inflowTransactionId
+    if (!oldOutflowId || !oldInflowId || !newOutflowId || !newInflowId) {
+      throw new Error("Expected a classic dual-leg transfer fixture")
+    }
+
     const rows = await readSupersessionRows(fixture.owner.family.id, [
-      oldTransfer.outflowTransactionId,
-      oldTransfer.inflowTransactionId,
-      newTransfer.outflowTransactionId,
-      newTransfer.inflowTransactionId,
+      oldOutflowId,
+      oldInflowId,
+      newOutflowId,
+      newInflowId,
     ])
-    expect(
-      rows.get(oldTransfer.outflowTransactionId)?.deletedAt
-    ).toBeInstanceOf(Date)
-    expect(rows.get(oldTransfer.inflowTransactionId)?.deletedAt).toBeInstanceOf(
-      Date
-    )
-    expect(rows.get(oldTransfer.outflowTransactionId)?.supersededBy).toBe(
-      newTransfer.outflowTransactionId
-    )
-    expect(rows.get(oldTransfer.inflowTransactionId)?.supersededBy).toBe(
-      newTransfer.inflowTransactionId
-    )
-    expect(rows.get(newTransfer.outflowTransactionId)).toMatchObject({
+    expect(rows.get(oldOutflowId)?.deletedAt).toBeInstanceOf(Date)
+    expect(rows.get(oldInflowId)?.deletedAt).toBeInstanceOf(Date)
+    expect(rows.get(oldOutflowId)?.supersededBy).toBe(newOutflowId)
+    expect(rows.get(oldInflowId)?.supersededBy).toBe(newInflowId)
+    expect(rows.get(newOutflowId)).toMatchObject({
       amount: -150_000n,
       deletedAt: null,
-      supersedes: oldTransfer.outflowTransactionId,
+      supersedes: oldOutflowId,
     })
-    expect(rows.get(newTransfer.inflowTransactionId)).toMatchObject({
+    expect(rows.get(newInflowId)).toMatchObject({
       amount: 150_000n,
       deletedAt: null,
-      supersedes: oldTransfer.inflowTransactionId,
+      supersedes: oldInflowId,
     })
 
     const oldTransferAfter = await readTransferById(

@@ -110,10 +110,12 @@ describe("currency + FX snapshots + cross-currency transfers (PER-147 / ADR-0035
       user: owner.user,
     })
 
-  const readTx = (owner: AuthenticatedOnboardedUser, id: string) =>
-    harness.withFamily(owner.family.id, async (tx) =>
+  const readTx = (owner: AuthenticatedOnboardedUser, id: string | null) => {
+    if (!id) throw new Error("readTx: expected a non-null transaction id")
+    return harness.withFamily(owner.family.id, async (tx) =>
       tx.transaction.findUniqueOrThrow({ where: { id } })
     )
+  }
 
   const readTransferByOutflow = (
     owner: AuthenticatedOnboardedUser,
