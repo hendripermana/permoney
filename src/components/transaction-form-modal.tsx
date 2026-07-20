@@ -102,6 +102,11 @@ const transactionSchema = z.object({
   // expense row server-side. Optional category for that expense.
   fxFeeAmount: z.number().nonnegative().optional(),
   fxFeeCategoryId: z.string().optional(),
+  // PER-196 / ADR-0048 §1: valuation-linked transfer. Only meaningful when
+  // either transfer side is a balanceSource="valuation" account — prefilled
+  // client-side as latest ∓ amount (see NewValuationValueField), editable.
+  // Left undefined, the server computes the same prefill from fresher data.
+  newValuationValue: z.number().optional(),
   // Enterprise: Proof of Purchase (URL struk dari S3/R2)
   attachmentUrl: z.string().optional(),
 })
@@ -752,6 +757,105 @@ function FxFeeField({
                 </form.Field>
               </div>
             )}
+          </form.Field>
+        )
+      }}
+    </form.Subscribe>
+  )
+}
+
+// PER-196 / ADR-0048 §1 — the valuation-linked transfer field. Shown only
+// when exactly one transfer side is a balanceSource="valuation" account
+// (a TRACKED_ASSET like a mutual fund or gold holding — see
+// docs/account-taxonomy.md). Two valuation-tracked sides is an explicit v1
+// scope boundary (ADR-0048 §2), rejected server-side with a typed error, so
+// this field intentionally does not render for that shape either.
+//
+// Prefill is a pure derived value (no-use-effect Rule 1): `trackedBalance ∓
+// amount`, recomputed on every render from the live form state via
+// form.Subscribe. The field itself only holds the user's manual override
+// (undefined until they type); `field.state.value ?? prefill` is what's
+// shown, so the box always displays a real, editable number without ever
+// needing an effect to "sync" the prefill into field state.
+function NewValuationValueField({
+  activeTab,
+  form,
+  formData,
+}: Pick<TransactionFormSectionProps, "activeTab" | "form" | "formData">) {
+  if (activeTab !== "transfer") return null
+
+  return (
+    <form.Subscribe
+      selector={(state) => ({
+        accountId: state.values.accountId,
+        toAccountId: state.values.toAccountId,
+        amount: state.values.amount,
+      })}
+    >
+      {({ accountId, toAccountId, amount }) => {
+        const srcAccount = formData?.accounts.find((a) => a.id === accountId)
+        const dstAccount = formData?.accounts.find((a) => a.id === toAccountId)
+        const srcIsValuation = srcAccount?.balanceSource === "valuation"
+        const dstIsValuation = dstAccount?.balanceSource === "valuation"
+
+        if (
+          !srcAccount ||
+          !dstAccount ||
+          srcIsValuation === dstIsValuation // neither, or both — out of scope
+        ) {
+          return null
+        }
+
+        const trackedAccount = srcIsValuation ? srcAccount : dstAccount
+        const trackedCurrency = trackedAccount.currency as CurrencyCode
+        const trackedDisplayBalance = toDisplayNumber(
+          trackedAccount.balance,
+          trackedCurrency
+        )
+        // Redemption (tracked -> cash): the withdrawal reduces the tracked
+        // value. Contribution (cash -> tracked): it increases it.
+        const prefill = srcIsValuation
+          ? trackedDisplayBalance - amount
+          : trackedDisplayBalance + amount
+
+        return (
+          <form.Field name="newValuationValue">
+            {(field) => {
+              const displayValue = field.state.value ?? prefill
+              return (
+                <div className="space-y-2 rounded-lg border border-emerald-200 bg-emerald-50/40 p-3 dark:border-emerald-800 dark:bg-emerald-950/20">
+                  <Label
+                    htmlFor="new-valuation-value"
+                    className="text-sm font-semibold text-emerald-700 dark:text-emerald-400"
+                  >
+                    New value of {trackedAccount.name}
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    {srcIsValuation
+                      ? "Prefilled as the current value minus this withdrawal. Edit if the fund's real remaining value differs — this captures any market gain or loss since the last valuation."
+                      : "Prefilled as the current value plus this contribution. Edit if the fund's real value differs — this captures any market gain or loss since the last valuation."}
+                  </p>
+                  <div className="relative">
+                    <span className="absolute top-2.5 left-3 text-sm font-medium text-muted-foreground">
+                      {getCurrencySymbol(trackedCurrency)}
+                    </span>
+                    <Input
+                      id="new-valuation-value"
+                      name="new-valuation-value"
+                      type="number"
+                      className="pl-8 text-lg font-bold"
+                      value={displayValue}
+                      onBlur={field.handleBlur}
+                      onChange={(e) =>
+                        field.handleChange(
+                          e.target.value ? Number(e.target.value) : undefined
+                        )
+                      }
+                    />
+                  </div>
+                </div>
+              )
+            }}
           </form.Field>
         )
       }}
@@ -1522,6 +1626,25 @@ function useTransactionFormModalController({
           value.fxFeeAmount > 0
             ? toMoney(value.fxFeeAmount, sourceCurrency)
             : null
+        // PER-196 / ADR-0048 §1: only sent when the user manually edited the
+        // prefill (NewValuationValueField leaves the field undefined until
+        // touched) — an absolute value in whichever side is
+        // balanceSource="valuation", never a delta. Harmlessly ignored
+        // server-side for a non-valuation-linked transfer.
+        const newValuationValueString: string | null =
+          value.type === "transfer" && value.newValuationValue != null
+            ? (() => {
+                const trackedCurrency =
+                  formData?.accounts.find((a) => a.id === value.accountId)
+                    ?.balanceSource === "valuation"
+                    ? sourceCurrency
+                    : (destCurrency ?? sourceCurrency)
+                return toMoney(
+                  value.newValuationValue as number,
+                  trackedCurrency
+                ).toString()
+              })()
+            : null
         const selectedAccount = formData?.accounts.find(
           (a) => a.id === value.accountId
         )
@@ -1595,6 +1718,7 @@ function useTransactionFormModalController({
           fxFeeAmount: fxFeeMoney,
           fxFeeAccountId: fxFeeMoney ? value.accountId : null,
           fxFeeCategoryId: fxFeeMoney ? value.fxFeeCategoryId || null : null,
+          newValuationValue: newValuationValueString,
           accountBalanceAfter: null, // Computed server-side
           attachmentUrl: value.attachmentUrl || null,
           deletedAt: null,
@@ -1824,6 +1948,11 @@ export function TransactionFormModal({
             isLoading={isLoading}
           />
           <DestinationAmountField
+            activeTab={activeTab}
+            form={form}
+            formData={formData}
+          />
+          <NewValuationValueField
             activeTab={activeTab}
             form={form}
             formData={formData}

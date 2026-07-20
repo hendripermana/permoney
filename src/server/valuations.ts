@@ -214,7 +214,7 @@ export interface ServerActor {
 }
 
 // Just enough of an Account to derive balance semantics.
-interface AccountBalanceFacts {
+export interface AccountBalanceFacts {
   id: string
   accountClass: string
   accountType: AccountType
@@ -392,7 +392,7 @@ async function setAccountBalanceTo(
   }
 }
 
-async function fetchAccountFacts(
+export async function fetchAccountFacts(
   tx: TenantTransactionClient,
   familyId: string,
   accountId: string
@@ -623,7 +623,7 @@ export const createValuationFn = createServerFn({ method: "POST" })
 // REBUILD (re-materialize the cached balance from canonical rows)
 // =============================================================================
 
-async function rebuildWithinTx(
+export async function rebuildWithinTx(
   tx: TenantTransactionClient,
   familyId: string,
   account: AccountBalanceFacts,
