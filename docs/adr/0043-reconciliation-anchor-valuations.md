@@ -9,6 +9,7 @@
 | **Supersedes**    | —                                                                                                           |
 | **Superseded by** | —                                                                                                           |
 | **Amends**        | ADR-0034 §4 (cash balance derivation) + §7 (drift detector); reverses ADR-0034 "Alternatives considered" #2 |
+| **Amended by**    | ADR-0048 §3 (valuation-tracked accounts never accept a raw transaction-flow leg; guard + Transfer schema)   |
 
 ## Context
 
