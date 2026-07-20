@@ -149,9 +149,14 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
     accountId: string,
     balance: bigint
   ) =>
-    harness.withFamily(owner.family.id, async (tx) =>
-      tx.account.update({ where: { id: accountId }, data: { balance } })
-    )
+    // Test-only drift simulation, not a real application write path — needs
+    // the PER-196 / ADR-0048 §3 bypass GUC so it can still write a wrong
+    // stored balance on a `balanceSource="valuation"` account for rebuild
+    // tests to fix. A no-op condition for transaction_flow accounts.
+    harness.withFamily(owner.family.id, async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.valuation_balance_write', 'on', true)`
+      return tx.account.update({ where: { id: accountId }, data: { balance } })
+    })
 
   const openingValuation = (
     owner: AuthenticatedOnboardedUser,
