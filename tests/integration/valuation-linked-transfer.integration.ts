@@ -6,9 +6,13 @@ import {
   expect,
   test,
 } from "vite-plus/test"
+import { createAccountForFamily } from "@/server/accounts"
 import {
+  bulkDeleteTransactionsForFamily,
   createTransactionForFamily,
   deleteTransactionForFamily,
+  findLedgerTransactionsForFamily,
+  TransactionGoneError,
   updateTransactionForFamily,
   ValuationLinkedTransferUnsupportedError,
 } from "@/server/transactions"
@@ -85,6 +89,39 @@ describe("PER-196 / ADR-0048 — valuation-linked transfer", () => {
         },
       })
     )
+  }
+
+  // Real account-creation (not the raw-insert factory): a TRACKED_ASSET
+  // account always gets a genuine "opening" Valuation (ADR-0034 §3), so
+  // deleting a later valuation-linked transfer correctly falls back to that
+  // opening value — the realistic shape every production account has.
+  async function createRealisticFixture(
+    options: {
+      trackedOpening?: bigint
+    } = {}
+  ) {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const cash = await createAccountForFamily({
+      data: {
+        accountType: "DEPOSITORY",
+        idempotencyKey: factories.createIdempotencyKey(),
+        name: "Bank Jago",
+        openingBalance: "5000000",
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+    const tracked = await createAccountForFamily({
+      data: {
+        accountType: "TRACKED_ASSET",
+        idempotencyKey: factories.createIdempotencyKey(),
+        name: "Hasil Jualan",
+        openingBalance: (options.trackedOpening ?? 1_000_000n).toString(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+    return { cash, familyId: owner.family.id, tracked, user: owner.user }
   }
 
   test("contribution (cash -> tracked asset): one Transaction leg + one Valuation, prefilled latest + amount", async () => {
@@ -174,6 +211,57 @@ describe("PER-196 / ADR-0048 — valuation-linked transfer", () => {
 
     // Not hidden from the ledger: it is a normal, visible cash-side Transaction.
     expect(txRow.type).toBe("transfer")
+  })
+
+  test("the ledger list query (findLedgerTransactionsForFamily) shows both a contribution's and a redemption's cash leg — regression for the 'hidden from list' half of PER-196", async () => {
+    // The list query historically hid a Transaction sitting in a Transfer's
+    // inflowTransactionId slot, assuming its outflow twin would represent it
+    // (true for a classic dual-leg transfer). A redemption's cash leg IS the
+    // inflow leg with no outflow twin at all (the other side is a Valuation)
+    // — hiding it reproduces PER-196's "transaction did not appear in the
+    // ledger list" symptom through a brand-new mechanism. Caught by the e2e
+    // suite; this integration test pins the fix at the query layer.
+    const fx = await createFixture({ trackedOpening: 1_000_000n })
+
+    const contribution = await createTransactionForFamily({
+      data: {
+        accountId: fx.cash.id,
+        amount: 250_000n,
+        currency: "IDR",
+        date: TEST_DATE,
+        description: "Top up reksadana",
+        idempotencyKey: factories.createIdempotencyKey(),
+        isSplit: false,
+        status: "CLEARED",
+        toAccountId: fx.tracked.id,
+        type: "transfer",
+      },
+      familyId: fx.familyId,
+      user: fx.user,
+    })
+    const redemption = await createTransactionForFamily({
+      data: {
+        accountId: fx.tracked.id,
+        amount: 400_000n,
+        currency: "IDR",
+        date: TEST_DATE,
+        description: "Pencairan reksadana",
+        idempotencyKey: factories.createIdempotencyKey(),
+        isSplit: false,
+        status: "CLEARED",
+        toAccountId: fx.cash.id,
+        type: "transfer",
+      },
+      familyId: fx.familyId,
+      user: fx.user,
+    })
+
+    const ledger = await harness.withFamily(fx.familyId, (tx) =>
+      findLedgerTransactionsForFamily(tx, fx.familyId)
+    )
+    const ledgerIds = ledger.map((row) => row.id)
+    expect(ledgerIds).toContain(contribution.id)
+    expect(ledgerIds).toContain(redemption.id)
   })
 
   test("editable prefill: newValuationValue overrides the computed latest ∓ amount", async () => {
@@ -345,8 +433,147 @@ describe("PER-196 / ADR-0048 — valuation-linked transfer", () => {
     expect(transferCount).toBe(1)
   })
 
-  test("deleting a valuation-linked transfer's Transaction is not yet supported — fails loud, nothing changes", async () => {
-    const fx = await createFixture({ trackedOpening: 1_000_000n })
+  test("deleting a contribution valuation-linked transfer symmetrically reverses both sides", async () => {
+    const fx = await createRealisticFixture({ trackedOpening: 1_000_000n })
+    const result = await createTransactionForFamily({
+      data: {
+        accountId: fx.cash.id,
+        amount: 250_000n,
+        currency: "IDR",
+        date: TEST_DATE,
+        description: "Top up reksadana",
+        idempotencyKey: factories.createIdempotencyKey(),
+        isSplit: false,
+        status: "CLEARED",
+        toAccountId: fx.tracked.id,
+        type: "transfer",
+      },
+      familyId: fx.familyId,
+      user: fx.user,
+    })
+    const transfer = await transferForTransaction(fx.familyId, result.id)
+    const valuationId = transfer.valuationId ?? ""
+
+    await deleteTransactionForFamily({
+      familyId: fx.familyId,
+      id: result.id,
+      idempotencyKey: factories.createIdempotencyKey(),
+      user: fx.user,
+    })
+
+    expect((await readAccount(fx.familyId, fx.cash.id)).balance).toBe(
+      5_000_000n
+    )
+    expect((await readAccount(fx.familyId, fx.tracked.id)).balance).toBe(
+      1_000_000n
+    )
+
+    const [txRow, valuationRow, transferRow] = await Promise.all([
+      harness.withFamily(fx.familyId, (tx) =>
+        tx.transaction.findUniqueOrThrow({ where: { id: result.id } })
+      ),
+      harness.withFamily(fx.familyId, (tx) =>
+        tx.valuation.findUniqueOrThrow({ where: { id: valuationId } })
+      ),
+      harness.withFamily(fx.familyId, (tx) =>
+        tx.transfer.findUniqueOrThrow({ where: { id: transfer.id } })
+      ),
+    ])
+    expect(txRow.deletedAt).not.toBeNull()
+    expect(valuationRow.deletedAt).not.toBeNull()
+    expect(transferRow.deletedAt).not.toBeNull()
+  })
+
+  test("deleting a redemption valuation-linked transfer symmetrically reverses both sides", async () => {
+    const fx = await createRealisticFixture({ trackedOpening: 1_000_000n })
+    const result = await createTransactionForFamily({
+      data: {
+        accountId: fx.tracked.id,
+        amount: 400_000n,
+        currency: "IDR",
+        date: TEST_DATE,
+        description: "Pencairan reksadana",
+        idempotencyKey: factories.createIdempotencyKey(),
+        isSplit: false,
+        status: "CLEARED",
+        toAccountId: fx.cash.id,
+        type: "transfer",
+      },
+      familyId: fx.familyId,
+      user: fx.user,
+    })
+
+    await deleteTransactionForFamily({
+      familyId: fx.familyId,
+      id: result.id,
+      idempotencyKey: factories.createIdempotencyKey(),
+      user: fx.user,
+    })
+
+    expect((await readAccount(fx.familyId, fx.cash.id)).balance).toBe(
+      5_000_000n
+    )
+    expect((await readAccount(fx.familyId, fx.tracked.id)).balance).toBe(
+      1_000_000n
+    )
+  })
+
+  test("deleting a valuation-linked transfer twice does not double-reverse (idempotent)", async () => {
+    const fx = await createRealisticFixture({ trackedOpening: 1_000_000n })
+    const result = await createTransactionForFamily({
+      data: {
+        accountId: fx.cash.id,
+        amount: 250_000n,
+        currency: "IDR",
+        date: TEST_DATE,
+        description: "Top up reksadana",
+        idempotencyKey: factories.createIdempotencyKey(),
+        isSplit: false,
+        status: "CLEARED",
+        toAccountId: fx.tracked.id,
+        type: "transfer",
+      },
+      familyId: fx.familyId,
+      user: fx.user,
+    })
+    const deleteKey = factories.createIdempotencyKey()
+
+    await deleteTransactionForFamily({
+      familyId: fx.familyId,
+      id: result.id,
+      idempotencyKey: deleteKey,
+      user: fx.user,
+    })
+    // Same idempotency key -> pure replay, returns the same cached response.
+    await expect(
+      deleteTransactionForFamily({
+        familyId: fx.familyId,
+        id: result.id,
+        idempotencyKey: deleteKey,
+        user: fx.user,
+      })
+    ).resolves.toEqual({ success: true })
+    // A different key on an already-deleted transaction is a fresh attempt,
+    // not a replay -> must fail loud, never a second reversal.
+    await expect(
+      deleteTransactionForFamily({
+        familyId: fx.familyId,
+        id: result.id,
+        idempotencyKey: factories.createIdempotencyKey(),
+        user: fx.user,
+      })
+    ).rejects.toThrow(TransactionGoneError)
+
+    expect((await readAccount(fx.familyId, fx.cash.id)).balance).toBe(
+      5_000_000n
+    )
+    expect((await readAccount(fx.familyId, fx.tracked.id)).balance).toBe(
+      1_000_000n
+    )
+  })
+
+  test("deleting via the general bulk-delete endpoint (the UI's actual delete path) also reverses symmetrically", async () => {
+    const fx = await createRealisticFixture({ trackedOpening: 1_000_000n })
     const result = await createTransactionForFamily({
       data: {
         accountId: fx.cash.id,
@@ -364,20 +591,19 @@ describe("PER-196 / ADR-0048 — valuation-linked transfer", () => {
       user: fx.user,
     })
 
-    await expect(
-      deleteTransactionForFamily({
-        familyId: fx.familyId,
-        id: result.id,
-        idempotencyKey: factories.createIdempotencyKey(),
-        user: fx.user,
-      })
-    ).rejects.toThrow(ValuationLinkedTransferUnsupportedError)
+    const response = await bulkDeleteTransactionsForFamily({
+      familyId: fx.familyId,
+      idempotencyKey: factories.createIdempotencyKey(),
+      ids: [result.id],
+      user: fx.user,
+    })
+    expect(response).toEqual({ count: 1, success: true })
 
     expect((await readAccount(fx.familyId, fx.cash.id)).balance).toBe(
-      5_000_000n - 250_000n
+      5_000_000n
     )
     expect((await readAccount(fx.familyId, fx.tracked.id)).balance).toBe(
-      1_250_000n
+      1_000_000n
     )
   })
 
