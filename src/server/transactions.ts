@@ -49,7 +49,9 @@ import {
 } from "./mutation-kit"
 import {
   createValuationWithinTx,
+  fetchAccountFacts,
   latestValuation,
+  rebuildWithinTx,
   valueMagnitudeSchema,
   ValuationError,
   type CreateValuationInput,
@@ -441,14 +443,32 @@ export async function findLedgerTransactionsForFamily(
     where: {
       familyId,
       deletedAt: null,
-      transferIn: {
-        is: null,
-      },
-      // PER-20 / ADR-0012: defense-in-depth against any future drift between
-      // Transaction.deletedAt and Transfer.deletedAt. A non-transfer row
-      // (`transferOut: null`) passes; an outflow leg only passes when its
-      // Transfer row is also alive.
-      OR: [{ transferOut: { is: null } }, { transferOut: { deletedAt: null } }],
+      AND: [
+        {
+          // A classic dual-leg transfer's inflow leg is hidden — its outflow
+          // twin represents the movement in the list. PER-196 / ADR-0048 §4:
+          // a valuation-linked redemption's cash leg can ALSO sit in the
+          // inflow FK slot, but has no outflow twin at all (the other side
+          // is a Valuation, not a Transaction) — hiding it would reproduce
+          // PER-196's original "hidden from the list" bug through a new
+          // mechanism. Only hide an inflow leg when a real outflow twin
+          // exists to show instead.
+          OR: [
+            { transferIn: { is: null } },
+            { transferIn: { outflowTransactionId: null } },
+          ],
+        },
+        {
+          // PER-20 / ADR-0012: defense-in-depth against any future drift
+          // between Transaction.deletedAt and Transfer.deletedAt. A
+          // non-transfer row (`transferOut: null`) passes; an outflow leg
+          // only passes when its Transfer row is also alive.
+          OR: [
+            { transferOut: { is: null } },
+            { transferOut: { deletedAt: null } },
+          ],
+        },
+      ],
     },
   })
   const transactionIds = transactions.map((transaction) => transaction.id)
@@ -599,17 +619,18 @@ export class ValuationAccountLedgerError extends Error {
   }
 }
 
-// PER-196 / ADR-0048 §4: a valuation-linked transfer (one Transaction leg +
-// one Valuation leg) does not yet support the update/delete
-// reversal-and-replace path — that machinery assumes two Transaction legs.
-// Raised by `findTransferGraph`, the single choke point every mutation of an
-// EXISTING transfer reads its graph through, so this never reaches deeper
-// null-unsafe code. Creating a new valuation-linked transfer is unaffected.
+// PER-196 / ADR-0048 §4: editing a valuation-linked transfer (one
+// Transaction leg + one Valuation leg) is not yet supported — the
+// reversal-and-replace path (replaceTransactionWithinTenantTransaction)
+// assumes two Transaction legs. Raised by `findTransferGraph`, the choke
+// point the update path reads a transfer's graph through. Deleting a
+// valuation-linked transfer IS supported (softDeleteValuationLinkedTransferWithinTx)
+// — this error's message reflects that split.
 export class ValuationLinkedTransferUnsupportedError extends Error {
   override readonly name = "ValuationLinkedTransferUnsupportedError"
   readonly statusCode = 422
   constructor(
-    message = "Editing or deleting a valuation-linked transfer is not yet supported. Delete it and record a new transfer instead."
+    message = "Editing a valuation-linked transfer is not yet supported. Delete it and record a new transfer instead."
   ) {
     super(message)
   }
@@ -2132,6 +2153,127 @@ export const createTransactionFn = createServerFn({ method: "POST" })
 // Exported for reuse by src/server/accounts.ts (PER-183 cascade account
 // delete): this is the canonical, transfer-symmetric, audited, balance-
 // correct per-transaction soft delete. Do not reimplement it elsewhere.
+// PER-196 / ADR-0048 §4: symmetric reversal for a valuation-linked transfer
+// (one Transaction leg + one Valuation leg, joined by one Transfer row).
+// Mirrors the classic dual-leg reversal in
+// softDeleteTransactionWithinTenantTransaction: reverse the cash leg's
+// balance delta, tombstone the cash Transaction, tombstone the Valuation,
+// re-materialize the tracked account's balance from whatever Valuation is
+// now the latest non-deleted one (rebuildWithinTx — the same primitive
+// createValuationForFamily and rebuildFamilyBalances already route every
+// legitimate tracked-account balance write through), then tombstone the
+// Transfer row itself. Every step is idempotent at the call-site level via
+// deleteTransactionForFamily's IdempotencyRecord and the `deletedAt: null`
+// guard on each updateMany below (a replayed delete cannot double-reverse).
+async function softDeleteValuationLinkedTransferWithinTx(
+  tx: TenantTransactionClient,
+  {
+    auditCtx,
+    familyId,
+    cashTx,
+  }: {
+    auditCtx: AuditContext
+    familyId: string
+    cashTx: NonNullable<Awaited<ReturnType<typeof findTransactionAuditGraph>>>
+  }
+): Promise<void> {
+  const transfer = cashTx.transferOut ?? cashTx.transferIn
+  if (!transfer || transfer.valuationId === null) {
+    throw new Error(
+      `softDeleteValuationLinkedTransferWithinTx called on Transaction ${cashTx.id} without a valuation-linked Transfer`
+    )
+  }
+  if (transfer.deletedAt !== null) {
+    throw new TransactionGoneError()
+  }
+
+  const oldValuation = await tx.valuation.findUniqueOrThrow({
+    where: { id: transfer.valuationId },
+  })
+  const trackedAccountFacts = await fetchAccountFacts(
+    tx,
+    familyId,
+    oldValuation.accountId
+  )
+  if (!trackedAccountFacts) {
+    throw new Error(`Tracked-asset account ${oldValuation.accountId} not found`)
+  }
+  const oldCashAccount = await tx.account.findUniqueOrThrow({
+    where: { id: cashTx.accountId },
+  })
+
+  // 1. Reverse the cash leg's balance delta (single formula regardless of
+  // direction: cashTx.amount is already signed, negating it undoes exactly
+  // what creating it applied).
+  await applyAccountBalanceDelta(tx, {
+    accountId: cashTx.accountId,
+    delta: negateMoney(cashTx.amount),
+    familyId,
+    notFoundMessage: "Cash account not found or access denied!",
+  })
+
+  const deletedAt = new Date()
+
+  // 2. Tombstone the cash Transaction.
+  const cashTxUpdate = await tx.transaction.updateMany({
+    where: { id: cashTx.id, familyId, deletedAt: null },
+    data: { deletedAt },
+  })
+  if (cashTxUpdate.count !== 1) throw new TransactionGoneError()
+
+  // 3. Tombstone the Valuation (never hard-deleted, ADR-0034).
+  const valuationUpdate = await tx.valuation.updateMany({
+    where: { id: oldValuation.id, familyId, deletedAt: null },
+    data: { deletedAt },
+  })
+  if (valuationUpdate.count !== 1) throw new TransactionGoneError()
+
+  // 4. Re-materialize the tracked account from whatever Valuation is now the
+  // latest non-deleted one (rebuildWithinTx writes its own Account audit
+  // entry when the balance actually changes).
+  await rebuildWithinTx(tx, familyId, trackedAccountFacts, auditCtx)
+
+  // 5. Tombstone the Transfer row itself.
+  const transferUpdate = await tx.transfer.updateMany({
+    where: { id: transfer.id, deletedAt: null },
+    data: { deletedAt },
+  })
+  if (transferUpdate.count !== 1) throw new TransactionGoneError()
+
+  const [newCashAccount, updatedCashTx, updatedValuation, updatedTransfer] =
+    await runTenantTransactionQueriesInOrder([
+      () => tx.account.findUniqueOrThrow({ where: { id: cashTx.accountId } }),
+      () => tx.transaction.findUniqueOrThrow({ where: { id: cashTx.id } }),
+      () => tx.valuation.findUniqueOrThrow({ where: { id: oldValuation.id } }),
+      () => tx.transfer.findUniqueOrThrow({ where: { id: transfer.id } }),
+    ] as const)
+
+  await auditLogs(tx, auditCtx, [
+    ...accountBalanceAuditEntries([oldCashAccount], [newCashAccount]),
+    {
+      action: "soft_delete",
+      entityType: "Transaction",
+      entityId: cashTx.id,
+      before: cashTx,
+      after: updatedCashTx,
+    },
+    {
+      action: "soft_delete",
+      entityType: "Valuation",
+      entityId: oldValuation.id,
+      before: oldValuation,
+      after: updatedValuation,
+    },
+    {
+      action: "soft_delete",
+      entityType: "Transfer",
+      entityId: transfer.id,
+      before: transfer,
+      after: updatedTransfer,
+    },
+  ])
+}
+
 export async function softDeleteTransactionWithinTenantTransaction(
   tx: TenantTransactionClient,
   {
@@ -2157,24 +2299,33 @@ export async function softDeleteTransactionWithinTenantTransaction(
   // can sit in either FK slot (outflow for a contribution, inflow for a
   // redemption) with no Transaction at all on the other side. Detect that
   // shape before the classic-transfer redirect/reversal logic below, which
-  // assumes two Transaction legs, ever runs.
+  // assumes two Transaction legs, ever runs, and route to the symmetric
+  // valuation-linked reversal instead.
   if (
     oldTx.type === "transfer" &&
     ((oldTx.transferIn && oldTx.transferIn.outflowTransactionId === null) ||
       (oldTx.transferOut && oldTx.transferOut.inflowTransactionId === null))
   ) {
-    throw new ValuationLinkedTransferUnsupportedError()
+    await softDeleteValuationLinkedTransferWithinTx(tx, {
+      auditCtx,
+      familyId,
+      cashTx: oldTx,
+    })
+    return
   }
 
   // PER-20 / ADR-0012: a transfer is one money movement. If the user clicked
   // the inflow leg, redirect to the outflow leg so the symmetric handler logic
   // below treats outflow as the source of truth.
   if (oldTx.type === "transfer" && oldTx.transferIn && !oldTx.transferOut) {
-    // Guaranteed non-null by the valuation-linked check above (would have
-    // thrown otherwise) — narrows the type for the lookup below.
+    // The valuation-linked branch above already returned for a null
+    // outflowTransactionId, so this is guaranteed non-null here — an
+    // internal invariant, not a reachable "unsupported" case.
     const outflowTransactionId = oldTx.transferIn.outflowTransactionId
     if (!outflowTransactionId) {
-      throw new ValuationLinkedTransferUnsupportedError()
+      throw new Error(
+        `Invariant violated: Transfer ${oldTx.transferIn.id} reached the classic-transfer redirect with a null outflowTransactionId`
+      )
     }
     const outflowAuditGraph = await findTransactionAuditGraph(
       tx,

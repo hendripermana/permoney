@@ -139,6 +139,13 @@ export const transactionCollection = createCollection(
         // off the raw change set and forward to the server (ADR-0035 §6).
         const feeFields = payload as Record<string, unknown>
         const fxFeeAmount = feeFields.fxFeeAmount as Money | null | undefined
+        // PER-196 / ADR-0048 §1: valuation-linked transfer value override —
+        // also a write-only ephemeral field, not a collection column (see
+        // the transaction form modal's NewValuationValueField).
+        const newValuationValue = feeFields.newValuationValue as
+          | string
+          | null
+          | undefined
 
         await createTransactionFn({
           data: {
@@ -186,6 +193,7 @@ export const transactionCollection = createCollection(
               (feeFields.fxFeeAccountId as string | null | undefined) ?? null,
             fxFeeCategoryId:
               (feeFields.fxFeeCategoryId as string | null | undefined) ?? null,
+            newValuationValue: newValuationValue ?? undefined,
             attachmentUrl:
               (payload.attachmentUrl as string | null | undefined) ?? null,
           },
