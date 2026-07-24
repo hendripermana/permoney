@@ -332,7 +332,7 @@ export async function latestValuation(
 // is what reproduces the real Sure UI for migrated accounts. Tracked
 // (`valuation`-sourced) accounts are unchanged: latest valuation of any type
 // wins, no transaction sum (ADR-0034 §5).
-async function computeCanonicalBalance(
+export async function computeCanonicalBalance(
   tx: TenantTransactionClient,
   familyId: string,
   account: AccountBalanceFacts
