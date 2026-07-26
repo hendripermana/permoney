@@ -64,7 +64,7 @@ import {
   type AccountType,
 } from "@/lib/accounts"
 import { CURRENCY_OPTIONS, formatCurrency } from "@/lib/currency"
-import { negateMoney, toMinorUnits } from "@/lib/money"
+import { negateMoney, parseUserInput } from "@/lib/money"
 import { normalizeNetWorthAt, type PointBalance } from "@/lib/net-worth"
 import { getFxOverviewFn } from "@/server/fx"
 import type { CurrencyCode } from "@/lib/data/currencies"
@@ -546,13 +546,21 @@ function AccountFormDialog({
           },
         })
       } else {
-        const openingMinor =
-          openingBalance.trim() === ""
-            ? "0"
-            : toMinorUnits(
-                openingBalance.trim(),
-                currency as CurrencyCode
-              ).toString()
+        // PER-207: parse the user-typed opening balance with `parseUserInput`
+        // (handles thousands separators / locale decimal, returns null on
+        // malformed) — NOT `toMinorUnits`, which expects a canonical decimal
+        // and throws on user-formatted strings.
+        let openingMinor = "0"
+        if (openingBalance.trim() !== "") {
+          const parsed = parseUserInput(
+            openingBalance.trim(),
+            currency as CurrencyCode
+          )
+          if (parsed === null) {
+            throw new Error("Enter a valid opening balance.")
+          }
+          openingMinor = parsed.toString()
+        }
         await createAccountFn({
           data: {
             name: name.trim(),
@@ -765,10 +773,14 @@ function ValuationActionDialog({
   })
 
   const currentMinor = BigInt(account.balance)
+  // PER-207: `parseUserInput` (locale-aware, returns null on malformed) — NOT
+  // `toMinorUnits`, which throws on user-formatted strings. This runs at RENDER
+  // on every keystroke, so a throw here crashes the dialog into the error
+  // boundary; null is the safe "not a valid amount yet" state instead.
   const targetMagnitude =
     valueInput.trim() === ""
       ? null
-      : toMinorUnits(valueInput.trim(), account.currency as CurrencyCode)
+      : parseUserInput(valueInput.trim(), account.currency as CurrencyCode)
   const signedTarget =
     targetMagnitude === null
       ? null
