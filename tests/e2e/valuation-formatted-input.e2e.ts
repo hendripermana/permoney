@@ -42,9 +42,11 @@ test.describe("valuation formatted input (PER-207)", () => {
     await expect(page.getByRole("dialog")).toHaveCount(0)
 
     // The account page still renders (no error boundary) and shows the parsed
-    // value: "5.571.313,20" → Rp 5,571,313.20.
+    // value: "5.571.313,20" → Rp 5,571,313.20. The amount appears more than once
+    // (account card + net-worth summary), so assert at least one is visible —
+    // the point is that it parsed and rendered at all, not the exact count.
     await waitForHydration(page)
-    await expect(page.getByText("Rp 5,571,313.20")).toBeVisible()
+    await expect(page.getByText("Rp 5,571,313.20").first()).toBeVisible()
     await expect(page.getByText(goldName)).toBeVisible()
   })
 })
