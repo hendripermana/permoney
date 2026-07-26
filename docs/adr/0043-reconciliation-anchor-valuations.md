@@ -1,15 +1,15 @@
 # ADR-0043 — Reconciliation-anchor valuations (balance calculator)
 
-|                   |                                                                                                             |
-| ----------------- | ----------------------------------------------------------------------------------------------------------- |
-| **Status**        | Accepted                                                                                                    |
-| **Date**          | 2026-07-04                                                                                                  |
-| **Accepted**      | 2026-07-04                                                                                                  |
-| **Deciders**      | Hendri Permana                                                                                              |
-| **Supersedes**    | —                                                                                                           |
-| **Superseded by** | —                                                                                                           |
-| **Amends**        | ADR-0034 §4 (cash balance derivation) + §7 (drift detector); reverses ADR-0034 "Alternatives considered" #2 |
-| **Amended by**    | ADR-0048 §3 (valuation-tracked accounts never accept a raw transaction-flow leg; guard + Transfer schema)   |
+|                   |                                                                                                                                                                              |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Status**        | Accepted                                                                                                                                                                     |
+| **Date**          | 2026-07-04                                                                                                                                                                   |
+| **Accepted**      | 2026-07-04                                                                                                                                                                   |
+| **Deciders**      | Hendri Permana                                                                                                                                                               |
+| **Supersedes**    | —                                                                                                                                                                            |
+| **Superseded by** | —                                                                                                                                                                            |
+| **Amends**        | ADR-0034 §4 (cash balance derivation) + §7 (drift detector); reverses ADR-0034 "Alternatives considered" #2                                                                  |
+| **Amended by**    | ADR-0048 §3 (valuation-tracked accounts never accept a raw transaction-flow leg; guard + Transfer schema); PER-201 amendment below (createdAt-aware post-anchor flow, §2/§6) |
 
 ## Context
 
@@ -310,3 +310,108 @@ for that filtering to be built without further calculator changes.
   it changes which valuations are authoritative balance assertions)
 - PER-154 (net-worth time series — future consumer of the anchor-chain
   primitive for arbitrary as-of-date queries)
+
+## Amendment — createdAt-aware post-anchor flow (PER-201)
+
+|            |                                                                   |
+| ---------- | ----------------------------------------------------------------- |
+| **Date**   | 2026-07-26                                                        |
+| **Amends** | §2 (cash balance formula) and §6 (ANCHOR_CHAIN drift) of this ADR |
+| **Ticket** | PER-201                                                           |
+
+### Problem
+
+§2 as originally written segments post-anchor flow by **date only**
+(`Transaction.date > anchor.valuationDate`). That treats the latest anchor as an
+absolute floor: any transaction dated at/before the anchor's date is assumed to
+be already baked into the anchor's asserted value and is dropped from the sum.
+
+But `Account.balance` is maintained by an **incremental delta on every
+transaction** (`applyAccountBalanceDelta`, `balance:{increment}`), regardless of
+the transaction's date. So when a user adds a **back-dated** transaction (dated
+at/before the latest anchor) _after_ an import or reconciliation, the stored
+balance counts it while the date-only canonical formula drops it — producing a
+false `MATERIALIZATION` drift error even though no money is wrong. Verified
+against real data: an OVO (`DEPOSITORY` / `transaction_flow`) account with a
+2026-07-24 import reconciliation anchor and back-dated top-ups added afterward
+reported an 8,000,000 phantom drift exactly equal to the dropped back-dated
+flow. The import's reconciliation anchor should absorb only the transactions
+that **existed when it was written** (the import's own rows), not activity the
+user records later, even if that activity is back-dated.
+
+### Decision — the `afterAnchor` predicate
+
+A transaction is **after** an anchor `A` — i.e. it is post-anchor flow, not
+absorbed into `A`'s asserted value — iff:
+
+```
+afterAnchor(A)(t)  ≡  t.date > A.valuationDate  OR  t.createdAt > A.createdAt
+```
+
+It is absorbed into `A` only when **both** disjuncts are false: it was dated
+at/before the anchor **and** already recorded (`createdAt`) when the anchor was
+written. Both disjuncts are load-bearing:
+
+- **The `createdAt` disjunct** is the fix: a back-dated transaction recorded
+  after the anchor (`date <= anchor.date` but `createdAt > anchor.createdAt`) is
+  genuine post-anchor activity the materialized balance already counts, so the
+  canonical formula must count it too.
+- **The `date` disjunct** must stay: a **future**-dated transaction recorded
+  _before_ a live reconciliation (`date > anchor.date` but
+  `createdAt <= anchor.createdAt`) is after the asserted balance and must be
+  added. A `createdAt`-only rule would wrongly absorb it — so the rule is a
+  disjunction, never `createdAt` alone.
+
+§2's cash balance formula becomes `latestAnchor.value + Σ afterAnchor(latestAnchor)`.
+
+### §6 stays "one segmentation function"
+
+The ANCHOR_CHAIN check keeps sharing the exact segmentation predicate with the
+balance formula (the load-bearing §6 invariant). The consecutive-anchor segment
+`(i → i+1)` is the complement pairing:
+
+```
+segment(i, i+1) = { t : afterAnchor(anchor[i])(t) ∧ ¬afterAnchor(anchor[i+1])(t) }
+                = afterAnchor(from) ∧ (t.date <= to.valuationDate ∧ t.createdAt <= to.createdAt)
+```
+
+Both boundaries use the one `afterAnchor` predicate, so the balance formula and
+the drift check can never silently disagree about which flows belong to which
+anchor. A consequence that falls out cleanly: a late back-dated user
+transaction (created after the latest anchor) satisfies `¬afterAnchor(next)` for
+every historical `next`, so it lands **only** in the "after the latest anchor"
+balance bucket and never perturbs a historical migrated-anchor segment's
+warning.
+
+### Why a fresh import stays zero-drift (no double-count)
+
+The Sure importer writes its **final reconciliation anchor last**
+(`writeSureFinalReconciliationAnchors`, step 10 of the orchestration), _after_
+all promoted transactions and transfers (steps 5–9), each step in its **own
+tenant transaction**. Postgres `now()` is fixed per transaction, so the final
+anchor's `createdAt` is strictly greater than every promoted transaction's
+`createdAt`. The final anchor is also dated `lastActivityDay + 1`, so no
+imported leg is dated after it either. Both `afterAnchor` disjuncts are
+therefore false for every imported row → all imported rows stay absorbed exactly
+as before → a fresh import's canonical balance is still exactly the anchor's
+asserted value, matching `projectSureMigrationBalances` with **no change to the
+projection** (which remains date-only, and is inert under the `createdAt`
+disjunct because no transaction is created after the final anchor on a fresh
+import). `createdAt` is `@default(now())` on both `Transaction` and `Valuation`
+(never null), and both the import-promote and manual-create paths let it
+default, so it reliably records insertion order.
+
+### Known limitation — re-import with genuinely new activity
+
+If a Sure bundle is re-imported with **genuinely new later activity**, the
+importer writes a **new** final reconciliation anchor (new `createdAt`, dated the
+new `lastActivityDay + 1`) whose asserted value is projected from Sure legs
+only. On the mandatory post-import rebuild, that new anchor can re-absorb a
+post-import **manual back-dated** edit (the edit's `createdAt` now precedes the
+new anchor's), silently dropping it from the balance. This is inherent to the
+one-directional "the import source owns its accounts" authority semantics and is
+**out of scope for PER-201** (tracked as a separate follow-up). Note that
+re-importing an **identical** bundle does _not_ hit this: the final anchor
+replays through idempotency as the _same_ row with its _original_ `createdAt`, so
+manual edits recorded after it stay counted — a strict improvement over the
+prior date-only rule, which dropped them on every rebuild.

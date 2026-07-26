@@ -16,7 +16,11 @@ import {
   runSureMigrationForFamily,
   SureMigrationPreflightError,
 } from "@/server/sure-migration"
-import { detectBalanceDriftForFamily } from "@/server/valuations"
+import { createTransactionForFamily } from "@/server/transactions"
+import {
+  detectBalanceDriftForFamily,
+  rebuildFamilyBalances,
+} from "@/server/valuations"
 import {
   createIntegrationHarness,
   type IntegrationHarness,
@@ -1027,6 +1031,73 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
       checking: 500_000n,
       savings: 4_000_000n,
     })
+  })
+
+  test("PER-201: a back-dated manual txn added AFTER the import produces no drift and is counted (createdAt-absorption)", async () => {
+    const tenant = await setupTenant()
+    const checkingExternalId = "sure-acc-per201-checking"
+    const lines = [
+      sureAccount(checkingExternalId, "Checking", "Depository", "checking"),
+      // One reconciliation anchor. The import writes its FINAL reconciliation
+      // anchor LAST (dated lastActivityDay+1 = 2026-06-25), in its own tenant
+      // transaction, so its createdAt is strictly greater than any promoted row
+      // — the ordering guarantee the afterAnchor rule relies on.
+      sureVal({
+        accountId: checkingExternalId,
+        amount: "480600.0",
+        date: "2026-06-24",
+      }),
+    ]
+
+    await migrate(tenant, "per201.ndjson", lines.join("\n"))
+
+    const checking = await accountByBinding(tenant, checkingExternalId)
+    expect(checking?.balanceSource).toBe("transaction_flow")
+    // Fresh import: balance is exactly the anchor's asserted value (no post-
+    // anchor flow) — the projection===balance / zero-drift baseline.
+    expect(checking?.balance).toBe(48_060_000n)
+
+    // The user adds a top-up dated 2026-06-23 (BEFORE the final anchor's
+    // 2026-06-25 date) but recorded now (createdAt AFTER the whole import).
+    await createTransactionForFamily({
+      data: {
+        type: "income",
+        amount: "8000000",
+        description: "Back-dated top-up after import",
+        accountId: checking!.id,
+        date: new Date("2026-06-23T09:00:00.000Z"),
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: tenant.familyId,
+      user: { id: tenant.userId },
+      runInTenantTransaction: runner(),
+    })
+
+    // Stored counted it via the incremental delta.
+    const afterTopUp = await accountByBinding(tenant, checkingExternalId)
+    expect(afterTopUp?.balance).toBe(56_060_000n)
+
+    // Canonical counts it too (createdAt disjunct) → NO materialization drift.
+    const drift = await detectBalanceDriftForFamily({
+      familyId: tenant.familyId,
+      userId: tenant.userId,
+      runInTenantTransaction: runner(),
+    })
+    expect(
+      drift.filter(
+        (d) => d.accountId === checking!.id && d.kind === "MATERIALIZATION"
+      )
+    ).toEqual([])
+
+    // Rebuild agrees: stored == canonical, so the checking rebuild is a no-op.
+    const rebuilt = await rebuildFamilyBalances({
+      familyId: tenant.familyId,
+      user: { id: tenant.userId },
+      runInTenantTransaction: runner(),
+    })
+    const checkingRebuild = rebuilt.find((r) => r.accountId === checking!.id)
+    expect(checkingRebuild?.changed).toBe(false)
+    expect(checkingRebuild?.rebuiltBalance).toBe("56060000")
   })
 
   test("self-heal 2B: a created leg with unmarked rows re-promotes via the stable key (no double)", async () => {

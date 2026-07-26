@@ -718,6 +718,198 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
   })
 
   // --------------------------------------------------------------------------
+  // PER-201 — back-dated transactions after an anchor (createdAt-absorption)
+  //
+  // The shared `afterAnchor` predicate (ADR-0043 §2, PER-201): a transaction is
+  // post-anchor iff it is dated after the anchor OR was recorded (createdAt)
+  // after it. In these tests the CALL ORDER fixes createdAt ordering — a txn
+  // added AFTER `addValuation` has a later createdAt than that anchor, so a
+  // back-dated one is still counted, while a txn added BEFORE the anchor (older
+  // createdAt, dated at/before it) stays absorbed exactly as before.
+  // --------------------------------------------------------------------------
+  describe("PER-201 back-dated flow after the latest anchor", () => {
+    const detect = (owner: AuthenticatedOnboardedUser) =>
+      detectBalanceDriftForFamily({
+        familyId: owner.family.id,
+        userId: owner.user.id,
+      })
+
+    // (a) + (c): the canonical bug. A back-dated top-up added AFTER an anchor is
+    // real post-anchor activity the materialized balance already counts; the
+    // canonical formula must count it too, so there is NO materialization drift
+    // and a rebuild is a no-op. Under the old date-only rule canonical would drop
+    // it (dated before the anchor) and report a false 8,000,000 MATERIALIZATION.
+    test("a back-dated txn added after the latest anchor is counted: no drift, rebuild is a no-op", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "150000")
+      await backdateOpeningValuation(owner, account.id, daysAgo(30))
+
+      // Effective anchor: reconciliation 200000 dated daysAgo(5).
+      await addValuation(
+        owner,
+        account.id,
+        "200000",
+        "reconciliation",
+        daysAgo(5)
+      )
+      expect((await accountRow(owner, account.id)).balance).toBe(200000n)
+
+      // User adds a top-up dated BEFORE the anchor (daysAgo(6)) but recorded now.
+      await addTransaction(
+        owner,
+        account.id,
+        "income",
+        "8000000",
+        "Back-dated top-up",
+        daysAgo(6)
+      )
+
+      // Stored balance counted it via the incremental delta.
+      expect((await accountRow(owner, account.id)).balance).toBe(8200000n)
+
+      // Canonical now includes it too (createdAt disjunct) → no MATERIALIZATION.
+      const report = await detect(owner)
+      expect(
+        report.filter(
+          (r) => r.accountId === account.id && r.kind === "MATERIALIZATION"
+        )
+      ).toEqual([])
+
+      // Rebuild agrees: stored == canonical.
+      const rebuilt = await rebuildAccountBalanceForFamily({
+        accountId: account.id,
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+      expect(rebuilt.changed).toBe(false)
+      expect(rebuilt.rebuiltBalance).toBe("8200000")
+    })
+
+    // (f): the disjunction is OR, never createdAt-only. A FUTURE-dated txn
+    // recorded BEFORE a live reconciliation is after the asserted date and must
+    // be added — the date disjunct catches it even though its createdAt is older
+    // than the anchor. A createdAt-only rule would wrongly absorb it.
+    test("a future-dated txn recorded before a reconciliation still counts (date disjunct)", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "100000")
+      await backdateOpeningValuation(owner, account.id, daysAgo(30))
+
+      // Recorded FIRST (older createdAt), dated AFTER the coming anchor.
+      await addTransaction(
+        owner,
+        account.id,
+        "income",
+        "5000",
+        "Future-dated relative to the anchor",
+        daysAgo(2)
+      )
+      // Anchor recorded SECOND (newer createdAt), dated daysAgo(5).
+      await addValuation(
+        owner,
+        account.id,
+        "100000",
+        "reconciliation",
+        daysAgo(5)
+      )
+
+      // anchor(100000) + the daysAgo(2) income (date > anchor date) = 105000.
+      expect((await accountRow(owner, account.id)).balance).toBe(105000n)
+      const report = await detect(owner)
+      expect(
+        report.filter(
+          (r) => r.accountId === account.id && r.kind === "MATERIALIZATION"
+        )
+      ).toEqual([])
+    })
+
+    // The shared predicate keeps the balance formula and ANCHOR_CHAIN in lockstep
+    // (ADR-0043 §6): a late back-dated txn lands ONLY in the "after latest anchor"
+    // bucket, so it must NOT manufacture a spurious ANCHOR_CHAIN warning on the
+    // historical segment it happens to date into. (A divergent impl — date-only
+    // chain + createdAt balance — would report a false chain drift here.)
+    test("a late back-dated txn does not perturb a historical anchor-chain segment", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "100000")
+      await backdateOpeningValuation(owner, account.id, daysAgo(30))
+
+      // Clean chain: opening(100000 @ daysAgo30) -> anchor(100000 @ daysAgo10),
+      // zero flow between them, so no chain drift.
+      await addValuation(
+        owner,
+        account.id,
+        "100000",
+        "reconciliation",
+        daysAgo(10)
+      )
+      expect(
+        (await detect(owner)).filter(
+          (r) => r.accountId === account.id && r.kind === "ANCHOR_CHAIN"
+        )
+      ).toEqual([])
+
+      // A back-dated txn recorded now, dated INSIDE the (daysAgo30, daysAgo10]
+      // segment.
+      await addTransaction(
+        owner,
+        account.id,
+        "income",
+        "5000",
+        "Late back-dated",
+        daysAgo(20)
+      )
+
+      // Balance counts it (after the latest anchor by createdAt); no drift of
+      // EITHER kind — the segment stays explained, the materialization matches.
+      expect((await accountRow(owner, account.id)).balance).toBe(105000n)
+      const report = await detect(owner)
+      expect(report.filter((r) => r.accountId === account.id)).toEqual([])
+    })
+
+    // (e): the valuation-tracked path (balanceSource="valuation") never touches
+    // transaction flow — it must be entirely unaffected by the afterAnchor rule.
+    test("valuation-tracked accounts are untouched: balance follows the latest valuation, no drift", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const tracked = await makeTracked(owner, "100000000")
+
+      // Latest valuation of ANY type wins for a tracked account (ADR-0034 §5);
+      // dated "now" (default) so it supersedes the opening valuation, which is
+      // also dated now, by the createdAt tie-break.
+      await addValuation(owner, tracked.id, "123456789", "market")
+      expect((await accountRow(owner, tracked.id)).balance).toBe(123456789n)
+
+      const report = await detect(owner)
+      expect(report.filter((r) => r.accountId === tracked.id)).toEqual([])
+    })
+
+    // (d): tenant isolation — the afterAnchor sum is family-scoped; another
+    // family's back-dated activity never leaks into this family's drift report.
+    test("is tenant-scoped: another family's back-dated txn never appears", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const intruder = await factories.createAuthenticatedOnboardedUser()
+      const intruderAccount = await makeCash(intruder, "150000")
+      await backdateOpeningValuation(intruder, intruderAccount.id, daysAgo(30))
+      await addValuation(
+        intruder,
+        intruderAccount.id,
+        "200000",
+        "reconciliation",
+        daysAgo(5)
+      )
+      await addTransaction(
+        intruder,
+        intruderAccount.id,
+        "income",
+        "8000000",
+        "Intruder back-dated top-up",
+        daysAgo(6)
+      )
+
+      const report = await detect(owner)
+      expect(report.some((r) => r.accountId === intruderAccount.id)).toBe(false)
+    })
+  })
+
+  // --------------------------------------------------------------------------
   // current / available / held semantics
   // --------------------------------------------------------------------------
   describe("getAccountBalanceForFamily (current / available / held)", () => {
