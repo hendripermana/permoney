@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start"
 import type { Valuation } from "@prisma/client"
 import { z } from "zod"
 import { allowsNegativeAssetBalance, type AccountType } from "@/lib/accounts"
+import { ANCHOR_VALUATION_TYPES } from "@/lib/net-worth"
 import {
   absMoney,
   addMoney,
@@ -74,7 +75,13 @@ const PUBLIC_VALUATION_TYPE_SET: ReadonlySet<string> = new Set(
 // observation-only and must never silently override a cash account's
 // ledger-derived balance. "opening" needs no special-casing here: it is
 // simply the earliest anchor in the chain.
-const ANCHOR_VALUATION_TYPES = ["opening", "reconciliation", "manual"] as const
+//
+// The set itself lives in the Prisma-free `@/lib/net-worth` so the batch
+// in-memory net-worth fold (`buildNetWorthSeries`) and this per-account DB
+// derivation share ONE source of truth — the two must stay in exact parity
+// (same anchor types, same `afterAnchor` date-OR-createdAt predicate). The
+// ADR-0038 §6 invariant test (series last point == Σ Account.balance) is the
+// guard that keeps them from drifting.
 
 /**
  * Raised for valuation-specific rejections (unknown/forbidden type, currency
