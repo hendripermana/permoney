@@ -694,11 +694,18 @@ export type SureTransferHeldReason =
   | "db_rejected"
   | "unpaired_orphan"
   | "ambiguous_cluster"
+  // PER-199: TERMINAL, not "pending retry" like the reasons above — this leg's
+  // externalId is already bound to a live-or-deleted canonical Transaction
+  // from a PRIOR import run (staging-time provider dedup). It will never be
+  // promoted, by design (ADD-ONLY), so it must still be counted here to keep
+  // `legsStaged === legsPromotedTotal + Σ heldLegsByReason` exact.
+  | "already_imported"
 
-/** Reasons the pure pairer can assign (everything but the runtime `db_rejected`). */
+/** Reasons the pure pairer can assign (everything but the runtime-only,
+ * DB-anchored `db_rejected` / `already_imported`). */
 export type SureTransferPureHeldReason = Exclude<
   SureTransferHeldReason,
-  "db_rejected"
+  "db_rejected" | "already_imported"
 >
 
 /** Gate failures for a formed candidate pair (precedence: importable→currency→kind). */

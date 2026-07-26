@@ -9,6 +9,7 @@ import {
   Coins,
   FileJson,
   FileWarning,
+  History,
   Layers,
   Link2Off,
   Loader2,
@@ -528,6 +529,12 @@ export function DoneStage({
   const t = result.transactions
   const ignoredTotal = sumValues(result.ignoredEntities)
   const nothingPromoted = t.promotedThisRun === 0
+  // PER-199: a re-import can promote nothing for two very different reasons —
+  // "everything is already in your ledger" (success, add-only dedup working
+  // as designed) vs "everything is held pending the transfer step" (the
+  // pre-existing degraded case). Conflating them would be dishonest.
+  const allAlreadyImported =
+    nothingPromoted && t.duplicateSkipped > 0 && t.held === 0
 
   let title: string
   let description: string
@@ -535,6 +542,10 @@ export function DoneStage({
     title = "Already imported"
     description =
       "This exact export was imported before — nothing was duplicated."
+  } else if (allAlreadyImported) {
+    title = "Already up to date"
+    description =
+      "Every transaction in this export was already in your ledger from an earlier import — nothing was duplicated."
   } else if (nothingPromoted) {
     // The real-world degraded/transfer-heavy case: accounts and reference data
     // land, but every transaction is held. This is success, not failure.
@@ -565,15 +576,24 @@ export function DoneStage({
           </div>
         </CardHeader>
         <CardContent className="flex flex-col gap-6">
-          {t.promotedThisRun > 0 && (
-            <div className="flex flex-wrap items-end gap-x-3 gap-y-1">
-              <span className="text-5xl font-extrabold tracking-tight tabular-nums">
-                {t.promotedThisRun}
-              </span>
-              <span className="pb-1 text-lg text-muted-foreground">
-                transaction{t.promotedThisRun === 1 ? "" : "s"} added to your
-                ledger
-              </span>
+          {(t.promotedThisRun > 0 || t.duplicateSkipped > 0) && (
+            <div className="flex flex-col gap-1">
+              <div className="flex flex-wrap items-end gap-x-3 gap-y-1">
+                <span className="text-5xl font-extrabold tracking-tight tabular-nums">
+                  {t.promotedThisRun}
+                </span>
+                <span className="pb-1 text-lg text-muted-foreground">
+                  transaction{t.promotedThisRun === 1 ? "" : "s"} added to your
+                  ledger
+                </span>
+              </div>
+              {/* PER-199: honest re-import copy — "X new · Y already imported
+                  (skipped)" so dedup is visible, never a silent drop. */}
+              {t.duplicateSkipped > 0 && (
+                <p className="text-sm text-muted-foreground">
+                  {t.duplicateSkipped} already imported previously (skipped)
+                </p>
+              )}
             </div>
           )}
 
@@ -604,6 +624,7 @@ export function DoneStage({
 
           {/* Full reconciliation of the transaction buckets the server returns. */}
           {(t.held > 0 ||
+            t.duplicateSkipped > 0 ||
             t.zeroAmountSkipped > 0 ||
             t.invalidDateSkipped > 0 ||
             result.malformedLines > 0 ||
@@ -620,6 +641,12 @@ export function DoneStage({
                     className="border-amber-400 text-amber-700 dark:text-amber-300"
                   >
                     {t.held} held for review
+                  </Badge>
+                )}
+                {t.duplicateSkipped > 0 && (
+                  <Badge variant="outline" className="gap-1">
+                    <History size={11} />
+                    {t.duplicateSkipped} already imported
                   </Badge>
                 )}
                 {t.zeroAmountSkipped > 0 && (
@@ -867,6 +894,11 @@ const TRANSFER_HELD_REASON_LABEL: Record<SureTransferHeldReason, string> = {
   db_rejected: "rejected by a ledger safety check",
   unpaired_orphan: "no matching counterpart found",
   ambiguous_cluster: "more than one possible match",
+  // PER-199: TERMINAL (already imported by a prior run), not "pending retry"
+  // like the reasons above — deliberately excluded from the "kept for
+  // review" grouping in BalanceReconciliationSummary, which shows it as its
+  // own honest "already imported (skipped)" line instead.
+  already_imported: "already imported previously",
 }
 
 // PER-188 — the Done-screen truth about balances. Every migration run ends
@@ -880,10 +912,17 @@ function BalanceReconciliationSummary({
 }: {
   transfers: SureMigrationResult["transfers"]
 }) {
+  // PER-199: `already_imported` is TERMINAL (done, from a prior run) — it is
+  // never "pending review", so it gets its own honest line instead of
+  // inflating the "kept for review" count.
+  const alreadyImportedTotal = transfers.heldLegsByReason.already_imported
   const heldReasons = (
     Object.keys(transfers.heldLegsByReason) as SureTransferHeldReason[]
-  ).filter((reason) => transfers.heldLegsByReason[reason] > 0)
-  const heldTotal = sumValues(transfers.heldLegsByReason)
+  ).filter(
+    (reason) =>
+      reason !== "already_imported" && transfers.heldLegsByReason[reason] > 0
+  )
+  const heldTotal = sumValues(transfers.heldLegsByReason) - alreadyImportedTotal
 
   return (
     <div className="flex flex-col gap-3">
@@ -928,6 +967,26 @@ function BalanceReconciliationSummary({
                 )
                 .join(", ")}
               .
+            </p>
+          </div>
+        </div>
+      )}
+
+      {alreadyImportedTotal > 0 && (
+        <div className="flex items-start gap-3 rounded-2xl border border-border bg-muted/40 p-4 text-sm">
+          <History
+            size={18}
+            className="mt-0.5 shrink-0 text-muted-foreground"
+          />
+          <div>
+            <p className="font-medium">
+              {alreadyImportedTotal} transfer leg
+              {alreadyImportedTotal === 1 ? "" : "s"} already imported
+              previously (skipped).
+            </p>
+            <p className="text-xs text-muted-foreground">
+              These were part of an earlier import — re-importing never
+              duplicates them.
             </p>
           </div>
         </div>

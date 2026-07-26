@@ -797,9 +797,26 @@ const createTransactionTransportInputSchema = transactionInputSchema.extend({
   idempotencyKey: uuidV7Schema.optional(),
 })
 
-const createTransactionInputSchema =
-  createTransactionTransportInputSchema.required({
+// PER-199: durable provider-identity binding (mirrors Account/Category/
+// Merchant/Transaction's externalProvider/externalId columns). Deliberately
+// added ONLY to this INTERNAL schema, never to `transactionInputSchema` /
+// `createTransactionTransportInputSchema` — those back the public
+// `createTransactionFn` `.inputValidator`, so a client can never set or spoof
+// a provider binding. Only internal server-side callers (e.g. Sure-migration
+// transfer-pair promotion) construct a `data` object with these fields and
+// call `createTransactionForFamily` directly, bypassing the public transport
+// layer entirely — exactly as already happens for `idempotencyKey` there.
+// `toExternalId` names the INFLOW leg's binding; `externalId` (this
+// object's own key) names the OUTFLOW leg's for a transfer, or the single
+// leg's for income/expense.
+const createTransactionInputSchema = createTransactionTransportInputSchema
+  .required({
     idempotencyKey: true,
+  })
+  .extend({
+    externalProvider: z.string().min(1).nullable().optional(),
+    externalId: z.string().min(1).nullable().optional(),
+    toExternalId: z.string().min(1).nullable().optional(),
   })
 
 const updateTransactionTransportInputSchema = transactionInputSchema.extend({
@@ -1911,6 +1928,8 @@ export async function createTransactionForFamily({
               accountBalanceAfter: sourceBalanceAfter,
               attachmentUrl: data.attachmentUrl,
               idempotencyKey: data.idempotencyKey,
+              externalProvider: data.externalProvider ?? null,
+              externalId: data.externalId ?? null,
             },
           })
 
@@ -1938,6 +1957,8 @@ export async function createTransactionForFamily({
               fxRateSnapshotId: inflowProjection.fxRateSnapshotId,
               accountBalanceAfter: destBalanceAfter,
               attachmentUrl: data.attachmentUrl,
+              externalProvider: data.externalProvider ?? null,
+              externalId: data.toExternalId ?? null,
             },
           })
 

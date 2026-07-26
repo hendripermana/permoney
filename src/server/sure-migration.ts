@@ -142,6 +142,13 @@ export interface SureMigrationResult {
     staged: number
     promotedThisRun: number
     held: number
+    // PER-199: staged rows whose externalId already had a live-or-deleted
+    // canonical Transaction from a PRIOR import run (staging-time provider
+    // dedup) — ADD-ONLY skipped, never promoted. Counted separately from
+    // `held` (which means "not yet promotable, needs a future run/fix") so
+    // the Done screen can say "X new · Y already imported (skipped)" instead
+    // of silently dropping them from the reconciliation total.
+    duplicateSkipped: number
     zeroAmountSkipped: number
     invalidDateSkipped: number
   }
@@ -1373,6 +1380,22 @@ export async function runSureMigrationForFamily({
   })
   timings.transfers = Date.now() - transfersT0
 
+  // PER-199: total staged rows (standard + transfer legs) flagged `duplicate`
+  // at staging by the provider-identity dedup check, minus the transfer-leg
+  // portion (already counted in `transfers.heldLegsByReason.already_imported`
+  // — every leg is owned by exactly one bucket, mirroring the existing
+  // `held` split above).
+  const totalDuplicateRows = await runInTenantTransaction(
+    familyId,
+    user.id,
+    async (tx) =>
+      tx.rawImportedTransaction.count({
+        where: { familyId, importBatchId: batchId, rowStatus: "duplicate" },
+      })
+  )
+  const duplicateSkipped =
+    totalDuplicateRows - transfers.heldLegsByReason.already_imported
+
   // --- 10. Final reconciliation anchor (ADR-0045's PER-182 amendment) -------
   // Closes any remaining balance gap from legs Permoney's own staging gates
   // held (non-importable counterpart, ambiguous cluster, currency mismatch,
@@ -1434,7 +1457,11 @@ export async function runSureMigrationForFamily({
       promotedThisRun,
       // STANDARD held only — transfer legs are owned by the `transfers` block, so
       // every leg is counted in exactly one place (the spanning reconcile, Q7).
-      held: rows.length - promotableCount - transferLegs.length,
+      // PER-199: duplicateSkipped is subtracted out here (it has its own
+      // bucket) so it isn't silently double-counted as "held for review".
+      held:
+        rows.length - promotableCount - transferLegs.length - duplicateSkipped,
+      duplicateSkipped,
       zeroAmountSkipped,
       invalidDateSkipped,
     },
@@ -1556,6 +1583,7 @@ const EMPTY_HELD_BY_REASON = (): Record<SureTransferHeldReason, number> => ({
   db_rejected: 0,
   unpaired_orphan: 0,
   ambiguous_cluster: 0,
+  already_imported: 0,
 })
 
 const TIER_TO_RESULT_KEY: Record<
@@ -1688,6 +1716,16 @@ async function pairAndPromoteSureTransfers({
     if (outRow.rowStatus === "promoted" || inRow.rowStatus === "promoted") {
       continue
     }
+    // PER-199: a FRESH batch (different contentHash) can re-stage a pair whose
+    // externalId is already bound to a live-or-deleted canonical Transaction
+    // from a PRIOR import run — the staging-time provider dedup check
+    // (loadCanonicalDedupIndex) already flagged it `rowStatus: "duplicate"`.
+    // ADD-ONLY: never re-promote, never half-import — if EITHER leg is
+    // already bound, skip the whole pair. The finalRows pass below counts
+    // these into `already_imported`.
+    if (outRow.rowStatus === "duplicate" || inRow.rowStatus === "duplicate") {
+      continue
+    }
 
     const outMeta = transferMeta.get(pair.outflow.account_id)
     const outAccountId = accountMap.get(pair.outflow.account_id)
@@ -1732,6 +1770,13 @@ async function pairAndPromoteSureTransfers({
           date: new Date(pair.outflow.date),
           idempotencyKey: stableKey,
           status: "CLEARED",
+          // PER-199: bind BOTH legs to their own Sure externalId so a FUTURE
+          // re-import's staging-time dedup can recognize this pair as
+          // already-canonical (the DB partial-unique index protects each leg
+          // independently, since outflow/inflow have distinct externalIds).
+          externalProvider: SURE_PROVIDER,
+          externalId: pair.outflow.id,
+          toExternalId: pair.inflow.id,
         },
         familyId,
         user,
@@ -1798,10 +1843,13 @@ async function pairAndPromoteSureTransfers({
     }
   }
 
-  // --- Persist the pure pairer's held reasons (skip anything already promoted) -
+  // --- Persist the pure pairer's held reasons (skip anything already promoted
+  // OR already flagged duplicate at staging — PER-199 must not overwrite that
+  // terminal, DB-anchored verdict with the pure pairer's own guess) ----------
   for (const heldLeg of pairing.held) {
     const row = rowByExternalId.get(heldLeg.txn.id)
-    if (!row || row.rowStatus === "promoted") continue
+    if (!row || row.rowStatus === "promoted" || row.rowStatus === "duplicate")
+      continue
     await persistSureHeldReason(
       runInTenantTransaction,
       familyId,
@@ -1831,6 +1879,13 @@ async function pairAndPromoteSureTransfers({
   for (const row of finalRows) {
     if (row.rowStatus === "promoted") {
       legsPromotedTotal += 1
+      continue
+    }
+    // PER-199: staging-time provider dedup already gave this the terminal,
+    // DB-anchored verdict — trust rowStatus over errorReason (persistSureHeldReason
+    // is guarded to never touch these rows, but read defensively regardless).
+    if (row.rowStatus === "duplicate") {
+      heldLegsByReason.already_imported += 1
       continue
     }
     const reason = (row.errorReason ?? "") as SureTransferHeldReason

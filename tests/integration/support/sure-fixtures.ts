@@ -618,7 +618,7 @@ export interface SureTransferFixture {
   balancesMinor: Record<string, bigint>
 }
 
-const sureAccount = (
+export const sureAccount = (
   id: string,
   name: string,
   accountableType: string,
@@ -638,7 +638,7 @@ const sureAccount = (
     updated_at: "2026-06-25T00:00:00Z",
   })
 
-const sureTxn = (args: {
+export const sureTxn = (args: {
   id: string
   accountId: string
   amount: string
@@ -668,7 +668,7 @@ const sureTxn = (args: {
     updated_at: `${args.date}T00:00:00Z`,
   })
 
-const sureVal = (args: {
+export const sureVal = (args: {
   accountId: string
   amount: string
   date: string
@@ -688,7 +688,7 @@ const sureVal = (args: {
     updated_at: `${args.date}T00:00:00Z`,
   })
 
-const sureTransfer = (outflowId: string, inflowId: string): string =>
+export const sureTransfer = (outflowId: string, inflowId: string): string =>
   envelope("Transfer", {
     id: `xfer-${outflowId}`,
     outflow_transaction_id: outflowId,
@@ -704,6 +704,7 @@ const emptyHeld = (): Record<SureTransferHeldReason, number> => ({
   db_rejected: 0,
   unpaired_orphan: 0,
   ambiguous_cluster: 0,
+  already_imported: 0,
 })
 
 // ---------------------------------------------------------------------------

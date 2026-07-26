@@ -104,11 +104,17 @@ describe("import staging vertical slice (PER-82)", () => {
   const stage = async (
     tenant: Tenant,
     rows: Array<Record<string, unknown>>,
-    opts: { contentHash?: string; idempotencyKey?: string } = {}
+    opts: {
+      contentHash?: string
+      idempotencyKey?: string
+      sourceKind?: string
+      provider?: string
+    } = {}
   ) =>
     createImportBatchForFamily({
       data: {
-        sourceKind: "csv_upload",
+        sourceKind: opts.sourceKind ?? "csv_upload",
+        provider: opts.provider,
         accountId: tenant.accountId,
         contentHash: opts.contentHash ?? "hash-default",
         idempotencyKey: opts.idempotencyKey,
@@ -294,6 +300,57 @@ describe("import staging vertical slice (PER-82)", () => {
     }
   }
 
+  // Confirms every currently-"normalized" row (not just a single row) and
+  // promotes — used by the PER-199 tests below where a batch mixes duplicate
+  // and genuinely-new rows.
+  const stageConfirmPromoteAll = async (
+    tenant: Tenant,
+    rows: Array<Record<string, unknown>>,
+    opts: { contentHash: string; provider?: string; sourceKind?: string }
+  ) => {
+    const batch = await stage(tenant, rows, opts)
+    const staged = await getImportBatchForFamily({
+      data: { batchId: batch.id },
+      familyId: tenant.familyId,
+      userId: tenant.userId,
+      runInTenantTransaction: runner(),
+    })
+    const normalizedRowIds = staged.rows
+      .filter((r) => r.rowStatus === "normalized")
+      .map((r) => r.id)
+    if (normalizedRowIds.length > 0) {
+      await reviewImportRowsForFamily({
+        data: {
+          batchId: batch.id,
+          idempotencyKey: factories.createIdempotencyKey(),
+          decisions: normalizedRowIds.map((rowId) => ({
+            rowId,
+            verdict: "confirm" as const,
+          })),
+        },
+        familyId: tenant.familyId,
+        user: { id: tenant.userId, familyId: tenant.familyId },
+        runInTenantTransaction: runner(),
+      })
+    }
+    const result = await promoteImportBatchForFamily({
+      data: {
+        batchId: batch.id,
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: tenant.familyId,
+      user: { id: tenant.userId, familyId: tenant.familyId },
+      runInTenantTransaction: runner(),
+    })
+    const after = await getImportBatchForFamily({
+      data: { batchId: batch.id },
+      familyId: tenant.familyId,
+      userId: tenant.userId,
+      runInTenantTransaction: runner(),
+    })
+    return { batch, result, rows: after.rows }
+  }
+
   test("promotion matches single-create invariants incl. base FX projection (PER-159)", async () => {
     const tenant = await setupTenant()
     const key = factories.createIdempotencyKey()
@@ -437,5 +494,201 @@ describe("import staging vertical slice (PER-82)", () => {
     expect(roleCan("member", "ledger:write")).toBe(true)
     expect(roleCan("admin", "ledger:write")).toBe(true)
     expect(roleCan("owner", "ledger:write")).toBe(true)
+  })
+
+  // ---- PER-199: per-transaction cross-batch provider (externalId) dedup ----
+  // Root cause proof: batch-level contentHash dedup only protects a
+  // byte-identical re-upload. A FRESH Sure export (different contentHash,
+  // overlapping externalIds) used to re-promote every overlapping
+  // transaction. These tests stage TWO separate batches with different
+  // contentHash and an overlapping externalId to prove the fix.
+
+  test("PER-199: a fresh batch re-staging an already-promoted externalId is flagged duplicate and never re-promoted", async () => {
+    const tenant = await setupTenant()
+
+    const first = await stageConfirmPromoteAll(
+      tenant,
+      [row({ externalId: "sure-txn-1" })],
+      {
+        contentHash: "sure-export-1",
+        provider: "sure",
+        sourceKind: "migration",
+      }
+    )
+    expect(first.result.promotedCount).toBe(1)
+    const firstTxnId = first.result.promotedTransactionIds[0]!
+
+    // Fresh export: different contentHash, same overlapping externalId PLUS
+    // one genuinely new transaction.
+    const second = await stageConfirmPromoteAll(
+      tenant,
+      [
+        row({ externalId: "sure-txn-1" }),
+        row({ externalId: "sure-txn-2", description: "New coffee" }),
+      ],
+      {
+        contentHash: "sure-export-2",
+        provider: "sure",
+        sourceKind: "migration",
+      }
+    )
+
+    const overlapRow = second.rows.find((r) => r.externalId === "sure-txn-1")
+    const newRow = second.rows.find((r) => r.externalId === "sure-txn-2")
+    expect(overlapRow?.rowStatus).toBe("duplicate")
+    expect(overlapRow?.duplicateOfTransactionId).toBe(firstTxnId)
+    expect(newRow?.rowStatus).toBe("promoted")
+    // Only ONE new transaction promoted this run (the genuinely-new one) —
+    // the overlapping row was never re-created.
+    expect(second.result.promotedCount).toBe(1)
+
+    const liveCount = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      (tx) =>
+        tx.transaction.count({
+          where: { familyId: tenant.familyId, deletedAt: null },
+        })
+    )
+    expect(liveCount).toBe(2)
+  })
+
+  test("PER-199: promotion persists externalProvider/externalId onto the created Transaction", async () => {
+    const tenant = await setupTenant()
+    const { result } = await stageConfirmPromoteAll(
+      tenant,
+      [row({ externalId: "sure-txn-9" })],
+      {
+        contentHash: "sure-export-9",
+        provider: "sure",
+        sourceKind: "migration",
+      }
+    )
+    const txn = await harness.withMember(tenant.familyId, tenant.userId, (tx) =>
+      tx.transaction.findUniqueOrThrow({
+        where: { id: result.promotedTransactionIds[0]! },
+      })
+    )
+    expect(txn.externalProvider).toBe("sure")
+    expect(txn.externalId).toBe("sure-txn-9")
+  })
+
+  test("PER-199: manually-created (externalId-less) transactions are unaffected by provider dedup", async () => {
+    const tenant = await setupTenant()
+    const { result } = await stageConfirmPromoteAll(tenant, [row()], {
+      contentHash: "csv-plain",
+    })
+    const txn = await harness.withMember(tenant.familyId, tenant.userId, (tx) =>
+      tx.transaction.findUniqueOrThrow({
+        where: { id: result.promotedTransactionIds[0]! },
+      })
+    )
+    expect(txn.externalProvider).toBeNull()
+    expect(txn.externalId).toBeNull()
+  })
+
+  test("PER-199: a Sure transaction deleted in Permoney is not resurrected by re-import", async () => {
+    const tenant = await setupTenant()
+    const first = await stageConfirmPromoteAll(
+      tenant,
+      [row({ externalId: "sure-txn-del" })],
+      {
+        contentHash: "sure-export-del-1",
+        provider: "sure",
+        sourceKind: "migration",
+      }
+    )
+    const firstTxnId = first.result.promotedTransactionIds[0]!
+
+    // The creator deletes the imported transaction inside Permoney.
+    await harness.withMember(tenant.familyId, tenant.userId, (tx) =>
+      tx.transaction.update({
+        where: { id: firstTxnId },
+        data: { deletedAt: new Date() },
+      })
+    )
+
+    const second = await stageConfirmPromoteAll(
+      tenant,
+      [row({ externalId: "sure-txn-del" })],
+      {
+        contentHash: "sure-export-del-2",
+        provider: "sure",
+        sourceKind: "migration",
+      }
+    )
+    const overlapRow = second.rows.find((r) => r.externalId === "sure-txn-del")
+    expect(overlapRow?.rowStatus).toBe("duplicate")
+    expect(second.result.promotedCount).toBe(0)
+
+    const liveCount = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      (tx) =>
+        tx.transaction.count({
+          where: {
+            familyId: tenant.familyId,
+            externalProvider: "sure",
+            externalId: "sure-txn-del",
+          },
+        })
+    )
+    // Only the original (now soft-deleted) row — the deletion decision stuck.
+    expect(liveCount).toBe(1)
+  })
+
+  test("PER-199: the DB partial-unique index rejects two live Transactions sharing (familyId, externalProvider, externalId)", async () => {
+    const tenant = await setupTenant()
+    await factories.createTransaction({
+      familyId: tenant.familyId,
+      userId: tenant.userId,
+      accountId: tenant.accountId,
+      description: "First",
+    })
+    await harness.withMember(tenant.familyId, tenant.userId, (tx) =>
+      tx.transaction.updateMany({
+        where: { familyId: tenant.familyId },
+        data: { externalProvider: "sure", externalId: "dup-key" },
+      })
+    )
+
+    await expect(
+      harness.withMember(tenant.familyId, tenant.userId, (tx) =>
+        tx.transaction.create({
+          data: {
+            familyId: tenant.familyId,
+            userId: tenant.userId,
+            accountId: tenant.accountId,
+            amount: -1n,
+            type: "expense",
+            currency: "IDR",
+            description: "Second",
+            externalProvider: "sure",
+            externalId: "dup-key",
+          },
+        })
+      )
+    ).rejects.toThrow()
+  })
+
+  test("PER-199: family B's externalId binding never dedups against family A's transaction", async () => {
+    const a = await setupTenant()
+    const b = await setupTenant()
+
+    const forA = await stageConfirmPromoteAll(
+      a,
+      [row({ externalId: "shared-sure-id" })],
+      { contentHash: "a-export", provider: "sure", sourceKind: "migration" }
+    )
+    expect(forA.result.promotedCount).toBe(1)
+
+    const forB = await stageConfirmPromoteAll(
+      b,
+      [row({ externalId: "shared-sure-id" })],
+      { contentHash: "b-export", provider: "sure", sourceKind: "migration" }
+    )
+    // Same externalId, DIFFERENT family — must promote independently, not be
+    // flagged as a duplicate of family A's transaction.
+    expect(forB.result.promotedCount).toBe(1)
   })
 })
