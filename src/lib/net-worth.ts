@@ -16,6 +16,20 @@ import { convertMinor } from "@/lib/fx"
 //     per point. FX is as-of-date mark-to-market: the rate resolver is clamped to
 //     the greatest snapshot `asOfDate <= T`; a future-dated rate never leaks.
 //
+// Cash (transaction_flow) balance-as-of-T mirrors `computeCanonicalBalance`
+// (ADR-0043 §2 / PER-201) EXACTLY, so the series' last point equals the
+// materialized `Account.balance` by construction (ADR-0038 §6). The anchor is the
+// LATEST balance-assertion valuation (opening | reconciliation | manual) with
+// `valuationDate <= T`; the balance is `anchor.value + Σ afterAnchor(anchor, ≤ T)`
+// where a flow is "after the anchor" iff `date > anchor.date` OR
+// `createdAt > anchor.createdAt` (both disjuncts load-bearing — a live
+// reconciliation asserts a value that ABSORBS all prior-and-already-recorded
+// flow, while a back-dated txn added after that anchor is still counted; see
+// PER-201). A cash account with no anchor at T contributes 0 (pre-inception).
+// Recognizing reconciliation/manual anchors — not just `opening` — is what fixes
+// PER-204: migrated/reconciled accounts are anchored by `reconciliation`, never
+// `opening`, so the old opening-only fold zeroed every one of them.
+//
 // All money is signed minor units (ASSET balance >= 0, LIABILITY balance <= 0),
 // the same sign convention as `Account.balance` / `Valuation.value`.
 // =============================================================================
@@ -23,6 +37,44 @@ import { convertMinor } from "@/lib/fx"
 export const MAX_SERIES_POINTS = 366
 
 export type SeriesInterval = "day" | "week" | "month"
+
+/**
+ * Balance-assertion valuation types — the anchors a cash (transaction_flow)
+ * account's balance is derived from. The SINGLE source of truth for this set;
+ * `computeCanonicalBalance` (src/server/valuations.ts) imports it so the batch
+ * in-memory fold here and the per-account DB derivation there can never drift on
+ * which valuation types reset a cash balance (ADR-0043 §1). `market` is excluded
+ * — it never asserts a cash balance. Kept in this Prisma-free module so the
+ * server file depends on the pure one, never the reverse.
+ */
+export const ANCHOR_VALUATION_TYPES = [
+  "opening",
+  "reconciliation",
+  "manual",
+] as const
+
+const ANCHOR_VALUATION_TYPE_SET: ReadonlySet<string> = new Set(
+  ANCHOR_VALUATION_TYPES
+)
+
+/**
+ * The `afterAnchor` predicate (ADR-0043 §2 / PER-201), the in-memory twin of the
+ * Prisma `OR: [{ date: { gt } }, { createdAt: { gt } }]` in
+ * `sumTransactionFlowAfterAnchor` (src/server/valuations.ts). A flow counts
+ * toward the post-anchor sum iff it is dated after the anchor OR was recorded
+ * after it — the disjunction is load-bearing in BOTH directions (a future-dated
+ * txn recorded before a live reconciliation; a back-dated txn recorded after
+ * one). Keep the two shapes identical; the ADR-0038 §6 invariant test enforces
+ * parity. Dates are compared as YYYY-MM-DD strings (lexicographic == calendar).
+ */
+function isAfterAnchor(
+  anchorDate: string,
+  anchorCreatedAt: Date,
+  txnDate: string,
+  txnCreatedAt: Date
+): boolean {
+  return txnDate > anchorDate || txnCreatedAt > anchorCreatedAt
+}
 
 // ---- shared point normalizer ------------------------------------------------
 
@@ -161,6 +213,7 @@ export interface SeriesValuation {
   accountId: string
   value: bigint
   valuationDate: string // YYYY-MM-DD (date-only anchor)
+  createdAt: Date // recorded-at instant; the `afterAnchor` createdAt disjunct
   type: string
 }
 
@@ -168,6 +221,7 @@ export interface SeriesTransaction {
   accountId: string
   amount: bigint
   date: Date // instant; localized to the family timezone for the day boundary
+  createdAt: Date // recorded-at instant; the `afterAnchor` createdAt disjunct
 }
 
 export interface SeriesSnapshot {
@@ -214,32 +268,48 @@ export function buildNetWorthSeries(
   const sampleDates = generateSampleDates(input.from, input.to, input.interval)
 
   // --- index canonical rows per account / currency, all sorted ascending -----
-  const openingByAccount = new Map<string, { date: string; value: bigint }>()
+  // Cash accounts key off ANCHOR-type valuations (opening | reconciliation |
+  // manual); tracked accounts carry the latest valuation of ANY type. Both come
+  // from the same `input.valuations`, split by type here.
+  const anchorsByAccount = new Map<string, CashAnchor[]>()
   const valuationsByAccount = new Map<
     string,
     { date: string; value: bigint }[]
   >()
   for (const valuation of input.valuations) {
-    if (valuation.type === "opening") {
-      openingByAccount.set(valuation.accountId, {
+    if (ANCHOR_VALUATION_TYPE_SET.has(valuation.type)) {
+      const anchors = anchorsByAccount.get(valuation.accountId) ?? []
+      anchors.push({
         date: valuation.valuationDate,
+        createdAt: valuation.createdAt,
         value: valuation.value,
       })
+      anchorsByAccount.set(valuation.accountId, anchors)
     }
     const list = valuationsByAccount.get(valuation.accountId) ?? []
     list.push({ date: valuation.valuationDate, value: valuation.value })
     valuationsByAccount.set(valuation.accountId, list)
   }
+  // Sort anchors by (date, createdAt) ascending — the last one with date <= T is
+  // the active anchor, mirroring `latestValuation`'s (valuationDate desc,
+  // createdAt desc) tie-break (src/server/valuations.ts).
+  for (const anchors of anchorsByAccount.values()) {
+    anchors.sort((a, b) =>
+      a.date !== b.date
+        ? a.date < b.date
+          ? -1
+          : 1
+        : a.createdAt.getTime() - b.createdAt.getTime()
+    )
+  }
   for (const list of valuationsByAccount.values()) byDateAsc(list)
 
-  const transactionsByAccount = new Map<
-    string,
-    { date: string; amount: bigint }[]
-  >()
+  const transactionsByAccount = new Map<string, CashFlowRow[]>()
   for (const transaction of input.transactions) {
     const list = transactionsByAccount.get(transaction.accountId) ?? []
     list.push({
       date: calendarDateInTimezone(transaction.date, input.timezone),
+      createdAt: transaction.createdAt,
       amount: transaction.amount,
     })
     transactionsByAccount.set(transaction.accountId, list)
@@ -258,7 +328,7 @@ export function buildNetWorthSeries(
   for (const list of snapshotsByCurrency.values()) byDateAsc(list)
 
   // --- per-account / per-currency advancing pointers (single pass) -----------
-  const cashState = new Map<string, { idx: number; running: bigint }>()
+  const cashState = new Map<string, CashFoldState>()
   const trackedState = new Map<
     string,
     { idx: number; current: bigint | null }
@@ -267,7 +337,12 @@ export function buildNetWorthSeries(
     if (account.balanceSource === "valuation") {
       trackedState.set(account.id, { idx: 0, current: null })
     } else {
-      cashState.set(account.id, { idx: 0, running: 0n })
+      cashState.set(account.id, {
+        anchorIdx: 0,
+        active: null,
+        tIdx: 0,
+        sumThroughT: 0n,
+      })
     }
   }
   const rateState = new Map<string, { idx: number; rate: bigint | null }>()
@@ -292,7 +367,7 @@ export function buildNetWorthSeries(
       accountClass: account.accountClass,
       currency: account.currency,
       native: nativeBalanceAt(account, sampleDate, {
-        openingByAccount,
+        anchorsByAccount,
         cashState,
         trackedState,
         transactionsByAccount,
@@ -315,11 +390,41 @@ export function buildNetWorthSeries(
   return points
 }
 
+interface CashAnchor {
+  date: string
+  createdAt: Date
+  value: bigint
+}
+
+interface CashFlowRow {
+  date: string
+  createdAt: Date
+  amount: bigint
+}
+
+/** Memoized summary of the currently-active anchor (recomputed on activation). */
+interface ActiveAnchor {
+  value: bigint
+  // Σ flow dated at/before the anchor date (subtracted from `sumThroughT` to
+  // leave only strictly-after-date flow — the first `afterAnchor` disjunct).
+  sumThroughAnchorDate: bigint
+  // Σ flow dated at/before the anchor date BUT recorded after it — the second
+  // (createdAt) disjunct, which the date subtraction above would otherwise drop.
+  backdatedAfterAnchor: bigint
+}
+
+interface CashFoldState {
+  anchorIdx: number
+  active: ActiveAnchor | null
+  tIdx: number
+  sumThroughT: bigint
+}
+
 interface FoldState {
-  openingByAccount: Map<string, { date: string; value: bigint }>
-  cashState: Map<string, { idx: number; running: bigint }>
+  anchorsByAccount: Map<string, CashAnchor[]>
+  cashState: Map<string, CashFoldState>
   trackedState: Map<string, { idx: number; current: bigint | null }>
-  transactionsByAccount: Map<string, { date: string; amount: bigint }[]>
+  transactionsByAccount: Map<string, CashFlowRow[]>
   valuationsByAccount: Map<string, { date: string; value: bigint }[]>
 }
 
@@ -340,16 +445,67 @@ function nativeBalanceAt(
     return tracked.current ?? 0n
   }
 
-  // cash-like: opening anchor + Σ flow (date <= T). Pointer accumulates the
-  // running flow (including any activity before `from`); the opening date gates
-  // existence so the account contributes 0 before inception (ADR-0038 §4).
+  // cash-like (ADR-0043 §2 / PER-201, twin of `computeCanonicalBalance`):
+  //   balance(T) = anchor.value + Σ { afterAnchor(anchor)(t) ∧ t.date <= T }
+  // The counted set splits into two disjoint pieces (see `isAfterAnchor`):
+  //   (a) strictly-after-date flow: Σ{ anchorDate < date <= T }
+  //         = sumThroughT − sumThroughAnchorDate
+  //   (b) back-dated-but-later-recorded flow: Σ{ date <= anchorDate ∧
+  //         createdAt > anchorCreatedAt }  — constant per anchor.
   const cash = state.cashState.get(account.id)!
-  const list = state.transactionsByAccount.get(account.id) ?? []
-  while (cash.idx < list.length && list[cash.idx].date <= sampleDate) {
-    cash.running += list[cash.idx].amount
-    cash.idx += 1
+  const txns = state.transactionsByAccount.get(account.id) ?? []
+  const anchors = state.anchorsByAccount.get(account.id) ?? []
+
+  // Advance the active anchor to the latest one with date <= T. Each activation
+  // recomputes its constant pieces (both bounded by the anchor date) once.
+  while (
+    cash.anchorIdx < anchors.length &&
+    anchors[cash.anchorIdx].date <= sampleDate
+  ) {
+    cash.active = summarizeAnchor(anchors[cash.anchorIdx], txns)
+    cash.anchorIdx += 1
   }
-  const opening = state.openingByAccount.get(account.id)
-  if (!opening || opening.date > sampleDate) return 0n
-  return opening.value + cash.running
+
+  // Advance the running Σ flow dated <= T (single pass across sample dates).
+  while (cash.tIdx < txns.length && txns[cash.tIdx].date <= sampleDate) {
+    cash.sumThroughT += txns[cash.tIdx].amount
+    cash.tIdx += 1
+  }
+
+  if (cash.active === null) {
+    // No anchor yet at T. A cash account created the canonical way always has an
+    // `opening` anchor (accounts.ts), so this is reached only BEFORE the first
+    // anchor's date, or for an anchor-less account (e.g. a raw insert). Mirror
+    // `computeCanonicalBalance`'s no-anchor intent as an implicit opening-0: 0 +
+    // Σ all flow <= T. Before any flow this is 0 (pre-inception, ADR-0038 §4).
+    return anchors.length === 0 ? cash.sumThroughT : 0n
+  }
+  return (
+    cash.active.value +
+    (cash.sumThroughT - cash.active.sumThroughAnchorDate) +
+    cash.active.backdatedAfterAnchor
+  )
+}
+
+/**
+ * Precompute an anchor's two constant flow pieces (both Σ bounded by the anchor
+ * date). The strictly-after-DATE disjunct of `afterAnchor` is handled by the
+ * caller via `sumThroughT − sumThroughAnchorDate`; here we only classify the
+ * at/before-date rows, for which `isAfterAnchor` collapses to its createdAt
+ * disjunct — the exact rows the date subtraction would otherwise drop.
+ */
+function summarizeAnchor(
+  anchor: CashAnchor,
+  txns: CashFlowRow[]
+): ActiveAnchor {
+  let sumThroughAnchorDate = 0n
+  let backdatedAfterAnchor = 0n
+  for (const txn of txns) {
+    if (txn.date > anchor.date) break // txns are date-sorted ascending
+    sumThroughAnchorDate += txn.amount
+    if (isAfterAnchor(anchor.date, anchor.createdAt, txn.date, txn.createdAt)) {
+      backdatedAfterAnchor += txn.amount
+    }
+  }
+  return { value: anchor.value, sumThroughAnchorDate, backdatedAfterAnchor }
 }

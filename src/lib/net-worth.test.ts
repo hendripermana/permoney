@@ -39,8 +39,12 @@ const valuation = (
   accountId: string,
   value: bigint,
   valuationDate: string,
-  type = "opening"
-): SeriesValuation => ({ accountId, value, valuationDate, type })
+  type = "opening",
+  // Defaults to the valuation's own date at midnight UTC. `afterAnchor` uses
+  // strict `>`, so a same-instant flow is NOT "after" — existing date-only
+  // expectations are preserved unless a test passes explicit createdAt values.
+  createdAt: Date = new Date(`${valuationDate}T00:00:00Z`)
+): SeriesValuation => ({ accountId, value, valuationDate, type, createdAt })
 const snapshot = (
   fromCurrency: string,
   rate: string,
@@ -186,10 +190,16 @@ describe("generateSampleDates", () => {
 // =============================================================================
 
 describe("buildNetWorthSeries", () => {
-  const txn = (accountId: string, amount: bigint, iso: string) => ({
+  const txn = (
+    accountId: string,
+    amount: bigint,
+    iso: string,
+    createdAtIso: string = iso
+  ) => ({
     accountId,
     amount,
     date: new Date(iso),
+    createdAt: new Date(createdAtIso),
   })
 
   test("cash-like balance = opening anchor + Σ flow up to each sample date", () => {
@@ -208,6 +218,123 @@ describe("buildNetWorthSeries", () => {
     )
     expect(pointByDate(points, "2026-01-05").netWorth).toBe(100_000n)
     expect(pointByDate(points, "2026-01-25").netWorth).toBe(120_000n)
+  })
+
+  // PER-204: a cash account anchored by a RECONCILIATION valuation (not an
+  // `opening`) — the shape of every Sure-migrated / reconciled account — must
+  // resolve to its asserted balance, not 0. The old opening-only fold zeroed it.
+  test("reconciliation anchor (no opening) sets the cash balance — PER-204", () => {
+    const points = buildNetWorthSeries(
+      baseInput({
+        from: "2026-01-01",
+        to: "2026-03-01",
+        interval: "month",
+        accounts: [cashAccount("a")],
+        valuations: [
+          valuation("a", 210_000_000n, "2026-02-15", "reconciliation"),
+        ],
+        transactions: [txn("a", 5_000_000n, "2026-02-20T00:00:00Z")],
+      })
+    )
+    // Before the anchor's date the account has no anchor yet → 0.
+    expect(pointByDate(points, "2026-01-01").netWorth).toBe(0n)
+    // At/after: asserted value + post-anchor flow (dated after the anchor).
+    expect(pointByDate(points, "2026-03-01").netWorth).toBe(215_000_000n)
+  })
+
+  // A later reconciliation asserts a fresh balance that ABSORBS all flow dated
+  // at/before it and already recorded — mirrors `computeCanonicalBalance`.
+  test("a later reconciliation anchor overrides accumulated flow (absorbs prior)", () => {
+    const points = buildNetWorthSeries(
+      baseInput({
+        from: "2026-01-01",
+        to: "2026-03-01",
+        interval: "month",
+        accounts: [cashAccount("a")],
+        valuations: [
+          valuation("a", 100_000n, "2026-01-01", "opening"),
+          valuation("a", 500_000n, "2026-02-10", "reconciliation"),
+        ],
+        transactions: [
+          txn("a", 999_999n, "2026-01-15T00:00:00Z"), // absorbed by the reconciliation
+          txn("a", 20_000n, "2026-02-20T00:00:00Z"), // after it → counted
+        ],
+      })
+    )
+    // Jan (opening active): 100k + the 01-15 flow.
+    expect(pointByDate(points, "2026-01-01").netWorth).toBe(100_000n)
+    expect(pointByDate(points, "2026-02-01").netWorth).toBe(1_099_999n)
+    // Mar (reconciliation active): asserts 500k, prior flow absorbed, +20k after.
+    expect(pointByDate(points, "2026-03-01").netWorth).toBe(520_000n)
+  })
+
+  // The `afterAnchor` createdAt disjunct (PER-201): a txn dated BEFORE the anchor
+  // but RECORDED after it is genuine post-anchor activity and must be counted;
+  // the same-date txn recorded before the anchor is absorbed.
+  test("a back-dated txn recorded after the anchor is counted (createdAt disjunct)", () => {
+    const anchorCreatedAt = new Date("2026-02-10T09:00:00Z")
+    const points = buildNetWorthSeries(
+      baseInput({
+        from: "2026-02-01",
+        to: "2026-03-01",
+        interval: "month",
+        accounts: [cashAccount("a")],
+        valuations: [
+          valuation(
+            "a",
+            500_000n,
+            "2026-02-10",
+            "reconciliation",
+            anchorCreatedAt
+          ),
+        ],
+        transactions: [
+          // dated before the anchor date, recorded AFTER it → post-anchor.
+          txn("a", 7_000n, "2026-02-05T00:00:00Z", "2026-02-11T00:00:00Z"),
+          // dated before AND recorded before the anchor → absorbed.
+          txn("a", 3_000n, "2026-02-05T00:00:00Z", "2026-02-09T00:00:00Z"),
+        ],
+      })
+    )
+    expect(pointByDate(points, "2026-03-01").netWorth).toBe(507_000n)
+  })
+
+  // No-anchor edge: `computeCanonicalBalance` falls back to the stored balance,
+  // which for a canonically-created account equals opening-0 + Σ all flow. The
+  // fold never reads Account.balance, so it folds an anchor-less cash account as
+  // an implicit opening-0: 0 + Σ all flow ≤ T.
+  test("an account with no anchor of any type folds as opening-0 (Σ all flow)", () => {
+    const points = buildNetWorthSeries(
+      baseInput({
+        from: "2026-01-01",
+        to: "2026-02-01",
+        interval: "month",
+        accounts: [cashAccount("a")],
+        valuations: [], // no opening / reconciliation / manual
+        transactions: [
+          txn("a", 40_000n, "2026-01-10T00:00:00Z"),
+          txn("a", -15_000n, "2026-01-20T00:00:00Z"),
+        ],
+      })
+    )
+    expect(pointByDate(points, "2026-01-01").netWorth).toBe(0n) // no flow yet
+    expect(pointByDate(points, "2026-02-01").netWorth).toBe(25_000n)
+  })
+
+  // A `market` valuation is an OBSERVATION, never a cash anchor, so it must not
+  // assert a transaction_flow balance — the account folds as opening-0 here.
+  test("a market valuation is not a cash anchor (observation only)", () => {
+    const points = buildNetWorthSeries(
+      baseInput({
+        from: "2026-01-01",
+        to: "2026-01-01",
+        interval: "day",
+        accounts: [cashAccount("a")],
+        valuations: [valuation("a", 9_000_000n, "2026-01-01", "market")],
+        transactions: [txn("a", 25_000n, "2026-01-01T00:00:00Z")],
+      })
+    )
+    expect(pointByDate(points, "2026-01-01").netWorth).toBe(25_000n)
   })
 
   test("tracked balance carries forward the latest valuation <= T", () => {

@@ -25,8 +25,10 @@ import type { RunInTenantTransaction } from "./mutation-kit"
 // PER-154 / ADR-0038 — Reporting engine: net-worth time series.
 //
 // Computed-on-read from canonical rows (no BalanceSnapshot table). For each
-// sampled date the per-account NATIVE balance is derived (cash = opening anchor
-// + Σ flow ≤ T; tracked = latest valuation ≤ T, carried forward) and normalized
+// sampled date the per-account NATIVE balance is derived (cash = latest anchor
+// valuation ≤ T [opening | reconciliation | manual] + Σ afterAnchor flow ≤ T,
+// the twin of `computeCanonicalBalance`; tracked = latest valuation ≤ T) and
+// normalized
 // to the family base currency by as-of-date mark-to-market FX (greatest snapshot
 // asOfDate ≤ T). The heavy lifting is the pure `buildNetWorthSeries` fold in
 // `src/lib/net-worth.ts`, shared with the live `NetWorthInBaseCard` via
@@ -143,12 +145,13 @@ export async function getNetWorthSeriesForFamily({
           accountId: true,
           value: true,
           valuationDate: true,
+          createdAt: true,
           type: true,
         },
       }),
       tx.transaction.findMany({
         where: { familyId, deletedAt: null, date: { lt: upperBound } },
-        select: { accountId: true, amount: true, date: true },
+        select: { accountId: true, amount: true, date: true, createdAt: true },
       }),
       tx.fxRateSnapshot.findMany({
         where: {
@@ -171,12 +174,14 @@ export async function getNetWorthSeriesForFamily({
         accountId: row.accountId,
         value: row.value,
         valuationDate: toDateOnly(row.valuationDate),
+        createdAt: row.createdAt,
         type: row.type,
       })),
       transactions: transactions.map((row) => ({
         accountId: row.accountId,
         amount: row.amount,
         date: row.date,
+        createdAt: row.createdAt,
       })),
       snapshots: snapshots.map((row) => ({
         fromCurrency: row.fromCurrency,

@@ -126,6 +126,28 @@ describe("net-worth time series (PER-154 / ADR-0038)", () => {
       user: owner.user,
     })
 
+  // Assert a fresh balance at a date — a `reconciliation` anchor. Pass the
+  // POSITIVE magnitude; the server signs it for the account class (a LIABILITY
+  // magnitude becomes a negative signed value). This is the Sure-migrated shape:
+  // the effective anchor is a reconciliation, never the `opening`.
+  const reconcile = (
+    owner: AuthenticatedOnboardedUser,
+    accountId: string,
+    magnitude: string,
+    date: string
+  ) =>
+    createValuationForFamily({
+      data: {
+        accountId,
+        value: magnitude,
+        type: "reconciliation",
+        valuationDate: new Date(`${date}T00:00:00.000Z`),
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
   const series = (
     owner: AuthenticatedOnboardedUser,
     from: string,
@@ -146,6 +168,42 @@ describe("net-worth time series (PER-154 / ADR-0038)", () => {
     const point = points.find((p) => p.date === date)
     if (!point) throw new Error(`no point for ${date}`)
     return point
+  }
+
+  // Recompute the live card total exactly as `NetWorthInBaseCard` does (shared
+  // `normalizeNetWorthAt` over materialized balances + latest rate per currency),
+  // and the raw Σ signed Account.balance. For an all-base-currency family the two
+  // coincide; both must equal the series' last point (ADR-0038 §6).
+  const materializedCardTotal = async (owner: AuthenticatedOnboardedUser) => {
+    const accounts = await harness.withFamily(owner.family.id, async (tx) =>
+      tx.account.findMany({
+        where: { familyId: owner.family.id },
+        select: { accountClass: true, currency: true, balance: true },
+      })
+    )
+    const sumSignedBalance = accounts.reduce((acc, a) => acc + a.balance, 0n)
+    const overview = await getFxOverviewForFamily({
+      familyId: owner.family.id,
+      userId: owner.user.id,
+    })
+    const latest = new Map<string, bigint>()
+    for (const rate of overview.rates) {
+      if (rate.toCurrency !== overview.baseCurrency) continue
+      if (!latest.has(rate.fromCurrency)) {
+        latest.set(rate.fromCurrency, BigInt(rate.rateScaled))
+      }
+    }
+    const balances: PointBalance[] = accounts.map((a) => ({
+      accountClass: a.accountClass,
+      currency: a.currency,
+      native: a.balance,
+    }))
+    const cardTotal = normalizeNetWorthAt(
+      balances,
+      (currency) => latest.get(currency) ?? null,
+      overview.baseCurrency
+    ).netWorth
+    return { cardTotal, sumSignedBalance }
   }
 
   // A rich mixed family used by several assertions.
@@ -383,6 +441,128 @@ describe("net-worth time series (PER-154 / ADR-0038)", () => {
     ).netWorth
 
     expect(last.netWorth).toBe(cardTotal.toString())
+  })
+
+  // ---- ADR-0038 §6 invariant: the reconciliation-anchor regression -----------
+  //
+  // The bug PER-204 fixes: the fold only recognized `opening` anchors, so any
+  // account whose effective anchor is a RECONCILIATION (every Sure-migrated /
+  // reconciled account) folded to 0. This is the guard that keeps the batch
+  // fold and `computeCanonicalBalance` in exact parity: the series' last point
+  // must equal the live card AND Σ Account.balance, on data that mirrors the
+  // failure — reconciliation-anchored accounts, a back-dated post-anchor txn
+  // (the createdAt disjunct), and a liability (the sign path).
+  test("last point == Σ Account.balance == card for reconciliation-anchored accounts (PER-204)", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "UTC")
+
+    // Sure-migrated shape: opening 0, then the REAL anchor is a reconciliation.
+    const cash = await makeAccount(owner, {
+      name: "Migrated cash",
+      accountType: "DEPOSITORY",
+      openingBalance: "0",
+      openingDate: "2025-07-24",
+    })
+    const loan = await makeAccount(owner, {
+      name: "Migrated loan",
+      accountType: "LOAN",
+      openingBalance: "0",
+      openingDate: "2025-07-24",
+    })
+
+    // Pre-reconciliation activity the anchor absorbs (dated + recorded before it).
+    await expense(owner, cash.id, 999_999n, "2026-01-10")
+
+    // The effective anchors (latest <= now): a reconciliation on each account.
+    await reconcile(owner, cash.id, "210000000", "2026-06-30")
+    await reconcile(owner, loan.id, "128000000", "2026-06-30") // signed → -128,000,000
+
+    // Post-anchor flow, dated after the anchor.
+    await expense(owner, cash.id, 5_000_000n, "2026-07-05")
+    // Back-dated flow RECORDED after the reconciliation: dated before the anchor
+    // but created now → genuine post-anchor activity (the createdAt disjunct).
+    await expense(owner, cash.id, 1_000_000n, "2026-06-01")
+
+    const today = new Date().toISOString().slice(0, 10)
+    const result = await series(owner, "2025-07-01", today, "month")
+    const last = result.points[result.points.length - 1]
+    expect(last.date).toBe(today)
+
+    const { cardTotal, sumSignedBalance } = await materializedCardTotal(owner)
+    // The invariant (ADR-0038 §6). Under the old opening-only fold this was 0.
+    expect(last.netWorth).toBe(cardTotal.toString())
+    expect(last.netWorth).toBe(sumSignedBalance.toString())
+
+    // Materially non-zero, with the liability REDUCING net worth (sign path):
+    // cash 210,000,000 − 5,000,000 − 1,000,000 = 204,000,000; loan −128,000,000.
+    expect(last.netWorth).toBe("76000000")
+    expect(last.assets).toBe("204000000")
+    expect(last.liabilities).toBe("128000000")
+  })
+
+  // No-anchor edge (head-eng point 3): an account with NO anchor of any type
+  // must not be dropped. The fold folds it as an implicit opening-0 (Σ all flow),
+  // which equals the stored `Account.balance` that `computeCanonicalBalance`
+  // falls back to — so the invariant still holds.
+  test("no-anchor account: last point == Σ Account.balance (opening-0 fallback)", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "UTC")
+    const cash = await makeAccount(owner, {
+      name: "Anchor-less",
+      openingBalance: "0",
+      openingDate: "2026-01-01",
+    })
+    await expense(owner, cash.id, 40_000n, "2026-01-10")
+    // Soft-delete the opening valuation → the account now has zero anchors, while
+    // its materialized balance (−40,000) is untouched. Mirrors a raw/legacy row.
+    await harness.withFamily(owner.family.id, async (tx) =>
+      tx.valuation.updateMany({
+        where: { accountId: cash.id, type: "opening" },
+        data: { deletedAt: new Date() },
+      })
+    )
+
+    const today = new Date().toISOString().slice(0, 10)
+    const result = await series(owner, "2026-01-01", today, "month")
+    const last = result.points[result.points.length - 1]
+
+    const { cardTotal, sumSignedBalance } = await materializedCardTotal(owner)
+    expect(last.netWorth).toBe(sumSignedBalance.toString())
+    expect(last.netWorth).toBe(cardTotal.toString())
+    expect(last.netWorth).toBe("-40000") // opening-0 + Σ flow, not dropped to 0
+  })
+
+  // ---- interval bucketing ----------------------------------------------------
+  //
+  // day / week / month must each produce strictly time-ascending buckets, end at
+  // `to`, and agree with the live card at the last point (here `to` is past the
+  // family's last activity, so the last point equals the current balance). A
+  // date sampled by two intervals resolves to one identical value.
+  test("interval bucketing: day/week/month are monotonic and agree at the last point", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await seedMixedFamily(owner)
+    const to = "2026-03-01" // no activity after this → last point == current balance
+    const [byDay, byWeek, byMonth] = await Promise.all([
+      series(owner, "2026-01-01", to, "day"),
+      series(owner, "2026-01-01", to, "week"),
+      series(owner, "2026-01-01", to, "month"),
+    ])
+    const { cardTotal } = await materializedCardTotal(owner)
+    for (const s of [byDay, byWeek, byMonth]) {
+      for (let i = 1; i < s.points.length; i++) {
+        // strictly ascending calendar dates (monotonic in time)
+        expect(s.points[i].date > s.points[i - 1].date).toBe(true)
+      }
+      expect(s.points[s.points.length - 1].date).toBe(to)
+      expect(s.points[s.points.length - 1].netWorth).toBe(cardTotal.toString())
+    }
+    // Finer intervals never yield fewer buckets than coarser ones.
+    expect(byDay.points.length).toBeGreaterThanOrEqual(byWeek.points.length)
+    expect(byWeek.points.length).toBeGreaterThanOrEqual(byMonth.points.length)
+    // A date sampled by both day and month resolves to one identical value.
+    expect(pointAt(byDay.points, "2026-02-01").netWorth).toBe(
+      pointAt(byMonth.points, "2026-02-01").netWorth
+    )
   })
 
   // ---- tenant isolation ------------------------------------------------------
