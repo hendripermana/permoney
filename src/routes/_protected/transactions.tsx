@@ -663,6 +663,7 @@ function TransactionsPage() {
                               trx={row.trx}
                               onEdit={setEditingTrx}
                               onDelete={handleInlineDelete}
+                              viewedAccountIds={filters.accounts}
                               isSelected={
                                 table.getRow(row.trx.id)?.getIsSelected() ??
                                 false
@@ -766,6 +767,7 @@ function TransactionRow({
   onDelete,
   isSelected,
   onSelect,
+  viewedAccountIds,
 }: {
   trx: TransactionData
   onEdit: (
@@ -776,10 +778,30 @@ function TransactionRow({
   onDelete: (id: string) => void
   isSelected: boolean
   onSelect: (value: boolean) => void
+  // The active account filter (URL `accounts` search param), if any. Used to
+  // decide a transfer's direction FROM the viewed account's perspective.
+  viewedAccountIds?: ReadonlyArray<string>
 }) {
   const [isExpanded, setIsExpanded] = React.useState(false)
   const hasSplits = trx.isSplit && (trx.splitEntries?.length ?? 0) > 0
   const statusBadge = STATUS_BADGE[trx.status]
+
+  // PER-202: a transfer is persisted as a single outflow leg (`accountId` =
+  // source, `toAccountId` = destination). When the ledger is filtered to the
+  // DESTINATION account, that leg surfaces via `toAccountId`, and from that
+  // account's side the money is INCOMING — so flip the sign/label/colour to
+  // read as a credit ("Transfer from <source> +Rp…") instead of a neutral
+  // "Transfer". The global (unfiltered) list passes no `viewedAccountIds`, so
+  // its rendering is unchanged. Source-side matches (`accountId` in the
+  // filter) keep the neutral transfer rendering. `amount` is an absolute
+  // magnitude here (sign lives in `type`), so we only steer the prefix/colour.
+  const isIncomingTransfer =
+    trx.type === "transfer" &&
+    viewedAccountIds != null &&
+    viewedAccountIds.length > 0 &&
+    trx.toAccountId != null &&
+    viewedAccountIds.includes(trx.toAccountId) &&
+    !viewedAccountIds.includes(trx.accountId)
 
   return (
     <div
@@ -887,9 +909,18 @@ function TransactionRow({
         {/* Category column (hidden on tablet) */}
         <div className="hidden w-44 shrink-0 px-4 pt-0.5 lg:block">
           {trx.type === "transfer" ? (
-            <span className="flex items-center gap-1 text-sm font-medium text-blue-600 dark:text-blue-400">
+            <span
+              className={cn(
+                "flex items-center gap-1 text-sm font-medium",
+                isIncomingTransfer
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-blue-600 dark:text-blue-400"
+              )}
+            >
               <IconArrowsExchange size={15} />
-              Transfer
+              {isIncomingTransfer
+                ? `Transfer from ${trx.account.name}`
+                : "Transfer"}
             </span>
           ) : trx.isSplit ? (
             <span className="flex items-center gap-1 text-sm font-medium text-amber-600 dark:text-amber-400">
@@ -932,13 +963,17 @@ function TransactionRow({
             "w-36 shrink-0 px-4 pt-0.5 text-right font-bold",
             trx.type === "expense"
               ? "text-red-600 dark:text-red-400"
-              : trx.type === "income"
+              : trx.type === "income" || isIncomingTransfer
                 ? "text-emerald-600 dark:text-emerald-400"
                 : "text-blue-600 dark:text-blue-400"
           )}
         >
           <span>
-            {trx.type === "expense" ? "−" : trx.type === "income" ? "+" : ""}
+            {trx.type === "expense"
+              ? "−"
+              : trx.type === "income" || isIncomingTransfer
+                ? "+"
+                : ""}
             {formatCurrency(trx.amount, trx.currency)}
           </span>
 
