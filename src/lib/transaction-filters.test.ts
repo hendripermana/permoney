@@ -248,6 +248,70 @@ describe("applyFilters", () => {
 
       expect(result.map((t) => t.id).sort()).toEqual(["a", "c"])
     })
+
+    // PER-202: a transfer is stored as one outflow leg (accountId = source,
+    // toAccountId = destination). Filtering by the DESTINATION account must
+    // surface it via toAccountId — otherwise "top up OVO" (BCA -> GOPAY) is
+    // visible from BCA but invisible from GOPAY.
+    it("surfaces an incoming transfer when filtering by the destination (toAccountId)", () => {
+      const transferOut = tx({
+        id: "transfer",
+        type: "transfer",
+        accountId: ACCOUNT_BCA,
+        toAccountId: ACCOUNT_GOPAY,
+      })
+      const unrelated = tx({ id: "unrelated", accountId: ACCOUNT_USD })
+
+      const result = applyFilters([transferOut, unrelated], {
+        ...baseFilters,
+        accounts: [ACCOUNT_GOPAY],
+      })
+
+      expect(result.map((t) => t.id)).toEqual(["transfer"])
+    })
+
+    it("still matches a transfer from the source side (accountId)", () => {
+      const transferOut = tx({
+        id: "transfer",
+        type: "transfer",
+        accountId: ACCOUNT_BCA,
+        toAccountId: ACCOUNT_GOPAY,
+      })
+
+      const result = applyFilters([transferOut], {
+        ...baseFilters,
+        accounts: [ACCOUNT_BCA],
+      })
+
+      expect(result.map((t) => t.id)).toEqual(["transfer"])
+    })
+
+    it("does not double-list a transfer when both legs are in the filter", () => {
+      const transferOut = tx({
+        id: "transfer",
+        type: "transfer",
+        accountId: ACCOUNT_BCA,
+        toAccountId: ACCOUNT_GOPAY,
+      })
+
+      const result = applyFilters([transferOut], {
+        ...baseFilters,
+        accounts: [ACCOUNT_BCA, ACCOUNT_GOPAY],
+      })
+
+      expect(result.map((t) => t.id)).toEqual(["transfer"])
+    })
+
+    it("ignores toAccountId for non-transfer rows (null destination)", () => {
+      const expense = tx({ id: "expense", accountId: ACCOUNT_BCA })
+
+      const result = applyFilters([expense], {
+        ...baseFilters,
+        accounts: [ACCOUNT_GOPAY],
+      })
+
+      expect(result).toEqual([])
+    })
   })
 
   describe("category filtering", () => {

@@ -63,6 +63,12 @@ export interface FilterableTransaction {
   date: Date | string
   description: string
   accountId: string
+  // A transfer is stored as a single outflow leg: `accountId` is the source
+  // and `toAccountId` is the destination. Account filtering matches EITHER
+  // leg (see applyFilters) so viewing an account surfaces transfers INTO it,
+  // not only transfers out of it (PER-202). Optional so existing non-transfer
+  // fixtures/mocks stay compatible.
+  toAccountId?: string | null
   categoryId: string | null
   merchantId: string | null
   notes: string | null
@@ -134,8 +140,17 @@ export function applyFilters<T extends FilterableTransaction>(
   }
 
   // 3. Filter berdasarkan akun
+  // Match transactions FROM the account (`accountId`) OR transfers INTO it
+  // (`toAccountId`). A transfer is persisted as a single outflow leg whose
+  // `accountId` is the source; without the `toAccountId` clause, filtering by
+  // the destination account would hide the incoming transfer entirely — the
+  // "top up shows from Jago but not from OVO" bug (PER-202).
   if (filters.accounts?.length) {
-    result = result.filter((t) => filters.accounts!.includes(t.accountId))
+    result = result.filter(
+      (t) =>
+        filters.accounts!.includes(t.accountId) ||
+        (t.toAccountId != null && filters.accounts!.includes(t.toAccountId))
+    )
   }
 
   // 4. Filter berdasarkan kategori
