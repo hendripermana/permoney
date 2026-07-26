@@ -1702,8 +1702,20 @@ function useTransactionFormModalController({
           status: value.status ?? "CLEARED",
           destinationAmount: destAmountMoney,
           destinationCurrency: (() => {
-            // Compute destinationCurrency from toAccountId's account currency
-            if (value.type === "transfer" && value.toAccountId) {
+            // PER-200: destinationAmount + destinationCurrency are the
+            // cross-currency FX destination pair. The DB CHECK
+            // `destination_pair_consistency` requires them BOTH null or BOTH
+            // set — so the currency may only be present when the amount is.
+            // A same-currency transfer has destAmountMoney === null, so both
+            // stay null; previously the currency was set unconditionally,
+            // producing an inconsistent (null amount, non-null currency) pair
+            // that the constraint rejected — the transfer silently vanished
+            // (optimistic insert rolled back).
+            if (
+              destAmountMoney != null &&
+              value.type === "transfer" &&
+              value.toAccountId
+            ) {
               return (
                 formData?.accounts.find((a) => a.id === value.toAccountId)
                   ?.currency ?? null
