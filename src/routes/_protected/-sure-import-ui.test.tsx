@@ -40,6 +40,7 @@ function makeResult(
       staged: 6,
       promotedThisRun: 0,
       held: 6,
+      duplicateSkipped: 0,
       zeroAmountSkipped: 0,
       invalidDateSkipped: 0,
       ...txnOverrides,
@@ -63,6 +64,7 @@ function makeResult(
         db_rejected: 0,
         unpaired_orphan: 0,
         ambiguous_cluster: 0,
+        already_imported: 0,
       },
     },
     timings: {
@@ -167,6 +169,7 @@ describe("DoneStage", () => {
               db_rejected: 0,
               unpaired_orphan: 0,
               ambiguous_cluster: 0,
+              already_imported: 0,
             },
           },
         })}
@@ -202,6 +205,7 @@ describe("DoneStage", () => {
               db_rejected: 0,
               unpaired_orphan: 1,
               ambiguous_cluster: 0,
+              already_imported: 0,
             },
           },
         })}

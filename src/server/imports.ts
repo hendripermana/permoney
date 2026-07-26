@@ -293,12 +293,14 @@ export async function createImportBatchForFamily({
     // Existing canonical fingerprints + coarse keys, derived on read (no
     // column on Transaction). Window the ledger to the accounts + date span
     // touched.
-    const { fingerprintToTxnId, coarseToTxnId } = await loadCanonicalDedupIndex(
-      tx,
-      familyId,
-      family.timezone,
-      data.rows
-    )
+    const { fingerprintToTxnId, coarseToTxnId, externalIdToTxnId } =
+      await loadCanonicalDedupIndex(
+        tx,
+        familyId,
+        family.timezone,
+        data.rows,
+        data.provider ?? null
+      )
 
     let batchId: string
     let alreadyPersisted = 0
@@ -339,6 +341,7 @@ export async function createImportBatchForFamily({
       smartRules,
       fingerprintToTxnId,
       coarseToTxnId,
+      externalIdToTxnId,
       alreadyPersisted,
     }
   })
@@ -364,6 +367,7 @@ export async function createImportBatchForFamily({
     smartRules,
     fingerprintToTxnId,
     coarseToTxnId,
+    externalIdToTxnId,
     alreadyPersisted,
   } = setup
 
@@ -391,8 +395,15 @@ export async function createImportBatchForFamily({
       externalId: row.externalId ?? null,
     })
 
-    // Dedup verdict (ADR-0039 §4).
-    const canonicalMatch = fingerprintToTxnId.get(fingerprint)
+    // Dedup verdict (ADR-0039 §4, amended by PER-199 §1). Provider identity
+    // (externalId) is a stronger, exact signal than the content-tuple
+    // fingerprint — a row that already has a durable binding to a live-or-
+    // deleted canonical Transaction is ALWAYS a duplicate, regardless of what
+    // the content-tuple hash would say.
+    const canonicalMatch =
+      (row.externalId != null
+        ? externalIdToTxnId.get(row.externalId)
+        : undefined) ?? fingerprintToTxnId.get(fingerprint)
     const inBatchMatch = seenFingerprints.has(fingerprint)
     let rowStatus = "normalized"
     let duplicateOfTransactionId: string | null = null
@@ -497,10 +508,12 @@ async function loadCanonicalDedupIndex(
   tx: TenantTransactionClient,
   familyId: string,
   timezone: string,
-  rows: readonly StagedRow[]
+  rows: readonly StagedRow[],
+  provider: string | null
 ): Promise<{
   fingerprintToTxnId: Map<string, string>
   coarseToTxnId: Map<string, string>
+  externalIdToTxnId: Map<string, string>
 }> {
   const accountIds = Array.from(new Set(rows.map((row) => row.accountId)))
   const times = rows.map((row) => row.date.getTime())
@@ -544,7 +557,41 @@ async function loadCanonicalDedupIndex(
     const coarse = coarseKey(txn.accountId, day, txn.amount)
     if (!coarseToTxnId.has(coarse)) coarseToTxnId.set(coarse, txn.id)
   }
-  return { fingerprintToTxnId, coarseToTxnId }
+
+  // PER-199: durable provider-identity dedup, INDEPENDENT of the content-tuple
+  // fingerprint above. A direct equality lookup on the new
+  // `transaction_provider_binding` partial-unique index, not a hash match —
+  // simpler and exact, and deliberately NOT deletedAt-scoped: once a Sure
+  // transaction has been imported, re-importing the same externalId must
+  // never re-create it even if the creator later deleted it in Permoney
+  // (deletion is an edit the migration must not silently undo). This mirrors
+  // the DB constraint itself, which is also not deletedAt-scoped.
+  const externalIdToTxnId = new Map<string, string>()
+  if (provider != null) {
+    const externalIds = Array.from(
+      new Set(
+        rows
+          .map((row) => row.externalId)
+          .filter((id): id is string => id != null && id !== "")
+      )
+    )
+    if (externalIds.length > 0) {
+      const boundExisting = await tx.transaction.findMany({
+        where: {
+          familyId,
+          externalProvider: provider,
+          externalId: { in: externalIds },
+        },
+        select: { id: true, externalId: true },
+      })
+      for (const txn of boundExisting) {
+        if (txn.externalId != null)
+          externalIdToTxnId.set(txn.externalId, txn.id)
+      }
+    }
+  }
+
+  return { fingerprintToTxnId, coarseToTxnId, externalIdToTxnId }
 }
 
 // ---------------------------------------------------------------------------
@@ -817,6 +864,12 @@ export async function promoteImportBatchForFamily({
           fxRateScaled: projection.fxRateScaled,
           fxRateSnapshotId: projection.fxRateSnapshotId,
           idempotencyKey: row.promotionIdempotencyKey,
+          // PER-199: durable provider-identity binding, so a FUTURE re-import
+          // (fresh ImportBatch, new RawImportedTransaction rows) can detect
+          // this transaction as already-canonical via the staging-time
+          // externalId dedup check above, instead of duplicating it.
+          externalProvider: batch.provider,
+          externalId: row.externalId,
         })
       }
 
@@ -943,6 +996,7 @@ export async function getImportBatchForFamily({
         currency: row.currency,
         date: row.date,
         description: row.description,
+        externalId: row.externalId,
         rowStatus: row.rowStatus,
         possibleDuplicate: row.possibleDuplicate,
         duplicateOfTransactionId: row.duplicateOfTransactionId,

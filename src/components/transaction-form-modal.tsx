@@ -1796,6 +1796,10 @@ function useTransactionFormModalController({
             baseCurrency: null,
             fxRateScaled: null,
             fxRateSnapshotId: null,
+            // PER-199: provider-identity binding is import-only; UI-created
+            // transactions never carry one.
+            externalProvider: null,
+            externalId: null,
             // splitEntries di optimistic payload adalah versi ringkas (tanpa relasi Prisma)
             splitEntries:
               payload.splitEntries as TransactionRecord["splitEntries"],

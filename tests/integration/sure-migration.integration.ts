@@ -33,6 +33,10 @@ import {
   buildSureBundleV1DegradedTransfers,
   buildSureBundleV2Complete,
   buildSureBundleV2Transfers,
+  sureAccount,
+  sureTransfer,
+  sureTxn,
+  sureVal,
 } from "./support/sure-fixtures"
 
 // PER-170 / PER-173 / PER-174 / PER-176 / ADR-0041 / ADR-0043 — Real-Postgres
@@ -928,6 +932,101 @@ describe("Sure full-family migration vertical slice (PER-170)", () => {
     expect(transferLegs).toBe(fixture.expected.legsPromotedTotal) // no double-book
     expect(transferCount).toBe(fixture.expected.pairsPromotedThisRun)
     await assertBalances(tenant, fixture.accountIds, fixture.balancesMinor)
+  })
+
+  test("PER-199: a FRESH batch (different bundle content) re-staging an already-promoted transfer pair does not double-book it", async () => {
+    const tenant = await setupTenant()
+    const accountIds = {
+      checking: "sure-acc-per199-checking",
+      savings: "sure-acc-per199-savings",
+    }
+    const legIds = {
+      fmOut: "sure-txn-per199-fm-out",
+      fmIn: "sure-txn-per199-fm-in",
+    }
+    const baseLines = [
+      sureAccount(accountIds.checking, "Checking", "Depository", "checking"),
+      sureAccount(accountIds.savings, "Savings", "Depository", "savings"),
+      // Opening buffer so checking's incremental balance never dips negative
+      // mid-migration (ADR-0043 — real balance is derived at final rebuild,
+      // but the account_normal_balance_sign CHECK is enforced immediately on
+      // every incremental write in between).
+      sureVal({
+        accountId: accountIds.checking,
+        amount: "50000.0",
+        date: "2026-01-01",
+        kind: "opening_anchor",
+      }),
+      sureTxn({
+        id: legIds.fmOut,
+        accountId: accountIds.checking,
+        amount: "40000.0",
+        kind: "funds_movement",
+        name: "Transfer to Savings",
+        date: "2026-05-02",
+      }),
+      sureTxn({
+        id: legIds.fmIn,
+        accountId: accountIds.savings,
+        amount: "-40000.0",
+        kind: "funds_movement",
+        name: "Transfer from Checking",
+        date: "2026-05-02",
+      }),
+      sureTransfer(legIds.fmOut, legIds.fmIn),
+    ]
+
+    const first = await migrate(tenant, "run1.ndjson", baseLines.join("\n"))
+    expect(first.transfers.pairsPromotedThisRun).toBe(1)
+    expect(first.transfers.legsPromotedTotal).toBe(2)
+
+    // A FRESH export (different bytes -> different contentHash): the SAME
+    // accounts + SAME transfer pair (same Sure externalIds) PLUS one
+    // genuinely new standalone transaction — exactly the real-world "Sure
+    // export grew since last import" scenario PER-199 fixes.
+    const secondLines = [
+      ...baseLines,
+      sureTxn({
+        id: "sure-txn-per199-new-expense",
+        accountId: accountIds.checking,
+        amount: "5000.0",
+        kind: "standard",
+        name: "New coffee",
+        date: "2026-05-10",
+      }),
+    ]
+    const second = await migrate(tenant, "run2.ndjson", secondLines.join("\n"))
+    expect(second.contentHash).not.toBe(first.contentHash)
+    expect(second.replayed).toBe(false)
+
+    // The pair is recognized as already-imported, not re-promoted.
+    expect(second.transfers.pairsPromotedThisRun).toBe(0)
+    expect(second.transfers.legsPromotedTotal).toBe(0)
+    expect(second.transfers.heldLegsByReason.already_imported).toBe(2)
+    // The genuinely new standalone transaction DOES promote.
+    expect(second.transactions.promotedThisRun).toBe(1)
+    expect(second.transactions.duplicateSkipped).toBe(0) // it's a transfer leg, owned by the transfers block
+
+    const { transferCount, transferLegCount } = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      async (tx) => ({
+        transferCount: await tx.transfer.count(),
+        transferLegCount: await tx.transaction.count({
+          where: { familyId: tenant.familyId, type: "transfer" },
+        }),
+      })
+    )
+    // Still just the ONE pair from run1 — never double-booked.
+    expect(transferCount).toBe(1)
+    expect(transferLegCount).toBe(2)
+
+    // checking: 5_000_000 (opening) − 4_000_000 (fm, run1) − 500_000 (new
+    // expense, run2) = 500_000. savings: 4_000_000 (fm in, unaffected by run2).
+    await assertBalances(tenant, accountIds, {
+      checking: 500_000n,
+      savings: 4_000_000n,
+    })
   })
 
   test("self-heal 2B: a created leg with unmarked rows re-promotes via the stable key (no double)", async () => {

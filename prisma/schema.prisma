@@ -318,6 +318,17 @@ model Transaction {
   notes       String?
   excluded    Boolean @default(false)
 
+  // Durable external-provider binding (PER-199, mirrors Account/Category/
+  // Merchant — ADR-0041 §3). NULL for manually-created and manually-imported
+  // (CSV) transactions. A PARTIAL UNIQUE (familyId, externalProvider,
+  // externalId) WHERE externalProvider IS NOT NULL is created in raw SQL
+  // (migration `transaction_provider_binding`) — Prisma cannot express the
+  // predicate. This is the cross-batch, per-transaction dedup identity that
+  // makes re-importing a fresh Sure export ADD-ONLY instead of duplicating
+  // every overlapping transaction (PER-199 / ADR-0039 §9 amendment).
+  externalProvider String?
+  externalId       String?
+
   // Running Balance Snapshot: Saldo akun setelah transaksi ini dicatat (untuk grafik historis instan).
   // Stored in MINOR UNITS of `currency`.
   accountBalanceAfter BigInt?
