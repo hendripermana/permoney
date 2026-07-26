@@ -42,8 +42,9 @@ import { validateTenantReferences } from "./validation/tenant-references"
 // `Valuation` is a dated, audited ledger entry that sits alongside `Transaction`.
 // `Account.balance` stays materialized-but-rebuildable (ADR-0034 §2):
 //   - cash-like (balanceSource="transaction_flow"): balance = the latest
-//     ANCHOR valuation (<= now) + Σ Transaction.amount strictly after that
-//     anchor's date (ADR-0043 §2). Anchors are balance-assertion types —
+//     ANCHOR valuation (<= now) + Σ Transaction.amount after that anchor —
+//     "after" = dated after it OR recorded (createdAt) after it (ADR-0043 §2,
+//     PER-201 afterAnchor predicate). Anchors are balance-assertion types —
 //     opening/reconciliation/manual (ANCHOR_VALUATION_TYPES) — while "market"
 //     stays an OBSERVATION that never overrides the ledger-derived balance.
 //     With a single anchor this degenerates to ADR-0034 §4's original
@@ -256,24 +257,60 @@ export function signMagnitudeForAccount(
 interface AnchorValuation {
   value: Money
   valuationDate: Date
+  // PER-201: the instant this anchor row was written. Half of the shared
+  // `afterAnchor` segmentation predicate — a transaction recorded after the
+  // anchor is post-anchor flow even when back-dated to at/before the anchor.
+  createdAt: Date
 }
 
-// Σ Transaction.amount strictly after `afterDate`, optionally bounded through
-// `throughDate` inclusive (ADR-0043 §2/§6 — the SAME segmentation predicate
-// backs both the balance formula and the ANCHOR_CHAIN drift check, so they can
-// never silently disagree on which flows belong to which anchor). Each amount
-// is already the signed delta to its own accountId (transfers post a separate
-// inflow row on the destination account), so per-account flow is a single sum
-// — no toAccountId. `Transaction.date` is a full timestamp and
-// `Valuation.valuationDate` is date-only, so Postgres compares it against
-// midnight of that day — any real (non-midnight) same-day transaction is
-// naturally "strictly after" its anchor with no separate tie-break needed.
-async function sumTransactionFlowInRange(
+// An anchor's identity for flow segmentation (PER-201): its asserted date
+// (date-only) and the wall-clock instant the row was written. Both
+// `AnchorValuation` (the balance path) and the raw anchor rows the drift check
+// reads satisfy it, so one predicate serves both boundaries (ADR-0043 §6).
+interface AnchorBound {
+  valuationDate: Date
+  createdAt: Date
+}
+
+// PER-201 / ADR-0043 §2 — the ONE segmentation predicate shared by the balance
+// formula and the ANCHOR_CHAIN drift check (ADR-0043 §6's load-bearing "one
+// segmentation function" invariant). A transaction is *after* an anchor iff it
+// is dated after the anchor's date OR was recorded after the anchor was written:
+//
+//   afterAnchor(A)(t)  ≡  t.date > A.valuationDate  OR  t.createdAt > A.createdAt
+//
+// It is absorbed into the anchor's asserted value only when BOTH are false —
+// i.e. it was dated at/before the anchor AND already existed when the anchor was
+// written. The createdAt disjunct is what fixes PER-201: a user's *back-dated*
+// transaction added AFTER an import/reconciliation anchor (date <= anchor.date
+// but createdAt > anchor.createdAt) is real post-anchor activity the
+// materialized balance already counts (it increments on every transaction
+// regardless of date), so the canonical formula must count it too. The date
+// disjunct is equally load-bearing: a *future*-dated transaction recorded
+// BEFORE a live reconciliation (date > anchor.date but createdAt <=
+// anchor.createdAt) is still after the asserted balance and must be added — so
+// the rule is a disjunction, never createdAt alone.
+//
+// Why a fresh Sure import stays zero-drift (no double-count): the final
+// reconciliation anchor is written LAST, each import step in its own tenant
+// transaction, so its createdAt is strictly greater than every promoted
+// transaction's createdAt, and it is dated `lastActivityDay + 1` so no imported
+// leg is dated after it either — both disjuncts are false for every imported
+// row, which are therefore absorbed exactly as before (ADR-0043 amendment).
+// `createdAt` is `@default(now())` on Transaction and Valuation (never null).
+//
+// Σ Transaction.amount over { afterAnchor(after) } — optionally intersected with
+// { NOT afterAnchor(through) } for a bounded segment (the chain check passes the
+// next anchor as `through`, yielding afterAnchor(i) ∧ ¬afterAnchor(i+1), the
+// exact complement so both boundaries use one predicate). Each amount is already
+// the signed delta to its own accountId (transfers post a separate inflow row on
+// the destination account), so per-account flow is a single sum — no toAccountId.
+async function sumTransactionFlowAfterAnchor(
   tx: TenantTransactionClient,
   familyId: string,
   accountId: string,
-  afterDate: Date,
-  throughDate: Date | null
+  after: AnchorBound,
+  through: AnchorBound | null
 ): Promise<Money> {
   const agg = await tx.transaction.aggregate({
     _sum: { amount: true },
@@ -281,9 +318,20 @@ async function sumTransactionFlowInRange(
       accountId,
       familyId,
       deletedAt: null,
-      date: throughDate
-        ? { gt: afterDate, lte: throughDate }
-        : { gt: afterDate },
+      // afterAnchor(after): dated after the anchor OR recorded after it.
+      OR: [
+        { date: { gt: after.valuationDate } },
+        { createdAt: { gt: after.createdAt } },
+      ],
+      // ¬afterAnchor(through): dated at/before the next anchor AND recorded
+      // at/before it. ANDs with the OR above (Prisma implicit-AND of top-level
+      // keys) to give the segment afterAnchor(from) ∧ ¬afterAnchor(to).
+      ...(through
+        ? {
+            date: { lte: through.valuationDate },
+            createdAt: { lte: through.createdAt },
+          }
+        : {}),
     },
   })
   return toMoney(agg._sum.amount ?? 0n)
@@ -313,10 +361,14 @@ export async function latestValuation(
       ...(options?.asOf ? { valuationDate: { lte: options.asOf } } : {}),
     },
     orderBy: [{ valuationDate: "desc" }, { createdAt: "desc" }, { id: "desc" }],
-    select: { value: true, valuationDate: true },
+    select: { value: true, valuationDate: true, createdAt: true },
   })
   return latest
-    ? { value: toMoney(latest.value), valuationDate: latest.valuationDate }
+    ? {
+        value: toMoney(latest.value),
+        valuationDate: latest.valuationDate,
+        createdAt: latest.createdAt,
+      }
     : null
 }
 
@@ -325,13 +377,16 @@ export async function latestValuation(
 // found, so a rebuild can never corrupt a balance it cannot reconstruct.
 //
 // ADR-0043: for transaction_flow accounts, balance = the latest anchor
-// valuation (<= now) + Σ flows strictly after that anchor's date. With a
-// single anchor (the common case — just `opening`) this is exactly ADR-0034
-// §4's original opening + Σflow formula; multiple anchors let a later
-// balance-assertion (reconciliation/manual) override accumulated flow, which
-// is what reproduces the real Sure UI for migrated accounts. Tracked
-// (`valuation`-sourced) accounts are unchanged: latest valuation of any type
-// wins, no transaction sum (ADR-0034 §5).
+// valuation (<= now) + Σ flows *after* that anchor, where "after" is the
+// shared `afterAnchor` predicate (PER-201): dated after the anchor OR recorded
+// after it. With a single anchor (the common case — just `opening`) this is
+// exactly ADR-0034 §4's original opening + Σflow formula; multiple anchors let
+// a later balance-assertion (reconciliation/manual) override accumulated flow,
+// which is what reproduces the real Sure UI for migrated accounts. The
+// createdAt disjunct keeps a user's back-dated transaction added after the
+// latest anchor in the sum (PER-201 — see `sumTransactionFlowAfterAnchor`).
+// Tracked (`valuation`-sourced) accounts are unchanged: latest valuation of
+// any type wins, no transaction sum (ADR-0034 §5).
 export async function computeCanonicalBalance(
   tx: TenantTransactionClient,
   familyId: string,
@@ -346,11 +401,11 @@ export async function computeCanonicalBalance(
     asOf: new Date(),
   })
   if (anchor === null) return toMoney(account.balance)
-  const flow = await sumTransactionFlowInRange(
+  const flow = await sumTransactionFlowAfterAnchor(
     tx,
     familyId,
     account.id,
-    anchor.valuationDate,
+    anchor,
     null
   )
   return addMoney(anchor.value, flow)
@@ -739,8 +794,8 @@ export const rebuildAccountBalanceFn = createServerFn({ method: "POST" })
 // assertions — the classic bookkeeping "does activity explain the
 // restatement" check, generalized to every transition in history instead of
 // only the latest one. Uses the same segmentation predicate as the balance
-// formula (`sumTransactionFlowInRange`) so the two can never silently
-// disagree about which flows belong to which anchor.
+// formula (`sumTransactionFlowAfterAnchor`'s afterAnchor rule, PER-201) so the
+// two can never silently disagree about which flows belong to which anchor.
 async function detectAnchorChainDrift(
   tx: TenantTransactionClient,
   familyId: string,
@@ -754,7 +809,7 @@ async function detectAnchorChainDrift(
       type: { in: [...ANCHOR_VALUATION_TYPES] },
     },
     orderBy: [{ valuationDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
-    select: { value: true, valuationDate: true, source: true },
+    select: { value: true, valuationDate: true, createdAt: true, source: true },
   })
 
   const reports: BalanceDriftReport[] = []
@@ -763,12 +818,17 @@ async function detectAnchorChainDrift(
     const to = anchors[index + 1]
     if (!from || !to) continue
 
-    const segmentFlow = await sumTransactionFlowInRange(
+    // PER-201: segment flow = afterAnchor(from) ∧ ¬afterAnchor(to), the exact
+    // complement pairing that keeps this drift check and the balance formula on
+    // ONE segmentation predicate (ADR-0043 §6). A late back-dated user
+    // transaction lands only in the "after latest anchor" bucket, so it never
+    // perturbs a historical migrated-anchor segment here.
+    const segmentFlow = await sumTransactionFlowAfterAnchor(
       tx,
       familyId,
       accountId,
-      from.valuationDate,
-      to.valuationDate
+      from,
+      to
     )
     const expected = addMoney(toMoney(from.value), segmentFlow)
     const actual = toMoney(to.value)
