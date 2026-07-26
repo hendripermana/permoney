@@ -1432,6 +1432,19 @@ function useTransactionFormModalController({
       : [createBlankSplitEntry(), createBlankSplitEntry()]
   )
 
+  // PER-205: the "New Transaction" modal is a persistently-mounted singleton
+  // (transactions.tsx renders <TransactionFormModal /> with no key and no
+  // editData), so isSplit + splitEntries survive across open/submit cycles.
+  // TanStack Form resets itself on submit, but this split state lives OUTSIDE
+  // the form and must be cleared explicitly on the two user actions that begin
+  // a fresh entry: a successful non-edit submit, and reopening the modal for a
+  // new transaction. Edit mode never calls this — its allocation is seeded
+  // from editData in the useState initializers above and must be preserved.
+  const resetSplitState = React.useCallback(() => {
+    setIsSplit(false)
+    setSplitEntries([createBlankSplitEntry(), createBlankSplitEntry()])
+  }, [])
+
   useHotkeys([
     {
       hotkey: "Shift+N",
@@ -1821,7 +1834,13 @@ function useTransactionFormModalController({
         setIsOpen(false)
         if (onClose) onClose()
 
-        if (!isEditMode) form.reset()
+        if (!isEditMode) {
+          form.reset()
+          // Split state lives outside TanStack Form; clear it too so the next
+          // "New Transaction" open starts with a clean, inactive allocation
+          // (PER-205 — no stale rows, no phantom "Over allocated" banner).
+          resetSplitState()
+        }
       } catch (error: unknown) {
         console.error("Failed to save transaction:", error)
         setFormError(
@@ -1864,6 +1883,11 @@ function useTransactionFormModalController({
     if (open && editData) {
       setActiveTab(editData.type)
       form.reset()
+    } else if (open && !editData) {
+      // PER-205: reopening the singleton "New Transaction" modal must present a
+      // clean split allocation even if a prior split entry was never submitted
+      // (e.g. the user toggled Split on, then closed the dialog).
+      resetSplitState()
     }
   }
 
