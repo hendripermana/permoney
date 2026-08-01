@@ -190,11 +190,13 @@ describe("M2 final real-Postgres ledger umbrella suite (PER-88)", () => {
       toAccountId: fixture.transferDestination.id,
       type: "transfer",
     })
+    // PER-210: the split PARENT retains its single merchant (merchant = whole
+    // receipt); only categoryId is nulled on the parent.
     expect(rows.get(split.id)).toMatchObject({
       amount: -15_000n,
       categoryId: null,
       isSplit: true,
-      merchantId: null,
+      merchantId: fixture.merchant.id,
       type: "expense",
     })
 
