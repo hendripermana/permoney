@@ -5,7 +5,7 @@ import {
 } from "@tanstack/react-router"
 import { useLiveQuery } from "@tanstack/react-db"
 import { useQuery } from "@tanstack/react-query"
-import { HandCoins, Plus, Users } from "lucide-react"
+import { HandCoins, Plus, UserPlus, Users } from "lucide-react"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
@@ -58,7 +58,7 @@ export const Route = createFileRoute("/_protected/debts")({
     ])
     return null
   },
-  staticData: { title: "Utang-Piutang" },
+  staticData: { title: "People & Debts" },
   pendingComponent: DebtsPendingComponent,
   errorComponent: DebtsErrorComponent,
   component: DebtsPage,
@@ -72,6 +72,24 @@ const ACTION_LABEL: Record<DebtAction, string> = {
   borrow: "Borrow (I will owe them)",
   repay_receivable: "Repayment received (they pay me back)",
   repay_loan: "Repayment made (I pay them back)",
+}
+
+// Lend/borrow are always valid; a repayment is only offered when the selected
+// person actually has an outstanding debt in that direction. Passing no debt
+// record (a brand-new person) yields lend/borrow only. This keeps the UI from
+// offering a repayment that the server would reject as "No outstanding …".
+function availableActionsFor(
+  debt: PersonDebtRecord | undefined
+): ReadonlyArray<DebtAction> {
+  const actions: DebtAction[] = ["lend", "borrow"]
+  if (!debt) return actions
+  const hasOutstanding = (accountType: "RECEIVABLE" | "LOAN") =>
+    debt.accounts.some(
+      (a) => a.accountType === accountType && BigInt(a.balance) !== 0n
+    )
+  if (hasOutstanding("RECEIVABLE")) actions.push("repay_receivable")
+  if (hasOutstanding("LOAN")) actions.push("repay_loan")
+  return actions
 }
 
 // After any debt mutation, resync both the person-debt list and the accounts
@@ -117,6 +135,7 @@ function DebtsPage() {
     q.from({ d: personDebtCollection })
   )
   const [recordOpen, setRecordOpen] = React.useState(false)
+  const [addPersonOpen, setAddPersonOpen] = React.useState(false)
 
   const safeDebts = React.useMemo<ReadonlyArray<PersonDebtRecord>>(
     () => debts ?? [],
@@ -140,7 +159,7 @@ function DebtsPage() {
             <div className="flex items-center justify-between">
               <div>
                 <h1 className="text-2xl font-semibold tracking-tight">
-                  Utang-Piutang
+                  People &amp; Debts
                 </h1>
                 <p className="text-sm text-muted-foreground">
                   Money you have lent to or borrowed from people. Each person is
@@ -148,10 +167,19 @@ function DebtsPage() {
                   stay correct.
                 </p>
               </div>
-              <Button onClick={() => setRecordOpen(true)}>
-                <Plus className="size-4" />
-                Record debt
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setAddPersonOpen(true)}
+                >
+                  <UserPlus className="size-4" />
+                  Add person
+                </Button>
+                <Button onClick={() => setRecordOpen(true)}>
+                  <Plus className="size-4" />
+                  Record debt
+                </Button>
+              </div>
             </div>
 
             {safeDebts.length === 0 ? (
@@ -173,6 +201,16 @@ function DebtsPage() {
           onSaved={async () => {
             await refreshDebtsAfterMutation()
             setRecordOpen(false)
+          }}
+        />
+      ) : null}
+
+      {addPersonOpen ? (
+        <AddPersonDialog
+          onClose={() => setAddPersonOpen(false)}
+          onSaved={async () => {
+            await refreshDebtsAfterMutation()
+            setAddPersonOpen(false)
           }}
         />
       ) : null}
@@ -209,34 +247,120 @@ function PersonDebtCard({ debt }: Readonly<{ debt: PersonDebtRecord }>) {
           <CardTitle className="text-base">{debt.name}</CardTitle>
           {debt.settled ? (
             <Badge variant="outline" className="text-emerald-600">
-              Lunas
+              Settled
             </Badge>
           ) : null}
         </div>
       </CardHeader>
       <CardContent className="space-y-1.5">
-        {debt.positions.map((position) => {
-          const net = BigInt(position.net)
-          const direction = describeNetPosition(net)
-          const magnitude = net < 0n ? -net : net
-          return (
-            <div
-              key={position.currency}
-              className="flex items-center justify-between text-sm"
-            >
-              <span className="text-muted-foreground">{direction}</span>
-              <span className="font-medium tabular-nums">
-                {formatCurrency(magnitude.toString(), position.currency)}
-              </span>
+        {debt.positions.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No debts yet</p>
+        ) : (
+          <>
+            {debt.positions.map((position) => {
+              const net = BigInt(position.net)
+              const direction = describeNetPosition(net)
+              const magnitude = net < 0n ? -net : net
+              return (
+                <div
+                  key={position.currency}
+                  className="flex items-center justify-between text-sm"
+                >
+                  <span className="text-muted-foreground">{direction}</span>
+                  <span className="font-medium tabular-nums">
+                    {formatCurrency(magnitude.toString(), position.currency)}
+                  </span>
+                </div>
+              )
+            })}
+            <div className="pt-2 text-xs text-muted-foreground">
+              {debt.accounts.length} linked account
+              {debt.accounts.length === 1 ? "" : "s"}
             </div>
-          )
-        })}
-        <div className="pt-2 text-xs text-muted-foreground">
-          {debt.accounts.length} linked account
-          {debt.accounts.length === 1 ? "" : "s"}
-        </div>
+          </>
+        )}
       </CardContent>
     </Card>
+  )
+}
+
+// Create a contact WITHOUT recording any debt. PER-213: a person can exist with
+// no debt yet (and still appears in the list as "No debts yet"); this is the
+// only affordance that produces one.
+function AddPersonDialog({
+  onClose,
+  onSaved,
+}: Readonly<{
+  onClose: () => void
+  onSaved: () => Promise<void>
+}>) {
+  const [name, setName] = React.useState("")
+  const [error, setError] = React.useState<string | null>(null)
+  const [submitting, setSubmitting] = React.useState(false)
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault()
+    setError(null)
+    const trimmed = name.trim()
+    if (trimmed === "") {
+      setError("Enter the person's name.")
+      return
+    }
+    setSubmitting(true)
+    try {
+      await createPersonFn({
+        data: { name: trimmed, idempotencyKey: createUuidV7() },
+      })
+      await onSaved()
+    } catch (error_) {
+      setError(error_ instanceof Error ? error_.message : String(error_))
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
+      <DialogContent>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <DialogHeader>
+            <DialogTitle>Add a person</DialogTitle>
+            <DialogDescription>
+              Add a contact now and record what you lent or borrowed later.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="add-person-name">Name</Label>
+            <Input
+              id="add-person-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Budi"
+            />
+          </div>
+
+          {error ? (
+            <p className="text-sm text-destructive" role="alert">
+              {error}
+            </p>
+          ) : null}
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={onClose}
+              disabled={submitting}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={submitting}>
+              {submitting ? "Adding…" : "Add"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -256,6 +380,12 @@ function RecordDebtDialog({
   })
   const { data: accounts } = useLiveQuery((q) =>
     q.from({ a: accountCollection })
+  )
+  // Outstanding-per-person, used to constrain which repayment directions the
+  // dialog offers (a repayment with no matching outstanding debt is rejected
+  // server-side, so we never surface it).
+  const { data: debtRecords } = useLiveQuery((q) =>
+    q.from({ d: personDebtCollection })
   )
 
   // Only your own cash-like asset accounts are valid endpoints for a debt move.
@@ -282,6 +412,24 @@ function RecordDebtDialog({
 
   const selectedCash = cashAccounts.find((a) => a.id === cashAccountId)
   const currency = (selectedCash?.currency ?? "IDR") as CurrencyCode
+
+  const selectedDebt = (debtRecords ?? []).find((d) => d.personId === personId)
+  const availableActions = React.useMemo(
+    () => availableActionsFor(selectedDebt),
+    [selectedDebt]
+  )
+
+  // Changing the person can invalidate the current action (e.g. switching to a
+  // person with no outstanding loan while "Repayment made" is selected). Reset
+  // to a valid action in the same handler — no effect needed.
+  function handlePersonChange(nextPersonId: string) {
+    setPersonId(nextPersonId)
+    const nextDebt = (debtRecords ?? []).find(
+      (d) => d.personId === nextPersonId
+    )
+    const next = availableActionsFor(nextDebt)
+    if (!next.includes(action)) setAction("lend")
+  }
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
@@ -367,7 +515,7 @@ function RecordDebtDialog({
 
           <div className="flex flex-col gap-2">
             <Label>Person</Label>
-            <Select value={personId} onValueChange={setPersonId}>
+            <Select value={personId} onValueChange={handlePersonChange}>
               <SelectTrigger aria-label="Person">
                 <SelectValue />
               </SelectTrigger>
@@ -402,7 +550,7 @@ function RecordDebtDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {(Object.keys(ACTION_LABEL) as DebtAction[]).map((key) => (
+                {availableActions.map((key) => (
                   <SelectItem key={key} value={key}>
                     {ACTION_LABEL[key]}
                   </SelectItem>
