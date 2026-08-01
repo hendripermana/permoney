@@ -29,6 +29,28 @@ import { createTestFactories, type TestFactories } from "./support/factories"
 // TOTAL invariant (grouping is presentation-only), tenant isolation, and
 // idempotency replay — all against real Postgres.
 
+type Owner = Awaited<
+  ReturnType<TestFactories["createAuthenticatedOnboardedUser"]>
+>
+
+// Pure net-worth reducer (module scope: no harness dependency). Single-currency
+// (IDR) fixtures, base = IDR: the rate resolver is never consulted (identity
+// path), so it can safely return null.
+function netWorthOf(
+  accounts: ReadonlyArray<{
+    accountClass: string
+    currency: string
+    balance: string
+  }>
+): bigint {
+  const balances: PointBalance[] = accounts.map((a) => ({
+    accountClass: a.accountClass,
+    currency: a.currency,
+    native: BigInt(a.balance),
+  }))
+  return normalizeNetWorthAt(balances, () => null, "IDR").netWorth
+}
+
 describe("PER-212 person-to-person debt", () => {
   let harness: IntegrationHarness
   let factories: TestFactories
@@ -46,32 +68,124 @@ describe("PER-212 person-to-person debt", () => {
     await harness.teardown()
   })
 
-  test("lend creates a RECEIVABLE that grows while cash drops", async () => {
+  // --- Arrange/act helpers: collapse the repeated
+  // `{ data, familyId, user, runInTenantTransaction }` ceremony so each test
+  // reads as intent, not boilerplate. ---
+
+  const memberCtx = (owner: Owner) => ({
+    familyId: owner.family.id,
+    user: owner.user,
+    runInTenantTransaction: harness.withMember,
+  })
+
+  const readerCtx = (owner: Owner) => ({
+    familyId: owner.family.id,
+    userId: owner.user.id,
+    runInTenantTransaction: harness.withMember,
+  })
+
+  async function setup(
+    cashBalance: bigint,
+    personName = "Budi"
+  ): Promise<{ owner: Owner; cash: { id: string }; person: { id: string } }> {
     const owner = await factories.createAuthenticatedOnboardedUser()
     const cash = await factories.createAccount({
       accountType: "DEPOSITORY",
-      balance: 100_000n,
+      balance: cashBalance,
       familyId: owner.family.id,
       name: "Cash",
     })
-    const budi = await createPersonForFamily({
-      data: { name: "Budi", idempotencyKey: factories.createIdempotencyKey() },
-      familyId: owner.family.id,
-      user: owner.user,
-      runInTenantTransaction: harness.withMember,
-    })
-
-    await recordLendForFamily({
+    const person = await createPersonForFamily({
       data: {
-        personMerchantId: budi.id,
-        fromAccountId: cash.id,
-        amount: "40000",
+        name: personName,
         idempotencyKey: factories.createIdempotencyKey(),
       },
-      familyId: owner.family.id,
-      user: owner.user,
-      runInTenantTransaction: harness.withMember,
+      ...memberCtx(owner),
     })
+    return { owner, cash, person }
+  }
+
+  const lend = (
+    owner: Owner,
+    personMerchantId: string,
+    fromAccountId: string,
+    amount: string,
+    opts?: { date?: Date; idempotencyKey?: string }
+  ) =>
+    recordLendForFamily({
+      data: {
+        personMerchantId,
+        fromAccountId,
+        amount,
+        idempotencyKey:
+          opts?.idempotencyKey ?? factories.createIdempotencyKey(),
+        ...(opts?.date ? { date: opts.date } : {}),
+      },
+      ...memberCtx(owner),
+    })
+
+  const borrow = (
+    owner: Owner,
+    personMerchantId: string,
+    toAccountId: string,
+    amount: string
+  ) =>
+    recordBorrowForFamily({
+      data: {
+        personMerchantId,
+        toAccountId,
+        amount,
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      ...memberCtx(owner),
+    })
+
+  const repay = (
+    owner: Owner,
+    personMerchantId: string,
+    direction: "receivable" | "loan",
+    cashAccountId: string,
+    amount: string
+  ) =>
+    recordRepaymentForFamily({
+      data: {
+        personMerchantId,
+        direction,
+        cashAccountId,
+        amount,
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      ...memberCtx(owner),
+    })
+
+  const debtsOf = (owner: Owner) => getPersonDebtsForFamily(readerCtx(owner))
+  const personsOf = (owner: Owner) => getPersonsForFamily(readerCtx(owner))
+  const listAccounts = (owner: Owner, includeCounterparty?: boolean) =>
+    getAccountsForFamily({
+      ...readerCtx(owner),
+      ...(includeCounterparty === undefined ? {} : { includeCounterparty }),
+    })
+
+  async function readAccounts(familyId: string) {
+    return await harness.withFamily(familyId, (tx) =>
+      tx.account.findMany({
+        select: {
+          id: true,
+          accountType: true,
+          accountClass: true,
+          balance: true,
+          currency: true,
+          counterpartyMerchantId: true,
+        },
+        where: { familyId, deletedAt: null },
+      })
+    )
+  }
+
+  test("lend creates a RECEIVABLE that grows while cash drops", async () => {
+    const { owner, cash, person: budi } = await setup(100_000n)
+
+    await lend(owner, budi.id, cash.id, "40000")
 
     const accounts = await readAccounts(owner.family.id)
     const cashRow = accounts.find((a) => a.id === cash.id)
@@ -82,11 +196,7 @@ describe("PER-212 person-to-person debt", () => {
     expect(receivable?.accountType).toBe("RECEIVABLE")
     expect(receivable?.balance).toBe(40_000n)
 
-    const debts = await getPersonDebtsForFamily({
-      familyId: owner.family.id,
-      userId: owner.user.id,
-      runInTenantTransaction: harness.withMember,
-    })
+    const debts = await debtsOf(owner)
     expect(debts).toHaveLength(1)
     expect(debts[0].personId).toBe(budi.id)
     expect(debts[0].settled).toBe(false)
@@ -94,32 +204,9 @@ describe("PER-212 person-to-person debt", () => {
   })
 
   test("borrow creates a LOAN + cash grows (liability_draw)", async () => {
-    const owner = await factories.createAuthenticatedOnboardedUser()
-    const cash = await factories.createAccount({
-      accountType: "DEPOSITORY",
-      balance: 0n,
-      familyId: owner.family.id,
-      name: "Cash",
-    })
-    const abah = await createPersonForFamily({
-      data: { name: "Abah", idempotencyKey: factories.createIdempotencyKey() },
-      familyId: owner.family.id,
-      user: owner.user,
-      runInTenantTransaction: harness.withMember,
-    })
+    const { owner, cash, person: abah } = await setup(0n, "Abah")
 
-    const draw = await recordBorrowForFamily({
-      data: {
-        personMerchantId: abah.id,
-        toAccountId: cash.id,
-        amount: "30000",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-      runInTenantTransaction: harness.withMember,
-    })
-
+    const draw = await borrow(owner, abah.id, cash.id, "30000")
     expect(draw.kind).toBe("liability_draw")
 
     const accounts = await readAccounts(owner.family.id)
@@ -129,95 +216,29 @@ describe("PER-212 person-to-person debt", () => {
     expect(loan?.accountType).toBe("LOAN")
     expect(loan?.balance).toBe(-30_000n)
 
-    const debts = await getPersonDebtsForFamily({
-      familyId: owner.family.id,
-      userId: owner.user.id,
-      runInTenantTransaction: harness.withMember,
-    })
+    const debts = await debtsOf(owner)
     expect(debts[0].positions).toEqual([{ currency: "IDR", net: "-30000" }])
     expect(debts[0].settled).toBe(false)
   })
 
   test("net position aggregates a person's accounts; repay to zero settles", async () => {
-    const owner = await factories.createAuthenticatedOnboardedUser()
-    const cash = await factories.createAccount({
-      accountType: "DEPOSITORY",
-      balance: 100_000n,
-      familyId: owner.family.id,
-      name: "Cash",
-    })
-    const budi = await createPersonForFamily({
-      data: { name: "Budi", idempotencyKey: factories.createIdempotencyKey() },
-      familyId: owner.family.id,
-      user: owner.user,
-      runInTenantTransaction: harness.withMember,
-    })
+    const { owner, cash, person: budi } = await setup(100_000n)
 
     // Lend 50k (receivable +50k) AND borrow 20k from the same person
     // (loan -20k). Net across the two linked accounts = +30k.
-    await recordLendForFamily({
-      data: {
-        personMerchantId: budi.id,
-        fromAccountId: cash.id,
-        amount: "50000",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-      runInTenantTransaction: harness.withMember,
-    })
-    await recordBorrowForFamily({
-      data: {
-        personMerchantId: budi.id,
-        toAccountId: cash.id,
-        amount: "20000",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-      runInTenantTransaction: harness.withMember,
-    })
+    await lend(owner, budi.id, cash.id, "50000")
+    await borrow(owner, budi.id, cash.id, "20000")
 
-    let debts = await getPersonDebtsForFamily({
-      familyId: owner.family.id,
-      userId: owner.user.id,
-      runInTenantTransaction: harness.withMember,
-    })
+    let debts = await debtsOf(owner)
     expect(debts[0].accounts).toHaveLength(2)
     expect(debts[0].positions).toEqual([{ currency: "IDR", net: "30000" }])
     expect(debts[0].settled).toBe(false)
 
     // Repay both sides fully → net 0 → settled (Lunas).
-    await recordRepaymentForFamily({
-      data: {
-        personMerchantId: budi.id,
-        direction: "receivable",
-        cashAccountId: cash.id,
-        amount: "50000",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-      runInTenantTransaction: harness.withMember,
-    })
-    await recordRepaymentForFamily({
-      data: {
-        personMerchantId: budi.id,
-        direction: "loan",
-        cashAccountId: cash.id,
-        amount: "20000",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-      runInTenantTransaction: harness.withMember,
-    })
+    await repay(owner, budi.id, "receivable", cash.id, "50000")
+    await repay(owner, budi.id, "loan", cash.id, "20000")
 
-    debts = await getPersonDebtsForFamily({
-      familyId: owner.family.id,
-      userId: owner.user.id,
-      runInTenantTransaction: harness.withMember,
-    })
+    debts = await debtsOf(owner)
     expect(debts[0].positions).toEqual([{ currency: "IDR", net: "0" }])
     expect(debts[0].settled).toBe(true)
 
@@ -227,59 +248,18 @@ describe("PER-212 person-to-person debt", () => {
   })
 
   test("net-worth TOTAL is identical whether or not debts are counterparty-linked", async () => {
-    const owner = await factories.createAuthenticatedOnboardedUser()
-    const cash = await factories.createAccount({
-      accountType: "DEPOSITORY",
-      balance: 100_000n,
-      familyId: owner.family.id,
-      name: "Cash",
-    })
-    const budi = await createPersonForFamily({
-      data: { name: "Budi", idempotencyKey: factories.createIdempotencyKey() },
-      familyId: owner.family.id,
-      user: owner.user,
-      runInTenantTransaction: harness.withMember,
-    })
+    const { owner, cash, person: budi } = await setup(100_000n)
 
-    await recordLendForFamily({
-      data: {
-        personMerchantId: budi.id,
-        fromAccountId: cash.id,
-        amount: "40000",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-      runInTenantTransaction: harness.withMember,
-    })
-    await recordBorrowForFamily({
-      data: {
-        personMerchantId: budi.id,
-        toAccountId: cash.id,
-        amount: "30000",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-      runInTenantTransaction: harness.withMember,
-    })
+    await lend(owner, budi.id, cash.id, "40000")
+    await borrow(owner, budi.id, cash.id, "30000")
 
     // While linked: the main list (includeCounterparty:false) excludes the two
     // debt accounts, but the net-worth math (includeCounterparty:true) keeps them.
-    const listedOnly = await getAccountsForFamily({
-      familyId: owner.family.id,
-      userId: owner.user.id,
-      includeCounterparty: false,
-      runInTenantTransaction: harness.withMember,
-    })
+    const listedOnly = await listAccounts(owner, false)
     expect(listedOnly).toHaveLength(1)
     expect(listedOnly[0].id).toBe(cash.id)
 
-    const withDebtsLinked = await getAccountsForFamily({
-      familyId: owner.family.id,
-      userId: owner.user.id,
-      runInTenantTransaction: harness.withMember,
-    })
+    const withDebtsLinked = await listAccounts(owner)
     expect(withDebtsLinked).toHaveLength(3)
     const totalLinked = netWorthOf(withDebtsLinked)
 
@@ -290,11 +270,7 @@ describe("PER-212 person-to-person debt", () => {
         data: { counterpartyMerchantId: null },
       })
     })
-    const afterUnlink = await getAccountsForFamily({
-      familyId: owner.family.id,
-      userId: owner.user.id,
-      runInTenantTransaction: harness.withMember,
-    })
+    const afterUnlink = await listAccounts(owner)
     expect(afterUnlink).toHaveLength(3)
     const totalUnlinked = netWorthOf(afterUnlink)
 
@@ -305,86 +281,27 @@ describe("PER-212 person-to-person debt", () => {
   })
 
   test("tenant isolation: family B cannot see family A's persons or debts", async () => {
-    const ownerA = await factories.createAuthenticatedOnboardedUser()
+    const { owner: ownerA, cash: cashA, person: budi } = await setup(100_000n)
     const ownerB = await factories.createAuthenticatedOnboardedUser()
-    const cashA = await factories.createAccount({
-      accountType: "DEPOSITORY",
-      balance: 100_000n,
-      familyId: ownerA.family.id,
-      name: "A Cash",
-    })
-    const budi = await createPersonForFamily({
-      data: { name: "Budi", idempotencyKey: factories.createIdempotencyKey() },
-      familyId: ownerA.family.id,
-      user: ownerA.user,
-      runInTenantTransaction: harness.withMember,
-    })
-    await recordLendForFamily({
-      data: {
-        personMerchantId: budi.id,
-        fromAccountId: cashA.id,
-        amount: "40000",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: ownerA.family.id,
-      user: ownerA.user,
-      runInTenantTransaction: harness.withMember,
-    })
 
-    const debtsB = await getPersonDebtsForFamily({
-      familyId: ownerB.family.id,
-      userId: ownerB.user.id,
-      runInTenantTransaction: harness.withMember,
-    })
-    const personsB = await getPersonsForFamily({
-      familyId: ownerB.family.id,
-      userId: ownerB.user.id,
-      runInTenantTransaction: harness.withMember,
-    })
-    expect(debtsB).toEqual([])
-    expect(personsB).toEqual([])
+    await lend(ownerA, budi.id, cashA.id, "40000")
+
+    expect(await debtsOf(ownerB)).toEqual([])
+    expect(await personsOf(ownerB)).toEqual([])
 
     // And family A still sees its own.
-    const debtsA = await getPersonDebtsForFamily({
-      familyId: ownerA.family.id,
-      userId: ownerA.user.id,
-      runInTenantTransaction: harness.withMember,
-    })
-    expect(debtsA).toHaveLength(1)
+    expect(await debtsOf(ownerA)).toHaveLength(1)
   })
 
   test("idempotency replay of a lend is a no-op", async () => {
-    const owner = await factories.createAuthenticatedOnboardedUser()
-    const cash = await factories.createAccount({
-      accountType: "DEPOSITORY",
-      balance: 100_000n,
-      familyId: owner.family.id,
-      name: "Cash",
-    })
-    const budi = await createPersonForFamily({
-      data: { name: "Budi", idempotencyKey: factories.createIdempotencyKey() },
-      familyId: owner.family.id,
-      user: owner.user,
-      runInTenantTransaction: harness.withMember,
-    })
+    const { owner, cash, person: budi } = await setup(100_000n)
 
     const key = factories.createIdempotencyKey()
     // A genuine replay re-sends the IDENTICAL request, date included (the client
     // stamps the date once, so a network retry carries the same bytes).
     const date = new Date("2026-06-05T00:00:00.000Z")
     const lendOnce = () =>
-      recordLendForFamily({
-        data: {
-          personMerchantId: budi.id,
-          fromAccountId: cash.id,
-          amount: "40000",
-          date,
-          idempotencyKey: key,
-        },
-        familyId: owner.family.id,
-        user: owner.user,
-        runInTenantTransaction: harness.withMember,
-      })
+      lend(owner, budi.id, cash.id, "40000", { date, idempotencyKey: key })
 
     await lendOnce()
     await lendOnce() // replay: same key, same payload
@@ -406,37 +323,4 @@ describe("PER-212 person-to-person debt", () => {
     )
     expect(txCount).toBe(2)
   })
-
-  async function readAccounts(familyId: string) {
-    return await harness.withFamily(familyId, (tx) =>
-      tx.account.findMany({
-        select: {
-          id: true,
-          accountType: true,
-          accountClass: true,
-          balance: true,
-          currency: true,
-          counterpartyMerchantId: true,
-        },
-        where: { familyId, deletedAt: null },
-      })
-    )
-  }
-
-  function netWorthOf(
-    accounts: ReadonlyArray<{
-      accountClass: string
-      currency: string
-      balance: string
-    }>
-  ): bigint {
-    const balances: PointBalance[] = accounts.map((a) => ({
-      accountClass: a.accountClass,
-      currency: a.currency,
-      native: BigInt(a.balance),
-    }))
-    // Single-currency (IDR) fixture, base = IDR: the rate resolver is never
-    // consulted (identity path), so it can safely return null.
-    return normalizeNetWorthAt(balances, () => null, "IDR").netWorth
-  }
 })
