@@ -1066,6 +1066,57 @@ function CategoryField({
   )
 }
 
+// PER-209 polish: the allocation status line. Extracted to a component with
+// early returns (instead of a nested ternary) so the three states — balanced /
+// under-allocated / over-allocated — stay readable and each keeps its own
+// styling + copy.
+function SplitAllocationStatus({
+  isBalanced,
+  remaining,
+  currency,
+}: {
+  isBalanced: boolean
+  remaining: number
+  currency: string
+}) {
+  if (isBalanced) {
+    return (
+      <p className="flex items-center gap-1.5 rounded-md bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400">
+        <span>✓</span>
+        <span>Perfect! All funds allocated</span>
+      </p>
+    )
+  }
+
+  if (remaining > 0) {
+    return (
+      <p className="flex items-center gap-1.5 rounded-md bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 dark:bg-amber-950/30 dark:text-amber-400">
+        <span>○</span>
+        <span>
+          Remaining{" "}
+          <strong>
+            {getCurrencySymbol(currency)} {remaining.toLocaleString("en-US")}
+          </strong>{" "}
+          unallocated
+        </span>
+      </p>
+    )
+  }
+
+  return (
+    <p className="flex items-center gap-1.5 rounded-md bg-red-50 px-3 py-2 text-sm font-medium text-red-600 dark:bg-red-950/30 dark:text-red-400">
+      <span>✕</span>
+      <span>
+        Over allocated by{" "}
+        <strong>
+          {getCurrencySymbol(currency)}{" "}
+          {Math.abs(remaining).toLocaleString("en-US")}
+        </strong>
+      </span>
+    </p>
+  )
+}
+
 function SplitEntriesPanel({
   activeTab,
   form,
@@ -1084,171 +1135,144 @@ function SplitEntriesPanel({
     formData?.accounts.find((a) => a.id === form.getFieldValue("accountId"))
       ?.currency ?? "IDR"
 
+  // Panel-level mutation helpers keep the JSX event handlers shallow one-liners
+  // (avoids nesting setSplitEntries → map/filter callbacks inside the render
+  // prop, which otherwise breaches the 5-level function-nesting limit).
+  const updateSplitEntry = (id: string, patch: Partial<SplitEntryValue>) =>
+    setSplitEntries((prev) =>
+      prev.map((en) => (en.id === id ? { ...en, ...patch } : en))
+    )
+  const removeSplitEntry = (id: string) =>
+    setSplitEntries((prev) => prev.filter((en) => en.id !== id))
+  const addSplitEntry = () =>
+    setSplitEntries((prev) => [...prev, createBlankSplitEntry()])
+
   return (
-    <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50/40 p-3 dark:border-amber-800 dark:bg-amber-950/20">
-      <p className="text-xs font-semibold tracking-wider text-amber-700 uppercase dark:text-amber-400">
-        Category Allocation
-      </p>
+    <form.Subscribe selector={(state) => state.values.amount}>
+      {(parentAmount) => {
+        // When the allocation is fully balanced, promote the whole panel frame
+        // to emerald (matching the status line), else keep the amber "still
+        // allocating" frame. Light + dark variants.
+        const splitTotal = splitEntries.reduce((s, e) => s + e.amount, 0)
+        const remaining = parentAmount - splitTotal
+        const isBalanced = remaining === 0 && parentAmount > 0
 
-      <div className="grid grid-cols-[1fr_1.6fr_6rem_1.5rem] gap-2 px-0.5">
-        <span className="text-xs font-medium text-muted-foreground">
-          Category
-        </span>
-        <span className="text-xs font-medium text-muted-foreground">
-          Item Note
-        </span>
-        <span className="text-right text-xs font-medium text-muted-foreground">
-          Amount
-        </span>
-        <span />
-      </div>
-
-      <div className="space-y-2">
-        {splitEntries.map((entry) => (
+        return (
           <div
-            key={entry.id}
-            className="grid grid-cols-[1fr_1.6fr_6rem_1.5rem] items-center gap-2"
+            className={cn(
+              "space-y-3 rounded-lg border p-3",
+              isBalanced
+                ? "border-emerald-200 bg-emerald-50/40 dark:border-emerald-800 dark:bg-emerald-950/20"
+                : "border-amber-200 bg-amber-50/40 dark:border-amber-800 dark:bg-amber-950/20"
+            )}
           >
-            <select
-              aria-label="Category for split entry"
-              name={`split-category-${entry.id}`}
-              id={`split-category-${entry.id}`}
-              className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
-              value={entry.categoryId ?? ""}
-              onChange={(e) =>
-                setSplitEntries((prev) =>
-                  prev.map((en) =>
-                    en.id === entry.id
-                      ? {
-                          ...en,
-                          categoryId: e.target.value,
-                        }
-                      : en
-                  )
-                )
-              }
+            <p
+              className={cn(
+                "text-xs font-semibold tracking-wider uppercase",
+                isBalanced
+                  ? "text-emerald-700 dark:text-emerald-400"
+                  : "text-amber-700 dark:text-amber-400"
+              )}
             >
-              <option value="">-- Select --</option>
-              <CategoryOptions
-                categories={formData?.categories}
-                type={activeTab}
-              />
-            </select>
-
-            <Input
-              aria-label="Description for split entry"
-              name={`split-desc-${entry.id}`}
-              id={`split-desc-${entry.id}`}
-              placeholder="e.g., Soap & Shampoo"
-              className="h-8 text-sm"
-              value={entry.description}
-              onChange={(e) =>
-                setSplitEntries((prev) =>
-                  prev.map((en) =>
-                    en.id === entry.id
-                      ? {
-                          ...en,
-                          description: e.target.value,
-                        }
-                      : en
-                  )
-                )
-              }
-            />
-
-            <Input
-              aria-label="Amount for split entry"
-              name={`split-amount-${entry.id}`}
-              id={`split-amount-${entry.id}`}
-              type="number"
-              placeholder="0"
-              className="h-8 text-right text-sm font-semibold"
-              value={entry.amount || ""}
-              onChange={(e) =>
-                setSplitEntries((prev) =>
-                  prev.map((en) =>
-                    en.id === entry.id
-                      ? {
-                          ...en,
-                          amount: Number(e.target.value),
-                        }
-                      : en
-                  )
-                )
-              }
-            />
-
-            <button
-              type="button"
-              disabled={splitEntries.length <= 2}
-              onClick={() =>
-                setSplitEntries((prev) =>
-                  prev.filter((en) => en.id !== entry.id)
-                )
-              }
-              className="flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-red-100 hover:text-red-600 disabled:opacity-30"
-            >
-              <IconX className="size-3.5" />
-            </button>
-          </div>
-        ))}
-      </div>
-
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="h-7 w-full border border-dashed text-xs text-muted-foreground hover:border-amber-400 hover:text-amber-700"
-        onClick={() =>
-          setSplitEntries((prev) => [...prev, createBlankSplitEntry()])
-        }
-      >
-        <IconPlus className="mr-1 size-3" /> Add Row
-      </Button>
-
-      <form.Subscribe selector={(state) => state.values.amount}>
-        {(parentAmount) => {
-          const splitTotal = splitEntries.reduce((s, e) => s + e.amount, 0)
-          const remaining = parentAmount - splitTotal
-
-          if (remaining === 0 && parentAmount > 0) {
-            return (
-              <p className="flex items-center gap-1.5 rounded-md bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400">
-                <span>✓</span>
-                <span>Perfect! All funds allocated</span>
-              </p>
-            )
-          }
-          if (remaining > 0) {
-            return (
-              <p className="flex items-center gap-1.5 rounded-md bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 dark:bg-amber-950/30 dark:text-amber-400">
-                <span>○</span>
-                <span>
-                  Remaining{" "}
-                  <strong>
-                    {getCurrencySymbol(selectedAccountCurrency)}{" "}
-                    {remaining.toLocaleString("en-US")}
-                  </strong>{" "}
-                  unallocated
-                </span>
-              </p>
-            )
-          }
-          return (
-            <p className="flex items-center gap-1.5 rounded-md bg-red-50 px-3 py-2 text-sm font-medium text-red-600 dark:bg-red-950/30 dark:text-red-400">
-              <span>✕</span>
-              <span>
-                Over allocated by{" "}
-                <strong>
-                  {getCurrencySymbol(selectedAccountCurrency)}{" "}
-                  {Math.abs(remaining).toLocaleString("en-US")}
-                </strong>
-              </span>
+              Category Allocation
             </p>
-          )
-        }}
-      </form.Subscribe>
-    </div>
+
+            <div className="grid grid-cols-[1fr_1.6fr_6rem_1.5rem] gap-2 px-0.5">
+              <span className="text-xs font-medium text-muted-foreground">
+                Category
+              </span>
+              <span className="text-xs font-medium text-muted-foreground">
+                Item Note
+              </span>
+              <span className="text-right text-xs font-medium text-muted-foreground">
+                Amount
+              </span>
+              <span />
+            </div>
+
+            <div className="space-y-2">
+              {splitEntries.map((entry) => (
+                <div
+                  key={entry.id}
+                  className="grid grid-cols-[1fr_1.6fr_6rem_1.5rem] items-center gap-2"
+                >
+                  <select
+                    aria-label="Category for split entry"
+                    name={`split-category-${entry.id}`}
+                    id={`split-category-${entry.id}`}
+                    className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+                    value={entry.categoryId ?? ""}
+                    onChange={(e) =>
+                      updateSplitEntry(entry.id, { categoryId: e.target.value })
+                    }
+                  >
+                    <option value="">-- Select --</option>
+                    <CategoryOptions
+                      categories={formData?.categories}
+                      type={activeTab}
+                    />
+                  </select>
+
+                  <Input
+                    aria-label="Description for split entry"
+                    name={`split-desc-${entry.id}`}
+                    id={`split-desc-${entry.id}`}
+                    placeholder="e.g., Soap & Shampoo"
+                    className="h-8 text-sm"
+                    value={entry.description}
+                    onChange={(e) =>
+                      updateSplitEntry(entry.id, {
+                        description: e.target.value,
+                      })
+                    }
+                  />
+
+                  <Input
+                    aria-label="Amount for split entry"
+                    name={`split-amount-${entry.id}`}
+                    id={`split-amount-${entry.id}`}
+                    type="number"
+                    placeholder="0"
+                    className="h-8 text-right text-sm font-semibold"
+                    value={entry.amount || ""}
+                    onChange={(e) =>
+                      updateSplitEntry(entry.id, {
+                        amount: Number(e.target.value),
+                      })
+                    }
+                  />
+
+                  <button
+                    type="button"
+                    disabled={splitEntries.length <= 2}
+                    onClick={() => removeSplitEntry(entry.id)}
+                    className="flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-red-100 hover:text-red-600 disabled:opacity-30"
+                  >
+                    <IconX className="size-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 w-full border border-dashed text-xs text-muted-foreground hover:border-amber-400 hover:text-amber-700"
+              onClick={addSplitEntry}
+            >
+              <IconPlus className="mr-1 size-3" /> Add Row
+            </Button>
+
+            <SplitAllocationStatus
+              isBalanced={isBalanced}
+              remaining={remaining}
+              currency={selectedAccountCurrency}
+            />
+          </div>
+        )
+      }}
+    </form.Subscribe>
   )
 }
 
