@@ -52,9 +52,6 @@ const DIRECTION_ACCOUNT_TYPE: Record<
 export class PersonDebtNotFoundError extends Error {
   override readonly name = "PersonDebtNotFoundError"
   readonly statusCode = 404
-  constructor(message: string) {
-    super(message)
-  }
 }
 
 const nameSchema = z.string().trim().min(1).max(120)
@@ -268,37 +265,74 @@ export const recordRepaymentInputSchema = z.object({
   idempotencyKey: uuidV7Schema,
 })
 
-async function postDebtTransfer({
+/**
+ * The single flow behind lend / borrow / repay: resolve the person, pin the
+ * currency to the chosen cash account, ensure that person's RECEIVABLE/LOAN
+ * account exists (create-if-absent, idempotent by lookup), then post ONE
+ * ordinary transfer between the cash account and the debt account. The transfer
+ * `kind` (funds_movement / liability_draw / loan_payment) is DERIVED from the
+ * two account types by the ledger core — never passed by this module. Every
+ * public debt mutation is a thin wrapper that only picks `ensureDirection`,
+ * whether cash is the source, and the default description.
+ */
+async function orchestrateDebtMovement({
   familyId,
   user,
-  fromAccountId,
-  toAccountId,
-  amount,
-  description,
-  date,
-  idempotencyKey,
   runInTenantTransaction,
+  personMerchantId,
+  cashAccountId,
+  ensureDirection,
+  cashIsSource,
+  amount,
+  date,
+  description,
+  describe,
+  idempotencyKey,
 }: {
   familyId: string
   user: ServerUser
-  fromAccountId: string
-  toAccountId: string
-  amount: string
-  description: string
-  date: Date
-  idempotencyKey: string
   runInTenantTransaction: RunInTenantTransaction
+  personMerchantId: string
+  cashAccountId: string
+  ensureDirection: PersonDebtDirection
+  // true ⇒ cash → debt account (lend, repay-loan); false ⇒ debt account → cash
+  // (borrow, repay-receivable).
+  cashIsSource: boolean
+  amount: string
+  date: Date | undefined
+  description: string | undefined
+  describe: (personName: string) => string
+  idempotencyKey: string
 }) {
-  // The kind (funds_movement / liability_draw / loan_payment) is DERIVED from
-  // the two account types by the ledger core — never passed by this module.
+  const person = await loadPersonOrThrow({
+    familyId,
+    user,
+    personMerchantId,
+    runInTenantTransaction,
+  })
+  const currency = await loadCashAccountCurrency({
+    familyId,
+    user,
+    accountId: cashAccountId,
+    runInTenantTransaction,
+  })
+  const debtAccountId = await ensurePersonDebtAccountId({
+    familyId,
+    user,
+    personName: person.name,
+    personMerchantId: person.id,
+    direction: ensureDirection,
+    currency,
+    runInTenantTransaction,
+  })
   return await createTransactionForFamily({
     data: {
       type: "transfer",
-      accountId: fromAccountId,
-      toAccountId,
+      accountId: cashIsSource ? cashAccountId : debtAccountId,
+      toAccountId: cashIsSource ? debtAccountId : cashAccountId,
       amount,
-      description,
-      date,
+      description: description ?? describe(person.name),
+      date: date ?? new Date(),
       idempotencyKey,
     },
     familyId,
@@ -319,37 +353,20 @@ export async function recordLendForFamily({
   runInTenantTransaction?: RunInTenantTransaction
 }) {
   const data = recordLendInputSchema.parse(rawData)
-  const person = await loadPersonOrThrow({
+  // Lend: cash → RECEIVABLE (their debt to you grows).
+  return await orchestrateDebtMovement({
     familyId,
     user,
+    runInTenantTransaction,
     personMerchantId: data.personMerchantId,
-    runInTenantTransaction,
-  })
-  const currency = await loadCashAccountCurrency({
-    familyId,
-    user,
-    accountId: data.fromAccountId,
-    runInTenantTransaction,
-  })
-  const receivableId = await ensurePersonDebtAccountId({
-    familyId,
-    user,
-    personName: person.name,
-    personMerchantId: person.id,
-    direction: "receivable",
-    currency,
-    runInTenantTransaction,
-  })
-  return await postDebtTransfer({
-    familyId,
-    user,
-    fromAccountId: data.fromAccountId,
-    toAccountId: receivableId,
+    cashAccountId: data.fromAccountId,
+    ensureDirection: "receivable",
+    cashIsSource: true,
     amount: data.amount,
-    description: data.description ?? `Lent to ${person.name}`,
-    date: data.date ?? new Date(),
+    date: data.date,
+    description: data.description,
+    describe: (name) => `Lent to ${name}`,
     idempotencyKey: data.idempotencyKey,
-    runInTenantTransaction,
   })
 }
 
@@ -365,37 +382,20 @@ export async function recordBorrowForFamily({
   runInTenantTransaction?: RunInTenantTransaction
 }) {
   const data = recordBorrowInputSchema.parse(rawData)
-  const person = await loadPersonOrThrow({
+  // Borrow: LOAN → cash (your debt to them grows; liability_draw is derived).
+  return await orchestrateDebtMovement({
     familyId,
     user,
+    runInTenantTransaction,
     personMerchantId: data.personMerchantId,
-    runInTenantTransaction,
-  })
-  const currency = await loadCashAccountCurrency({
-    familyId,
-    user,
-    accountId: data.toAccountId,
-    runInTenantTransaction,
-  })
-  const loanId = await ensurePersonDebtAccountId({
-    familyId,
-    user,
-    personName: person.name,
-    personMerchantId: person.id,
-    direction: "loan",
-    currency,
-    runInTenantTransaction,
-  })
-  return await postDebtTransfer({
-    familyId,
-    user,
-    fromAccountId: loanId,
-    toAccountId: data.toAccountId,
+    cashAccountId: data.toAccountId,
+    ensureDirection: "loan",
+    cashIsSource: false,
     amount: data.amount,
-    description: data.description ?? `Borrowed from ${person.name}`,
-    date: data.date ?? new Date(),
+    date: data.date,
+    description: data.description,
+    describe: (name) => `Borrowed from ${name}`,
     idempotencyKey: data.idempotencyKey,
-    runInTenantTransaction,
   })
 }
 
@@ -411,48 +411,24 @@ export async function recordRepaymentForFamily({
   runInTenantTransaction?: RunInTenantTransaction
 }) {
   const data = recordRepaymentInputSchema.parse(rawData)
-  const person = await loadPersonOrThrow({
+  // Repay is the transfer OPPOSITE to the original debt:
+  //   receivable repaid: RECEIVABLE → cash (they pay you back)
+  //   loan repaid       : cash → LOAN       (you pay them back)
+  const isReceivable = data.direction === "receivable"
+  return await orchestrateDebtMovement({
     familyId,
     user,
+    runInTenantTransaction,
     personMerchantId: data.personMerchantId,
-    runInTenantTransaction,
-  })
-  const currency = await loadCashAccountCurrency({
-    familyId,
-    user,
-    accountId: data.cashAccountId,
-    runInTenantTransaction,
-  })
-  const debtAccountId = await ensurePersonDebtAccountId({
-    familyId,
-    user,
-    personName: person.name,
-    personMerchantId: person.id,
-    direction: data.direction,
-    currency,
-    runInTenantTransaction,
-  })
-  // Repay is the transfer in the OPPOSITE direction to the original debt:
-  //   receivable repaid: RECEIVABLE -> cash  (they pay you back)
-  //   loan repaid       : cash -> LOAN        (you pay them back)
-  const fromAccountId =
-    data.direction === "receivable" ? debtAccountId : data.cashAccountId
-  const toAccountId =
-    data.direction === "receivable" ? data.cashAccountId : debtAccountId
-  return await postDebtTransfer({
-    familyId,
-    user,
-    fromAccountId,
-    toAccountId,
+    cashAccountId: data.cashAccountId,
+    ensureDirection: data.direction,
+    cashIsSource: !isReceivable,
     amount: data.amount,
-    description:
-      data.description ??
-      (data.direction === "receivable"
-        ? `Repayment from ${person.name}`
-        : `Repayment to ${person.name}`),
-    date: data.date ?? new Date(),
+    date: data.date,
+    description: data.description,
+    describe: (name) =>
+      isReceivable ? `Repayment from ${name}` : `Repayment to ${name}`,
     idempotencyKey: data.idempotencyKey,
-    runInTenantTransaction,
   })
 }
 
@@ -584,7 +560,7 @@ export async function getPersonDebtsForFamily({
       const positions: PersonDebtCurrencyPosition[] = [
         ...netByCurrency.entries(),
       ]
-        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .sort(([a], [b]) => a.localeCompare(b))
         .map(([currency, net]) => ({ currency, net: net.toString() }))
 
       views.push({

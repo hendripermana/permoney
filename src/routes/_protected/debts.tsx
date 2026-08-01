@@ -74,6 +74,23 @@ const ACTION_LABEL: Record<DebtAction, string> = {
   repay_loan: "Repayment made (I pay them back)",
 }
 
+// After any debt mutation, resync both the person-debt list and the accounts
+// (balances moved) with the Postgres source of truth (CLAUDE.md §5B).
+async function refreshDebtsAfterMutation(): Promise<void> {
+  await Promise.all([
+    personDebtCollection.utils.refetch(),
+    accountCollection.utils.refetch(),
+  ])
+}
+
+/** Human-readable sign of a signed net position, extracted to avoid a nested
+ * ternary at the call site (SonarCloud S3358). */
+function describeNetPosition(net: bigint): string {
+  if (net > 0n) return "They owe you"
+  if (net < 0n) return "You owe them"
+  return "Settled"
+}
+
 function DebtsPendingComponent() {
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center gap-3 p-6 text-center">
@@ -105,13 +122,6 @@ function DebtsPage() {
     () => debts ?? [],
     [debts]
   )
-
-  async function refreshAfterMutation() {
-    await Promise.all([
-      personDebtCollection.utils.refetch(),
-      accountCollection.utils.refetch(),
-    ])
-  }
 
   return (
     <TooltipProvider>
@@ -161,7 +171,7 @@ function DebtsPage() {
         <RecordDebtDialog
           onClose={() => setRecordOpen(false)}
           onSaved={async () => {
-            await refreshAfterMutation()
+            await refreshDebtsAfterMutation()
             setRecordOpen(false)
           }}
         />
@@ -170,7 +180,7 @@ function DebtsPage() {
   )
 }
 
-function DebtsEmptyState({ onRecord }: { onRecord: () => void }) {
+function DebtsEmptyState({ onRecord }: Readonly<{ onRecord: () => void }>) {
   return (
     <Card className="border-dashed">
       <CardContent className="flex flex-col items-center gap-4 py-12 text-center">
@@ -191,7 +201,7 @@ function DebtsEmptyState({ onRecord }: { onRecord: () => void }) {
   )
 }
 
-function PersonDebtCard({ debt }: { debt: PersonDebtRecord }) {
+function PersonDebtCard({ debt }: Readonly<{ debt: PersonDebtRecord }>) {
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -207,8 +217,7 @@ function PersonDebtCard({ debt }: { debt: PersonDebtRecord }) {
       <CardContent className="space-y-1.5">
         {debt.positions.map((position) => {
           const net = BigInt(position.net)
-          const direction =
-            net > 0n ? "They owe you" : net < 0n ? "You owe them" : "Settled"
+          const direction = describeNetPosition(net)
           const magnitude = net < 0n ? -net : net
           return (
             <div
@@ -236,10 +245,10 @@ const NEW_PERSON_SENTINEL = "__new_person"
 function RecordDebtDialog({
   onClose,
   onSaved,
-}: {
+}: Readonly<{
   onClose: () => void
   onSaved: () => Promise<void>
-}) {
+}>) {
   // All person contacts (incl. those with no debt yet) power the picker.
   const { data: persons, refetch: refetchPersons } = useQuery({
     queryKey: ["persons_all"],
@@ -309,48 +318,37 @@ function RecordDebtDialog({
         await refetchPersons()
       }
 
-      const idempotencyKey = createUuidV7()
-      // Stamp the date client-side (once per submit) so a network retry re-sends
-      // the identical payload and the server idempotency replay is a true no-op.
-      const date = new Date()
+      // Fields shared by all four flows. `date` is stamped client-side once so a
+      // network retry re-sends the identical payload and the server idempotency
+      // replay is a true no-op; the cash account + direction are the only things
+      // that vary per action.
+      const shared = {
+        personMerchantId: resolvedPersonId,
+        amount: minor,
+        description,
+        date: new Date(),
+        idempotencyKey: createUuidV7(),
+      }
       if (action === "lend") {
         await recordLendFn({
-          data: {
-            personMerchantId: resolvedPersonId,
-            fromAccountId: cashAccountId,
-            amount: minor,
-            description,
-            date,
-            idempotencyKey,
-          },
+          data: { ...shared, fromAccountId: cashAccountId },
         })
       } else if (action === "borrow") {
         await recordBorrowFn({
-          data: {
-            personMerchantId: resolvedPersonId,
-            toAccountId: cashAccountId,
-            amount: minor,
-            description,
-            date,
-            idempotencyKey,
-          },
+          data: { ...shared, toAccountId: cashAccountId },
         })
       } else {
         await recordRepaymentFn({
           data: {
-            personMerchantId: resolvedPersonId,
+            ...shared,
             direction: action === "repay_receivable" ? "receivable" : "loan",
             cashAccountId,
-            amount: minor,
-            description,
-            date,
-            idempotencyKey,
           },
         })
       }
       await onSaved()
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught))
+    } catch (error_) {
+      setError(error_ instanceof Error ? error_.message : String(error_))
       setSubmitting(false)
     }
   }
