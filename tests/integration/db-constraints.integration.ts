@@ -575,17 +575,15 @@ describe("M2 data-integrity database constraints", () => {
     )
   })
 
-  test("rejects split parents with category or merchant stored on the parent row", async () => {
+  test("rejects split parents with a category stored on the parent row", async () => {
     const context = await createLedgerContext()
-    const [category, merchant] = await Promise.all([
-      factories.createCategory({
-        familyId: context.familyId,
-      }),
-      factories.createMerchant({
-        familyId: context.familyId,
-      }),
-    ])
+    const category = await factories.createCategory({
+      familyId: context.familyId,
+    })
 
+    // PER-210: the relaxed split_parent_details_live_on_children CHECK is now
+    // category-only. A category on a split parent must still be rejected —
+    // categories live exclusively on the SplitEntry children.
     await expectDatabaseRejection(() =>
       harness.withFamily(context.familyId, (tx) =>
         tx.transaction.create({
@@ -603,24 +601,59 @@ describe("M2 data-integrity database constraints", () => {
         })
       )
     )
+  })
 
-    await expectDatabaseRejection(() =>
-      harness.withFamily(context.familyId, (tx) =>
-        tx.transaction.create({
-          data: {
-            accountId: context.accountId,
-            amount: -1_000n,
-            currency: "IDR",
-            description: "Invalid split parent merchant",
-            familyId: context.familyId,
-            isSplit: true,
-            merchantId: merchant.id,
-            type: "expense",
-            userId: context.userId,
+  test("accepts split parents that keep their single merchant on the parent row (PER-210)", async () => {
+    const context = await createLedgerContext()
+    const merchant = await factories.createMerchant({
+      familyId: context.familyId,
+    })
+
+    // A split is one receipt at one merchant: the parent KEEPS its merchantId
+    // (only categoryId is nulled). Create the parent + matching split entries
+    // in one transaction so the deferred parity trigger is satisfied at commit.
+    const created = await harness.withFamily(context.familyId, async (tx) => {
+      const parent = await tx.transaction.create({
+        data: {
+          accountId: context.accountId,
+          amount: -1_000n,
+          currency: "IDR",
+          description: "Split parent keeps merchant",
+          familyId: context.familyId,
+          isSplit: true,
+          merchantId: merchant.id,
+          type: "expense",
+          userId: context.userId,
+        },
+      })
+      await tx.splitEntry.createMany({
+        data: [
+          {
+            amount: 400n,
+            description: "Split line one",
+            transactionId: parent.id,
           },
-        })
-      )
+          {
+            amount: 600n,
+            description: "Split line two",
+            transactionId: parent.id,
+          },
+        ],
+      })
+      return parent
+    })
+
+    const persisted = await harness.withFamily(context.familyId, (tx) =>
+      tx.transaction.findUniqueOrThrow({
+        select: { categoryId: true, isSplit: true, merchantId: true },
+        where: { id: created.id },
+      })
     )
+    expect(persisted).toMatchObject({
+      categoryId: null,
+      isSplit: true,
+      merchantId: merchant.id,
+    })
   })
 
   test("rejects split transactions whose entries do not match the parent amount", async () => {

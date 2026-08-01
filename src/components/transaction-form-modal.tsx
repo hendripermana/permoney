@@ -1719,7 +1719,10 @@ function useTransactionFormModalController({
           accountId: value.accountId,
           categoryId: isSplit ? null : value.categoryId || null,
           toAccountId: value.toAccountId || null,
-          merchantId: isSplit ? null : value.merchantId || null,
+          // PER-210: a split parent keeps its single merchant (merchant = whole
+          // receipt); only categoryId is nulled on split. Keep merchantId so it
+          // actually reaches the server and persists on the parent row.
+          merchantId: value.merchantId || null,
           date: value.date,
           notes: value.notes || null,
           isSplit: value.type === "transfer" ? false : isSplit,
@@ -1780,11 +1783,13 @@ function useTransactionFormModalController({
               ? (formData?.categories.find((c) => c.id === value.categoryId) ??
                 null)
               : null,
-          merchant:
-            !isSplit && value.merchantId
-              ? (formData?.merchants.find((m) => m.id === value.merchantId) ??
-                null)
-              : null,
+          // PER-210: split parent retains its merchant, so hydrate the
+          // optimistic merchant relation for splits too (only category is
+          // dropped on split).
+          merchant: value.merchantId
+            ? (formData?.merchants.find((m) => m.id === value.merchantId) ??
+              null)
+            : null,
           updatedAt: new Date(),
         }
 

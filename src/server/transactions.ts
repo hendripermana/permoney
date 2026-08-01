@@ -1252,7 +1252,11 @@ function canonicalRequestPayload(
     destinationCurrency: data.destinationCurrency ?? null,
     isSplit: data.isSplit,
     kind: data.type === "transfer" ? null : data.kind,
-    merchantId: data.isSplit ? null : (data.merchantId ?? null),
+    // PER-210: a split parent keeps its single merchant (merchant = whole
+    // receipt); only categoryId is nulled on the parent. Must stay symmetric
+    // with canonicalPersistedPayload's merchantId line so idempotency replay
+    // detection keeps matching split-with-merchant payloads.
+    merchantId: data.merchantId ?? null,
     notes: data.notes ?? null,
     splitEntries: data.isSplit
       ? canonicalSplitEntries(data.splitEntries ?? [])
@@ -1374,7 +1378,9 @@ function canonicalPersistedPayload(tx: PersistedTransactionForIdempotency) {
     destinationCurrency: tx.destinationCurrency,
     isSplit: tx.isSplit,
     kind: tx.type === "transfer" ? null : tx.kind,
-    merchantId: tx.isSplit ? null : tx.merchantId,
+    // PER-210: split parent keeps its merchant. Symmetric twin of
+    // canonicalRequestPayload's merchantId line (input-side vs persisted-side).
+    merchantId: tx.merchantId,
     notes: tx.notes,
     splitEntries: tx.isSplit ? canonicalSplitEntries(tx.splitEntries) : [],
     status: tx.status,
@@ -2083,7 +2089,9 @@ export async function createTransactionForFamily({
             toAccountId: data.toAccountId || null,
             // Jika split aktif, categoryId di parent menjadi null (kategori hidup di entries)
             categoryId: data.isSplit ? null : data.categoryId || null,
-            merchantId: data.isSplit ? null : data.merchantId || null,
+            // PER-210: split parent retains its single merchant (merchant =
+            // whole receipt); only categoryId is nulled on the parent.
+            merchantId: data.merchantId || null,
             isSplit: data.isSplit,
             userId: user.id,
             familyId,
@@ -2973,7 +2981,9 @@ async function replaceTransactionWithinTenantTransaction(
         accountId: data.accountId,
         toAccountId: data.toAccountId || null,
         categoryId: data.isSplit ? null : data.categoryId || null,
-        merchantId: data.isSplit ? null : data.merchantId || null,
+        // PER-210: split parent retains its single merchant; only categoryId
+        // is nulled on the parent (categories live on the split children).
+        merchantId: data.merchantId || null,
         isSplit: data.isSplit,
         userId: user.id,
         familyId,
@@ -3263,11 +3273,11 @@ function buildBulkUpdateReplacementInput(
     id: transaction.id,
     idempotencyKey: data.idempotencyKey,
     isSplit: transaction.isSplit,
-    merchantId: transaction.isSplit
-      ? null
-      : data.merchantId !== undefined
-        ? data.merchantId
-        : transaction.merchantId,
+    // PER-210: the split parent keeps its single merchant (only categoryId is
+    // nulled on split). Bulk paths must match single paths, so preserve/set the
+    // parent merchant here exactly like the single-update path.
+    merchantId:
+      data.merchantId !== undefined ? data.merchantId : transaction.merchantId,
     notes: transaction.notes,
     splitEntries: patchedSplitEntries,
     status: transaction.status,

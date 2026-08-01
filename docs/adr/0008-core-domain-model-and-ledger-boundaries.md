@@ -56,10 +56,18 @@ represent realized money movement.
   source `accountId`, `type`, `kind`, `status`, transaction date, tenant
   (`familyId`), actor (`userId`), soft-delete state, supersession links, and
   idempotency key for create-style writes.
-- `SplitEntry` is canonical allocation data for a split transaction. When
-  `Transaction.isSplit = true`, the parent `Transaction.categoryId` and
-  `merchantId` must be `null`; category/merchant allocation lives in the child
-  rows.
+- `SplitEntry` is canonical allocation data for a split transaction. The
+  domain semantic is: merchant = **where** a purchase happened (one
+  receipt/store); category = **what** each line item is. When
+  `Transaction.isSplit = true`, the parent `Transaction.categoryId` must be
+  `null` (category allocation lives in the child `SplitEntry` rows), but the
+  parent **retains its single `merchantId`** — a split is still one receipt at
+  one merchant. `SplitEntry.merchantId` remains available for per-line
+  attribution, but the canonical single-merchant path is the parent row.
+  Enforced by the `split_parent_details_live_on_children` CHECK, which
+  originally forced both `categoryId` and `merchantId` to `null` on split and
+  thereby silently dropped the merchant; PER-210 relaxed it to
+  category-only (`NOT "isSplit" OR "categoryId" IS NULL`).
 - `Transfer` is the canonical pairing record for a transfer movement. A
   transfer is not one loose row; it is two `Transaction` legs plus one
   `Transfer` row that proves the graph.
