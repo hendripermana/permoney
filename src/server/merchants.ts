@@ -48,9 +48,16 @@ const hexColorSchema = z
   .trim()
   .regex(/^#[0-9a-fA-F]{6}$/, "color must be a #RRGGBB hex value")
 
+// PER-212 / ADR-0049: "business" (classic payee) | "person" (informal-debt
+// party). Defaults to "business" so every existing quick-create keeps its
+// meaning; a person contact is created by passing kind="person".
+export const MERCHANT_KIND_VALUES = ["business", "person"] as const
+export type MerchantKind = (typeof MERCHANT_KIND_VALUES)[number]
+
 export const createMerchantInputSchema = z.object({
   name: nameSchema,
   color: hexColorSchema.nullable().optional(),
+  kind: z.enum(MERCHANT_KIND_VALUES).optional().default("business"),
   idempotencyKey: uuidV7Schema,
 })
 
@@ -60,6 +67,7 @@ export interface SerializedMerchant {
   id: string
   name: string
   color: string | null
+  kind: MerchantKind
 }
 
 function serializeMerchant(merchant: Merchant): SerializedMerchant {
@@ -67,6 +75,7 @@ function serializeMerchant(merchant: Merchant): SerializedMerchant {
     id: merchant.id,
     name: merchant.name,
     color: merchant.color,
+    kind: merchant.kind as MerchantKind,
   }
 }
 
@@ -88,7 +97,12 @@ export async function createMerchantForFamily({
   const data: CreateMerchantInput = createMerchantInputSchema.parse(rawData)
   const trimmedName = data.name.trim()
   const color = data.color ?? null
-  const requestHash = await hashCanonicalPayload({ color, name: trimmedName })
+  const kind = data.kind
+  const requestHash = await hashCanonicalPayload({
+    color,
+    kind,
+    name: trimmedName,
+  })
   const auditCtx = await createAuditContext(
     { user: { id: user.id, familyId } },
     data.idempotencyKey
@@ -116,7 +130,7 @@ export async function createMerchantForFamily({
       if (existing) throw new DuplicateNameError("Merchant", trimmedName)
 
       const merchant = await tx.merchant.create({
-        data: { familyId, name: trimmedName, color },
+        data: { familyId, name: trimmedName, color, kind },
       })
 
       const serialized = serializeMerchant(merchant)

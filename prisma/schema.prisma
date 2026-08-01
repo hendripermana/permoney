@@ -187,6 +187,18 @@ model Account {
   dueDay            Int?
   interestRateBps   Int?
 
+  // PER-212 / ADR-0049 — person-to-person debt (informal lending/borrowing).
+  // When set, this RECEIVABLE/LOAN account IS the ledger for a debt with a
+  // specific person contact (a Merchant with kind="person"). Its presence is
+  // the ONLY discriminator: such accounts are hidden from the main Accounts
+  // list and grouped as "Personal debts (net)" on the net-worth card; they
+  // live in the Utang-Piutang view instead. The ledger stays uniform — a
+  // person-debt is an ordinary RECEIVABLE(ASSET)/LOAN(LIABILITY) account, so
+  // every balance / net-worth / audit / RLS invariant holds for free.
+  // Tenant-safe composite FK to Merchant(id, familyId) (Pattern A, ADR-0010).
+  counterpartyMerchantId String?
+  counterpartyMerchant   Merchant? @relation("AccountCounterparty", fields: [counterpartyMerchantId, familyId], references: [id, familyId], onDelete: Restrict, onUpdate: Cascade, map: "account_counterparty_merchant_fkey")
+
   familyId String
   family   Family @relation(fields: [familyId], references: [id])
 
@@ -203,6 +215,7 @@ model Account {
   @@index([familyId, status])
   @@index([familyId, deletedAt])
   @@index([familyId, externalProvider, externalAccountId])
+  @@index([counterpartyMerchantId])
 }
 
 model Merchant {
@@ -212,6 +225,14 @@ model Merchant {
   // Fitur Enterprise: Logo/Website
   color   String?
   logoUrl String?
+
+  // PER-212 / ADR-0049 — merchant discriminator. "business" is the classic
+  // payee (a shop, a biller); "person" is a friend/family contact used for
+  // informal person-to-person debt (Utang-Piutang). One counterparty concept
+  // unifies payee + debt-party (the PER-189 extension point). A person contact
+  // is linked to its RECEIVABLE/LOAN ledger account via
+  // Account.counterpartyMerchantId. Domain-constrained by a DB CHECK.
+  kind String @default("business")
 
   // Durable external-provider binding (ADR-0041 §3, mirrors Account). NULL for
   // manually-created merchants. A PARTIAL UNIQUE (familyId, externalProvider,
@@ -225,6 +246,9 @@ model Merchant {
   transactions Transaction[]
   splitEntries SplitEntry[]
   smartRules   SmartRule[]
+
+  // PER-212 — RECEIVABLE/LOAN accounts representing debts with THIS person.
+  counterpartyAccounts Account[] @relation("AccountCounterparty")
 
   // Tenant scoping (see ADR-0003).
   // PER-189: case/whitespace-insensitive per-family name uniqueness for
