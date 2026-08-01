@@ -4,10 +4,11 @@ import { getQueryClient } from "./query-client"
 import { getPersonDebtsFn } from "@/server/debts"
 
 // =============================================================================
-// PER-212 / ADR-0049 — reactive Utang-Piutang (person-debt) collection.
+// PER-212 / ADR-0049 — reactive People & Debts (person-debt) collection.
 //
-// `getPersonDebtsFn` returns one row per person who has at least one linked
-// RECEIVABLE/LOAN account, with signed net positions as digit-strings (BigInt
+// `getPersonDebtsFn` returns one row per person contact (PER-213: including
+// persons with no debt yet — empty accounts/positions render "No debts yet"),
+// with signed net positions as digit-strings (BigInt
 // is not JSON-serializable). Mutations (create person / lend / borrow / repay)
 // call their `createServerFn` handlers directly, then
 // `personDebtCollection.utils.refetch()` to resync with the Postgres source of

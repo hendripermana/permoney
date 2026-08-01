@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
 import { createUuidV7 } from "@/lib/uuid-v7"
+import { formatCurrency } from "@/lib/currency"
 import {
   familyMiddleware,
   requireCapability,
@@ -54,6 +55,19 @@ export class PersonDebtNotFoundError extends Error {
   readonly statusCode = 404
 }
 
+/**
+ * Raised when a repayment is not a valid ledger move: there is no outstanding
+ * debt in that direction, or the amount would overshoot the outstanding balance
+ * (which would drive a RECEIVABLE negative or a LOAN positive and trip the
+ * `account_normal_balance_sign` CHECK). The human-readable reason lives in
+ * `.message` because TanStack Start's ShallowErrorPlugin strips every Error
+ * property but `.message` across the server-fn RPC boundary (memory: PER-187).
+ */
+export class PersonDebtValidationError extends Error {
+  override readonly name = "PersonDebtValidationError"
+  readonly statusCode = 422
+}
+
 const nameSchema = z.string().trim().min(1).max(120)
 const hexColorSchema = z
   .string()
@@ -94,7 +108,11 @@ export async function createPersonForFamily({
 }): Promise<SerializedMerchant> {
   const data = createPersonInputSchema.parse(rawData)
   // A person is just a Merchant with kind="person": one counterparty concept,
-  // reusing the merchant create contract (idempotency + audit + name dedup).
+  // reusing the merchant create contract (idempotency + audit). PER-213 locked
+  // "one contact = payee + debt-party": on a case-insensitive name collision we
+  // REUSE the existing merchant (promoting a "business" payee to "person" if
+  // needed) rather than hard-failing, so a payee you already transact with can
+  // become a debt party without a duplicate-name error.
   return await createMerchantForFamily({
     data: {
       name: data.name,
@@ -105,6 +123,7 @@ export async function createPersonForFamily({
     familyId,
     user,
     runInTenantTransaction,
+    reuseExisting: true,
   })
 }
 
@@ -399,6 +418,19 @@ export async function recordBorrowForFamily({
   })
 }
 
+/**
+ * Repayment is DELIBERATELY not routed through the create-if-absent path
+ * (`ensurePersonDebtAccountId`): a repayment can only ever REDUCE an existing
+ * debt, never open a new one. Reusing the create path let "Repayment received"
+ * for a person with no receivable (or an overshoot) drive a RECEIVABLE negative
+ * / a LOAN positive and trip the `account_normal_balance_sign` CHECK (PER-213).
+ *
+ * Guards (in order): the person and cash account must belong to the family; an
+ * EXISTING debt account of the matching direction+currency must exist with a
+ * non-zero balance; and the amount must not exceed the outstanding magnitude.
+ * Exact settle-to-zero is allowed. Only then is the reversing transfer posted
+ * through the same ledger core as every other flow.
+ */
 export async function recordRepaymentForFamily({
   data: rawData,
   familyId,
@@ -415,21 +447,89 @@ export async function recordRepaymentForFamily({
   //   receivable repaid: RECEIVABLE → cash (they pay you back)
   //   loan repaid       : cash → LOAN       (you pay them back)
   const isReceivable = data.direction === "receivable"
-  return await orchestrateDebtMovement({
+  const person = await loadPersonOrThrow({
     familyId,
     user,
-    runInTenantTransaction,
     personMerchantId: data.personMerchantId,
-    cashAccountId: data.cashAccountId,
-    ensureDirection: data.direction,
-    cashIsSource: !isReceivable,
-    amount: data.amount,
-    date: data.date,
-    description: data.description,
-    describe: (name) =>
-      isReceivable ? `Repayment from ${name}` : `Repayment to ${name}`,
-    idempotencyKey: data.idempotencyKey,
+    runInTenantTransaction,
   })
+  const currency = await loadCashAccountCurrency({
+    familyId,
+    user,
+    accountId: data.cashAccountId,
+    runInTenantTransaction,
+  })
+
+  const postTransfer = async (debtAccountId: string) =>
+    await createTransactionForFamily({
+      data: {
+        type: "transfer",
+        accountId: isReceivable ? debtAccountId : data.cashAccountId,
+        toAccountId: isReceivable ? data.cashAccountId : debtAccountId,
+        amount: data.amount,
+        description:
+          data.description ??
+          (isReceivable
+            ? `Repayment from ${person.name}`
+            : `Repayment to ${person.name}`),
+        date: data.date ?? new Date(),
+        idempotencyKey: data.idempotencyKey,
+      },
+      familyId,
+      user,
+      runInTenantTransaction,
+    })
+
+  const accountType = DIRECTION_ACCOUNT_TYPE[data.direction]
+  const debtAccount = await runInTenantTransaction(familyId, user.id, (tx) =>
+    tx.account.findFirst({
+      where: {
+        familyId,
+        counterpartyMerchantId: person.id,
+        accountType,
+        currency,
+        deletedAt: null,
+      },
+      select: { id: true, balance: true },
+    })
+  )
+
+  // Idempotency: a genuine retry re-sends the same key AFTER the balance was
+  // already reduced (possibly to zero), so the guards below would wrongly reject
+  // it. Detect the replay by the transaction row that already carries this key
+  // and delegate straight to the ledger core, which returns the stored result
+  // without touching balances again.
+  if (debtAccount) {
+    const alreadyPosted = await runInTenantTransaction(
+      familyId,
+      user.id,
+      (tx) =>
+        tx.transaction.findFirst({
+          where: { familyId, idempotencyKey: data.idempotencyKey },
+          select: { id: true },
+        })
+    )
+    if (alreadyPosted) return await postTransfer(debtAccount.id)
+  }
+
+  const outstanding =
+    debtAccount === null
+      ? 0n
+      : debtAccount.balance < 0n
+        ? -debtAccount.balance
+        : debtAccount.balance
+  if (debtAccount === null || outstanding === 0n) {
+    throw new PersonDebtValidationError(
+      `No outstanding ${data.direction} for ${person.name} to repay`
+    )
+  }
+  if (BigInt(data.amount) > outstanding) {
+    throw new PersonDebtValidationError(
+      `Repayment exceeds the ${formatCurrency(outstanding, currency)} outstanding`
+    )
+  }
+
+  return await postTransfer(debtAccount.id)
 }
 
 export const recordLendFn = createServerFn({ method: "POST" })
@@ -472,7 +572,7 @@ export const recordRepaymentFn = createServerFn({ method: "POST" })
   })
 
 // ============================================================================
-// READ — Utang-Piutang view (persons with linked debt accounts + net position)
+// READ — People & Debts view (ALL person contacts + net position; PER-213)
 // ============================================================================
 
 export interface PersonDebtAccountView {
@@ -547,8 +647,11 @@ export async function getPersonDebtsForFamily({
     const views: PersonDebtView[] = []
     for (const person of persons) {
       const linked = accountsByPerson.get(person.id) ?? []
-      // Only persons that actually have a debt relationship are listed.
-      if (linked.length === 0) continue
+      // PER-213: list EVERY person contact, including those with no debt yet
+      // (empty accounts/positions), so a freshly-added person never vanishes.
+      // The view renders "No debts yet" for them; `settled` stays false so they
+      // are not styled as "Settled" (that badge is reserved for people who HAD
+      // a debt that netted back to zero).
 
       const netByCurrency = new Map<string, bigint>()
       for (const account of linked) {
@@ -575,7 +678,11 @@ export async function getPersonDebtsForFamily({
           balance: account.balance.toString(),
         })),
         positions,
-        settled: positions.every((position) => BigInt(position.net) === 0n),
+        // Settled (Lunas) only when there IS a debt history that nets to zero;
+        // a person with no positions is "No debts yet", not settled.
+        settled:
+          positions.length > 0 &&
+          positions.every((position) => BigInt(position.net) === 0n),
       })
     }
     return views

@@ -49,7 +49,7 @@ const data: {
       icon: IconDatabase,
     },
     {
-      title: "Utang-Piutang",
+      title: "Debts",
       url: "/debts",
       icon: IconHandStop,
     },

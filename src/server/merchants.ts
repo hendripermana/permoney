@@ -88,11 +88,19 @@ export async function createMerchantForFamily({
   familyId,
   user,
   runInTenantTransaction = scopedTenantTransaction,
+  // PER-213 / locked "one contact = payee + debt-party": when true, a
+  // case-insensitive name collision is REUSED instead of rejected, and the
+  // existing merchant is promoted to the requested `kind` (e.g. a "business"
+  // payee that already exists becomes a "person" debt-party) inside the same
+  // tenant transaction with an audit row. Person creation passes this; ordinary
+  // quick-create keeps the strict duplicate-name error.
+  reuseExisting = false,
 }: {
   data: z.input<typeof createMerchantInputSchema>
   familyId: string
   user: ServerUser
   runInTenantTransaction?: RunInTenantTransaction
+  reuseExisting?: boolean
 }): Promise<SerializedMerchant> {
   const data: CreateMerchantInput = createMerchantInputSchema.parse(rawData)
   const trimmedName = data.name.trim()
@@ -127,19 +135,43 @@ export async function createMerchantForFamily({
       const existing = await tx.merchant.findFirst({
         where: { familyId, name: { equals: trimmedName, mode: "insensitive" } },
       })
-      if (existing) throw new DuplicateNameError("Merchant", trimmedName)
 
-      const merchant = await tx.merchant.create({
-        data: { familyId, name: trimmedName, color, kind },
-      })
+      let merchant: Merchant
+      if (existing) {
+        if (!reuseExisting)
+          throw new DuplicateNameError("Merchant", trimmedName)
+        // Reuse the existing contact. Promote its kind if the caller asks for a
+        // different one (business payee → person debt-party), auditing the
+        // before/after inside this same transaction.
+        if (existing.kind !== kind) {
+          const before = serializeMerchant(existing)
+          merchant = await tx.merchant.update({
+            where: { id: existing.id },
+            data: { kind },
+          })
+          await auditLog(tx, auditCtx, {
+            action: "update",
+            entityType: "Merchant",
+            entityId: merchant.id,
+            before,
+            after: serializeMerchant(merchant),
+          })
+        } else {
+          merchant = existing
+        }
+      } else {
+        merchant = await tx.merchant.create({
+          data: { familyId, name: trimmedName, color, kind },
+        })
+        await auditLog(tx, auditCtx, {
+          action: "create",
+          entityType: "Merchant",
+          entityId: merchant.id,
+          after: serializeMerchant(merchant),
+        })
+      }
 
       const serialized = serializeMerchant(merchant)
-      await auditLog(tx, auditCtx, {
-        action: "create",
-        entityType: "Merchant",
-        entityId: merchant.id,
-        after: serialized,
-      })
       await persistIdempotentEndpointResponse(tx, {
         endpoint: CREATE_MERCHANT_ENDPOINT,
         familyId,
@@ -154,6 +186,10 @@ export async function createMerchantForFamily({
     return await runOnce()
   } catch (error) {
     if (isNameDedupConstraintError(error, MERCHANT_NAME_DEDUP_INDEX)) {
+      // A concurrent create won the name race. For reuse callers, retry once so
+      // the pre-check now finds and reuses (and promotes) the winning row
+      // instead of surfacing a duplicate-name error.
+      if (reuseExisting) return await runOnce()
       throw new DuplicateNameError("Merchant", trimmedName)
     }
     // A concurrent request with the same key may win the IdempotencyRecord

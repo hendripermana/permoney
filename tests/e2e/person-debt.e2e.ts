@@ -73,8 +73,78 @@ test.describe("person-to-person debt (PER-212)", () => {
     await page.getByRole("button", { name: "Save" }).click()
     await expect(page.getByRole("dialog")).toHaveCount(0)
 
-    // --- The person is now settled: Lunas badge, net back to zero ---
-    await expect(page.getByText("Lunas")).toBeVisible()
-    await expect(page.getByText("Settled")).toBeVisible()
+    // --- The person is now settled: the "Settled" badge appears and the net is
+    //     back to zero. (Both the badge and the net-zero position read
+    //     "Settled", so scope to the first match.) ---
+    await expect(page.getByText("Settled").first()).toBeVisible()
+  })
+
+  test("a person added with no debt still appears in the list as 'No debts yet'", async ({
+    page,
+  }) => {
+    await onboard(page)
+
+    const personName = `Nodebt ${Date.now().toString(36)}`
+
+    await page.goto("/debts")
+    await waitForHydration(page)
+
+    // Add a contact WITHOUT recording any debt.
+    await page.getByRole("button", { name: "Add person" }).click()
+    await expect(page.getByRole("dialog")).toBeVisible()
+    await page.getByLabel("Name").fill(personName)
+    await page.getByRole("button", { name: "Add" }).click()
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+
+    // The person still shows, flagged as having no debts (PER-213).
+    await expect(page.getByText(personName)).toBeVisible()
+    await expect(page.getByText("No debts yet")).toBeVisible()
+  })
+
+  test("the repayment dialog only offers directions the person actually owes", async ({
+    page,
+  }) => {
+    await onboard(page)
+
+    const suffix = Date.now().toString(36)
+    const cashName = `E2E Cash ${suffix}`
+    const personName = `Budi ${suffix}`
+
+    // Cash account.
+    await page.goto("/accounts")
+    await waitForHydration(page)
+    await page.getByRole("button", { name: "New account" }).click()
+    await page.getByLabel("Name").fill(cashName)
+    await page.getByLabel("Opening balance").fill("2000000")
+    await page.getByRole("button", { name: "Create" }).click()
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+
+    // Lend to a brand-new person → they owe you (a receivable, no loan).
+    await page.goto("/debts")
+    await waitForHydration(page)
+    await page.getByRole("button", { name: "Record debt" }).click()
+    await expect(page.getByRole("dialog")).toBeVisible()
+    await page.getByLabel("New person name").fill(personName)
+    await page.getByRole("combobox", { name: "Cash account" }).click()
+    await page.getByRole("option", { name: `${cashName} (IDR)` }).click()
+    await page.getByLabel(/^Amount/).fill("500000")
+    await page.getByRole("button", { name: "Save" }).click()
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+
+    // Re-open, select that person, and inspect the Action options: only the
+    // receivable repayment is offered (they owe you, you don't owe them).
+    await page.getByRole("button", { name: "Record debt" }).click()
+    await expect(page.getByRole("dialog")).toBeVisible()
+    await page.getByRole("combobox", { name: "Person" }).click()
+    await page.getByRole("option", { name: personName }).click()
+    await page.getByRole("combobox", { name: "Action" }).click()
+    await expect(
+      page.getByRole("option", {
+        name: "Repayment received (they pay me back)",
+      })
+    ).toBeVisible()
+    await expect(
+      page.getByRole("option", { name: "Repayment made (I pay them back)" })
+    ).toHaveCount(0)
   })
 })

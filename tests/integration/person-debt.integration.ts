@@ -11,10 +11,12 @@ import {
   createPersonForFamily,
   getPersonDebtsForFamily,
   getPersonsForFamily,
+  PersonDebtValidationError,
   recordBorrowForFamily,
   recordLendForFamily,
   recordRepaymentForFamily,
 } from "../../src/server/debts"
+import { createMerchantForFamily } from "../../src/server/merchants"
 import { normalizeNetWorthAt, type PointBalance } from "../../src/lib/net-worth"
 import {
   createIntegrationHarness,
@@ -322,5 +324,185 @@ describe("PER-212 person-to-person debt", () => {
       (tx) => tx.transaction.count({ where: { familyId: owner.family.id } })
     )
     expect(txCount).toBe(2)
+  })
+
+  // --- PER-213 repayment guards -------------------------------------------
+  // Repayment must NEVER open a debt or overshoot it (that drove a RECEIVABLE
+  // negative / a LOAN positive and tripped `account_normal_balance_sign`).
+
+  const countMerchants = (owner: Owner) =>
+    harness.withMember(owner.family.id, owner.user.id, (tx) =>
+      tx.merchant.count({ where: { familyId: owner.family.id } })
+    )
+
+  test("(a) repayment received with no receivable throws, creates no account, no crash", async () => {
+    const { owner, cash, person: budi } = await setup(100_000n)
+
+    const err = await repay(
+      owner,
+      budi.id,
+      "receivable",
+      cash.id,
+      "10000"
+    ).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(PersonDebtValidationError)
+    expect((err as Error).message).toMatch(/No outstanding receivable for Budi/)
+
+    const accounts = await readAccounts(owner.family.id)
+    // No RECEIVABLE was created for this person, and cash is untouched.
+    expect(
+      accounts.filter((a) => a.counterpartyMerchantId === budi.id)
+    ).toHaveLength(0)
+    expect(accounts.find((a) => a.id === cash.id)?.balance).toBe(100_000n)
+  })
+
+  test("(b) repayment made with no loan throws, creates no account", async () => {
+    const { owner, cash, person: budi } = await setup(100_000n)
+
+    const err = await repay(owner, budi.id, "loan", cash.id, "10000").catch(
+      (e: unknown) => e
+    )
+    expect(err).toBeInstanceOf(PersonDebtValidationError)
+    expect((err as Error).message).toMatch(/No outstanding loan for Budi/)
+
+    const accounts = await readAccounts(owner.family.id)
+    expect(
+      accounts.filter((a) => a.counterpartyMerchantId === budi.id)
+    ).toHaveLength(0)
+    expect(accounts.find((a) => a.id === cash.id)?.balance).toBe(100_000n)
+  })
+
+  test("(c) repayment overshoot is rejected; balances unchanged", async () => {
+    const { owner, cash, person: budi } = await setup(100_000n)
+    await lend(owner, budi.id, cash.id, "40000")
+
+    const err = await repay(
+      owner,
+      budi.id,
+      "receivable",
+      cash.id,
+      "50000"
+    ).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(PersonDebtValidationError)
+    expect((err as Error).message).toMatch(/exceeds/)
+
+    // The failed overshoot left the receivable and cash exactly as the lend did.
+    const accounts = await readAccounts(owner.family.id)
+    expect(
+      accounts.find((a) => a.counterpartyMerchantId === budi.id)?.balance
+    ).toBe(40_000n)
+    expect(accounts.find((a) => a.id === cash.id)?.balance).toBe(60_000n)
+  })
+
+  test("(d) exact settle-to-zero repayment still works", async () => {
+    const { owner, cash, person: budi } = await setup(100_000n)
+    await lend(owner, budi.id, cash.id, "40000")
+
+    await repay(owner, budi.id, "receivable", cash.id, "40000") // exact
+
+    const accounts = await readAccounts(owner.family.id)
+    expect(
+      accounts.find((a) => a.counterpartyMerchantId === budi.id)?.balance
+    ).toBe(0n)
+    expect(accounts.find((a) => a.id === cash.id)?.balance).toBe(100_000n)
+
+    const debts = await debtsOf(owner)
+    expect(debts.find((d) => d.personId === budi.id)?.settled).toBe(true)
+  })
+
+  test("idempotency replay of a repayment is a no-op (balance stays settled)", async () => {
+    const { owner, cash, person: budi } = await setup(100_000n)
+    await lend(owner, budi.id, cash.id, "40000")
+
+    const key = factories.createIdempotencyKey()
+    const date = new Date("2026-06-05T00:00:00.000Z")
+    const repayOnce = () =>
+      recordRepaymentForFamily({
+        data: {
+          personMerchantId: budi.id,
+          direction: "receivable",
+          cashAccountId: cash.id,
+          amount: "40000",
+          idempotencyKey: key,
+          date,
+        },
+        ...memberCtx(owner),
+      })
+
+    await repayOnce()
+    await repayOnce() // replay AFTER the balance was already reduced to zero
+
+    const accounts = await readAccounts(owner.family.id)
+    expect(
+      accounts.find((a) => a.counterpartyMerchantId === budi.id)?.balance
+    ).toBe(0n)
+    expect(accounts.find((a) => a.id === cash.id)?.balance).toBe(100_000n)
+  })
+
+  // --- PER-213 contact reuse on name collision ----------------------------
+
+  test("(e) creating a person whose name equals an existing merchant reuses the SAME row (promoted to person)", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+
+    const before = await countMerchants(owner)
+    const business = await createMerchantForFamily({
+      data: {
+        name: "Toko Budi",
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      ...memberCtx(owner),
+    })
+    expect(business.kind).toBe("business")
+    expect(await countMerchants(owner)).toBe(before + 1)
+
+    // Same name, different case → reuse + promote, NOT a duplicate-name error.
+    const person = await createPersonForFamily({
+      data: {
+        name: "toko budi",
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      ...memberCtx(owner),
+    })
+    expect(person.id).toBe(business.id) // same underlying merchant row
+    expect(person.kind).toBe("person") // promoted business → person
+    expect(await countMerchants(owner)).toBe(before + 1) // no new row created
+  })
+
+  // --- PER-213 multi-currency person --------------------------------------
+
+  test("(f) lending to one person in two currencies yields two positions", async () => {
+    const { owner, cash, person: budi } = await setup(100_000n) // IDR cash
+    const usdCash = await factories.createAccount({
+      accountType: "DEPOSITORY",
+      balance: 100_000n,
+      currency: "USD",
+      familyId: owner.family.id,
+      name: "USD Cash",
+    })
+
+    await lend(owner, budi.id, cash.id, "40000") // IDR receivable
+    await lend(owner, budi.id, usdCash.id, "25000") // USD receivable
+
+    const debts = await debtsOf(owner)
+    const record = debts.find((d) => d.personId === budi.id)
+    expect(record?.accounts).toHaveLength(2)
+    // Positions are sorted by currency (IDR before USD).
+    expect(record?.positions).toEqual([
+      { currency: "IDR", net: "40000" },
+      { currency: "USD", net: "25000" },
+    ])
+  })
+
+  // --- PER-213 full person list -------------------------------------------
+
+  test("a person with no debt still appears in the list (empty positions, not settled)", async () => {
+    const { owner, person: budi } = await setup(100_000n)
+
+    const debts = await debtsOf(owner)
+    const record = debts.find((d) => d.personId === budi.id)
+    expect(record).toBeDefined()
+    expect(record?.accounts).toEqual([])
+    expect(record?.positions).toEqual([])
+    expect(record?.settled).toBe(false)
   })
 })
