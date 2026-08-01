@@ -700,6 +700,12 @@ function TransactionsPage() {
                   | "PENDING"
                   | "CLEARED"
                   | "RECONCILED",
+                // PER-209: hydrate the split allocation on edit. Without these
+                // two fields the modal's useState initializers fall back to a
+                // blank [blank, blank] allocation with isSplit=false, so an
+                // edited split transaction loses its category rows entirely.
+                isSplit: editingTrx.isSplit,
+                splitEntries: editingTrx.splitEntries,
               }}
               onClose={() => setEditingTrx(null)}
               customTrigger={<span className="hidden" />}
