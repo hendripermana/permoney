@@ -127,6 +127,11 @@ export const createAccountInputSchema = z.object({
   color: hexColorSchema.nullable().optional(),
   openingBalance: openingBalanceSchema.optional(),
   institutionName: institutionNameSchema.nullable().optional(),
+  // PER-212 / ADR-0049: link this account to a "person" Merchant, turning it
+  // into an informal person-debt account. Only valid for RECEIVABLE/LOAN types
+  // and validated tenant-owned + kind="person" in createAccountForFamily. The
+  // main account-create dialog never sets it; the Utang-Piutang debt flows do.
+  counterpartyMerchantId: z.string().min(1).nullable().optional(),
   idempotencyKey: uuidV7Schema,
 })
 
@@ -173,6 +178,11 @@ export interface SerializedAccount {
   statementDay: number | null
   dueDay: number | null
   interestRateBps: number | null
+  // PER-212 / ADR-0049: non-null ⇒ this is an informal person-debt account
+  // (RECEIVABLE/LOAN) linked to a "person" Merchant. Drives the main-list
+  // exclusion + the net-worth "Personal debts (net)" grouping (presentation
+  // only; the balance still counts toward net worth exactly as before).
+  counterpartyMerchantId: string | null
 }
 
 function serializeAccount(account: Account): SerializedAccount {
@@ -197,6 +207,7 @@ function serializeAccount(account: Account): SerializedAccount {
     statementDay: account.statementDay,
     dueDay: account.dueDay,
     interestRateBps: account.interestRateBps,
+    counterpartyMerchantId: account.counterpartyMerchantId,
   }
 }
 
@@ -211,15 +222,26 @@ interface ServerUser {
 export async function getAccountsForFamily({
   familyId,
   userId,
+  includeCounterparty = true,
   runInTenantTransaction = scopedTenantTransaction,
 }: {
   familyId: string
   userId: string
+  // PER-212 / ADR-0049: person-debt accounts (counterpartyMerchantId != null)
+  // are ordinary RECEIVABLE/LOAN accounts and MUST stay in the net-worth math,
+  // so the default is `true` — every existing caller (and the net-worth card)
+  // keeps seeing them. Pass `false` to fetch only the "real" accounts shown on
+  // the main Accounts page; the person-debt accounts live in Utang-Piutang.
+  includeCounterparty?: boolean
   runInTenantTransaction?: RunInTenantTransaction
 }): Promise<SerializedAccount[]> {
   return await runInTenantTransaction(familyId, userId, async (tx) => {
     const accounts = await tx.account.findMany({
-      where: { familyId, deletedAt: null },
+      where: {
+        familyId,
+        deletedAt: null,
+        ...(includeCounterparty ? {} : { counterpartyMerchantId: null }),
+      },
       orderBy: [{ status: "asc" }, { accountClass: "asc" }, { name: "asc" }],
     })
     return accounts.map(serializeAccount)
@@ -271,10 +293,27 @@ export async function createAccountForFamily({
   }
   const openingMagnitude =
     openingRawValue < 0n ? -openingRawValue : openingRawValue
+
+  // PER-212 / ADR-0049: a counterparty link only makes sense on a RECEIVABLE
+  // (they owe you) or LOAN (you owe them) account — the two debt-bearing types.
+  // Reject the shape here before any write; the tenant-owned + kind="person"
+  // check runs inside the transaction (RLS-scoped), with the composite FK as
+  // the durable backstop.
+  const counterpartyMerchantId = data.counterpartyMerchantId ?? null
+  if (
+    counterpartyMerchantId !== null &&
+    taxonomy.accountType !== "RECEIVABLE" &&
+    taxonomy.accountType !== "LOAN"
+  ) {
+    throw new AccountValidationError(
+      `counterpartyMerchantId is only valid for RECEIVABLE or LOAN accounts, not ${taxonomy.accountType}`
+    )
+  }
   const requestHash = await hashCanonicalPayload({
     accountSubtype: taxonomy.accountSubtype,
     accountType: taxonomy.accountType,
     color: data.color ?? null,
+    counterpartyMerchantId,
     currency,
     institutionName: data.institutionName ?? null,
     name: data.name,
@@ -309,6 +348,26 @@ export async function createAccountForFamily({
       )
       if (replay) return replay
 
+      // Tenant-owned reference validation (CLAUDE.md §5A): a person-debt link
+      // must point at a Merchant in THIS family with kind="person". FKs alone
+      // are not tenant isolation; the composite FK is the DB backstop.
+      if (counterpartyMerchantId !== null) {
+        const merchant = await tx.merchant.findFirst({
+          where: { id: counterpartyMerchantId, familyId },
+          select: { kind: true },
+        })
+        if (!merchant) {
+          throw new AccountValidationError(
+            `counterpartyMerchantId ${counterpartyMerchantId} not found for this family`
+          )
+        }
+        if (merchant.kind !== "person") {
+          throw new AccountValidationError(
+            `counterpartyMerchantId ${counterpartyMerchantId} must reference a person merchant, not a ${merchant.kind}`
+          )
+        }
+      }
+
       const account = await tx.account.create({
         data: {
           ...(data.id ? { id: data.id } : {}),
@@ -318,6 +377,7 @@ export async function createAccountForFamily({
           balance: signedOpeningBalance,
           balanceSource: taxonomy.balanceSource,
           color: data.color ?? null,
+          counterpartyMerchantId,
           currency,
           familyId,
           institutionName: data.institutionName ?? null,

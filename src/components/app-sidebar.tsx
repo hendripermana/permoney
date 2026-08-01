@@ -10,6 +10,7 @@ import {
   IconSettings,
   IconUsers,
   IconReceipt2,
+  IconHandStop,
 } from "@tabler/icons-react"
 
 import { NavMain, type NavItem } from "@/components/nav-main"
@@ -46,6 +47,11 @@ const data: {
       title: "Accounts & Wallets",
       url: "/accounts",
       icon: IconDatabase,
+    },
+    {
+      title: "Utang-Piutang",
+      url: "/debts",
+      icon: IconHandStop,
     },
     {
       title: "Budgets",

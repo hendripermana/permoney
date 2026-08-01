@@ -149,6 +149,19 @@ function AccountsPage() {
     [accounts]
   )
 
+  // PER-212 / ADR-0049: person-debt accounts (counterpartyMerchantId != null)
+  // are ordinary RECEIVABLE/LOAN accounts that STAY in the net-worth total, but
+  // are hidden from the main list — they live in Utang-Piutang and are shown on
+  // the net-worth card only as one grouped "Personal debts (net)" line.
+  const listedAccounts = React.useMemo<ReadonlyArray<AccountRecord>>(
+    () => safeAccounts.filter((a) => a.counterpartyMerchantId === null),
+    [safeAccounts]
+  )
+  const personDebtAccounts = React.useMemo<ReadonlyArray<AccountRecord>>(
+    () => safeAccounts.filter((a) => a.counterpartyMerchantId !== null),
+    [safeAccounts]
+  )
+
   // accountId → its drift entries, so each card can show a badge without an
   // N+1 query. Memoized off the live drift collection.
   const driftByAccount = React.useMemo(() => {
@@ -165,7 +178,7 @@ function AccountsPage() {
   // so the grouping is not recomputed on unrelated re-renders.
   const grouped = React.useMemo(() => {
     const byClass = new Map<AccountClass, AccountRecord[]>()
-    for (const account of safeAccounts) {
+    for (const account of listedAccounts) {
       const cls = account.accountClass as AccountClass
       const bucket = byClass.get(cls) ?? []
       bucket.push(account)
@@ -180,7 +193,7 @@ function AccountsPage() {
       })
     }
     return byClass
-  }, [safeAccounts])
+  }, [listedAccounts])
 
   async function refreshAfterMutation() {
     await Promise.all([
@@ -244,10 +257,13 @@ function AccountsPage() {
             </div>
 
             {safeAccounts.length > 0 ? (
-              <NetWorthInBaseCard accounts={safeAccounts} />
+              <NetWorthInBaseCard
+                accounts={safeAccounts}
+                personDebtAccounts={personDebtAccounts}
+              />
             ) : null}
 
-            {safeAccounts.length === 0 ? (
+            {listedAccounts.length === 0 ? (
               <EmptyState onCreate={() => setDialog({ mode: "create" })} />
             ) : (
               <div className="flex flex-col gap-6">
@@ -914,8 +930,16 @@ function ValuationActionDialog({
 // silently dropped, so the figure is never quietly wrong.
 function NetWorthInBaseCard({
   accounts,
+  personDebtAccounts,
 }: {
   accounts: ReadonlyArray<AccountRecord>
+  // PER-212 / ADR-0049: the subset of `accounts` that are person-debt accounts.
+  // Their balances are ALREADY inside `accounts` (and therefore the grand
+  // total); they are passed separately ONLY to render one grouped "Personal
+  // debts (net)" breakdown line. The total is NEVER recomputed without them —
+  // the net-worth-total invariant (presentation-only grouping) holds by
+  // construction.
+  personDebtAccounts: ReadonlyArray<AccountRecord>
 }) {
   const { data: fxOverview } = useQuery({
     queryKey: ["fx-overview"],
@@ -924,11 +948,12 @@ function NetWorthInBaseCard({
 
   const base = fxOverview?.baseCurrency
   const rates = fxOverview?.rates
-  const { total, unconverted } = React.useMemo(() => {
+  const { total, unconverted, personDebtNet } = React.useMemo(() => {
     if (!base)
       return {
         total: 0n,
         unconverted: [] as Array<{ currency: string; native: bigint }>,
+        personDebtNet: null as bigint | null,
       }
     // rates are sorted asOfDate DESC, so the first per `fromCurrency` is latest.
     const latest = new Map<string, bigint>()
@@ -938,22 +963,33 @@ function NetWorthInBaseCard({
         latest.set(rate.fromCurrency, BigInt(rate.rateScaled))
       }
     }
+    const resolveRate = (currency: string) => latest.get(currency) ?? null
+    const toBalances = (rows: ReadonlyArray<AccountRecord>): PointBalance[] =>
+      rows.map((account) => ({
+        accountClass: account.accountClass,
+        currency: account.currency,
+        native: BigInt(account.balance),
+      }))
     // Status-agnostic, same shared `normalizeNetWorthAt` as the net-worth series
     // (ADR-0038 §5): this card equals the series' last point by construction.
-    const balances: PointBalance[] = accounts.map((account) => ({
-      accountClass: account.accountClass,
-      currency: account.currency,
-      native: BigInt(account.balance),
-    }))
-    const result = normalizeNetWorthAt(
-      balances,
-      (currency) => latest.get(currency) ?? null,
-      base
-    )
-    return { total: result.netWorth, unconverted: result.unconverted }
-  }, [accounts, base, rates])
+    // The grand total is over ALL accounts (person-debt included), so the
+    // grouping below is presentation only and never shifts the number.
+    const result = normalizeNetWorthAt(toBalances(accounts), resolveRate, base)
+    // The net base-currency contribution of just the person-debt accounts
+    // (RECEIVABLE assets minus LOAN liabilities), for the grouped line.
+    const debtResult =
+      personDebtAccounts.length > 0
+        ? normalizeNetWorthAt(toBalances(personDebtAccounts), resolveRate, base)
+        : null
+    return {
+      total: result.netWorth,
+      unconverted: result.unconverted,
+      personDebtNet: debtResult ? debtResult.netWorth : null,
+    }
+  }, [accounts, personDebtAccounts, base, rates])
 
   const hasUnconverted = unconverted.length > 0
+  const hasPersonDebts = personDebtAccounts.length > 0
 
   return (
     <Card>
@@ -967,19 +1003,38 @@ function NetWorthInBaseCard({
           {base ? formatCurrency(total.toString(), base) : "—"}
         </CardTitle>
       </CardHeader>
-      {hasUnconverted ? (
+      {hasPersonDebts || hasUnconverted ? (
         <CardContent className="space-y-2 pt-0">
-          <Badge variant="outline" className="gap-1 text-muted-foreground">
-            <TriangleAlert className="size-3" aria-hidden />
-            Not yet converted — add a rate in Currencies &amp; FX
-          </Badge>
-          <ul className="space-y-0.5 text-sm text-muted-foreground">
-            {unconverted.map(({ currency, native }) => (
-              <li key={currency} className="tabular-nums">
-                + {formatCurrency(native.toString(), currency)}
-              </li>
-            ))}
-          </ul>
+          {hasPersonDebts && base ? (
+            <Link
+              to="/debts"
+              className="flex items-center justify-between rounded-md border px-3 py-2 text-sm hover:bg-muted/50"
+            >
+              <span className="text-muted-foreground">
+                Personal debts (net)
+              </span>
+              <span className="font-medium tabular-nums">
+                {personDebtNet === null
+                  ? "—"
+                  : formatCurrency(personDebtNet.toString(), base)}
+              </span>
+            </Link>
+          ) : null}
+          {hasUnconverted ? (
+            <>
+              <Badge variant="outline" className="gap-1 text-muted-foreground">
+                <TriangleAlert className="size-3" aria-hidden />
+                Not yet converted — add a rate in Currencies &amp; FX
+              </Badge>
+              <ul className="space-y-0.5 text-sm text-muted-foreground">
+                {unconverted.map(({ currency, native }) => (
+                  <li key={currency} className="tabular-nums">
+                    + {formatCurrency(native.toString(), currency)}
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
         </CardContent>
       ) : null}
     </Card>
