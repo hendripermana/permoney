@@ -2,6 +2,7 @@ import {
   Archive,
   MoreVertical,
   Pencil,
+  Pin,
   RotateCcw,
   Scale,
   ShieldCheck,
@@ -41,6 +42,36 @@ import { cn } from "@/lib/utils"
 // detail route. Navigation is delegated via `onOpen` so this card stays
 // router-free and unit-testable without a RouterProvider.
 
+// PER-219 — a shared pin/favorite control, reused by both the grid card and the
+// compact list row so the two views stay pixel-consistent. Filled + primary when
+// pinned; outline otherwise. Pure presentational, navigation/state is a parent
+// concern.
+export function PinButton({
+  pinned,
+  onToggle,
+  disabled,
+}: {
+  pinned: boolean
+  onToggle: () => void
+  disabled?: boolean
+}) {
+  return (
+    <Button
+      size="icon"
+      variant="ghost"
+      disabled={disabled}
+      onClick={onToggle}
+      aria-label={pinned ? "Unpin account" : "Pin account to top"}
+      aria-pressed={pinned}
+    >
+      <Pin
+        className={cn("size-4", pinned && "fill-current text-primary")}
+        aria-hidden
+      />
+    </Button>
+  )
+}
+
 export const ACCOUNT_TYPE_LABEL: Record<AccountType, string> = {
   CASH: "Cash",
   DEPOSITORY: "Bank / Depository",
@@ -62,6 +93,8 @@ export function AccountCard({
   onReactivate,
   onDelete,
   onOpen,
+  pinned = false,
+  onTogglePin,
 }: {
   account: AccountRecord
   drift: ReadonlyArray<DriftRecord>
@@ -74,6 +107,10 @@ export function AccountCard({
   // Opens the per-account detail route. Optional so a component test can mount
   // the card without a router (navigation is a parent concern).
   onOpen?: () => void
+  // PER-219 pin/favorite. Optional so existing mounts (and the unit test) work
+  // without wiring pin state; the pin button only renders when a handler exists.
+  pinned?: boolean
+  onTogglePin?: () => void
 }) {
   const archived = account.status !== "active"
   const cashLike = account.balanceSource === "transaction_flow"
@@ -133,7 +170,11 @@ export function AccountCard({
           ) : null}
         </div>
 
-        <div className="flex justify-end gap-1">
+        <div className="flex items-center justify-end gap-1">
+          {onTogglePin ? (
+            <PinButton pinned={pinned} onToggle={onTogglePin} disabled={busy} />
+          ) : null}
+          <div className="flex-1" />
           {!archived ? (
             <Button
               size="icon"

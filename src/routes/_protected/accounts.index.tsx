@@ -7,15 +7,25 @@ import {
 } from "@tanstack/react-router"
 import { useLiveQuery } from "@tanstack/react-db"
 import { useQuery } from "@tanstack/react-query"
-import { Plus, TriangleAlert, Upload, Wallet } from "lucide-react"
+import {
+  Archive,
+  LayoutGrid,
+  Plus,
+  Rows3,
+  Search,
+  TriangleAlert,
+  Upload,
+  Wallet,
+} from "lucide-react"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Badge } from "@/components/ui/badge"
-import { AccountCard, ACCOUNT_TYPE_LABEL } from "./-account-card"
+import { AccountCard, ACCOUNT_TYPE_LABEL, PinButton } from "./-account-card"
 import { Button } from "@/components/ui/button"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   Card,
   CardContent,
@@ -64,11 +74,24 @@ import {
   type AccountClass,
   type AccountType,
 } from "@/lib/accounts"
+import {
+  filterAccounts,
+  isPinned,
+  readPinnedIds,
+  readViewMode,
+  sortAccounts,
+  togglePinned,
+  writePinnedIds,
+  writeViewMode,
+  type AccountTypeFilter,
+  type AccountViewMode,
+} from "@/lib/account-list-tools"
 import { CURRENCY_OPTIONS, formatCurrency } from "@/lib/currency"
 import { negateMoney, parseUserInput } from "@/lib/money"
 import { normalizeNetWorthAt, type PointBalance } from "@/lib/net-worth"
 import { getFxOverviewFn } from "@/server/fx"
 import type { CurrencyCode } from "@/lib/data/currencies"
+import { cn } from "@/lib/utils"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import {
   archiveAccountFn,
@@ -144,6 +167,19 @@ function AccountsPage() {
   )
   const [dialog, setDialog] = React.useState<DialogState>(null)
   const [busyId, setBusyId] = React.useState<string | null>(null)
+  // PER-219 list tools. Search/type/archived are ephemeral view state; pins and
+  // view mode are client-only preferences hydrated once from localStorage (the
+  // route is ssr:false, so these initializers run on the client). Persistence
+  // writes happen inside the event handlers below — no useEffect.
+  const [query, setQuery] = React.useState("")
+  const [typeFilter, setTypeFilter] = React.useState<AccountTypeFilter>("all")
+  const [showArchived, setShowArchived] = React.useState(false)
+  const [pinnedIds, setPinnedIds] = React.useState<ReadonlyArray<string>>(() =>
+    readPinnedIds()
+  )
+  const [viewMode, setViewMode] = React.useState<AccountViewMode>(() =>
+    readViewMode()
+  )
   const navigate = useNavigate()
 
   const safeAccounts = React.useMemo<ReadonlyArray<AccountRecord>>(
@@ -176,26 +212,46 @@ function AccountsPage() {
     return map
   }, [driftRows])
 
-  // Group by class, then sort active-before-archived and alphabetically. Memoized
-  // so the grouping is not recomputed on unrelated re-renders.
+  // Apply search / type / archived filters (pure — see account-list-tools).
+  const filteredAccounts = React.useMemo(
+    () =>
+      filterAccounts(listedAccounts, {
+        query,
+        type: typeFilter,
+        showArchived,
+      }),
+    [listedAccounts, query, typeFilter, showArchived]
+  )
+
+  // Group the filtered set by class, then sort each bucket pinned-first,
+  // active-before-archived, A→Z (sortAccounts). Memoized so grouping is not
+  // recomputed on unrelated re-renders.
   const grouped = React.useMemo(() => {
     const byClass = new Map<AccountClass, AccountRecord[]>()
-    for (const account of listedAccounts) {
+    for (const account of filteredAccounts) {
       const cls = account.accountClass as AccountClass
       const bucket = byClass.get(cls) ?? []
       bucket.push(account)
       byClass.set(cls, bucket)
     }
-    for (const bucket of byClass.values()) {
-      bucket.sort((left, right) => {
-        if (left.status !== right.status) {
-          return left.status === "active" ? -1 : 1
-        }
-        return left.name.localeCompare(right.name)
-      })
+    for (const [cls, bucket] of byClass) {
+      byClass.set(cls, sortAccounts(bucket, pinnedIds))
     }
     return byClass
-  }, [listedAccounts])
+  }, [filteredAccounts, pinnedIds])
+
+  function handleTogglePin(accountId: string) {
+    setPinnedIds((current) => {
+      const next = togglePinned(current, accountId)
+      writePinnedIds(next)
+      return next
+    })
+  }
+
+  function handleViewChange(mode: AccountViewMode) {
+    setViewMode(mode)
+    writeViewMode(mode)
+  }
 
   async function refreshAfterMutation() {
     await Promise.all([
@@ -269,42 +325,87 @@ function AccountsPage() {
               <EmptyState onCreate={() => setDialog({ mode: "create" })} />
             ) : (
               <div className="flex flex-col gap-6">
-                {CLASS_ORDER.map((cls) => {
-                  const bucket = grouped.get(cls)
-                  if (!bucket || bucket.length === 0) return null
-                  return (
-                    <section key={cls} className="flex flex-col gap-3">
-                      <h2 className="text-sm font-medium text-muted-foreground">
-                        {CLASS_LABEL[cls]}
-                      </h2>
-                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                        {bucket.map((account) => (
-                          <AccountCard
-                            key={account.id}
-                            account={account}
-                            drift={driftByAccount.get(account.id) ?? []}
-                            busy={busyId === account.id}
-                            onEdit={() => setDialog({ mode: "edit", account })}
-                            onValuation={() =>
-                              setDialog({ mode: "valuation", account })
-                            }
-                            onArchive={() => handleArchive(account)}
-                            onReactivate={() => handleReactivate(account)}
-                            onDelete={() =>
-                              setDialog({ mode: "delete", account })
-                            }
-                            onOpen={() =>
-                              navigate({
-                                to: "/accounts/$accountId",
-                                params: { accountId: account.id },
-                              })
-                            }
-                          />
-                        ))}
-                      </div>
-                    </section>
-                  )
-                })}
+                <AccountsToolbar
+                  query={query}
+                  onQueryChange={setQuery}
+                  typeFilter={typeFilter}
+                  onTypeFilterChange={setTypeFilter}
+                  showArchived={showArchived}
+                  onShowArchivedChange={setShowArchived}
+                  viewMode={viewMode}
+                  onViewModeChange={handleViewChange}
+                />
+
+                {filteredAccounts.length === 0 ? (
+                  <NoResults
+                    onClear={() => {
+                      setQuery("")
+                      setTypeFilter("all")
+                      setShowArchived(false)
+                    }}
+                  />
+                ) : (
+                  CLASS_ORDER.map((cls) => {
+                    const bucket = grouped.get(cls)
+                    if (!bucket || bucket.length === 0) return null
+                    return (
+                      <section key={cls} className="flex flex-col gap-3">
+                        <h2 className="text-sm font-medium text-muted-foreground">
+                          {CLASS_LABEL[cls]}
+                        </h2>
+                        {viewMode === "grid" ? (
+                          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                            {bucket.map((account) => (
+                              <AccountCard
+                                key={account.id}
+                                account={account}
+                                drift={driftByAccount.get(account.id) ?? []}
+                                busy={busyId === account.id}
+                                pinned={isPinned(pinnedIds, account.id)}
+                                onTogglePin={() => handleTogglePin(account.id)}
+                                onEdit={() =>
+                                  setDialog({ mode: "edit", account })
+                                }
+                                onValuation={() =>
+                                  setDialog({ mode: "valuation", account })
+                                }
+                                onArchive={() => handleArchive(account)}
+                                onReactivate={() => handleReactivate(account)}
+                                onDelete={() =>
+                                  setDialog({ mode: "delete", account })
+                                }
+                                onOpen={() =>
+                                  navigate({
+                                    to: "/accounts/$accountId",
+                                    params: { accountId: account.id },
+                                  })
+                                }
+                              />
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-2">
+                            {bucket.map((account) => (
+                              <CompactAccountRow
+                                key={account.id}
+                                account={account}
+                                pinned={isPinned(pinnedIds, account.id)}
+                                busy={busyId === account.id}
+                                onTogglePin={() => handleTogglePin(account.id)}
+                                onOpen={() =>
+                                  navigate({
+                                    to: "/accounts/$accountId",
+                                    params: { accountId: account.id },
+                                  })
+                                }
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </section>
+                    )
+                  })
+                )}
               </div>
             )}
           </div>
@@ -375,6 +476,164 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
         </div>
       </CardContent>
     </Card>
+  )
+}
+
+// PER-219 — the list toolbar: name search, type filter, archived toggle, and
+// the grid/compact view switch. Pure controlled component; all state lives in
+// the page so filtering/sorting stay one source of truth.
+function AccountsToolbar({
+  query,
+  onQueryChange,
+  typeFilter,
+  onTypeFilterChange,
+  showArchived,
+  onShowArchivedChange,
+  viewMode,
+  onViewModeChange,
+}: {
+  query: string
+  onQueryChange: (value: string) => void
+  typeFilter: AccountTypeFilter
+  onTypeFilterChange: (value: AccountTypeFilter) => void
+  showArchived: boolean
+  onShowArchivedChange: (value: boolean) => void
+  viewMode: AccountViewMode
+  onViewModeChange: (value: AccountViewMode) => void
+}) {
+  return (
+    <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+      <div className="relative flex-1 sm:min-w-56">
+        <Search
+          className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+          aria-hidden
+        />
+        <Input
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          placeholder="Search accounts…"
+          aria-label="Search accounts"
+          className="pl-9"
+        />
+      </div>
+
+      <Select
+        value={typeFilter}
+        onValueChange={(value) =>
+          onTypeFilterChange(value as AccountTypeFilter)
+        }
+      >
+        <SelectTrigger className="sm:w-48" aria-label="Filter by account type">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All types</SelectItem>
+          {ACCOUNT_TYPE_VALUES.map((type) => (
+            <SelectItem key={type} value={type}>
+              {ACCOUNT_TYPE_LABEL[type]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      <Button
+        type="button"
+        variant={showArchived ? "secondary" : "outline"}
+        aria-pressed={showArchived}
+        onClick={() => onShowArchivedChange(!showArchived)}
+      >
+        <Archive className="size-4" />
+        Show archived
+      </Button>
+
+      <ToggleGroup
+        type="single"
+        value={viewMode}
+        onValueChange={(value) => {
+          // Radix emits "" when the active item is re-clicked; keep the current
+          // view rather than dropping into an undefined mode.
+          if (value === "grid" || value === "compact") onViewModeChange(value)
+        }}
+        variant="outline"
+        className="sm:ml-auto"
+      >
+        <ToggleGroupItem value="grid" aria-label="Grid view">
+          <LayoutGrid className="size-4" />
+        </ToggleGroupItem>
+        <ToggleGroupItem value="compact" aria-label="Compact view">
+          <Rows3 className="size-4" />
+        </ToggleGroupItem>
+      </ToggleGroup>
+    </div>
+  )
+}
+
+function NoResults({ onClear }: { onClear: () => void }) {
+  return (
+    <Card className="border-dashed">
+      <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
+        <Search className="size-8 text-muted-foreground" aria-hidden />
+        <div>
+          <p className="font-medium">No accounts match your filters</p>
+          <p className="text-sm text-muted-foreground">
+            Try a different search term or account type, or show archived
+            accounts.
+          </p>
+        </div>
+        <Button variant="outline" onClick={onClear}>
+          Clear filters
+        </Button>
+      </CardContent>
+    </Card>
+  )
+}
+
+// PER-219 compact row — a dense alternative to the ATM-card grid. Shows name /
+// type / balance and opens the same per-account detail route. Reuses the shared
+// PinButton so pin affordance is identical across both views.
+function CompactAccountRow({
+  account,
+  pinned,
+  busy,
+  onTogglePin,
+  onOpen,
+}: {
+  account: AccountRecord
+  pinned: boolean
+  busy: boolean
+  onTogglePin: () => void
+  onOpen: () => void
+}) {
+  const archived = account.status !== "active"
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-3 rounded-xl border bg-card px-3 py-2.5 transition-colors hover:bg-muted/40",
+        archived && "opacity-60"
+      )}
+    >
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`Open ${account.name}`}
+        className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      >
+        <span className="truncate font-medium">{account.name}</span>
+        <Badge variant="secondary" className="shrink-0">
+          {ACCOUNT_TYPE_LABEL[account.accountType as AccountType] ??
+            account.accountType}
+        </Badge>
+        {archived ? (
+          <Badge variant="outline" className="shrink-0">
+            Archived
+          </Badge>
+        ) : null}
+      </button>
+      <span className="shrink-0 font-semibold tabular-nums">
+        {formatCurrency(account.balance, account.currency)}
+      </span>
+      <PinButton pinned={pinned} onToggle={onTogglePin} disabled={busy} />
+    </div>
   )
 }
 
