@@ -1,0 +1,152 @@
+import { describe, expect, it } from "vite-plus/test"
+
+import {
+  buildBalanceSeries,
+  matchesQuery,
+  rangeCutoff,
+  signedDeltaForAccount,
+  summarizeCategories,
+  type AnalyticsTxn,
+} from "./account-analytics"
+
+const ID = "acc-1"
+
+function txn(partial: Partial<AnalyticsTxn>): AnalyticsTxn {
+  return {
+    date: "2026-01-01",
+    amount: 0n,
+    type: "expense",
+    accountId: ID,
+    ...partial,
+  }
+}
+
+describe("signedDeltaForAccount", () => {
+  it("income is positive, expense negative", () => {
+    expect(signedDeltaForAccount({ type: "income", amount: 100n }, ID)).toBe(
+      100n
+    )
+    expect(signedDeltaForAccount({ type: "expense", amount: 100n }, ID)).toBe(
+      -100n
+    )
+  })
+  it("transfer is + when this account is the destination, − when source", () => {
+    expect(
+      signedDeltaForAccount(
+        { type: "transfer", amount: 100n, toAccountId: ID },
+        ID
+      )
+    ).toBe(100n)
+    expect(
+      signedDeltaForAccount(
+        { type: "transfer", amount: 100n, toAccountId: "other" },
+        ID
+      )
+    ).toBe(-100n)
+  })
+})
+
+describe("rangeCutoff", () => {
+  it("returns null for ALL", () => {
+    expect(rangeCutoff("ALL")).toBeNull()
+  })
+  it("subtracts the right window", () => {
+    const now = new Date("2026-04-01T00:00:00")
+    const oneMonth = rangeCutoff("1M", now)!
+    // Local date math (tz-independent): April → March.
+    expect(oneMonth.getFullYear()).toBe(2026)
+    expect(oneMonth.getMonth()).toBe(2) // 0-indexed March
+    expect(rangeCutoff("1Y", now)?.getFullYear()).toBe(2025)
+  })
+})
+
+describe("buildBalanceSeries", () => {
+  const txns: AnalyticsTxn[] = [
+    txn({ date: "2026-01-10", type: "income", amount: 100_000n }),
+    txn({ date: "2026-02-15", type: "expense", amount: 30_000n }),
+    txn({
+      date: "2026-03-20",
+      type: "transfer",
+      amount: 50_000n,
+      toAccountId: ID,
+    }),
+  ]
+  const now = new Date("2026-04-01T00:00:00")
+
+  it("reconstructs balance-after per day, ending at the current balance", () => {
+    // Σ deltas = +100k −30k +50k = +120k. currentBalance 120k ⇒ opening 0.
+    const series = buildBalanceSeries(txns, 120_000n, ID, "IDR", "ALL", now)
+    // Major units: 120_000 minor / 100 = 1200.
+    const byDate = Object.fromEntries(series.map((p) => [p.date, p.balance]))
+    expect(byDate["2026-01-10"]).toBe(1000)
+    expect(byDate["2026-02-15"]).toBe(700)
+    expect(byDate["2026-03-20"]).toBe(1200)
+    // Final point is today = authoritative current balance.
+    expect(series[series.length - 1].balance).toBe(1200)
+  })
+
+  it("backs out a non-zero opening balance", () => {
+    // currentBalance 200k, Σ deltas 120k ⇒ opening 80k (800 major).
+    const series = buildBalanceSeries(txns, 200_000n, ID, "IDR", "ALL", now)
+    const byDate = Object.fromEntries(series.map((p) => [p.date, p.balance]))
+    expect(byDate["2026-01-10"]).toBe(1800) // 80k + 100k = 180k
+    expect(series[series.length - 1].balance).toBe(2000)
+  })
+
+  it("anchors the window at the cutoff carrying the pre-cutoff balance", () => {
+    const series = buildBalanceSeries(txns, 120_000n, ID, "IDR", "1M", now)
+    // cutoff = 2026-03-01; last balance before it is 700 (after the Feb expense).
+    expect(series[0].date).toBe("2026-03-01")
+    expect(series[0].balance).toBe(700)
+    // Jan/Feb daily points are collapsed away.
+    expect(series.some((p) => p.date === "2026-01-10")).toBe(false)
+  })
+
+  it("handles an empty ledger as a single current-balance point", () => {
+    const series = buildBalanceSeries([], 50_000n, ID, "IDR", "ALL", now)
+    expect(series).toHaveLength(1)
+    expect(series[0].balance).toBe(500)
+  })
+})
+
+describe("summarizeCategories", () => {
+  const txns: AnalyticsTxn[] = [
+    txn({ type: "expense", amount: 30_000n, category: { name: "Food" } }),
+    txn({ type: "expense", amount: 20_000n, category: { name: "Food" } }),
+    txn({ type: "expense", amount: 10_000n, category: { name: "Transport" } }),
+    txn({ type: "income", amount: 100_000n, category: { name: "Salary" } }),
+  ]
+
+  it("aggregates outflow by category, sorted by magnitude", () => {
+    const out = summarizeCategories(txns, ID, { direction: "out" })
+    expect(out.map((s) => [s.name, s.total])).toEqual([
+      ["Food", 50_000n],
+      ["Transport", 10_000n],
+    ])
+  })
+
+  it("respects the limit", () => {
+    const out = summarizeCategories(txns, ID, { direction: "out", limit: 1 })
+    expect(out).toHaveLength(1)
+    expect(out[0].name).toBe("Food")
+  })
+
+  it("aggregates inflow separately", () => {
+    const inn = summarizeCategories(txns, ID, { direction: "in" })
+    expect(inn).toEqual([{ name: "Salary", color: null, total: 100_000n }])
+  })
+})
+
+describe("matchesQuery", () => {
+  it("matches description, merchant, or category case-insensitively", () => {
+    const t = {
+      description: "Kopi Kenangan",
+      merchant: { name: "Kopi Kenangan" },
+      category: { name: "Food & Drink" },
+    }
+    expect(matchesQuery(t, "kopi")).toBe(true)
+    expect(matchesQuery(t, "FOOD")).toBe(true)
+    expect(matchesQuery(t, "xyz")).toBe(false)
+    expect(matchesQuery(t, "")).toBe(true)
+  })
+})
