@@ -1,7 +1,14 @@
 import * as React from "react"
 import { createFileRoute, Link } from "@tanstack/react-router"
 import { useLiveQuery } from "@tanstack/react-db"
-import { ArrowLeft, ExternalLink, Receipt, Search } from "lucide-react"
+import {
+  ArrowLeft,
+  Download,
+  ExternalLink,
+  Plus,
+  Receipt,
+  Search,
+} from "lucide-react"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
@@ -11,6 +18,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { AccountVisual } from "@/components/blocks/account-visual"
+import { TransactionFormModal } from "@/components/transaction-form-modal"
 import {
   accountCollection,
   type AccountRecord,
@@ -24,6 +32,7 @@ import {
 } from "./-account-analytics"
 import {
   buildBalanceSeries,
+  buildStatementCsv,
   matchesQuery,
   rangeCutoff,
   signedDeltaForAccount,
@@ -166,16 +175,49 @@ function AccountDetailPage() {
     )
   }
 
+  // The detail route is client-only (ssr:false), so `document`/`URL` are safe.
+  function exportCsv() {
+    const csv = buildStatementCsv(statement, accountId)
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
+    const url = URL.createObjectURL(blob)
+    const safeName = account!.name.replace(/[^\w.-]+/g, "_")
+    const link = document.createElement("a")
+    link.href = url
+    link.download = `${safeName || "account"}-statement.csv`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <AppShell>
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <BackLink />
-        <Button asChild variant="outline" size="sm">
-          <Link to="/transactions" search={{ accounts: [accountId] }}>
-            Open in ledger
-            <ExternalLink className="size-4" />
-          </Link>
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <TransactionFormModal
+            defaultAccountId={accountId}
+            customTrigger={
+              <Button size="sm">
+                <Plus className="size-4" />
+                Add transaction
+              </Button>
+            }
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={exportCsv}
+            disabled={statement.length === 0}
+          >
+            <Download className="size-4" />
+            Export CSV
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/transactions" search={{ accounts: [accountId] }}>
+              Open in ledger
+              <ExternalLink className="size-4" />
+            </Link>
+          </Button>
+        </div>
       </div>
 
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,24rem)_1fr]">

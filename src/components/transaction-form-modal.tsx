@@ -146,6 +146,10 @@ interface TransactionFormModalProps {
     | null
   customTrigger?: React.ReactNode
   onClose?: () => void
+  // Seeds the source account when opening the CREATE form (e.g. "Add
+  // transaction" launched from a specific account's detail page). Ignored in
+  // edit mode, where the account comes from `editData`.
+  defaultAccountId?: string
 }
 
 type TransactionType = TransactionFormValues["type"]
@@ -1423,7 +1427,11 @@ function TransactionActionBar({
 function useTransactionFormModalController({
   editData,
   onClose,
-}: Pick<TransactionFormModalProps, "editData" | "onClose">) {
+  defaultAccountId,
+}: Pick<
+  TransactionFormModalProps,
+  "editData" | "onClose" | "defaultAccountId"
+>) {
   const isEditMode = !!editData
 
   // THE TOP-LEVEL FIX:
@@ -1555,7 +1563,7 @@ function useTransactionFormModalController({
         type: "expense" as const,
         amount: 0,
         description: "",
-        accountId: "",
+        accountId: defaultAccountId ?? "",
         categoryId: "",
         toAccountId: "",
         merchantId: "",
@@ -1950,6 +1958,7 @@ export function TransactionFormModal({
   editData,
   customTrigger,
   onClose,
+  defaultAccountId,
 }: TransactionFormModalProps) {
   const {
     activeTab,
@@ -1969,7 +1978,7 @@ export function TransactionFormModal({
     setIsSplit,
     setSplitEntries,
     splitEntries,
-  } = useTransactionFormModalController({ editData, onClose })
+  } = useTransactionFormModalController({ editData, onClose, defaultAccountId })
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>

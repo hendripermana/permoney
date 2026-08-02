@@ -2,11 +2,13 @@ import { describe, expect, it } from "vite-plus/test"
 
 import {
   buildBalanceSeries,
+  buildStatementCsv,
   matchesQuery,
   rangeCutoff,
   signedDeltaForAccount,
   summarizeCategories,
   type AnalyticsTxn,
+  type StatementCsvRow,
 } from "./account-analytics"
 
 const ID = "acc-1"
@@ -134,6 +136,55 @@ describe("summarizeCategories", () => {
   it("aggregates inflow separately", () => {
     const inn = summarizeCategories(txns, ID, { direction: "in" })
     expect(inn).toEqual([{ name: "Salary", color: null, total: 100_000n }])
+  })
+})
+
+describe("buildStatementCsv", () => {
+  const rows: StatementCsvRow[] = [
+    {
+      date: "2026-03-10",
+      description: "Kopi, Kenangan",
+      type: "expense",
+      amount: 35_000n,
+      currency: "IDR",
+      accountId: ID,
+      category: { name: "Food" },
+    },
+    {
+      date: "2026-03-11",
+      description: "Salary",
+      type: "income",
+      amount: 100_000n,
+      currency: "IDR",
+      accountId: ID,
+      category: { name: "Salary" },
+    },
+    {
+      date: "2026-03-12",
+      type: "transfer",
+      amount: 50_000n,
+      currency: "IDR",
+      accountId: ID,
+      toAccountId: "other",
+      toAccount: { name: "GoPay" },
+    },
+  ]
+
+  it("emits a header and one signed, major-unit row per transaction", () => {
+    const lines = buildStatementCsv(rows, ID).split("\r\n")
+    expect(lines[0]).toBe("Date,Description,Category,Type,Amount,Currency")
+    // Expense → negative; description with a comma is quoted (RFC-4180).
+    expect(lines[1]).toBe('2026-03-10,"Kopi, Kenangan",Food,expense,-350,IDR')
+    // Income → positive.
+    expect(lines[2]).toBe("2026-03-11,Salary,Salary,income,1000,IDR")
+    // Transfer out → negative, labelled with the destination account.
+    expect(lines[3]).toBe("2026-03-12,,Transfer to GoPay,transfer,-500,IDR")
+  })
+
+  it("returns just the header for an empty statement", () => {
+    expect(buildStatementCsv([], ID)).toBe(
+      "Date,Description,Category,Type,Amount,Currency"
+    )
   })
 })
 
