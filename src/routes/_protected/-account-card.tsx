@@ -115,6 +115,10 @@ export function AccountCard({
   const archived = account.status !== "active"
   const cashLike = account.balanceSource === "transaction_flow"
   const runwayBadge = runway && isRunwayAlerting(runway.status) ? runway : null
+  // `daysToReserve` is non-null for watch/critical from computeAccountRunway, but
+  // the type allows null (a future server path could) — guard so we never render
+  // "~nulld to reserve".
+  const runwayDays = runwayBadge?.daysToReserve ?? null
   // Surface the single worst drift entry (ADR-0043 §6 classification lives in
   // src/lib/account-drift-presentation.ts, unit-tested there). Read-only — the
   // badge never mutates anything (ADR-0034 §7).
@@ -157,13 +161,17 @@ export function AccountCard({
                   <TrendingDown className="size-3" />
                   {runwayBadge.status === "below"
                     ? "Below reserve"
-                    : `~${runwayBadge.daysToReserve}d to reserve`}
+                    : runwayDays !== null
+                      ? `~${runwayDays}d to reserve`
+                      : "Reserve approaching"}
                 </Badge>
               </TooltipTrigger>
               <TooltipContent>
                 {runwayBadge.status === "below"
                   ? "This account is below the minimum balance you set to keep untouched."
-                  : `At its recent spending pace, this account reaches your reserve in about ${runwayBadge.daysToReserve} days.`}
+                  : runwayDays !== null
+                    ? `At its recent spending pace, this account reaches your reserve in about ${runwayDays} days.`
+                    : "At its recent spending pace, this account is approaching your reserve."}
               </TooltipContent>
             </Tooltip>
           ) : null}
