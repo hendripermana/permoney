@@ -87,7 +87,8 @@ import {
   type AccountViewMode,
 } from "@/lib/account-list-tools"
 import { CURRENCY_OPTIONS, formatCurrency } from "@/lib/currency"
-import { negateMoney, parseUserInput } from "@/lib/money"
+import { negateMoney, parseUserInput, toDisplayNumber } from "@/lib/money"
+import { accountSupportsReserve } from "@/lib/account-reserve"
 import { normalizeNetWorthAt, type PointBalance } from "@/lib/net-worth"
 import { getFxOverviewFn } from "@/server/fx"
 import type { CurrencyCode } from "@/lib/data/currencies"
@@ -795,12 +796,29 @@ function AccountFormDialog({
   const [isImportable, setIsImportable] = React.useState<boolean>(
     editing?.isImportable ?? false
   )
+  // PER-217 — reserve/minimum balance, as a user-facing MAJOR-unit string. On
+  // edit, seed from the stored minor-unit value (lazy init, no useEffect).
+  const [reserveInput, setReserveInput] = React.useState<string>(() =>
+    editing?.reserveBalance
+      ? String(
+          toDisplayNumber(
+            BigInt(editing.reserveBalance),
+            (editing.currency as CurrencyCode) ?? "IDR"
+          )
+        )
+      : ""
+  )
   const [error, setError] = React.useState<string | null>(null)
   const [submitting, setSubmitting] = React.useState(false)
 
   // Derived, pure: the class and balance source preview track the chosen type.
   const previewClass = getAccountClassForType(accountType)
   const previewCashLike = isCashLikeAccount(accountType)
+  // PER-217 — a reserve only makes sense on a cash-like ASSET account. On create
+  // this tracks the chosen type; on edit it reflects the (fixed) account.
+  const supportsReserve = editing
+    ? accountSupportsReserve(editing)
+    : previewClass === "ASSET" && previewCashLike
 
   // Subtypes are flexible; offer the known vocabulary as a convenience, led by
   // the "default for type" sentinel.
@@ -817,6 +835,25 @@ function AccountFormDialog({
     setError(null)
     setSubmitting(true)
     try {
+      // PER-217 — parse the reserve once for whichever branch runs. An empty
+      // input on edit CLEARS the reserve (null); on create it means "no reserve"
+      // (omit). A malformed non-empty value is rejected before any write.
+      let reserveMinor: string | null | undefined
+      if (supportsReserve) {
+        if (reserveInput.trim() === "") {
+          reserveMinor = editing ? null : undefined
+        } else {
+          const parsedReserve = parseUserInput(
+            reserveInput.trim(),
+            currency as CurrencyCode
+          )
+          if (parsedReserve === null || parsedReserve < 0n) {
+            throw new Error("Enter a valid reserve amount.")
+          }
+          reserveMinor = parsedReserve.toString()
+        }
+      }
+
       if (editing) {
         await updateAccountFn({
           data: {
@@ -825,6 +862,9 @@ function AccountFormDialog({
             accountSubtype: resolvedSubtype,
             institutionName: institutionName.trim() || null,
             isImportable,
+            ...(reserveMinor === undefined
+              ? {}
+              : { reserveBalance: reserveMinor }),
             idempotencyKey: createUuidV7(),
           },
         })
@@ -852,6 +892,7 @@ function AccountFormDialog({
             currency,
             openingBalance: openingMinor,
             institutionName: institutionName.trim() || null,
+            ...(reserveMinor ? { reserveBalance: reserveMinor } : {}),
             idempotencyKey: createUuidV7(),
           },
         })
@@ -985,6 +1026,27 @@ function AccountFormDialog({
               placeholder="e.g. Bank Central Asia"
             />
           </div>
+
+          {supportsReserve ? (
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="reserve-balance">
+                Reserve / minimum balance ({currency})
+              </Label>
+              <Input
+                id="reserve-balance"
+                inputMode="decimal"
+                value={reserveInput}
+                onChange={(e) => setReserveInput(e.target.value)}
+                placeholder="0"
+              />
+              <p className="text-xs text-muted-foreground">
+                Money you keep untouched — your “dana mengendap”. It never
+                changes your balance or net worth; it only lowers your{" "}
+                <span className="font-medium">safe-to-spend</span> (available =
+                balance − reserve).{editing ? " Leave empty to remove." : ""}
+              </p>
+            </div>
+          ) : null}
 
           {editing ? (
             <div className="flex items-start gap-3 rounded-md border p-3">

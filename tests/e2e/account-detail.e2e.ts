@@ -23,6 +23,10 @@ test.describe("account detail (PER-216)", () => {
     await page.getByRole("button", { name: "New account" }).click()
     await page.getByLabel("Name").fill(accountName)
     await page.getByLabel("Opening balance").fill("2000000")
+    // PER-217 — set a reserve/minimum balance ("dana mengendap"). The reserve
+    // field only shows for cash-like ASSET accounts; DEPOSITORY (the default
+    // type) qualifies. 500,000 reserve → safe-to-spend 1,500,000.
+    await page.getByLabel(/Reserve . minimum balance/i).fill("500000")
     await page.getByRole("button", { name: "Create" }).click()
     await expect(page.getByRole("dialog")).toHaveCount(0)
 
@@ -36,6 +40,12 @@ test.describe("account detail (PER-216)", () => {
     // Hero shows the name + formatted balance.
     await expect(page.getByText(accountName).first()).toBeVisible()
     await expect(page.getByText("Rp 2,000,000.00").first()).toBeVisible()
+
+    // PER-217 — the safe-to-spend panel shows available = balance − reserve, and
+    // names the reserved portion. (Balance is unchanged — reserve is ledger-neutral.)
+    await expect(page.getByText(/safe to spend/i).first()).toBeVisible()
+    await expect(page.getByText(/reserved/i).first()).toBeVisible()
+    await expect(page.getByText("Rp 1,500,000.00").first()).toBeVisible()
 
     // The statement section renders. A fresh account's opening balance is an
     // opening VALUATION anchor, not a posted transaction, so the ledger is

@@ -184,6 +184,9 @@ export interface AccountBalanceView {
   current: string
   held: string
   available: string | null
+  // PER-217 — reserve/minimum balance folded into `available` (safe-to-spend).
+  // Always non-negative; "0" when the account has no reserve set.
+  reserve: string
 }
 
 export interface BalanceRebuildResult {
@@ -231,6 +234,8 @@ export interface AccountBalanceFacts {
   version: number
   currency: string
   creditLimit: bigint | null
+  // PER-217 — user reserve/minimum balance (cash-like ASSET only, else NULL).
+  reserveBalance: bigint | null
 }
 
 const ACCOUNT_BALANCE_SELECT = {
@@ -242,6 +247,7 @@ const ACCOUNT_BALANCE_SELECT = {
   version: true,
   currency: true,
   creditLimit: true,
+  reserveBalance: true,
 } as const
 
 function normalBalanceForClass(accountClass: string): "POSITIVE" | "NEGATIVE" {
@@ -959,7 +965,14 @@ export async function getAccountBalanceForFamily({
       toMoney(0n)
     )
 
-    const available = computeAvailable(account, current, held)
+    // PER-217 — the reserve is a spending earmark; it only applies to cash-like
+    // assets (the DB CHECK already guarantees it is NULL otherwise). Fold it into
+    // `available` so "available" means true safe-to-spend: current − held − reserve.
+    const reserve =
+      account.reserveBalance !== null
+        ? toMoney(account.reserveBalance)
+        : toMoney(0n)
+    const available = computeAvailable(account, current, held, reserve)
 
     return {
       accountId,
@@ -967,6 +980,7 @@ export async function getAccountBalanceForFamily({
       current: current.toString(),
       held: held.toString(),
       available: available === null ? null : available.toString(),
+      reserve: reserve.toString(),
     }
   })
 }
@@ -974,13 +988,16 @@ export async function getAccountBalanceForFamily({
 function computeAvailable(
   account: AccountBalanceFacts,
   current: Money,
-  held: Money
+  held: Money,
+  // PER-217 — user reserve/minimum balance (already 0 for non-cash-like).
+  reserve: Money
 ): Money | null {
-  // Tracked assets: fully available net worth, nothing held.
+  // Tracked assets: fully available net worth, nothing held or reserved.
   if (account.balanceSource === "valuation") return current
 
   if (account.accountClass === "LIABILITY") {
-    // Revolving credit with a limit: remaining headroom.
+    // Revolving credit with a limit: remaining headroom. A reserve is never set
+    // on a liability (DB CHECK), so it does not participate here.
     if (account.creditLimit !== null) {
       return subMoney(
         subMoney(toMoney(account.creditLimit), absMoney(current)),
@@ -991,8 +1008,10 @@ function computeAvailable(
     return null
   }
 
-  // Cash-like asset: spendable balance, unclamped (overdraft shows negative).
-  return subMoney(current, held)
+  // Cash-like asset: safe-to-spend = balance − uncleared holds − reserve floor.
+  // Unclamped: dipping below your reserve shows a negative available, which is
+  // exactly the signal the user wants ("you're into your dana mengendap").
+  return subMoney(subMoney(current, held), reserve)
 }
 
 export const getAccountBalanceFn = createServerFn({ method: "GET" })

@@ -187,6 +187,16 @@ model Account {
   dueDay            Int?
   interestRateBps   Int?
 
+  // PER-217 — user-defined minimum balance floor ("dana mengendap" / reserve).
+  // Ledger-NEUTRAL: it NEVER mutates `balance`, net worth, transactions, or
+  // valuations. It is a spending earmark that only feeds the computed
+  // "available" (safe-to-spend) view: available = current − held − reserve.
+  // Stored NON-NEGATIVE in MINOR UNITS. Meaningful only for cash-like ASSET
+  // accounts (accountClass="ASSET", balanceSource="transaction_flow") — a real
+  // bank/e-wallet minimum balance. A DB CHECK keeps it NULL for every other
+  // account so the invariant can never drift ("Database Is the Law").
+  reserveBalance BigInt?
+
   // PER-212 / ADR-0049 — person-to-person debt (informal lending/borrowing).
   // When set, this RECEIVABLE/LOAN account IS the ledger for a debt with a
   // specific person contact (a Merchant with kind="person"). Its presence is

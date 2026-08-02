@@ -69,4 +69,17 @@ describe("AccountVisual", () => {
     )
     expect(screen.getByText(/outstanding/i)).toBeTruthy()
   })
+
+  it("shows safe-to-spend (balance − reserve) when a reserve is set", () => {
+    // base balance 1,500,000 minor = 15,000 major; reserve 500,000 minor =
+    // 5,000 major → safe-to-spend 10,000.
+    render(<AccountVisual account={{ ...base, reserveBalance: "500000" }} />)
+    expect(screen.getByText(/safe to spend/i)).toBeTruthy()
+    expect(screen.getByText(/10,000/)).toBeTruthy()
+  })
+
+  it("omits the safe-to-spend line when no reserve is set", () => {
+    render(<AccountVisual account={{ ...base, reserveBalance: null }} />)
+    expect(screen.queryByText(/safe to spend/i)).toBeNull()
+  })
 })

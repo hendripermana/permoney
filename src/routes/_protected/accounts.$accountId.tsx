@@ -29,7 +29,9 @@ import {
   BalanceTrendChart,
   CategoryBreakdown,
   RangeSelector,
+  SafeToSpendPanel,
 } from "./-account-analytics"
+import { accountSupportsReserve, hasReserve } from "@/lib/account-reserve"
 import {
   buildBalanceSeries,
   buildStatementCsv,
@@ -235,6 +237,16 @@ function AccountDetailPage() {
               <Badge variant="outline">Archived</Badge>
             ) : null}
           </div>
+          {accountSupportsReserve(account) &&
+          hasReserve(
+            account.reserveBalance ? BigInt(account.reserveBalance) : null
+          ) ? (
+            <SafeToSpendPanel
+              balanceMinor={BigInt(account.balance)}
+              reserveMinor={BigInt(account.reserveBalance ?? "0")}
+              currency={currency}
+            />
+          ) : null}
           <div className="grid grid-cols-2 gap-3">
             <MiniStat
               label="Money in"
