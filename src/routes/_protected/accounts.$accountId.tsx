@@ -5,8 +5,10 @@ import {
   ArrowLeft,
   Download,
   ExternalLink,
+  Pencil,
   Plus,
   Receipt,
+  Scale,
   Search,
 } from "lucide-react"
 
@@ -18,6 +20,8 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { AccountVisual } from "@/components/blocks/account-visual"
+import { AccountFormDialog } from "@/components/blocks/account-form-dialog"
+import { ValuationActionDialog } from "@/components/blocks/valuation-action-dialog"
 import { TransactionFormModal } from "@/components/transaction-form-modal"
 import {
   accountCollection,
@@ -77,6 +81,11 @@ function AccountDetailPage() {
   const [range, setRange] = React.useState<AccountRange>("3M")
   const [query, setQuery] = React.useState("")
   const [types, setTypes] = React.useState<ReadonlyArray<string>>([])
+  // PER-221 — Edit + Reconcile/Update-value now live on the detail page too,
+  // reusing the SAME shared dialogs as the list route (one source of truth).
+  const [detailDialog, setDetailDialog] = React.useState<
+    "edit" | "valuation" | null
+  >(null)
 
   const { data: accounts } = useLiveQuery((q) =>
     q.from({ a: accountCollection })
@@ -204,6 +213,22 @@ function AccountDetailPage() {
               </Button>
             }
           />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setDetailDialog("edit")}
+          >
+            <Pencil className="size-4" />
+            Edit
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setDetailDialog("valuation")}
+          >
+            <Scale className="size-4" />
+            {cashLike ? "Reconcile" : "Update value"}
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -373,8 +398,41 @@ function AccountDetailPage() {
           </div>
         </div>
       </div>
+
+      {detailDialog === "edit" ? (
+        <AccountFormDialog
+          // Remount per account so the form re-initializes cleanly.
+          key={`edit-${account.id}`}
+          state={{ mode: "edit", account }}
+          onClose={() => setDetailDialog(null)}
+          onSaved={async () => {
+            await refreshAccountData()
+            setDetailDialog(null)
+          }}
+        />
+      ) : detailDialog === "valuation" ? (
+        <ValuationActionDialog
+          key={`valuation-${account.id}`}
+          account={account}
+          onClose={() => setDetailDialog(null)}
+          onSaved={async () => {
+            await refreshAccountData()
+            setDetailDialog(null)
+          }}
+        />
+      ) : null}
     </AppShell>
   )
+}
+
+// PER-221 — after an edit/reconcile the account row (and, for a reconcile
+// anchor, its balance) changes; resync the client collections that this page
+// reads so the hero, KPIs, and trend update immediately.
+async function refreshAccountData() {
+  await Promise.all([
+    accountCollection.utils.refetch(),
+    transactionCollection.utils.refetch(),
+  ])
 }
 
 function BackLink() {

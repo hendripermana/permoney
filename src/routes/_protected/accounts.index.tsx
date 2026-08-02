@@ -24,6 +24,8 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Badge } from "@/components/ui/badge"
 import { AccountCard, ACCOUNT_TYPE_LABEL, PinButton } from "./-account-card"
+import { AccountFormDialog } from "@/components/blocks/account-form-dialog"
+import { ValuationActionDialog } from "@/components/blocks/valuation-action-dialog"
 import { Button } from "@/components/ui/button"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
@@ -41,17 +43,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Select,
   SelectContent,
@@ -66,11 +59,7 @@ import {
   type DriftRecord,
 } from "@/lib/account-collections"
 import {
-  ACCOUNT_SUBTYPE_VALUES,
   ACCOUNT_TYPE_VALUES,
-  allowsNegativeAssetBalance,
-  getAccountClassForType,
-  isCashLikeAccount,
   type AccountClass,
   type AccountType,
 } from "@/lib/accounts"
@@ -86,23 +75,17 @@ import {
   type AccountTypeFilter,
   type AccountViewMode,
 } from "@/lib/account-list-tools"
-import { CURRENCY_OPTIONS, formatCurrency } from "@/lib/currency"
-import { negateMoney, parseUserInput, toDisplayNumber } from "@/lib/money"
-import { accountSupportsReserve } from "@/lib/account-reserve"
+import { formatCurrency } from "@/lib/currency"
 import { normalizeNetWorthAt, type PointBalance } from "@/lib/net-worth"
 import { getFxOverviewFn } from "@/server/fx"
-import type { CurrencyCode } from "@/lib/data/currencies"
 import { cn } from "@/lib/utils"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import {
   archiveAccountFn,
-  createAccountFn,
   deleteAccountFn,
   getAccountDeletionImpactFn,
   reactivateAccountFn,
-  updateAccountFn,
 } from "@/server/accounts"
-import { createValuationFn, getAccountBalanceFn } from "@/server/valuations"
 
 export const Route = createFileRoute("/_protected/accounts/")({
   // TanStack DB collections are browser-only; SSR would hang on the pending sync.
@@ -121,8 +104,6 @@ export const Route = createFileRoute("/_protected/accounts/")({
   errorComponent: AccountsErrorComponent,
   component: AccountsPage,
 })
-
-const DEFAULT_SUBTYPE_SENTINEL = "__default"
 
 const CLASS_ORDER: ReadonlyArray<AccountClass> = ["ASSET", "LIABILITY"]
 
@@ -763,493 +744,6 @@ function DeleteAccountDialog({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
-  )
-}
-
-function AccountFormDialog({
-  state,
-  onClose,
-  onSaved,
-}: {
-  state: NonNullable<DialogState>
-  onClose: () => void
-  onSaved: () => Promise<void>
-}) {
-  const editing = state.mode === "edit" ? state.account : null
-
-  const [name, setName] = React.useState(editing?.name ?? "")
-  const [accountType, setAccountType] = React.useState<AccountType>(
-    (editing?.accountType as AccountType) ?? "DEPOSITORY"
-  )
-  // Radix Select forbids an empty-string item value, so an unset subtype uses a
-  // sentinel that maps back to "default for the chosen type" on submit.
-  const [accountSubtype, setAccountSubtype] = React.useState<string>(
-    editing?.accountSubtype ?? DEFAULT_SUBTYPE_SENTINEL
-  )
-  const [currency, setCurrency] = React.useState<string>(
-    editing?.currency ?? "IDR"
-  )
-  const [openingBalance, setOpeningBalance] = React.useState<string>("")
-  const [institutionName, setInstitutionName] = React.useState<string>(
-    editing?.institutionName ?? ""
-  )
-  const [isImportable, setIsImportable] = React.useState<boolean>(
-    editing?.isImportable ?? false
-  )
-  // PER-217 — reserve/minimum balance, as a user-facing MAJOR-unit string. On
-  // edit, seed from the stored minor-unit value (lazy init, no useEffect).
-  const [reserveInput, setReserveInput] = React.useState<string>(() =>
-    editing?.reserveBalance
-      ? String(
-          toDisplayNumber(
-            BigInt(editing.reserveBalance),
-            (editing.currency as CurrencyCode) ?? "IDR"
-          )
-        )
-      : ""
-  )
-  const [error, setError] = React.useState<string | null>(null)
-  const [submitting, setSubmitting] = React.useState(false)
-
-  // Derived, pure: the class and balance source preview track the chosen type.
-  const previewClass = getAccountClassForType(accountType)
-  const previewCashLike = isCashLikeAccount(accountType)
-  // PER-217 — a reserve only makes sense on a cash-like ASSET account. On create
-  // this tracks the chosen type; on edit it reflects the (fixed) account.
-  const supportsReserve = editing
-    ? accountSupportsReserve(editing)
-    : previewClass === "ASSET" && previewCashLike
-
-  // Subtypes are flexible; offer the known vocabulary as a convenience, led by
-  // the "default for type" sentinel.
-  const subtypeOptions = React.useMemo(
-    () => [DEFAULT_SUBTYPE_SENTINEL, ...ACCOUNT_SUBTYPE_VALUES],
-    []
-  )
-
-  const resolvedSubtype =
-    accountSubtype === DEFAULT_SUBTYPE_SENTINEL ? undefined : accountSubtype
-
-  async function handleSubmit(event: React.FormEvent) {
-    event.preventDefault()
-    setError(null)
-    setSubmitting(true)
-    try {
-      // PER-217 — parse the reserve once for whichever branch runs. An empty
-      // input on edit CLEARS the reserve (null); on create it means "no reserve"
-      // (omit). A malformed non-empty value is rejected before any write.
-      let reserveMinor: string | null | undefined
-      if (supportsReserve) {
-        if (reserveInput.trim() === "") {
-          reserveMinor = editing ? null : undefined
-        } else {
-          const parsedReserve = parseUserInput(
-            reserveInput.trim(),
-            currency as CurrencyCode
-          )
-          if (parsedReserve === null || parsedReserve < 0n) {
-            throw new Error("Enter a valid reserve amount.")
-          }
-          reserveMinor = parsedReserve.toString()
-        }
-      }
-
-      if (editing) {
-        await updateAccountFn({
-          data: {
-            id: editing.id,
-            name: name.trim(),
-            accountSubtype: resolvedSubtype,
-            institutionName: institutionName.trim() || null,
-            isImportable,
-            ...(reserveMinor === undefined
-              ? {}
-              : { reserveBalance: reserveMinor }),
-            idempotencyKey: createUuidV7(),
-          },
-        })
-      } else {
-        // PER-207: parse the user-typed opening balance with `parseUserInput`
-        // (handles thousands separators / locale decimal, returns null on
-        // malformed) — NOT `toMinorUnits`, which expects a canonical decimal
-        // and throws on user-formatted strings.
-        let openingMinor = "0"
-        if (openingBalance.trim() !== "") {
-          const parsed = parseUserInput(
-            openingBalance.trim(),
-            currency as CurrencyCode
-          )
-          if (parsed === null) {
-            throw new Error("Enter a valid opening balance.")
-          }
-          openingMinor = parsed.toString()
-        }
-        await createAccountFn({
-          data: {
-            name: name.trim(),
-            accountType,
-            accountSubtype: resolvedSubtype,
-            currency,
-            openingBalance: openingMinor,
-            institutionName: institutionName.trim() || null,
-            ...(reserveMinor ? { reserveBalance: reserveMinor } : {}),
-            idempotencyKey: createUuidV7(),
-          },
-        })
-      }
-      await onSaved()
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught))
-      setSubmitting(false)
-    }
-  }
-
-  return (
-    <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
-      <DialogContent>
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <DialogHeader>
-            <DialogTitle>
-              {editing ? "Edit account" : "New account"}
-            </DialogTitle>
-            <DialogDescription>
-              {editing
-                ? "Update account metadata. Class and type are fixed at creation."
-                : "Classification uses the account taxonomy. The balance source is derived from the type."}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="account-name">Name</Label>
-            <Input
-              id="account-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. BCA Checking"
-              required
-            />
-          </div>
-
-          {editing ? null : (
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col gap-2">
-                <Label>Type</Label>
-                <Select
-                  value={accountType}
-                  onValueChange={(value) =>
-                    setAccountType(value as AccountType)
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {ACCOUNT_TYPE_VALUES.map((type) => (
-                      <SelectItem key={type} value={type}>
-                        {ACCOUNT_TYPE_LABEL[type]}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label>Currency</Label>
-                <Select value={currency} onValueChange={setCurrency}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CURRENCY_OPTIONS.map(({ code, name }) => (
-                      <SelectItem key={code} value={code}>
-                        {code} — {name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          )}
-
-          <div className="flex flex-col gap-2">
-            <Label>Subtype</Label>
-            <Select
-              value={accountSubtype}
-              onValueChange={(value) => setAccountSubtype(value)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Default for type" />
-              </SelectTrigger>
-              <SelectContent>
-                {subtypeOptions.map((subtype) => (
-                  <SelectItem key={subtype} value={subtype}>
-                    {subtype === DEFAULT_SUBTYPE_SENTINEL
-                      ? "Default for type"
-                      : subtype}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {editing ? null : (
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="opening-balance">
-                Opening balance ({currency})
-              </Label>
-              <Input
-                id="opening-balance"
-                inputMode="decimal"
-                value={openingBalance}
-                onChange={(e) => setOpeningBalance(e.target.value)}
-                placeholder="0"
-              />
-              <p className="text-xs text-muted-foreground">
-                {previewClass === "LIABILITY"
-                  ? "Recorded as amount owed."
-                  : "Recorded as current value."}{" "}
-                {previewCashLike
-                  ? "Cash-like — balance follows transactions."
-                  : "Tracked asset — balance follows valuations."}
-                {allowsNegativeAssetBalance(accountType)
-                  ? " Already overdrawn? Enter a negative amount."
-                  : null}
-              </p>
-            </div>
-          )}
-
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="institution">Institution (optional)</Label>
-            <Input
-              id="institution"
-              value={institutionName}
-              onChange={(e) => setInstitutionName(e.target.value)}
-              placeholder="e.g. Bank Central Asia"
-            />
-          </div>
-
-          {supportsReserve ? (
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="reserve-balance">
-                Reserve / minimum balance ({currency})
-              </Label>
-              <Input
-                id="reserve-balance"
-                inputMode="decimal"
-                value={reserveInput}
-                onChange={(e) => setReserveInput(e.target.value)}
-                placeholder="0"
-              />
-              <p className="text-xs text-muted-foreground">
-                Money you keep untouched — your “dana mengendap”. It never
-                changes your balance or net worth; it only lowers your{" "}
-                <span className="font-medium">safe-to-spend</span> (available =
-                balance − reserve).{editing ? " Leave empty to remove." : ""}
-              </p>
-            </div>
-          ) : null}
-
-          {editing ? (
-            <div className="flex items-start gap-3 rounded-md border p-3">
-              <Checkbox
-                id="is-importable"
-                checked={isImportable}
-                onCheckedChange={(checked) => setIsImportable(checked === true)}
-              />
-              <div className="flex flex-col gap-1">
-                <Label htmlFor="is-importable">Allow imports</Label>
-                <p className="text-xs text-muted-foreground">
-                  Let CSV/QIF imports promote transactions into this account.
-                </p>
-              </div>
-            </div>
-          ) : null}
-
-          {error ? (
-            <p className="text-sm text-destructive" role="alert">
-              {error}
-            </p>
-          ) : null}
-
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={onClose}
-              disabled={submitting}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" disabled={submitting || name.trim() === ""}>
-              {submitting ? "Saving…" : editing ? "Save changes" : "Create"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-// PER-146/PER-177 UI slice (ADR-0034 §10, ADR-0043). Tracked assets
-// "Update value" → a market valuation that re-materializes the balance. Cash
-// accounts "Reconcile" → a reconciliation valuation, which is a balance-
-// assertion ANCHOR (ADR-0043 §2): it re-materializes the balance directly,
-// no compensating transaction needed.
-function ValuationActionDialog({
-  account,
-  onClose,
-  onSaved,
-}: {
-  account: AccountRecord
-  onClose: () => void
-  onSaved: () => Promise<void>
-}) {
-  const cashLike = account.balanceSource === "transaction_flow"
-  const isLiability = account.accountClass === "LIABILITY"
-  const [valueInput, setValueInput] = React.useState("")
-  const [error, setError] = React.useState<string | null>(null)
-  const [submitting, setSubmitting] = React.useState(false)
-
-  // current / available / held come from the canonical server fn (computed, not
-  // stored). Fetched declaratively — no useEffect (no-use-effect rule).
-  const { data: balanceView } = useQuery({
-    queryKey: ["account_balance_view", account.id],
-    queryFn: async () =>
-      await getAccountBalanceFn({ data: { accountId: account.id } }),
-  })
-
-  const currentMinor = BigInt(account.balance)
-  // PER-207: `parseUserInput` (locale-aware, returns null on malformed) — NOT
-  // `toMinorUnits`, which throws on user-formatted strings. This runs at RENDER
-  // on every keystroke, so a throw here crashes the dialog into the error
-  // boundary; null is the safe "not a valid amount yet" state instead.
-  const targetMagnitude =
-    valueInput.trim() === ""
-      ? null
-      : parseUserInput(valueInput.trim(), account.currency as CurrencyCode)
-  const signedTarget =
-    targetMagnitude === null
-      ? null
-      : isLiability
-        ? negateMoney(targetMagnitude)
-        : targetMagnitude
-  const driftMinor = signedTarget === null ? null : signedTarget - currentMinor
-
-  async function handleSubmit(event: React.FormEvent) {
-    event.preventDefault()
-    setError(null)
-    if (targetMagnitude === null) {
-      setError("Enter a value.")
-      return
-    }
-    setSubmitting(true)
-    try {
-      await createValuationFn({
-        data: {
-          accountId: account.id,
-          value: targetMagnitude.toString(),
-          type: cashLike ? "reconciliation" : "market",
-          idempotencyKey: createUuidV7(),
-        },
-      })
-      // Cash: a reconciliation valuation is now a balance-assertion ANCHOR
-      // (ADR-0043 §2/§4) — it re-materializes the balance directly, in the
-      // same transaction as the valuation write. No compensating transaction
-      // is posted; that would double-count the anchor's own value.
-      await onSaved()
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught))
-      setSubmitting(false)
-    }
-  }
-
-  return (
-    <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
-      <DialogContent>
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <DialogHeader>
-            <DialogTitle>
-              {cashLike ? "Reconcile account" : "Update value"}
-            </DialogTitle>
-            <DialogDescription>
-              {cashLike
-                ? "Enter the real-world balance. This becomes your account's new balance immediately, recorded as an audited reconciliation — your transaction history is never rewritten."
-                : "Record the latest market value. The balance follows this valuation."}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="grid grid-cols-3 gap-3 rounded-md bg-muted/50 p-3 text-sm">
-            <div>
-              <p className="text-xs text-muted-foreground">Current</p>
-              <p className="font-medium tabular-nums">
-                {formatCurrency(account.balance, account.currency)}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Available</p>
-              <p className="font-medium tabular-nums">
-                {balanceView?.available == null
-                  ? "—"
-                  : formatCurrency(balanceView.available, account.currency)}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Held</p>
-              <p className="font-medium tabular-nums">
-                {formatCurrency(balanceView?.held ?? "0", account.currency)}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="valuation-value">
-              {cashLike
-                ? `Real balance (${account.currency})`
-                : `New value (${account.currency})`}
-            </Label>
-            <Input
-              id="valuation-value"
-              inputMode="decimal"
-              value={valueInput}
-              onChange={(e) => setValueInput(e.target.value)}
-              placeholder="0"
-              autoFocus
-            />
-            {cashLike && driftMinor !== null && driftMinor !== 0n ? (
-              <p className="text-xs text-muted-foreground">
-                Balance will change by{" "}
-                <span className="font-medium tabular-nums">
-                  {formatCurrency(driftMinor.toString(), account.currency)}
-                </span>
-                .
-              </p>
-            ) : null}
-          </div>
-
-          {error ? (
-            <p className="text-sm text-destructive" role="alert">
-              {error}
-            </p>
-          ) : null}
-
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={onClose}
-              disabled={submitting}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              disabled={submitting || valueInput.trim() === ""}
-            >
-              {submitting ? "Saving…" : cashLike ? "Reconcile" : "Update value"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
   )
 }
 

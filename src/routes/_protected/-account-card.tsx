@@ -26,7 +26,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { AccountVisual } from "@/components/blocks/account-visual"
-import type { AccountType } from "@/lib/accounts"
+import { ACCOUNT_TYPE_LABEL, type AccountType } from "@/lib/accounts"
 import type { AccountRecord, DriftRecord } from "@/lib/account-collections"
 import { selectDriftBadge } from "@/lib/account-drift-presentation"
 import { formatCurrency } from "@/lib/currency"
@@ -72,16 +72,10 @@ export function PinButton({
   )
 }
 
-export const ACCOUNT_TYPE_LABEL: Record<AccountType, string> = {
-  CASH: "Cash",
-  DEPOSITORY: "Bank / Depository",
-  E_WALLET: "E-Wallet",
-  CREDIT: "Credit Card",
-  LOAN: "Loan",
-  INVESTMENT: "Investment",
-  RECEIVABLE: "Receivable",
-  TRACKED_ASSET: "Tracked Asset",
-}
+// PER-221 — canonical home moved to @/lib/accounts (imported above for local
+// use); re-exported here so existing importers (accounts.index.tsx,
+// accounts.$accountId.tsx) keep resolving from "./-account-card".
+export { ACCOUNT_TYPE_LABEL }
 
 export function AccountCard({
   account,
