@@ -7,6 +7,7 @@ import {
   Scale,
   ShieldCheck,
   Trash2,
+  TrendingDown,
   TrendingUp,
   TriangleAlert,
 } from "lucide-react"
@@ -27,6 +28,7 @@ import {
 } from "@/components/ui/tooltip"
 import { AccountVisual } from "@/components/blocks/account-visual"
 import { ACCOUNT_TYPE_LABEL, type AccountType } from "@/lib/accounts"
+import { isRunwayAlerting, type AccountRunway } from "@/lib/account-runway"
 import type { AccountRecord, DriftRecord } from "@/lib/account-collections"
 import { selectDriftBadge } from "@/lib/account-drift-presentation"
 import { formatCurrency } from "@/lib/currency"
@@ -89,6 +91,7 @@ export function AccountCard({
   onOpen,
   pinned = false,
   onTogglePin,
+  runway,
 }: {
   account: AccountRecord
   drift: ReadonlyArray<DriftRecord>
@@ -105,9 +108,13 @@ export function AccountCard({
   // without wiring pin state; the pin button only renders when a handler exists.
   pinned?: boolean
   onTogglePin?: () => void
+  // PER-222 — runway forecast for this account (cash-like only). Optional so
+  // existing mounts/tests work; the ambient badge only shows when alerting.
+  runway?: AccountRunway
 }) {
   const archived = account.status !== "active"
   const cashLike = account.balanceSource === "transaction_flow"
+  const runwayBadge = runway && isRunwayAlerting(runway.status) ? runway : null
   // Surface the single worst drift entry (ADR-0043 §6 classification lives in
   // src/lib/account-drift-presentation.ts, unit-tested there). Read-only — the
   // badge never mutates anything (ADR-0034 §7).
@@ -135,6 +142,31 @@ export function AccountCard({
             {cashLike ? "Cash-like" : "Tracked asset"}
           </Badge>
           {archived ? <Badge variant="outline">Archived</Badge> : null}
+          {runwayBadge ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Badge
+                  variant={
+                    runwayBadge.status === "watch" ? "outline" : "destructive"
+                  }
+                  className={cn(
+                    runwayBadge.status === "watch" &&
+                      "border-amber-500/50 text-amber-600 dark:text-amber-400"
+                  )}
+                >
+                  <TrendingDown className="size-3" />
+                  {runwayBadge.status === "below"
+                    ? "Below reserve"
+                    : `~${runwayBadge.daysToReserve}d to reserve`}
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent>
+                {runwayBadge.status === "below"
+                  ? "This account is below the minimum balance you set to keep untouched."
+                  : `At its recent spending pace, this account reaches your reserve in about ${runwayBadge.daysToReserve} days.`}
+              </TooltipContent>
+            </Tooltip>
+          ) : null}
           {driftBadge?.tone === "informational" ? (
             <Tooltip>
               <TooltipTrigger asChild>

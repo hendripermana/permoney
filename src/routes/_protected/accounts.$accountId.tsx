@@ -30,12 +30,14 @@ import {
 import { transactionCollection } from "@/lib/collections"
 import { applyFilters } from "@/lib/transaction-filters"
 import {
+  AccountRunwayNote,
   BalanceTrendChart,
   CategoryBreakdown,
   RangeSelector,
   SafeToSpendPanel,
 } from "./-account-analytics"
 import { accountSupportsReserve, hasReserve } from "@/lib/account-reserve"
+import { computeAccountRunway } from "@/lib/account-runway"
 import {
   buildBalanceSeries,
   buildStatementCsv,
@@ -136,6 +138,21 @@ function AccountDetailPage() {
         limit: 6,
       }),
     [rangedLedger, accountId]
+  )
+
+  // PER-222 — runway to reserve, from the full per-account ledger (trailing net
+  // daily flow). Only meaningful for cash-like accounts.
+  const runway = React.useMemo(
+    () =>
+      cashLike
+        ? computeAccountRunway(
+            ledger,
+            currentBalance,
+            account?.reserveBalance ? BigInt(account.reserveBalance) : 0n,
+            accountId
+          )
+        : null,
+    [cashLike, ledger, currentBalance, account?.reserveBalance, accountId]
   )
 
   const kpi = React.useMemo(() => {
@@ -271,6 +288,9 @@ function AccountDetailPage() {
               reserveMinor={BigInt(account.reserveBalance ?? "0")}
               currency={currency}
             />
+          ) : null}
+          {runway ? (
+            <AccountRunwayNote runway={runway} currency={currency} />
           ) : null}
           <div className="grid grid-cols-2 gap-3">
             <MiniStat

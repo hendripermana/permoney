@@ -58,6 +58,9 @@ import {
   type AccountRecord,
   type DriftRecord,
 } from "@/lib/account-collections"
+import { transactionCollection } from "@/lib/collections"
+import { applyFilters } from "@/lib/transaction-filters"
+import { computeAccountRunway, type AccountRunway } from "@/lib/account-runway"
 import {
   ACCOUNT_TYPE_VALUES,
   type AccountClass,
@@ -96,6 +99,8 @@ export const Route = createFileRoute("/_protected/accounts/")({
     await Promise.all([
       accountCollection.preload(),
       balanceDriftCollection.preload(),
+      // PER-222 — the runway badge needs each account's ledger.
+      transactionCollection.preload(),
     ])
     return null
   },
@@ -147,6 +152,9 @@ function AccountsPage() {
   const { data: driftRows } = useLiveQuery((q) =>
     q.from({ d: balanceDriftCollection })
   )
+  const { data: allTransactions } = useLiveQuery((q) =>
+    q.from({ t: transactionCollection })
+  )
   const [dialog, setDialog] = React.useState<DialogState>(null)
   const [busyId, setBusyId] = React.useState<string | null>(null)
   // PER-219 list tools. Search/type/archived are ephemeral view state; pins and
@@ -193,6 +201,32 @@ function AccountsPage() {
     }
     return map
   }, [driftRows])
+
+  // PER-222 — per-account runway forecast (cash-like ASSET only), using the SAME
+  // applyFilters lens as the detail page so the badge and the detail panel agree.
+  const runwayByAccount = React.useMemo(() => {
+    const map = new Map<string, AccountRunway>()
+    if (!allTransactions) return map
+    for (const a of listedAccounts) {
+      if (
+        a.accountClass !== "ASSET" ||
+        a.balanceSource !== "transaction_flow"
+      ) {
+        continue
+      }
+      const ledger = applyFilters(allTransactions, { accounts: [a.id] })
+      map.set(
+        a.id,
+        computeAccountRunway(
+          ledger,
+          BigInt(a.balance),
+          a.reserveBalance ? BigInt(a.reserveBalance) : 0n,
+          a.id
+        )
+      )
+    }
+    return map
+  }, [allTransactions, listedAccounts])
 
   // Apply search / type / archived filters (pure — see account-list-tools).
   const filteredAccounts = React.useMemo(
@@ -343,6 +377,7 @@ function AccountsPage() {
                                 account={account}
                                 drift={driftByAccount.get(account.id) ?? []}
                                 busy={busyId === account.id}
+                                runway={runwayByAccount.get(account.id)}
                                 pinned={isPinned(pinnedIds, account.id)}
                                 onTogglePin={() => handleTogglePin(account.id)}
                                 onEdit={() =>
