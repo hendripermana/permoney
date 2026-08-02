@@ -47,6 +47,32 @@ test.describe("account detail (PER-216)", () => {
     await expect(page.getByText(/reserved/i).first()).toBeVisible()
     await expect(page.getByText("Rp 1,500,000.00").first()).toBeVisible()
 
+    // --- Detail actions (PER-221): Edit + Reconcile reuse the shared dialogs ---
+    // Edit opens the shared account form (prefilled) and closes cleanly.
+    await page.getByRole("button", { name: "Edit", exact: true }).click()
+    const editDialog = page.getByRole("dialog")
+    await expect(
+      editDialog.getByRole("heading", { name: "Edit account" })
+    ).toBeVisible()
+    await page.keyboard.press("Escape")
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+
+    // Reconcile opens the shared valuation dialog (which shows the Reserved cell
+    // now that a reserve is set), asserts a new real balance, and the hero + the
+    // safe-to-spend figure update after the refetch.
+    await page.getByRole("button", { name: "Reconcile", exact: true }).click()
+    const reconcileDialog = page.getByRole("dialog")
+    await expect(
+      reconcileDialog.getByRole("heading", { name: "Reconcile account" })
+    ).toBeVisible()
+    await expect(reconcileDialog.getByText("Reserved")).toBeVisible()
+    await reconcileDialog.getByLabel(/Real balance/i).fill("3000000")
+    await reconcileDialog.getByRole("button", { name: "Reconcile" }).click()
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+    // New balance materialized; safe-to-spend = 3,000,000 − 500,000 = 2,500,000.
+    await expect(page.getByText("Rp 3,000,000.00").first()).toBeVisible()
+    await expect(page.getByText("Rp 2,500,000.00").first()).toBeVisible()
+
     // The statement section renders. A fresh account's opening balance is an
     // opening VALUATION anchor, not a posted transaction, so the ledger is
     // genuinely empty here.

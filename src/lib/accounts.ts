@@ -15,6 +15,22 @@ export const ACCOUNT_TYPE_VALUES = [
 
 export type AccountType = (typeof ACCOUNT_TYPE_VALUES)[number]
 
+/**
+ * Human-facing label for each account type. Canonical home so the account card,
+ * the create/edit dialog, and the detail page all read one source of truth
+ * (PER-221 extraction). UI-only; ledger semantics live in the taxonomy fields.
+ */
+export const ACCOUNT_TYPE_LABEL: Record<AccountType, string> = {
+  CASH: "Cash",
+  DEPOSITORY: "Bank / Depository",
+  E_WALLET: "E-Wallet",
+  CREDIT: "Credit Card",
+  LOAN: "Loan",
+  INVESTMENT: "Investment",
+  RECEIVABLE: "Receivable",
+  TRACKED_ASSET: "Tracked Asset",
+}
+
 export const ACCOUNT_SUBTYPE_VALUES = [
   "cash",
   "checking",
