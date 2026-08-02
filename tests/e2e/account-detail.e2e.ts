@@ -47,6 +47,14 @@ test.describe("account detail (PER-216)", () => {
     await expect(page.getByText(/reserved/i).first()).toBeVisible()
     await expect(page.getByText("Rp 1,500,000.00").first()).toBeVisible()
 
+    // PER-222 — the runway panel renders. A fresh account has no posted
+    // transactions (opening balance is an anchor, not a txn), so the honest
+    // state is "not enough activity to forecast" rather than a fabricated number.
+    await expect(page.getByText(/Runway/i).first()).toBeVisible()
+    await expect(
+      page.getByText(/not enough recent activity to forecast/i)
+    ).toBeVisible()
+
     // --- Detail actions (PER-221): Edit + Reconcile reuse the shared dialogs ---
     // Edit opens the shared account form (prefilled) and closes cleanly.
     await page.getByRole("button", { name: "Edit", exact: true }).click()

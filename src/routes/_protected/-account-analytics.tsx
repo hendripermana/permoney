@@ -1,5 +1,10 @@
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts"
-import { ShieldCheck } from "lucide-react"
+import {
+  ShieldCheck,
+  TrendingDown,
+  TrendingUp,
+  TriangleAlert,
+} from "lucide-react"
 
 import {
   ChartContainer,
@@ -19,6 +24,7 @@ import {
   reserveHealth,
   reserveLockedFraction,
 } from "@/lib/account-reserve"
+import { type AccountRunway } from "@/lib/account-runway"
 import { formatCurrency } from "@/lib/currency"
 import { cn } from "@/lib/utils"
 
@@ -195,6 +201,88 @@ export function SafeToSpendPanel({
         />
         <div className="h-full flex-1 bg-primary/70" />
       </div>
+    </div>
+  )
+}
+
+// PER-222 — "runway to reserve" note: forecasts when the account dips below its
+// reserve floor from its trailing net daily flow. Pure props in; the math is the
+// unit-tested computeAccountRunway. Calm by default, urgent only when it matters.
+export function AccountRunwayNote({
+  runway,
+  currency,
+}: Readonly<{ runway: AccountRunway; currency: string }>) {
+  const { status } = runway
+  const dateLabel = runway.reserveDate
+    ? runway.reserveDate.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      })
+    : null
+  const burnLabel =
+    runway.dailyBurnMinor !== null
+      ? `${formatCurrency(runway.dailyBurnMinor.toString(), currency)}/day`
+      : null
+
+  const urgent = status === "below" || status === "critical"
+
+  let icon = <TrendingDown className="size-3.5" aria-hidden />
+  let headline: string
+  let detail: string | null = null
+
+  if (status === "insufficient_data") {
+    icon = <TriangleAlert className="size-3.5" aria-hidden />
+    headline = "Not enough recent activity to forecast runway"
+  } else if (status === "growing") {
+    icon = <TrendingUp className="size-3.5" aria-hidden />
+    headline = "Trending up — no dip below your reserve expected"
+  } else if (status === "below") {
+    icon = <TriangleAlert className="size-3.5" aria-hidden />
+    headline = "You're below your reserve now"
+    detail = burnLabel ? `Burning about ${burnLabel}.` : null
+  } else {
+    // critical / watch / healthy — a real runway forecast.
+    const days = runway.daysToReserve ?? 0
+    headline = `About ${days} ${days === 1 ? "day" : "days"} of runway`
+    detail = [
+      dateLabel ? `reaches your reserve around ${dateLabel}` : null,
+      burnLabel ? `at ~${burnLabel}` : null,
+    ]
+      .filter(Boolean)
+      .join(" ")
+  }
+
+  return (
+    <div
+      className={cn(
+        "rounded-2xl border p-4",
+        urgent ? "border-destructive/40 bg-destructive/5" : undefined
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+          {icon}
+          Runway
+        </p>
+        {runway.lowConfidence && status !== "insufficient_data" ? (
+          <span className="text-[10px] font-medium text-muted-foreground">
+            Low confidence
+          </span>
+        ) : null}
+      </div>
+      <p
+        className={cn(
+          "mt-1 text-lg font-semibold",
+          urgent ? "text-destructive" : undefined
+        )}
+      >
+        {headline}
+      </p>
+      {detail ? (
+        <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+          {detail}
+        </p>
+      ) : null}
     </div>
   )
 }
