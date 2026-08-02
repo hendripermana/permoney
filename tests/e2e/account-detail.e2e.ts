@@ -37,11 +37,32 @@ test.describe("account detail (PER-216)", () => {
     await expect(page.getByText(accountName).first()).toBeVisible()
     await expect(page.getByText("Rp 2,000,000.00").first()).toBeVisible()
 
-    // The statement section renders (count reflects whatever the ledger holds
-    // for this account — opening balance may or may not post a row).
+    // The statement section renders. A fresh account's opening balance is an
+    // opening VALUATION anchor, not a posted transaction, so the ledger is
+    // genuinely empty here.
     await expect(
       page.getByRole("heading", { name: /Transactions \(/ })
     ).toBeVisible()
+    await expect(
+      page.getByText("No transactions for this account yet.")
+    ).toBeVisible()
+
+    // --- Analytics tools (PER-218) render and are interactive ---
+    await expect(
+      page.getByRole("heading", { name: "Balance trend" })
+    ).toBeVisible()
+    await expect(
+      page.getByRole("heading", { name: "Spending by category" })
+    ).toBeVisible()
+    // Range selector toggles the active window.
+    const oneMonth = page.getByRole("button", { name: "1M", exact: true })
+    await oneMonth.click()
+    await expect(oneMonth).toHaveAttribute("aria-pressed", "true")
+    // The in-account search box accepts input without crashing the page.
+    const search = page.getByRole("textbox", { name: "Search transactions" })
+    await search.fill("coffee")
+    await expect(search).toHaveValue("coffee")
+    await search.clear()
 
     // --- Open in ledger carries the account filter ---
     await page.getByRole("link", { name: "Open in ledger" }).click()
