@@ -222,3 +222,77 @@ export function matchesQuery(
     (trx.category?.name ?? "").toLowerCase().includes(q)
   )
 }
+
+export interface StatementCsvRow {
+  date: Date | string
+  description?: string | null
+  type: string
+  amount: bigint
+  currency: string
+  accountId: string
+  toAccountId?: string | null
+  account?: { name: string } | null
+  toAccount?: { name: string } | null
+  category?: { name: string } | null
+  merchant?: { name: string } | null
+  isSplit?: boolean
+}
+
+/** RFC-4180 field quoting: wrap in quotes and double internal quotes when the
+ * value contains a comma, quote, or newline. */
+function csvField(value: string): string {
+  return /[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
+}
+
+function labelFor(row: StatementCsvRow, direction: 1 | -1): string {
+  if (row.type === "transfer") {
+    return direction === 1
+      ? `Transfer from ${row.account?.name ?? "account"}`
+      : `Transfer to ${row.toAccount?.name ?? "account"}`
+  }
+  return (
+    row.category?.name ??
+    row.merchant?.name ??
+    (row.isSplit ? "Split" : "Uncategorized")
+  )
+}
+
+/**
+ * Serialize an account's statement (as the user currently sees it — pass the
+ * already-filtered rows) to CSV. Amount is signed FROM this account's
+ * perspective, in MAJOR units. Pure + unit-tested; the browser download wrapper
+ * lives in the route.
+ */
+export function buildStatementCsv(
+  rows: ReadonlyArray<StatementCsvRow>,
+  accountId: string
+): string {
+  const header = [
+    "Date",
+    "Description",
+    "Category",
+    "Type",
+    "Amount",
+    "Currency",
+  ]
+  const lines = [header.join(",")]
+  for (const row of rows) {
+    const delta = signedDeltaForAccount(row, accountId)
+    const direction: 1 | -1 = delta >= 0n ? 1 : -1
+    const magnitude = delta < 0n ? -delta : delta
+    const major = toDisplayNumber(magnitude, row.currency as CurrencyCode)
+    const signed = direction === 1 ? major : -major
+    const isoDate = new Date(row.date).toISOString().slice(0, 10)
+    lines.push(
+      [
+        csvField(isoDate),
+        csvField(row.description ?? ""),
+        csvField(labelFor(row, direction)),
+        csvField(row.type),
+        csvField(String(signed)),
+        csvField(row.currency),
+      ].join(",")
+    )
+  }
+  return lines.join("\r\n")
+}
