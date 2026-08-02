@@ -11,6 +11,8 @@ import { uuidV7Schema, type RunInTenantTransaction } from "./mutation-kit"
 import { createAccountForFamily } from "./accounts"
 import { createMerchantForFamily, type SerializedMerchant } from "./merchants"
 import { createTransactionForFamily } from "./transactions"
+import { getFamilyBaseCurrency } from "./fx"
+import { normalizeNetWorthAt, type RateResolver } from "@/lib/net-worth"
 
 // =============================================================================
 // PER-212 / ADR-0049 — person-to-person debt (Utang-Piutang), Slice 1 of the
@@ -352,6 +354,12 @@ async function orchestrateDebtMovement({
       amount,
       description: description ?? describe(person.name),
       date: date ?? new Date(),
+      // PER-214: stamp the person (a Merchant kind="person") as the transfer's
+      // merchant so BOTH ledger legs attribute to them — the ledger Merchant
+      // column shows the person and the existing merchant filter surfaces every
+      // debt movement by person. Tenant validation passes because the person is
+      // a family merchant (validateTenantReferences.assertMerchantInFamily).
+      merchantId: person.id,
       idempotencyKey,
     },
     familyId,
@@ -473,6 +481,9 @@ export async function recordRepaymentForFamily({
             ? `Repayment from ${person.name}`
             : `Repayment to ${person.name}`),
         date: data.date ?? new Date(),
+        // PER-214: attribute the repayment legs to the person too (see
+        // orchestrateDebtMovement).
+        merchantId: person.id,
         idempotencyKey: data.idempotencyKey,
       },
       familyId,
@@ -733,6 +744,256 @@ export const getPersonsFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
   .handler(async ({ context }) => {
     return await getPersonsForFamily({
+      familyId: context.familyId,
+      userId: context.user.id,
+    })
+  })
+
+// ============================================================================
+// READ — Per-person debt detail (PER-214, scope B).
+//
+// Everything the detail drill-down needs in ONE tenant-scoped read: the person
+// header, their signed net position per currency, settled state, and the full
+// movement history. A "movement" is the ONE transfer leg posted on the person's
+// RECEIVABLE/LOAN account (never the cash leg). That leg's SIGNED amount is,
+// by construction, exactly the delta it applied to the net position:
+//   lend           : RECEIVABLE inflow  +amount  (they owe you more)
+//   repay received : RECEIVABLE outflow -amount  (they owe you less)
+//   borrow         : LOAN outflow       -amount  (you owe them more)
+//   repay made     : LOAN inflow        +amount  (you owe them less)
+// so the UI derives direction and colour from the sign alone. The leg `id` is
+// delete-safe: `deleteTransactionForFamily` redirects an inflow leg to its
+// outflow twin and reverses BOTH legs symmetrically (PER-20 / ADR-0012).
+// ============================================================================
+
+export interface PersonDebtMovement {
+  // The debt-account leg's transaction id — the handle passed to the EXISTING
+  // `deleteTransactionFn` (transfer-symmetric, balance-safe, idempotent).
+  id: string
+  // ISO string (BigInt/Date are not JSON-serializable across the RPC boundary).
+  date: string
+  description: string
+  currency: string
+  accountType: string
+  // Signed net-position delta as a digit-string (> 0 grows what they owe you or
+  // shrinks what you owe them; < 0 the reverse).
+  amount: string
+  kind: string
+}
+
+export interface PersonDebtDetailView {
+  personId: string
+  name: string
+  color: string | null
+  accounts: PersonDebtAccountView[]
+  positions: PersonDebtCurrencyPosition[]
+  settled: boolean
+  movements: PersonDebtMovement[]
+}
+
+export const getPersonDebtDetailInputSchema = z.object({
+  personMerchantId: z.string().min(1),
+})
+
+export async function getPersonDebtDetailForFamily({
+  familyId,
+  userId,
+  personMerchantId,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  familyId: string
+  userId: string
+  personMerchantId: string
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<PersonDebtDetailView | null> {
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
+    // Tenant scoping: the person lookup is filtered by familyId + kind, so a
+    // cross-tenant personMerchantId returns null (never leaks another family's
+    // movements).
+    const person = await tx.merchant.findFirst({
+      where: { id: personMerchantId, familyId, kind: "person" },
+      select: { id: true, name: true, color: true },
+    })
+    if (!person) return null
+
+    const accounts = await tx.account.findMany({
+      where: {
+        familyId,
+        deletedAt: null,
+        counterpartyMerchantId: person.id,
+      },
+      select: {
+        id: true,
+        name: true,
+        accountType: true,
+        currency: true,
+        balance: true,
+      },
+      orderBy: { name: "asc" },
+    })
+
+    const accountTypeById = new Map(
+      accounts.map((account) => [account.id, account.accountType])
+    )
+    const accountIds = accounts.map((account) => account.id)
+
+    // Exactly ONE leg per transfer sits on a debt account (the other is the
+    // cash leg), so this never double-counts a movement.
+    const legs =
+      accountIds.length > 0
+        ? await tx.transaction.findMany({
+            where: {
+              familyId,
+              deletedAt: null,
+              accountId: { in: accountIds },
+            },
+            orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+            select: {
+              id: true,
+              date: true,
+              description: true,
+              currency: true,
+              amount: true,
+              accountId: true,
+              kind: true,
+            },
+          })
+        : []
+
+    const netByCurrency = new Map<string, bigint>()
+    for (const account of accounts) {
+      netByCurrency.set(
+        account.currency,
+        (netByCurrency.get(account.currency) ?? 0n) + account.balance
+      )
+    }
+    const positions: PersonDebtCurrencyPosition[] = [...netByCurrency.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([currency, net]) => ({ currency, net: net.toString() }))
+
+    return {
+      personId: person.id,
+      name: person.name,
+      color: person.color,
+      accounts: accounts.map((account) => ({
+        id: account.id,
+        name: account.name,
+        accountType: account.accountType,
+        currency: account.currency,
+        balance: account.balance.toString(),
+      })),
+      positions,
+      settled:
+        positions.length > 0 &&
+        positions.every((position) => BigInt(position.net) === 0n),
+      movements: legs.map((leg) => ({
+        id: leg.id,
+        date: leg.date.toISOString(),
+        description: leg.description,
+        currency: leg.currency,
+        accountType: accountTypeById.get(leg.accountId) ?? "",
+        amount: leg.amount.toString(),
+        kind: leg.kind,
+      })),
+    }
+  })
+}
+
+export const getPersonDebtDetailFn = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .inputValidator((data: z.input<typeof getPersonDebtDetailInputSchema>) =>
+    getPersonDebtDetailInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await getPersonDebtDetailForFamily({
+      familyId: context.familyId,
+      userId: context.user.id,
+      personMerchantId: data.personMerchantId,
+    })
+  })
+
+// ============================================================================
+// READ — Debts summary header (PER-214, scope C).
+//
+// Σ "They owe you" (receivables) vs Σ "You owe them" (|loans|) and the net, in
+// the family base currency. Reuses the net-worth normalizer: a person-debt
+// account is an ordinary RECEIVABLE(ASSET)/LOAN(LIABILITY), so
+// `normalizeNetWorthAt` already yields assets = Σ receivable-base,
+// liabilities = Σ |loan|-base, netWorth = assets - liabilities — exactly the
+// three totals this header shows. Foreign balances convert at the latest
+// snapshot rate; a currency with no rate is surfaced in `unconvertedCurrencies`
+// rather than silently zeroed (ADR-0038 §3).
+// ============================================================================
+
+export interface PersonDebtSummary {
+  baseCurrency: string
+  // Base-currency minor units as digit-strings.
+  receivable: string
+  loan: string
+  net: string
+  unconvertedCurrencies: string[]
+}
+
+export async function getPersonDebtSummaryForFamily({
+  familyId,
+  userId,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  familyId: string
+  userId: string
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<PersonDebtSummary> {
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
+    const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
+
+    const accounts = await tx.account.findMany({
+      where: {
+        familyId,
+        deletedAt: null,
+        counterpartyMerchantId: { not: null },
+      },
+      select: { accountClass: true, currency: true, balance: true },
+    })
+
+    // Latest foreign->base rate per currency (greatest asOfDate wins).
+    const snapshots = await tx.fxRateSnapshot.findMany({
+      where: { familyId, toCurrency: baseCurrency },
+      orderBy: { asOfDate: "desc" },
+      select: { fromCurrency: true, rateScaled: true },
+    })
+    const latestRate = new Map<string, bigint>()
+    for (const snapshot of snapshots) {
+      if (!latestRate.has(snapshot.fromCurrency)) {
+        latestRate.set(snapshot.fromCurrency, snapshot.rateScaled)
+      }
+    }
+    const resolveRate: RateResolver = (fromCurrency) =>
+      latestRate.get(fromCurrency) ?? null
+
+    const breakdown = normalizeNetWorthAt(
+      accounts.map((account) => ({
+        accountClass: account.accountClass,
+        currency: account.currency,
+        native: account.balance,
+      })),
+      resolveRate,
+      baseCurrency
+    )
+
+    return {
+      baseCurrency,
+      receivable: breakdown.assets.toString(),
+      loan: breakdown.liabilities.toString(),
+      net: breakdown.netWorth.toString(),
+      unconvertedCurrencies: breakdown.unconverted.map((u) => u.currency),
+    }
+  })
+}
+
+export const getPersonDebtSummaryFn = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .handler(async ({ context }) => {
+    return await getPersonDebtSummaryForFamily({
       familyId: context.familyId,
       userId: context.user.id,
     })
