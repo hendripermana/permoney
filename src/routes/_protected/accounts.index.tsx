@@ -512,7 +512,7 @@ function AccountsToolbar({
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
           placeholder="Search accounts…"
-          aria-label="Search accounts by name"
+          aria-label="Search accounts"
           className="pl-9"
         />
       </div>
