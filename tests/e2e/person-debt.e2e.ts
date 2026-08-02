@@ -147,4 +147,64 @@ test.describe("person-to-person debt (PER-212)", () => {
       page.getByRole("option", { name: "Repayment made (I pay them back)" })
     ).toHaveCount(0)
   })
+
+  // PER-214 (Debts polish) — drill into a person's detail, see the movement
+  // history + net position, and delete a movement. Also confirms the person is
+  // attributed as the ledger merchant of the debt transfer.
+  test("drill into a person, see history + position, then delete a movement", async ({
+    page,
+  }) => {
+    await onboard(page)
+
+    const suffix = Date.now().toString(36)
+    const cashName = `E2E Cash ${suffix}`
+    const personName = `Budi ${suffix}`
+
+    // --- Cash account ---
+    await page.goto("/accounts")
+    await waitForHydration(page)
+    await page.getByRole("button", { name: "New account" }).click()
+    await page.getByLabel("Name").fill(cashName)
+    await page.getByLabel("Opening balance").fill("2000000")
+    await page.getByRole("button", { name: "Create" }).click()
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+
+    // --- Lend to a brand-new person ---
+    await page.goto("/debts")
+    await waitForHydration(page)
+    await page.getByRole("button", { name: "Record debt" }).click()
+    await expect(page.getByRole("dialog")).toBeVisible()
+    await page.getByLabel("New person name").fill(personName)
+    await page.getByRole("combobox", { name: "Cash account" }).click()
+    await page.getByRole("option", { name: `${cashName} (IDR)` }).click()
+    await page.getByLabel(/^Amount/).fill("500000")
+    await page.getByRole("button", { name: "Save" }).click()
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+
+    // --- The person now shows as the merchant on the ledger transfer ---
+    await page.goto("/transactions")
+    await waitForHydration(page)
+    await expect(page.getByText(personName).first()).toBeVisible()
+
+    // --- Drill into the person's detail from the Debts list ---
+    await page.goto("/debts")
+    await waitForHydration(page)
+    await page.getByRole("button", { name: new RegExp(personName) }).click()
+
+    // Detail header, net position, and the movement history are all present.
+    await expect(page.getByRole("heading", { name: personName })).toBeVisible()
+    await expect(page.getByText("They owe you")).toBeVisible()
+    await expect(page.getByText("Movement history")).toBeVisible()
+    await expect(page.getByText(`Lent to ${personName}`)).toBeVisible()
+
+    // --- Delete the movement (confirm in the dialog) ---
+    await page.getByRole("button", { name: "Delete movement" }).click()
+    await expect(page.getByRole("alertdialog")).toBeVisible()
+    await page.getByRole("button", { name: "Delete", exact: true }).click()
+    await expect(page.getByRole("alertdialog")).toHaveCount(0)
+
+    // --- Position updated: the movement is gone (reversed, balance-safe) ---
+    await expect(page.getByText("No movements recorded yet.")).toBeVisible()
+    await expect(page.getByText(`Lent to ${personName}`)).toHaveCount(0)
+  })
 })
