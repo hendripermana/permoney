@@ -8,12 +8,14 @@ import {
 } from "vite-plus/test"
 import {
   AccountNotFoundError,
+  AccountValidationError,
   archiveAccountForFamily,
   createAccountForFamily,
   getAccountsForFamily,
   reactivateAccountForFamily,
   updateAccountForFamily,
 } from "@/server/accounts"
+import { getAccountBalanceForFamily } from "@/server/valuations"
 import {
   createIntegrationHarness,
   type IntegrationHarness,
@@ -256,6 +258,179 @@ describe("accounts manual UX vertical slice (PER-143)", () => {
       )
       // Only the first archive transitioned state and wrote an audit row.
       expect(softDeleteAudits).toHaveLength(1)
+    })
+  })
+
+  describe("reserve / minimum balance (PER-217)", () => {
+    test("stores a reserve on a cash-like ASSET and folds it into available (safe-to-spend)", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+
+      const created = await createAccountForFamily({
+        data: {
+          name: "BCA with buffer",
+          accountType: "DEPOSITORY",
+          currency: "IDR",
+          openingBalance: "1000000",
+          reserveBalance: "200000",
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+      expect(created.balance).toBe("1000000")
+      expect(created.reserveBalance).toBe("200000")
+
+      // Ledger-neutral: the stored balance is untouched by the reserve.
+      const row = await harness.withFamily(owner.family.id, async (tx) =>
+        tx.account.findUniqueOrThrow({ where: { id: created.id } })
+      )
+      expect(row.balance).toBe(1000000n)
+      expect(row.reserveBalance).toBe(200000n)
+
+      // available = current − held − reserve; held is 0 with no pending txns.
+      const view = await getAccountBalanceForFamily({
+        accountId: created.id,
+        familyId: owner.family.id,
+        userId: owner.user.id,
+      })
+      expect(view.current).toBe("1000000")
+      expect(view.held).toBe("0")
+      expect(view.reserve).toBe("200000")
+      expect(view.available).toBe("800000")
+    })
+
+    test("a 0 reserve is normalized to null (no reserve)", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const created = await createAccountForFamily({
+        data: {
+          name: "No buffer",
+          accountType: "DEPOSITORY",
+          openingBalance: "500000",
+          reserveBalance: "0",
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+      expect(created.reserveBalance).toBeNull()
+    })
+
+    test("rejects a reserve on a liability account (validated, before any write)", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      let captured: unknown
+      try {
+        await createAccountForFamily({
+          data: {
+            name: "Card with bogus reserve",
+            accountType: "CREDIT",
+            openingBalance: "0",
+            reserveBalance: "50000",
+            idempotencyKey: factories.createIdempotencyKey(),
+          },
+          familyId: owner.family.id,
+          user: owner.user,
+        })
+        expect.fail("Expected AccountValidationError")
+      } catch (error) {
+        captured = error
+      }
+      expect(captured).toBeInstanceOf(AccountValidationError)
+    })
+
+    test("rejects a reserve on a tracked (valuation) asset", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      let captured: unknown
+      try {
+        await createAccountForFamily({
+          data: {
+            name: "Gold with bogus reserve",
+            accountType: "TRACKED_ASSET",
+            accountSubtype: "commodity",
+            openingBalance: "0",
+            reserveBalance: "50000",
+            idempotencyKey: factories.createIdempotencyKey(),
+          },
+          familyId: owner.family.id,
+          user: owner.user,
+        })
+        expect.fail("Expected AccountValidationError")
+      } catch (error) {
+        captured = error
+      }
+      expect(captured).toBeInstanceOf(AccountValidationError)
+    })
+
+    test("update sets then clears the reserve (null clears; omit leaves unchanged)", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await factories.createAccount({
+        familyId: owner.family.id,
+        name: "Editable buffer",
+      })
+
+      const set = await updateAccountForFamily({
+        data: {
+          id: account.id,
+          reserveBalance: "150000",
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+      expect(set.reserveBalance).toBe("150000")
+
+      // Omitting the field leaves the reserve unchanged.
+      const renamed = await updateAccountForFamily({
+        data: {
+          id: account.id,
+          name: "Renamed",
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+      expect(renamed.reserveBalance).toBe("150000")
+
+      // Explicit null clears it.
+      const cleared = await updateAccountForFamily({
+        data: {
+          id: account.id,
+          reserveBalance: null,
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+      expect(cleared.reserveBalance).toBeNull()
+    })
+
+    test("the DB CHECK is the backstop: a raw reserve on a liability is rejected", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const card = await createAccountForFamily({
+        data: {
+          name: "Visa",
+          accountType: "CREDIT",
+          openingBalance: "0",
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+
+      // Bypass the app-layer validation and write straight to the row: the DB
+      // CHECK (Database Is the Law) must still reject it.
+      let captured: unknown
+      try {
+        await harness.withFamily(owner.family.id, async (tx) =>
+          tx.account.update({
+            where: { id: card.id },
+            data: { reserveBalance: 50000n },
+          })
+        )
+        expect.fail("Expected the DB CHECK to reject the reserve")
+      } catch (error) {
+        captured = error
+      }
+      expect(captured).toBeTruthy()
     })
   })
 

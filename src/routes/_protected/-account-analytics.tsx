@@ -1,4 +1,5 @@
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts"
+import { ShieldCheck } from "lucide-react"
 
 import {
   ChartContainer,
@@ -13,7 +14,13 @@ import {
   type BalancePoint,
   type CategorySlice,
 } from "@/lib/account-analytics"
+import {
+  availableAfterReserve,
+  reserveHealth,
+  reserveLockedFraction,
+} from "@/lib/account-reserve"
 import { formatCurrency } from "@/lib/currency"
+import { cn } from "@/lib/utils"
 
 // PER-218 — presentational analytics for the account detail page. Pure props
 // in, chart out. All numbers are pre-derived by the unit-tested helpers in
@@ -123,6 +130,72 @@ export function BalanceTrendChart({
         />
       </AreaChart>
     </ChartContainer>
+  )
+}
+
+// PER-217 — "safe to spend" panel: available (balance − reserve) with a gauge
+// that splits the balance into its reserved floor and its free headroom. Shown
+// on the detail hero only when a reserve is set. Pure props in; the reserve math
+// is the unit-tested helpers in src/lib/account-reserve.ts.
+export function SafeToSpendPanel({
+  balanceMinor,
+  reserveMinor,
+  currency,
+}: Readonly<{ balanceMinor: bigint; reserveMinor: bigint; currency: string }>) {
+  const available = availableAfterReserve(balanceMinor, reserveMinor)
+  const health = reserveHealth(balanceMinor, reserveMinor)
+  const lockedPct = Math.round(
+    reserveLockedFraction(balanceMinor, reserveMinor) * 100
+  )
+  const belowFloor = health === "below"
+  return (
+    <div
+      className={cn(
+        "rounded-2xl border p-4",
+        belowFloor ? "border-destructive/40 bg-destructive/5" : undefined
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+          <ShieldCheck className="size-3.5" aria-hidden />
+          Safe to spend
+        </p>
+        {belowFloor ? (
+          <span className="text-[10px] font-medium text-destructive">
+            Below reserve
+          </span>
+        ) : health === "near" ? (
+          <span className="text-[10px] font-medium text-muted-foreground">
+            Near reserve
+          </span>
+        ) : null}
+      </div>
+      <p
+        className={cn(
+          "mt-1 text-2xl font-semibold tabular-nums",
+          belowFloor ? "text-destructive" : undefined
+        )}
+      >
+        {formatCurrency(available.toString(), currency)}
+      </p>
+      <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+        of {formatCurrency(balanceMinor.toString(), currency)} ·{" "}
+        {formatCurrency(reserveMinor.toString(), currency)} reserved
+      </p>
+      <div
+        className="mt-3 flex h-2 overflow-hidden rounded-full bg-muted"
+        role="presentation"
+      >
+        <div
+          className={cn(
+            "h-full",
+            belowFloor ? "bg-destructive" : "bg-muted-foreground/40"
+          )}
+          style={{ width: `${lockedPct}%` }}
+        />
+        <div className="h-full flex-1 bg-primary/70" />
+      </div>
+    </div>
   )
 }
 

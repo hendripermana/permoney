@@ -38,6 +38,7 @@ const account: AccountRecord = {
   dueDay: null,
   interestRateBps: null,
   counterpartyMerchantId: null,
+  reserveBalance: null,
 }
 
 function renderCard(drift: ReadonlyArray<DriftRecord>) {

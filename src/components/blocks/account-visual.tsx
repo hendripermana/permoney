@@ -1,6 +1,14 @@
-import { CreditCard, Landmark, Smartphone, Wallet, Wifi } from "lucide-react"
+import {
+  CreditCard,
+  Landmark,
+  ShieldCheck,
+  Smartphone,
+  Wallet,
+  Wifi,
+} from "lucide-react"
 
 import { formatCurrency } from "@/lib/currency"
+import { availableAfterReserve, hasReserve } from "@/lib/account-reserve"
 import { cn } from "@/lib/utils"
 
 // =============================================================================
@@ -41,6 +49,16 @@ export interface AccountVisualData {
   balance: string
   currency: string
   color: string | null
+  // PER-217 — reserve/minimum balance in minor units (or null). When present,
+  // the card surfaces a "safe-to-spend" (balance − reserve) line.
+  reserveBalance?: string | null
+}
+
+/** Reserve as minor-unit bigint when it is meaningfully set, else null. */
+function reserveMinorOf(account: AccountVisualData): bigint | null {
+  if (!account.reserveBalance) return null
+  const minor = BigInt(account.reserveBalance)
+  return hasReserve(minor) ? minor : null
 }
 
 // Sensible brand default per card-like type when the account has no colour.
@@ -90,6 +108,7 @@ function AtmCard({
   const base =
     account.color ?? DEFAULT_CARD_COLOR[account.accountType] ?? "#334155"
   const hero = size === "hero"
+  const reserveMinor = reserveMinorOf(account)
   return (
     <div
       className={cn(
@@ -154,6 +173,21 @@ function AtmCard({
           >
             {formatCurrency(account.balance, account.currency)}
           </p>
+          {reserveMinor !== null ? (
+            <p className="mt-0.5 flex items-center gap-1 text-[10px] text-white/70 tabular-nums">
+              <ShieldCheck className="size-3 shrink-0" aria-hidden />
+              <span className="truncate">
+                {formatCurrency(
+                  availableAfterReserve(
+                    BigInt(account.balance),
+                    reserveMinor
+                  ).toString(),
+                  account.currency
+                )}{" "}
+                safe to spend
+              </span>
+            </p>
+          ) : null}
         </div>
         <TypeIcon
           accountType={account.accountType}
@@ -171,6 +205,7 @@ function PlainCard({
 }: Readonly<{ account: AccountVisualData; size: "grid" | "hero" }>) {
   const hero = size === "hero"
   const isLiability = account.accountClass === "LIABILITY"
+  const reserveMinor = reserveMinorOf(account)
   return (
     <div
       className={cn(
@@ -204,6 +239,21 @@ function PlainCard({
         >
           {formatCurrency(account.balance, account.currency)}
         </p>
+        {reserveMinor !== null ? (
+          <p className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground tabular-nums">
+            <ShieldCheck className="size-3 shrink-0" aria-hidden />
+            <span className="truncate">
+              {formatCurrency(
+                availableAfterReserve(
+                  BigInt(account.balance),
+                  reserveMinor
+                ).toString(),
+                account.currency
+              )}{" "}
+              safe to spend
+            </span>
+          </p>
+        ) : null}
       </div>
     </div>
   )

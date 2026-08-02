@@ -117,6 +117,17 @@ const institutionNameSchema = z.string().trim().min(1).max(120)
 const accountTypeSchema = z.enum(ACCOUNT_TYPE_VALUES)
 const subtypeSchema = z.string().trim().min(1).max(64)
 
+// PER-217 — reserve / minimum balance ("dana mengendap"). A NON-NEGATIVE
+// magnitude in MINOR UNITS as a digit-string (BigInt is not JSON-serializable),
+// or `null` to clear it. Ledger-neutral; validated cash-like-ASSET-only in the
+// create/update paths, with the DB CHECK as the durable backstop.
+const reserveBalanceSchema = z
+  .union([
+    z.string().regex(/^\d+$/, "reserveBalance must be a string of digits"),
+    z.number().int().nonnegative(),
+  ])
+  .nullable()
+
 export const createAccountInputSchema = z.object({
   // Optional client-generated id so the optimistic UI and the server agree.
   id: z.string().min(1).optional(),
@@ -132,6 +143,9 @@ export const createAccountInputSchema = z.object({
   // and validated tenant-owned + kind="person" in createAccountForFamily. The
   // main account-create dialog never sets it; the Utang-Piutang debt flows do.
   counterpartyMerchantId: z.string().min(1).nullable().optional(),
+  // PER-217 — optional reserve/minimum balance set at creation (cash-like ASSET
+  // only; validated in createAccountForFamily).
+  reserveBalance: reserveBalanceSchema.optional(),
   idempotencyKey: uuidV7Schema,
 })
 
@@ -144,6 +158,9 @@ export const updateAccountInputSchema = z.object({
   // Whether this account may receive provider/import feed data (taxonomy
   // contract). Promotion of staged import rows requires this gate (ADR-0039 §6).
   isImportable: z.boolean().optional(),
+  // PER-217 — set/clear the reserve. `null` clears it; omitted leaves it
+  // unchanged. Cash-like ASSET only (validated in updateAccountForFamily).
+  reserveBalance: reserveBalanceSchema.optional(),
   idempotencyKey: uuidV7Schema,
 })
 
@@ -155,6 +172,31 @@ export const accountIdActionInputSchema = z.object({
 type CreateAccountInput = z.infer<typeof createAccountInputSchema>
 type UpdateAccountInput = z.infer<typeof updateAccountInputSchema>
 type AccountIdActionInput = z.infer<typeof accountIdActionInputSchema>
+
+// PER-217 — normalize a reserve/minimum-balance input to the signed value we
+// store, or throw a validated error. Rules ("Database Is the Law" mirrors these
+// in the DB CHECK): non-negative; a 0 reserve is stored as NULL (no reserve);
+// and a positive reserve is only allowed on cash-like ASSET accounts. Call ONLY
+// when the caller actually supplied a value (never pass `undefined` for the
+// "leave unchanged" case — the update path guards that before calling).
+function resolveReserveBalance(
+  rawReserve: string | number | null,
+  accountClass: string,
+  balanceSource: string
+): bigint | null {
+  if (rawReserve === null) return null
+  const value = BigInt(rawReserve)
+  if (value < 0n) {
+    throw new AccountValidationError("reserveBalance cannot be negative")
+  }
+  if (value === 0n) return null
+  if (accountClass !== "ASSET" || balanceSource !== "transaction_flow") {
+    throw new AccountValidationError(
+      "reserveBalance is only valid for cash-like ASSET accounts (a minimum balance you keep untouched)"
+    )
+  }
+  return value
+}
 
 export interface SerializedAccount {
   id: string
@@ -183,6 +225,9 @@ export interface SerializedAccount {
   // exclusion + the net-worth "Personal debts (net)" grouping (presentation
   // only; the balance still counts toward net worth exactly as before).
   counterpartyMerchantId: string | null
+  // PER-217 — reserve/minimum balance in MINOR UNITS (digit-string), or null
+  // when unset. Ledger-neutral; only feeds the "available" (safe-to-spend) view.
+  reserveBalance: string | null
 }
 
 function serializeAccount(account: Account): SerializedAccount {
@@ -208,6 +253,7 @@ function serializeAccount(account: Account): SerializedAccount {
     dueDay: account.dueDay,
     interestRateBps: account.interestRateBps,
     counterpartyMerchantId: account.counterpartyMerchantId,
+    reserveBalance: account.reserveBalance?.toString() ?? null,
   }
 }
 
@@ -309,6 +355,14 @@ export async function createAccountForFamily({
       `counterpartyMerchantId is only valid for RECEIVABLE or LOAN accounts, not ${taxonomy.accountType}`
     )
   }
+  // PER-217 — resolve the reserve against the resolved taxonomy (cash-like ASSET
+  // only). Rejects a positive reserve on any non-cash-like account before write.
+  const reserveBalance = resolveReserveBalance(
+    data.reserveBalance ?? null,
+    taxonomy.accountClass,
+    taxonomy.balanceSource
+  )
+
   const requestHash = await hashCanonicalPayload({
     accountSubtype: taxonomy.accountSubtype,
     accountType: taxonomy.accountType,
@@ -318,6 +372,7 @@ export async function createAccountForFamily({
     institutionName: data.institutionName ?? null,
     name: data.name,
     openingBalance: openingRawValue.toString(),
+    reserveBalance: reserveBalance?.toString() ?? null,
   })
   const auditCtx = await createAuditContext(
     { user: { id: user.id, familyId } },
@@ -382,6 +437,7 @@ export async function createAccountForFamily({
           familyId,
           institutionName: data.institutionName ?? null,
           name: data.name,
+          reserveBalance,
           status: "active",
         },
       })
@@ -491,6 +547,15 @@ export async function updateAccountForFamily({
       data.institutionName === undefined ? undefined : data.institutionName,
     isImportable: data.isImportable ?? null,
     name: data.name ?? null,
+    // PER-217 — hash the RAW input (deterministic); undefined = leave unchanged,
+    // null = clear. The cash-like-ASSET validation runs inside the transaction
+    // against the existing account (type is fixed at creation).
+    reserveBalance:
+      data.reserveBalance === undefined
+        ? undefined
+        : data.reserveBalance === null
+          ? null
+          : data.reserveBalance.toString(),
   })
   const auditCtx = await createAuditContext(
     { user: { id: user.id, familyId } },
@@ -521,6 +586,7 @@ export async function updateAccountForFamily({
         institutionName?: string | null
         isImportable?: boolean
         name?: string
+        reserveBalance?: bigint | null
       } = {}
       if (data.name !== undefined) updateData.name = data.name
       if (data.color !== undefined) updateData.color = data.color
@@ -529,6 +595,16 @@ export async function updateAccountForFamily({
       }
       if (data.isImportable !== undefined) {
         updateData.isImportable = data.isImportable
+      }
+      // PER-217 — only touch the reserve when the caller supplied the field.
+      // Validated against the existing account's class/source (type is fixed at
+      // creation), so a reserve can never land on a non-cash-like account.
+      if (data.reserveBalance !== undefined) {
+        updateData.reserveBalance = resolveReserveBalance(
+          data.reserveBalance,
+          before.accountClass,
+          before.balanceSource
+        )
       }
       if (data.accountSubtype !== undefined) {
         // Re-normalize against the account's existing type so a subtype edit can
