@@ -2,6 +2,7 @@ import * as React from "react"
 import {
   createFileRoute,
   Link,
+  useNavigate,
   type ErrorComponentProps,
 } from "@tanstack/react-router"
 import { useLiveQuery } from "@tanstack/react-db"
@@ -79,7 +80,7 @@ import {
 } from "@/server/accounts"
 import { createValuationFn, getAccountBalanceFn } from "@/server/valuations"
 
-export const Route = createFileRoute("/_protected/accounts")({
+export const Route = createFileRoute("/_protected/accounts/")({
   // TanStack DB collections are browser-only; SSR would hang on the pending sync.
   ssr: false,
   // Preload the collection during navigation so `useLiveQuery` never kicks off
@@ -143,6 +144,7 @@ function AccountsPage() {
   )
   const [dialog, setDialog] = React.useState<DialogState>(null)
   const [busyId, setBusyId] = React.useState<string | null>(null)
+  const navigate = useNavigate()
 
   const safeAccounts = React.useMemo<ReadonlyArray<AccountRecord>>(
     () => accounts ?? [],
@@ -290,6 +292,12 @@ function AccountsPage() {
                             onReactivate={() => handleReactivate(account)}
                             onDelete={() =>
                               setDialog({ mode: "delete", account })
+                            }
+                            onOpen={() =>
+                              navigate({
+                                to: "/accounts/$accountId",
+                                params: { accountId: account.id },
+                              })
                             }
                           />
                         ))}

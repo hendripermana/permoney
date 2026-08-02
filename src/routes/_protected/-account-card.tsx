@@ -1,6 +1,5 @@
 import {
   Archive,
-  Landmark,
   MoreVertical,
   Pencil,
   RotateCcw,
@@ -9,18 +8,11 @@ import {
   Trash2,
   TrendingUp,
   TriangleAlert,
-  Wallet,
 } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card } from "@/components/ui/card"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,6 +24,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { AccountVisual } from "@/components/blocks/account-visual"
 import type { AccountType } from "@/lib/accounts"
 import type { AccountRecord, DriftRecord } from "@/lib/account-collections"
 import { selectDriftBadge } from "@/lib/account-drift-presentation"
@@ -42,6 +35,11 @@ import { cn } from "@/lib/utils"
 // itself, mirrors -sure-import-ui.tsx) so this presentational card can be
 // imported directly by a component test without pulling in the route's
 // createFileRoute/collection-preload module graph.
+//
+// PER-216: the balance/name/type now live inside the shared <AccountVisual>
+// ("ATM card") which doubles as the clickable target that opens the per-account
+// detail route. Navigation is delegated via `onOpen` so this card stays
+// router-free and unit-testable without a RouterProvider.
 
 export const ACCOUNT_TYPE_LABEL: Record<AccountType, string> = {
   CASH: "Cash",
@@ -63,6 +61,7 @@ export function AccountCard({
   onArchive,
   onReactivate,
   onDelete,
+  onOpen,
 }: {
   account: AccountRecord
   drift: ReadonlyArray<DriftRecord>
@@ -72,25 +71,30 @@ export function AccountCard({
   onArchive: () => void
   onReactivate: () => void
   onDelete: () => void
+  // Opens the per-account detail route. Optional so a component test can mount
+  // the card without a router (navigation is a parent concern).
+  onOpen?: () => void
 }) {
   const archived = account.status !== "active"
   const cashLike = account.balanceSource === "transaction_flow"
-  const Icon = account.accountClass === "LIABILITY" ? Landmark : Wallet
   // Surface the single worst drift entry (ADR-0043 §6 classification lives in
   // src/lib/account-drift-presentation.ts, unit-tested there). Read-only — the
   // badge never mutates anything (ADR-0034 §7).
   const driftBadge = selectDriftBadge(drift)
   return (
-    <Card className={cn(archived && "opacity-60")}>
-      <CardHeader>
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <Icon className="size-4 text-muted-foreground" />
-            <CardTitle className="text-base">{account.name}</CardTitle>
-          </div>
-          {archived ? <Badge variant="outline">Archived</Badge> : null}
-        </div>
-        <CardDescription className="flex flex-wrap gap-1.5 pt-1">
+    <Card className={cn("overflow-hidden", archived && "opacity-60")}>
+      <button
+        type="button"
+        onClick={onOpen}
+        disabled={!onOpen}
+        aria-label={`Open ${account.name}`}
+        className="block w-full cursor-pointer rounded-b-none text-left transition-transform focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none enabled:hover:-translate-y-0.5 disabled:cursor-default"
+      >
+        <AccountVisual account={account} size="grid" />
+      </button>
+
+      <div className="flex flex-col gap-2 p-3">
+        <div className="flex flex-wrap items-center gap-1.5">
           <Badge variant="secondary">
             {ACCOUNT_TYPE_LABEL[account.accountType as AccountType] ??
               account.accountType}
@@ -99,6 +103,7 @@ export function AccountCard({
           <Badge variant={cashLike ? "default" : "outline"}>
             {cashLike ? "Cash-like" : "Tracked asset"}
           </Badge>
+          {archived ? <Badge variant="outline">Archived</Badge> : null}
           {driftBadge?.tone === "informational" ? (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -108,8 +113,8 @@ export function AccountCard({
                 </Badge>
               </TooltipTrigger>
               <TooltipContent>
-                Sure's own history already absorbed some drift before it was
-                exported, so this gap is expected — your balance is correct.
+                Sure&apos;s own history already absorbed some drift before it
+                was exported, so this gap is expected — your balance is correct.
               </TooltipContent>
             </Tooltip>
           ) : driftBadge ? (
@@ -126,16 +131,9 @@ export function AccountCard({
                 : `Needs reconcile (${formatCurrency(driftBadge.entry.drift, account.currency)})`}
             </Badge>
           ) : null}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex items-end justify-between gap-2">
-        <div>
-          <p className="text-xs text-muted-foreground">Balance</p>
-          <p className="text-lg font-semibold tabular-nums">
-            {formatCurrency(account.balance, account.currency)}
-          </p>
         </div>
-        <div className="flex gap-1">
+
+        <div className="flex justify-end gap-1">
           {!archived ? (
             <Button
               size="icon"
@@ -203,7 +201,7 @@ export function AccountCard({
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-      </CardContent>
+      </div>
     </Card>
   )
 }
