@@ -64,6 +64,23 @@ test.describe("account detail (PER-216)", () => {
     await expect(search).toHaveValue("coffee")
     await search.clear()
 
+    // --- Quick actions (PER-220) ---
+    // Export CSV is disabled while the statement is empty.
+    await expect(
+      page.getByRole("button", { name: "Export CSV" })
+    ).toBeDisabled()
+    // Add transaction opens the create modal with THIS account prefilled
+    // (the source account <select> has our account as its selected option).
+    await page.getByRole("button", { name: "Add transaction" }).click()
+    const dialog = page.getByRole("dialog")
+    await expect(dialog).toBeVisible()
+    const accountSelect = dialog.getByRole("combobox", { name: "Account *" })
+    await expect(accountSelect.locator("option:checked")).toHaveText(
+      new RegExp(accountName)
+    )
+    await page.keyboard.press("Escape")
+    await expect(dialog).toHaveCount(0)
+
     // --- Open in ledger carries the account filter ---
     await page.getByRole("link", { name: "Open in ledger" }).click()
     await expect(page).toHaveURL(/\/transactions\?.*accounts/)
