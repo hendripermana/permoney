@@ -156,12 +156,11 @@ export function computeAccountHealth(input: {
 
   // Need at least one forward/at-rest safety signal; integrity alone isn't enough.
   if (runway === null && buffer === null) {
+    const integ = integrityFactor(input.driftTone)
     return {
       score: null,
       band: "unknown",
-      factors: integrityFactor(input.driftTone)
-        ? [integrityFactor(input.driftTone) as HealthFactor]
-        : [],
+      factors: integ ? [integ] : [],
       lowConfidence: true,
     }
   }
