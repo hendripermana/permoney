@@ -29,6 +29,7 @@ import {
 } from "@/lib/account-reserve"
 import { type AccountRunway } from "@/lib/account-runway"
 import { type IdleCashInsight } from "@/lib/account-idle-cash"
+import { type AccountPerformance } from "@/lib/account-performance"
 import {
   type AccountHealth,
   type FactorTone,
@@ -145,6 +146,70 @@ export function BalanceTrendChart({
         />
       </AreaChart>
     </ChartContainer>
+  )
+}
+
+// PER-229 — investment/gold performance: market value vs cost basis → unrealized
+// gain/loss + return %. Shown for valuation-tracked accounts. Green up / red down.
+export function PerformancePanel({
+  performance,
+  currency,
+}: Readonly<{ performance: AccountPerformance; currency: string }>) {
+  const {
+    marketValueMinor,
+    costBasisMinor,
+    gainMinor,
+    isGain,
+    isFlat,
+    hasBasis,
+  } = performance
+  const toneText = isFlat
+    ? "text-muted-foreground"
+    : isGain
+      ? "text-emerald-600 dark:text-emerald-400"
+      : "text-destructive"
+  const pctStr =
+    performance.returnPct === null
+      ? null
+      : `${performance.returnPct >= 0 ? "+" : ""}${(performance.returnPct * 100).toFixed(2)}%`
+  const gainStr = `${isGain && !isFlat ? "+" : ""}${formatCurrency(gainMinor.toString(), currency)}`
+
+  return (
+    <div className="rounded-2xl border p-4">
+      <p className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+        <TrendingUp className="size-3.5" aria-hidden />
+        Performance
+      </p>
+      <p className="mt-1 text-2xl font-semibold tabular-nums">
+        {formatCurrency(marketValueMinor.toString(), currency)}
+      </p>
+      <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+        Cost {formatCurrency(costBasisMinor.toString(), currency)}
+      </p>
+      {hasBasis ? (
+        <p
+          className={cn(
+            "mt-2 flex items-center gap-1 text-sm font-medium tabular-nums",
+            toneText
+          )}
+        >
+          {isFlat ? null : isGain ? (
+            <TrendingUp className="size-4 shrink-0" aria-hidden />
+          ) : (
+            <TrendingDown className="size-4 shrink-0" aria-hidden />
+          )}
+          <span>
+            {gainStr}
+            {pctStr ? ` (${pctStr})` : ""}
+          </span>
+        </p>
+      ) : (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Record your cost — set the opening value at creation, or transfer
+          money in as you buy — to see gain/loss and return.
+        </p>
+      )}
+    </div>
   )
 }
 

@@ -1026,3 +1026,64 @@ export const getAccountBalanceFn = createServerFn({ method: "GET" })
       userId: context.user.id,
     })
   })
+
+// =============================================================================
+// PER-229 — Investment/Gold performance: the OPENING valuation scalar.
+//
+// Cost basis = opening value + Σ(net cash contributions). The client already
+// derives the net contributions from its loaded ledger with the proven
+// `signedDeltaForAccount` lens (PER-202/222/223) — the ONE thing it cannot see
+// is the account's opening valuation (valuations are not a client collection).
+// This fn returns exactly that scalar, tenant-scoped; all the money math stays
+// in the pure, unit-tested `computeAccountPerformance` on the client.
+// =============================================================================
+
+export interface AccountOpeningValueView {
+  accountId: string
+  currency: string
+  /** Signed opening valuation in minor units (positive for an ASSET), or null
+   * when the account has no opening valuation on record. */
+  openingValue: string | null
+}
+
+export async function getAccountOpeningValueForFamily({
+  accountId,
+  familyId,
+  userId,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  accountId: string
+  familyId: string
+  userId: string
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<AccountOpeningValueView> {
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
+    const account = await fetchAccountFacts(tx, familyId, accountId)
+    if (!account) {
+      throw new ValuationError(`Account ${accountId} not found`)
+    }
+    const opening = await tx.valuation.findFirst({
+      where: { accountId, familyId, type: "opening" },
+      orderBy: { valuationDate: "asc" },
+      select: { value: true },
+    })
+    return {
+      accountId,
+      currency: account.currency,
+      openingValue: opening ? opening.value.toString() : null,
+    }
+  })
+}
+
+export const getAccountOpeningValueFn = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .inputValidator((data: z.infer<typeof accountBalanceQuerySchema>) =>
+    accountBalanceQuerySchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await getAccountOpeningValueForFamily({
+      accountId: data.accountId,
+      familyId: context.familyId,
+      userId: context.user.id,
+    })
+  })

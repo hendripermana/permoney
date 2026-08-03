@@ -1,6 +1,7 @@
 import * as React from "react"
 import { createFileRoute, Link } from "@tanstack/react-router"
 import { useLiveQuery } from "@tanstack/react-db"
+import { useQuery } from "@tanstack/react-query"
 import {
   ArrowLeft,
   Download,
@@ -36,6 +37,7 @@ import {
   BalanceTrendChart,
   CategoryBreakdown,
   IdleCashNote,
+  PerformancePanel,
   RangeSelector,
   SafeToSpendPanel,
 } from "./-account-analytics"
@@ -46,6 +48,8 @@ import {
 } from "@/lib/account-reserve"
 import { computeAccountRunway } from "@/lib/account-runway"
 import { computeIdleCash } from "@/lib/account-idle-cash"
+import { computeAccountPerformance } from "@/lib/account-performance"
+import { getAccountOpeningValueFn } from "@/server/valuations"
 import { computeAccountHealth } from "@/lib/account-health"
 import { selectDriftBadge } from "@/lib/account-drift-presentation"
 import {
@@ -128,7 +132,30 @@ function AccountDetailPage() {
 
   const currency = account?.currency ?? "IDR"
   const cashLike = account?.balanceSource === "transaction_flow"
+  const tracked = account?.balanceSource === "valuation"
   const currentBalance = account ? BigInt(account.balance) : 0n
+
+  // PER-229 — the opening valuation scalar (the one piece the client can't
+  // derive) for investment/gold cost basis. Fetched declaratively; only for
+  // valuation-tracked accounts. No useEffect (no-use-effect rule).
+  const { data: openingData } = useQuery({
+    queryKey: ["account_opening_value", accountId],
+    queryFn: async () =>
+      await getAccountOpeningValueFn({ data: { accountId } }),
+    enabled: tracked,
+  })
+
+  // PER-229 — performance: cost basis (opening + net contributions) vs market
+  // value → unrealized gain/loss + return %. Reuses the proven ledger lens.
+  const performance = React.useMemo(() => {
+    if (!tracked || !openingData) return null
+    return computeAccountPerformance(
+      ledger,
+      openingData.openingValue ? BigInt(openingData.openingValue) : 0n,
+      currentBalance,
+      accountId
+    )
+  }, [tracked, openingData, ledger, currentBalance, accountId])
 
   // Time-scoped subset (range drives KPI + breakdown + statement).
   const rangedLedger = React.useMemo(() => {
@@ -335,6 +362,9 @@ function AccountDetailPage() {
               <Badge variant="outline">Archived</Badge>
             ) : null}
           </div>
+          {performance ? (
+            <PerformancePanel performance={performance} currency={currency} />
+          ) : null}
           {health ? <AccountHealthPanel health={health} /> : null}
           {accountSupportsReserve(account) &&
           hasReserve(

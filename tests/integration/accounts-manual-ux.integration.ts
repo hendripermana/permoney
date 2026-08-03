@@ -15,7 +15,10 @@ import {
   reactivateAccountForFamily,
   updateAccountForFamily,
 } from "@/server/accounts"
-import { getAccountBalanceForFamily } from "@/server/valuations"
+import {
+  getAccountBalanceForFamily,
+  getAccountOpeningValueForFamily,
+} from "@/server/valuations"
 import {
   createIntegrationHarness,
   type IntegrationHarness,
@@ -427,6 +430,52 @@ describe("accounts manual UX vertical slice (PER-143)", () => {
           })
         )
         expect.fail("Expected the DB CHECK to reject the reserve")
+      } catch (error) {
+        captured = error
+      }
+      expect(captured).toBeTruthy()
+    })
+  })
+
+  describe("account opening value (PER-229 performance)", () => {
+    test("returns the signed opening valuation for a tracked asset", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const gold = await createAccountForFamily({
+        data: {
+          name: "Gold ANTAM",
+          accountType: "TRACKED_ASSET",
+          accountSubtype: "gold",
+          openingBalance: "20000000",
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+
+      const view = await getAccountOpeningValueForFamily({
+        accountId: gold.id,
+        familyId: owner.family.id,
+        userId: owner.user.id,
+      })
+      expect(view.openingValue).toBe("20000000")
+      expect(view.currency).toBe("IDR")
+    })
+
+    test("cannot read the opening value of another family's account", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const intruder = await factories.createAuthenticatedOnboardedUser()
+      const account = await factories.createAccount({
+        familyId: owner.family.id,
+      })
+
+      let captured: unknown
+      try {
+        await getAccountOpeningValueForFamily({
+          accountId: account.id,
+          familyId: intruder.family.id,
+          userId: intruder.user.id,
+        })
+        expect.fail("Expected a not-found error for a cross-tenant read")
       } catch (error) {
         captured = error
       }
