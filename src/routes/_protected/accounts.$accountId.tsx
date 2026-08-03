@@ -33,11 +33,13 @@ import {
   AccountRunwayNote,
   BalanceTrendChart,
   CategoryBreakdown,
+  IdleCashNote,
   RangeSelector,
   SafeToSpendPanel,
 } from "./-account-analytics"
 import { accountSupportsReserve, hasReserve } from "@/lib/account-reserve"
 import { computeAccountRunway } from "@/lib/account-runway"
+import { computeIdleCash } from "@/lib/account-idle-cash"
 import {
   buildBalanceSeries,
   buildStatementCsv,
@@ -146,6 +148,21 @@ function AccountDetailPage() {
     () =>
       cashLike
         ? computeAccountRunway(
+            ledger,
+            currentBalance,
+            account?.reserveBalance ? BigInt(account.reserveBalance) : 0n,
+            accountId
+          )
+        : null,
+    [cashLike, ledger, currentBalance, account?.reserveBalance, accountId]
+  )
+
+  // PER-223 — idle-cash opportunity (cash-like only; a "savings" account is
+  // meant to hold idle cash, so it's excluded from the nudge at render time).
+  const idleCash = React.useMemo(
+    () =>
+      cashLike
+        ? computeIdleCash(
             ledger,
             currentBalance,
             account?.reserveBalance ? BigInt(account.reserveBalance) : 0n,
@@ -291,6 +308,9 @@ function AccountDetailPage() {
           ) : null}
           {runway ? (
             <AccountRunwayNote runway={runway} currency={currency} />
+          ) : null}
+          {idleCash && account.accountSubtype !== "savings" ? (
+            <IdleCashNote insight={idleCash} currency={currency} />
           ) : null}
           <div className="grid grid-cols-2 gap-3">
             <MiniStat

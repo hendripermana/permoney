@@ -1,5 +1,6 @@
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts"
 import {
+  PiggyBank,
   ShieldCheck,
   TrendingDown,
   TrendingUp,
@@ -25,6 +26,7 @@ import {
   reserveLockedFraction,
 } from "@/lib/account-reserve"
 import { type AccountRunway } from "@/lib/account-runway"
+import { type IdleCashInsight } from "@/lib/account-idle-cash"
 import { formatCurrency } from "@/lib/currency"
 import { cn } from "@/lib/utils"
 
@@ -283,6 +285,34 @@ export function AccountRunwayNote({
           {detail}
         </p>
       ) : null}
+    </div>
+  )
+}
+
+// PER-223 — "idle cash" opportunity: cash that has sat above the reserve,
+// untouched, all window. Opportunity tone (emerald), not an alarm. Renders
+// nothing unless there is a material surplus, so the caller can mount it freely.
+export function IdleCashNote({
+  insight,
+  currency,
+}: Readonly<{ insight: IdleCashInsight; currency: string }>) {
+  if (!insight.hasSurplus) return null
+  const pct = Math.round(insight.fractionIdle * 100)
+  return (
+    <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-4">
+      <p className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+        <PiggyBank className="size-3.5" aria-hidden />
+        Idle cash
+      </p>
+      <p className="mt-1 text-lg font-semibold tabular-nums">
+        {formatCurrency(insight.idleSurplusMinor.toString(), currency)} sitting
+        idle
+      </p>
+      <p className="mt-0.5 text-xs text-muted-foreground">
+        About {pct}% of this account has stayed untouched above your reserve for
+        the last {insight.windowDays}+ days — consider moving it somewhere it
+        earns.
+      </p>
     </div>
   )
 }
