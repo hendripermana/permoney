@@ -1,5 +1,7 @@
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts"
 import {
+  Activity,
+  Check,
   PiggyBank,
   ShieldCheck,
   TrendingDown,
@@ -27,6 +29,11 @@ import {
 } from "@/lib/account-reserve"
 import { type AccountRunway } from "@/lib/account-runway"
 import { type IdleCashInsight } from "@/lib/account-idle-cash"
+import {
+  type AccountHealth,
+  type FactorTone,
+  type HealthBand,
+} from "@/lib/account-health"
 import { formatCurrency } from "@/lib/currency"
 import { cn } from "@/lib/utils"
 
@@ -138,6 +145,114 @@ export function BalanceTrendChart({
         />
       </AreaChart>
     </ChartContainer>
+  )
+}
+
+// PER-224 — account health: one 0–100 score that ALWAYS shows its breakdown.
+// Summary of the safety signals (runway + buffer + integrity); never a black box.
+const HEALTH_BAND_LABEL: Record<HealthBand, string> = {
+  excellent: "Excellent",
+  good: "Good",
+  fair: "Fair",
+  attention: "Needs attention",
+  unknown: "Not enough data",
+}
+
+const HEALTH_BAND_TEXT: Record<HealthBand, string> = {
+  excellent: "text-emerald-600 dark:text-emerald-400",
+  good: "text-emerald-600 dark:text-emerald-400",
+  fair: "text-amber-600 dark:text-amber-400",
+  attention: "text-destructive",
+  unknown: "text-muted-foreground",
+}
+
+const HEALTH_BAND_METER: Record<HealthBand, string> = {
+  excellent: "bg-emerald-500",
+  good: "bg-emerald-500/80",
+  fair: "bg-amber-500",
+  attention: "bg-destructive",
+  unknown: "bg-muted-foreground/40",
+}
+
+const FACTOR_TEXT: Record<FactorTone, string> = {
+  good: "text-emerald-600 dark:text-emerald-400",
+  caution: "text-amber-600 dark:text-amber-400",
+  bad: "text-destructive",
+}
+
+export function AccountHealthPanel({
+  health,
+}: Readonly<{ health: AccountHealth }>) {
+  return (
+    <div className="rounded-2xl border p-4">
+      <div className="flex items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+          <Activity className="size-3.5" aria-hidden />
+          Account health
+        </p>
+        {health.lowConfidence && health.score !== null ? (
+          <span className="text-[10px] font-medium text-muted-foreground">
+            Limited history
+          </span>
+        ) : null}
+      </div>
+
+      <div className="mt-1 flex items-baseline gap-2">
+        <span
+          className={cn(
+            "text-2xl font-semibold tabular-nums",
+            HEALTH_BAND_TEXT[health.band]
+          )}
+        >
+          {health.score === null ? "—" : health.score}
+        </span>
+        <span
+          className={cn("text-sm font-medium", HEALTH_BAND_TEXT[health.band])}
+        >
+          {HEALTH_BAND_LABEL[health.band]}
+        </span>
+      </div>
+
+      {health.score !== null ? (
+        <div
+          className="mt-2 h-2 overflow-hidden rounded-full bg-muted"
+          role="presentation"
+        >
+          <div
+            className={cn(
+              "h-full rounded-full",
+              HEALTH_BAND_METER[health.band]
+            )}
+            style={{ width: `${Math.max(health.score, 3)}%` }}
+          />
+        </div>
+      ) : (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Add a reserve or a little transaction history to score this account.
+        </p>
+      )}
+
+      {health.factors.length > 0 ? (
+        <ul className="mt-3 flex flex-col gap-1.5">
+          {health.factors.map((f) => (
+            <li key={f.key} className="flex items-center gap-2 text-xs">
+              {f.tone === "good" ? (
+                <Check
+                  className={cn("size-3.5 shrink-0", FACTOR_TEXT.good)}
+                  aria-hidden
+                />
+              ) : (
+                <TriangleAlert
+                  className={cn("size-3.5 shrink-0", FACTOR_TEXT[f.tone])}
+                  aria-hidden
+                />
+              )}
+              <span className="text-foreground">{f.label}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
   )
 }
 

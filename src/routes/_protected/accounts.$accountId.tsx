@@ -25,11 +25,13 @@ import { ValuationActionDialog } from "@/components/blocks/valuation-action-dial
 import { TransactionFormModal } from "@/components/transaction-form-modal"
 import {
   accountCollection,
+  balanceDriftCollection,
   type AccountRecord,
 } from "@/lib/account-collections"
 import { transactionCollection } from "@/lib/collections"
 import { applyFilters } from "@/lib/transaction-filters"
 import {
+  AccountHealthPanel,
   AccountRunwayNote,
   BalanceTrendChart,
   CategoryBreakdown,
@@ -37,9 +39,15 @@ import {
   RangeSelector,
   SafeToSpendPanel,
 } from "./-account-analytics"
-import { accountSupportsReserve, hasReserve } from "@/lib/account-reserve"
+import {
+  accountSupportsReserve,
+  hasReserve,
+  reserveHealth,
+} from "@/lib/account-reserve"
 import { computeAccountRunway } from "@/lib/account-runway"
 import { computeIdleCash } from "@/lib/account-idle-cash"
+import { computeAccountHealth } from "@/lib/account-health"
+import { selectDriftBadge } from "@/lib/account-drift-presentation"
 import {
   buildBalanceSeries,
   buildStatementCsv,
@@ -63,6 +71,8 @@ export const Route = createFileRoute("/_protected/accounts/$accountId")({
     await Promise.all([
       accountCollection.preload(),
       transactionCollection.preload(),
+      // PER-224 — health score folds in balance-drift (data integrity).
+      balanceDriftCollection.preload(),
     ])
     return null
   },
@@ -96,6 +106,9 @@ function AccountDetailPage() {
   )
   const { data: allTransactions } = useLiveQuery((q) =>
     q.from({ t: transactionCollection })
+  )
+  const { data: driftRows } = useLiveQuery((q) =>
+    q.from({ d: balanceDriftCollection })
   )
 
   const account = React.useMemo<AccountRecord | undefined>(
@@ -192,6 +205,32 @@ function AccountDetailPage() {
       ),
     [rangedLedger, query, types]
   )
+
+  // PER-224 — account health: fold runway + reserve buffer + balance-drift into
+  // one transparent score. Cash-like only (the signals don't apply to tracked
+  // assets / term liabilities).
+  const health = React.useMemo(() => {
+    if (!cashLike) return null
+    const accountDrift = (driftRows ?? []).filter(
+      (d) => d.accountId === accountId
+    )
+    const driftTone = selectDriftBadge(accountDrift)?.tone ?? "none"
+    const reserveMinor = account?.reserveBalance
+      ? BigInt(account.reserveBalance)
+      : 0n
+    return computeAccountHealth({
+      runwayStatus: runway?.status ?? null,
+      reserveState: reserveHealth(currentBalance, reserveMinor),
+      driftTone,
+    })
+  }, [
+    cashLike,
+    driftRows,
+    accountId,
+    account?.reserveBalance,
+    currentBalance,
+    runway,
+  ])
 
   if (accounts && !account) {
     return (
@@ -296,6 +335,7 @@ function AccountDetailPage() {
               <Badge variant="outline">Archived</Badge>
             ) : null}
           </div>
+          {health ? <AccountHealthPanel health={health} /> : null}
           {accountSupportsReserve(account) &&
           hasReserve(
             account.reserveBalance ? BigInt(account.reserveBalance) : null

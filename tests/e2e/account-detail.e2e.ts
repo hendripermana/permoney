@@ -41,6 +41,11 @@ test.describe("account detail (PER-216)", () => {
     await expect(page.getByText(accountName).first()).toBeVisible()
     await expect(page.getByText("Rp 2,000,000.00").first()).toBeVisible()
 
+    // PER-224 — the account-health panel summarizes the safety signals with a
+    // transparent breakdown (here: a comfortably-covered reserve).
+    await expect(page.getByText("Account health")).toBeVisible()
+    await expect(page.getByText(/Reserve comfortably covered/i)).toBeVisible()
+
     // PER-217 — the safe-to-spend panel shows available = balance − reserve, and
     // names the reserved portion. (Balance is unchanged — reserve is ledger-neutral.)
     await expect(page.getByText(/safe to spend/i).first()).toBeVisible()
