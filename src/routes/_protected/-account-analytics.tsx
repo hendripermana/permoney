@@ -183,9 +183,11 @@ export function PerformancePanel({
       <p className="mt-1 text-2xl font-semibold tabular-nums">
         {formatCurrency(marketValueMinor.toString(), currency)}
       </p>
-      <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
-        Cost {formatCurrency(costBasisMinor.toString(), currency)}
-      </p>
+      {hasBasis ? (
+        <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+          Cost {formatCurrency(costBasisMinor.toString(), currency)}
+        </p>
+      ) : null}
       {hasBasis ? (
         <p
           className={cn(

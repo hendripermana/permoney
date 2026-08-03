@@ -143,6 +143,9 @@ function AccountDetailPage() {
     queryFn: async () =>
       await getAccountOpeningValueFn({ data: { accountId } }),
     enabled: tracked,
+    // The opening valuation is written once at account creation and never
+    // edited, so it never needs refetching within a session.
+    staleTime: Infinity,
   })
 
   // PER-229 — performance: cost basis (opening + net contributions) vs market
