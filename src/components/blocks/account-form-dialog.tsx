@@ -221,7 +221,7 @@ export function AccountFormDialog({
                     setAccountType(value as AccountType)
                   }
                 >
-                  <SelectTrigger>
+                  <SelectTrigger aria-label="Account type">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -236,7 +236,7 @@ export function AccountFormDialog({
               <div className="flex flex-col gap-2">
                 <Label>Currency</Label>
                 <Select value={currency} onValueChange={setCurrency}>
-                  <SelectTrigger>
+                  <SelectTrigger aria-label="Currency">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
