@@ -26,6 +26,7 @@ model Iso4217Currency {
   fxFromCurrencies                 FxRateSnapshot[] @relation("FxRateFromCurrency")
   fxToCurrencies                   FxRateSnapshot[] @relation("FxRateToCurrency")
   budgetCurrencies                 Budget[]      @relation("BudgetCurrency")
+  instrumentQuoteCurrencies        Instrument[]  @relation("InstrumentQuoteCurrency")
 
   @@map("iso_4217_currency")
 }
@@ -53,6 +54,8 @@ model Family {
   importBatches ImportBatch[]
   rawImportedTransactions RawImportedTransaction[]
   importBatchArtifacts ImportBatchArtifact[]
+  instruments  Instrument[]
+  holdings     Holding[]
 }
 
 // ADR-0036: first-class family membership + role authorization.
@@ -216,6 +219,7 @@ model Account {
   transactionsTo   Transaction[] @relation("ToAccount")
   valuations       Valuation[]
   rawImportedTransactions RawImportedTransaction[]
+  holdings         Holding[]
 
   // Tenant-scoped fetch (every Account read is filtered by familyId once
   // ADR-0004 lands; cheap to add now). See ADR-0003.
@@ -927,4 +931,85 @@ model ImportBatchArtifact {
 
   @@unique([importBatchId, contentHash], name: "import_artifact_batch_content", map: "import_artifact_batch_content")
   @@index([familyId])
+}
+
+// =============================================================================
+// PER-232 / ADR-0051 — Investments & Holdings domain (Slice 1: market-priced).
+//
+// An `Instrument` is the tradeable thing (a named reksadana fund, a gram of
+// gold, a share). It is tenant-scoped (v1 manual instruments — no market-data
+// feed yet). A `Holding` is a position of an Instrument inside an investment
+// `Account` (balanceSource="valuation"). Account value = Σ its holdings' current
+// value, written back as a valuation ANCHOR (ADR-0034/0043) so every net-worth /
+// balance / audit / RLS invariant holds for free — holdings are the ASSET
+// valuation layer, never a second cash ledger (ADR-0008). See src/lib/holdings.ts
+// for the pure valuation math and src/server/holdings.ts for the mutation contract.
+// =============================================================================
+
+model Instrument {
+  id String @id @default(cuid())
+
+  // Instrument taxonomy (CHECK domain in migration). Slice 1 uses market-priced
+  // kinds; yield-bearing (deposit/bond accrual) math arrives in a later slice.
+  kind String
+
+  name   String
+  symbol String?
+
+  // The currency the instrument is quoted in (NAV/unit, price/gram, last price).
+  // FK to the ISO-4217 registry, mirroring Account.currency. Holdings on an
+  // account must share the account's currency (single-currency Σ this slice);
+  // multi-currency normalization (ADR-0035) is a later slice.
+  quoteCurrency         String          @default("IDR")
+  quoteCurrencyRegistry Iso4217Currency @relation("InstrumentQuoteCurrency", fields: [quoteCurrency], references: [code], onDelete: Restrict, onUpdate: Cascade, map: "instrument_quote_currency_is_iso_4217")
+
+  // Valuation method selector (CHECK domain). "market" = quantity × price/unit
+  // (this slice). "yield" (principal + accrued interest) is a later slice.
+  priceModel String @default("market")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  familyId String
+  family   Family @relation(fields: [familyId], references: [id])
+
+  holdings Holding[]
+
+  // Composite-FK target for Holding(instrumentId, familyId) — tenant isolation
+  // lives in the (id, familyId) pair, not the bare id (ADR-0010 Pattern A).
+  @@unique([id, familyId], map: "Instrument_id_familyId_key")
+  @@index([familyId])
+}
+
+model Holding {
+  id String @id @default(cuid())
+
+  // Fractional units: fund units (1353.5149), grams (2.0180), shares. Decimal so
+  // the quantity is exact; the pure math scales it to a bigint (QUANTITY_SCALE=1e8)
+  // to stay in integer arithmetic (src/lib/holdings.ts). CHECK quantity >= 0.
+  quantity Decimal @db.Decimal(38, 8)
+
+  // Cost per ONE unit, in MINOR units of the instrument's quoteCurrency (always
+  // >= 0 — CHECK). Cost = quantity × this.
+  avgUnitCostMinor BigInt
+
+  // Manual current market price per ONE unit, MINOR units. NULL until the user
+  // enters a price (value then falls back to cost basis, gain 0). CHECK null or >= 0.
+  lastPriceMinor BigInt?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  familyId String
+  family   Family @relation(fields: [familyId], references: [id])
+
+  // Composite (tenant-safe) FKs — Pattern A (ADR-0010), MATCH SIMPLE, Restrict.
+  accountId String
+  account   Account @relation(fields: [accountId, familyId], references: [id, familyId], onDelete: Restrict, onUpdate: Cascade, map: "Holding_accountId_familyId_fkey")
+
+  instrumentId String
+  instrument   Instrument @relation(fields: [instrumentId, familyId], references: [id, familyId], onDelete: Restrict, onUpdate: Cascade, map: "Holding_instrumentId_familyId_fkey")
+
+  @@unique([id, familyId], map: "Holding_id_familyId_key")
+  @@index([familyId, accountId])
 }
