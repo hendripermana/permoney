@@ -60,7 +60,12 @@ test.describe("holdings UI (PER-232)", () => {
     await expect(page.getByText(/\+Rp\s400,000\.00/).first()).toBeVisible()
 
     // --- The account hero balance re-materialized from the holdings anchor:
-    //     Σ holdings' value = 2,400,000. The hero shows the account balance. ---
-    await expect(page.getByText(/Rp\s2,400,000\.00/).first()).toBeVisible()
+    //     Σ holdings' value = 2,400,000. The value now appears in MORE than the
+    //     single holding row (the holding value, the Total, AND the account hero
+    //     balance), proving the anchor propagated to the account view — a
+    //     `.first()` match would only re-check the holding row. ---
+    expect(
+      await page.getByText(/Rp\s2,400,000\.00/).count()
+    ).toBeGreaterThanOrEqual(2)
   })
 })

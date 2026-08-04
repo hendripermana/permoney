@@ -64,7 +64,13 @@ export type HoldingFormState =
 // only — the server re-parses and is the source of truth.
 function majorFromMinor(minor: string | null, currency: CurrencyCode): string {
   if (minor === null) return ""
-  return String(toDisplayNumber(BigInt(minor), currency))
+  // toLocaleString (not String()) so a large amount never prefills in scientific
+  // notation, which the number input would reject. Convenience only — the server
+  // re-parses and is the source of truth.
+  return toDisplayNumber(BigInt(minor), currency).toLocaleString("en-US", {
+    useGrouping: false,
+    maximumFractionDigits: 8,
+  })
 }
 
 // Trim trailing zeros from a fixed-scale quantity string ("2.01800000" → "2.018")

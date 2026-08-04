@@ -72,6 +72,7 @@ import { formatCurrency } from "@/lib/currency"
 import { toMoney, ZERO_MONEY, type Money } from "@/lib/money"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import { cn } from "@/lib/utils"
+import { toast } from "sonner"
 
 export const Route = createFileRoute("/_protected/accounts/$accountId")({
   // TanStack DB collections are client-only; SSR would hang (CLAUDE.md §5B).
@@ -179,10 +180,18 @@ function AccountDetailPage() {
   }
 
   async function handleDeleteHolding(holding: HoldingRecord) {
-    await deleteHoldingFn({
-      data: { holdingId: holding.id, idempotencyKey: createUuidV7() },
-    })
-    await refreshHoldings()
+    // Catch the rejection: this is fired from an onClick, so an unhandled reject
+    // would silently fail with no user feedback. Surface it as a toast instead.
+    try {
+      await deleteHoldingFn({
+        data: { holdingId: holding.id, idempotencyKey: createUuidV7() },
+      })
+      await refreshHoldings()
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to delete holding"
+      )
+    }
   }
 
   // PER-229 — performance: cost basis (opening + net contributions) vs market
