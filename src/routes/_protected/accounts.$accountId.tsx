@@ -23,6 +23,10 @@ import { Input } from "@/components/ui/input"
 import { AccountVisual } from "@/components/blocks/account-visual"
 import { AccountFormDialog } from "@/components/blocks/account-form-dialog"
 import { ValuationActionDialog } from "@/components/blocks/valuation-action-dialog"
+import {
+  HoldingFormDialog,
+  type HoldingFormState,
+} from "@/components/blocks/holding-form-dialog"
 import { TransactionFormModal } from "@/components/transaction-form-modal"
 import {
   accountCollection,
@@ -50,6 +54,8 @@ import { computeAccountRunway } from "@/lib/account-runway"
 import { computeIdleCash } from "@/lib/account-idle-cash"
 import { computeAccountPerformance } from "@/lib/account-performance"
 import { getAccountOpeningValueFn } from "@/server/valuations"
+import { deleteHoldingFn, getAccountHoldingsFn } from "@/server/holdings"
+import { HoldingsPanel, type HoldingRecord } from "./-account-holdings"
 import { computeAccountHealth } from "@/lib/account-health"
 import { selectDriftBadge } from "@/lib/account-drift-presentation"
 import {
@@ -64,6 +70,7 @@ import {
 import { ACCOUNT_TYPE_LABEL } from "./-account-card"
 import { formatCurrency } from "@/lib/currency"
 import { toMoney, ZERO_MONEY, type Money } from "@/lib/money"
+import { createUuidV7 } from "@/lib/uuid-v7"
 import { cn } from "@/lib/utils"
 
 export const Route = createFileRoute("/_protected/accounts/$accountId")({
@@ -104,6 +111,9 @@ function AccountDetailPage() {
   const [detailDialog, setDetailDialog] = React.useState<
     "edit" | "valuation" | null
   >(null)
+  // PER-232 — add/edit holding dialog (create vs edit a single position).
+  const [holdingDialog, setHoldingDialog] =
+    React.useState<HoldingFormState | null>(null)
 
   const { data: accounts } = useLiveQuery((q) =>
     q.from({ a: accountCollection })
@@ -147,6 +157,33 @@ function AccountDetailPage() {
     // edited, so it never needs refetching within a session.
     staleTime: Infinity,
   })
+
+  // PER-232 / ADR-0051 — holdings for a valuation-tracked account. Declarative
+  // fetch (no useEffect), only enabled for tracked accounts. Each holding's
+  // value/cost/gain is computed server-side; the UI only formats.
+  const {
+    data: holdingsView,
+    isLoading: holdingsLoading,
+    refetch: refetchHoldings,
+  } = useQuery({
+    queryKey: ["account_holdings", accountId],
+    queryFn: async () => await getAccountHoldingsFn({ data: { accountId } }),
+    enabled: tracked,
+  })
+
+  // After any holding mutation the account balance changes (the holdings anchor
+  // re-materialized it), so resync BOTH the holdings query and the account
+  // collections the hero/KPIs read from.
+  async function refreshHoldings() {
+    await Promise.all([refetchHoldings(), refreshAccountData()])
+  }
+
+  async function handleDeleteHolding(holding: HoldingRecord) {
+    await deleteHoldingFn({
+      data: { holdingId: holding.id, idempotencyKey: createUuidV7() },
+    })
+    await refreshHoldings()
+  }
 
   // PER-229 — performance: cost basis (opening + net contributions) vs market
   // value → unrealized gain/loss + return %. Reuses the proven ledger lens.
@@ -368,6 +405,16 @@ function AccountDetailPage() {
           {performance ? (
             <PerformancePanel performance={performance} currency={currency} />
           ) : null}
+          {tracked ? (
+            <HoldingsPanel
+              view={holdingsView}
+              currency={currency}
+              isLoading={holdingsLoading}
+              onAdd={() => setHoldingDialog({ mode: "create" })}
+              onEdit={(holding) => setHoldingDialog({ mode: "edit", holding })}
+              onDelete={handleDeleteHolding}
+            />
+          ) : null}
           {health ? <AccountHealthPanel health={health} /> : null}
           {accountSupportsReserve(account) &&
           hasReserve(
@@ -531,6 +578,25 @@ function AccountDetailPage() {
           onSaved={async () => {
             await refreshAccountData()
             setDetailDialog(null)
+          }}
+        />
+      ) : null}
+
+      {holdingDialog ? (
+        <HoldingFormDialog
+          // Remount per holding (or per create) so the form re-initializes.
+          key={
+            holdingDialog.mode === "edit"
+              ? `holding-${holdingDialog.holding.id}`
+              : "holding-create"
+          }
+          state={holdingDialog}
+          accountId={accountId}
+          currency={currency}
+          onClose={() => setHoldingDialog(null)}
+          onSaved={async () => {
+            await refreshHoldings()
+            setHoldingDialog(null)
           }}
         />
       ) : null}
