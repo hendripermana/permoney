@@ -1,0 +1,149 @@
+# ADR-0051 — Investments & Holdings domain (multi-instrument portfolio)
+
+|                |                                                                                         |
+| -------------- | --------------------------------------------------------------------------------------- |
+| **Status**     | Proposed                                                                                |
+| **Date**       | 2026-08-04                                                                              |
+| **Deciders**   | Hendri Permana                                                                          |
+| **Amends**     | ADR-0008 (domain/ledger boundaries), ADR-0034/0043 (valuations), ADR-0050 (market data) |
+| **Supersedes** | PER-239 account-level opt-in valuation (folded in)                                      |
+
+## Context
+
+PER-229 gave each valuation-tracked account ONE value and ONE cost. Real
+brokers do not work that way. Verified against the creator's actual holdings:
+
+- **Bibit (reksadana)** — a "portfolio" account holds several funds; each fund
+  shows _units_ (`1,353.5149`), _average buy price_ (`Rp 1,477.63`), _cost_
+  (`Rp 2,000,000`), _current value_ (`Rp 2,008,370`), _gain_ (`+Rp 8,370
+/ +0.42%`).
+- **BSI Gold** — `2.0180 gram` × avg buy `Rp 2,760,809/gram` = cost
+  `Rp 5,571,313`; today's sell price `Rp 2,455,000/gram` → value `Rp 4,954,190`;
+  `−Rp 617,123 / −11.08%`.
+
+Two corrections to earlier assumptions this ADR bakes in:
+
+1. **Scale.** DB balances are minor units (sen). The account earlier read as
+   "533jt" is `Rp 5,333,433`. All amounts here are real (millions of rupiah).
+2. **Cost basis is NOT lost.** The creator has units + average cost from the
+   broker apps. Cost lives PER-HOLDING and is user-entered (later auto from
+   feeds/confirmations), never fabricated. The "cost unknown" worry only applies
+   to a legacy account with no holdings entered yet.
+
+Goal (creator's brief): support **every investment type worldwide** — mutual
+funds, gold/metals, stocks, government bonds (SBN), time deposits (deposito),
+crypto — and be decisively better than Sure/YNAB (no real holdings) and Revolut.
+
+The account-level approximation (PER-239) can't express units, average cost, or
+multiple positions per account. The right primitive is a **holding**.
+
+## Decision
+
+Introduce a **Holdings domain**: the asset-side valuation layer for investment
+accounts, plugging into the canonical cash ledger (ADR-0008) WITHOUT becoming a
+second source of cash truth.
+
+### Model
+
+- **`Instrument`** (global, family-neutral; shared with ADR-0050): the tradeable
+  thing — fund / stock / metal / bond / crypto / deposit-product — carrying a
+  `kind` and a `priceModel`. Manual "instruments" (a named fund with no feed)
+  are allowed; a feed-backed instrument links to `InstrumentQuote`.
+- **`Holding`**: a position of an `Instrument` inside an investment `Account`,
+  tenant-scoped (familyId + RLS). Carries `quantity`, a `valuationMethod`, and
+  method-specific fields. An account may hold many (Bibit = several funds).
+- **`HoldingLot`** (from Slice 5): individual buy lots `(date, quantity, unitCost)`
+  for exact cost basis (FIFO/average) and realized gains. v1 may aggregate to a
+  single average-cost lot.
+- **Account value = Σ its holdings' current value.** The investment account is
+  valuation-tracked; its balance is materialized from the holdings via the
+  existing valuation mechanism (a holdings-derived **anchor** valuation,
+  ADR-0034/0043), so every net-worth / balance / audit invariant holds for free.
+
+### Valuation methods (per instrument kind — extensible, not bespoke subsystems)
+
+1. **Market-priced** — value = `quantity × latest price/unit`; cost = Σ lots
+   (`unitCost × qty`); gain = value − cost.
+   - reksadana: unit = fund unit, price = NAV/unit.
+   - gold/metals: unit = gram (also troy oz), price = spot/gram.
+   - stocks: unit = share, price = last; carries ticker + exchange (MIC).
+   - crypto: unit = coin, price = spot.
+2. **Yield-bearing** — value = `principal + accrued interest to date`; fields:
+   principal, rate (bps), start date, tenor/maturity, compounding. Gain = accrued
+   interest. Optional market price for tradeable instruments.
+   - deposito (time deposit): principal + rate + tenor → accrued / maturity value;
+     not market-fluctuating (hold to maturity), maturity-dated.
+   - SBN / bonds: face value + coupon + maturity; held-to-maturity uses accrual,
+     tradeable secondary adds an optional market price/yield.
+
+A `valuationMethod` field selects the formula. New instrument types add a method,
+never a new subsystem. All math is pure and unit-tested; property-based
+invariants (PER-208 harness) fuzz thousands of qty/price/lot/accrual combinations
+(quantity ≥ 0, value = method(qty, price/principal), Σ holdings = account value,
+realized+unrealized accounting closes).
+
+### Cash-ledger integration (one source of cash truth)
+
+- **Buy**: cash leaves a cash account (a canonical `Transaction`, ADR-0048
+  valuation-linked) → creates/increases a `Holding` (+ a cost lot).
+- **Sell**: quantity leaves the `Holding`, cash enters a cash account → realized
+  gain from lots.
+- **Income** (dividends, coupons, distributions): cash in, optionally reinvested
+  (a new lot).
+- Cash movements stay canonical double-entry `Transaction`s (idempotent, audited,
+  tenant-scoped, RLS). Holdings are the ASSET valuation layer, reconciled to the
+  ledger through the valuation anchor — never a parallel cash ledger. This is the
+  ADR-0008 §"asset tracking plugs in without rewriting the core" contract made real.
+
+### Cost basis (honest)
+
+Cost = Σ lots entered from the user's broker data (units + average price they
+already have), later auto from confirmations/feeds. NEVER fabricated. A legacy
+account with a manually-tracked value but no holdings shows value-only (PER-229
+`hasBasis=false`) until holdings are entered — then cost + gain become exact.
+
+### Migration (live prod, gated)
+
+Existing INVESTMENT/TRACKED_ASSET accounts opt into holdings: seed the current
+balance as the account's current value; the user adds holdings (units + avg cost
+from Bibit/BSI) to make cost + gain exact. No data loss; the manually-adjusted
+legacy transaction history is superseded by holdings and left untouched. Backup +
+explicit creator go-ahead + real-PG + property-based migration tests before any
+live write. Supersedes PER-239 (its account-level value+cost is the degenerate
+"one holding" case).
+
+## Consequences
+
+**Positive**
+
+- A true multi-instrument portfolio — units, average cost, current value,
+  unrealized + realized gain, allocation — per account and aggregated. Surpasses
+  Sure/YNAB (no holdings) and matches/exceeds Revolut across asset classes.
+- One extensible model spans reksadana, gold, stocks, SBN, deposito, crypto; new
+  types are a valuation method, not a rewrite.
+- Cash truth stays in the canonical ledger; holdings reconcile via the existing
+  valuation anchor, so ledger invariants + tenant isolation hold unchanged.
+- Feeds (ADR-0050) auto-price market instruments; deposito/SBN accrue by formula.
+
+**Costs / risks**
+
+- New tenant-scoped schema (`Holding`, `HoldingLot`) + buy/sell/income flows +
+  lot accounting + realized-gain math — delivered in slices, each real-PG +
+  property-tested.
+- A live-data migration of the creator's accounts (gated, backed up, tested).
+- Instrument-type breadth (bond yield, deposito accrual) is genuinely intricate;
+  each method needs its own careful tests.
+
+## Implementation slices (Linear)
+
+1. **Holdings core** — `Instrument` (manual) + `Holding` schema (tenant-scoped),
+   Holding CRUD, market-priced valuation (qty × manual price), account value =
+   Σ holdings as a valuation anchor. Real-PG + property tests.
+2. **Reksadana + gold** — units (fund unit, gram), average cost, buy/sell flow
+   cash-linked; the creator's Bibit + BSI Gold become exact.
+3. **Stocks + crypto** — ticker/exchange, crypto; prices via ADR-0050 feeds.
+4. **Yield-bearing** — deposito + SBN (principal/rate/tenor/maturity, accrued
+   interest, coupons).
+5. **Lots + realized gains** — FIFO/average cost, dividends/coupons reinvest.
+6. **Portfolio + dashboard** — PER-230/231 read holdings (total value, cost,
+   gain, allocation by kind), base-currency normalized (ADR-0035).
