@@ -97,7 +97,9 @@ const INSTRUMENT_KINDS = [
 const currencySchema = z
   .string()
   .trim()
-  .regex(/^[A-Za-z]{3}$/, "currency must be a 3-letter ISO 4217 code")
+  // 3–5 chars to match the DB `instrument_quote_currency_shape` CHECK (crypto
+  // symbols can exceed 3); `assertKnownCurrency` still gates membership.
+  .regex(/^[A-Za-z]{3,5}$/, "currency must be a 3–5 letter code")
   .transform((value) => value.toUpperCase())
 
 // A decimal magnitude string in MAJOR units (e.g. "2.0180", "2455000",

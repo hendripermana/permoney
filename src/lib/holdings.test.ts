@@ -197,9 +197,9 @@ describe("valuation invariants (property-based)", () => {
       fc.property(wholeArb, fracArb, (whole, frac) => {
         const decimal = frac === "" ? `${whole}` : `${whole}.${frac}`
         const scaled = quantityToScaled(decimal)
+        // padEnd always yields 8 chars ("" -> "00000000" -> 0n), so no guard.
         const expected =
-          BigInt(whole) * QUANTITY_SCALE +
-          BigInt(frac.padEnd(8, "0") === "" ? "0" : frac.padEnd(8, "0"))
+          BigInt(whole) * QUANTITY_SCALE + BigInt(frac.padEnd(8, "0"))
         expect(scaled).toBe(expected)
       })
     )
