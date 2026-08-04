@@ -22,6 +22,8 @@ const RESET_TABLES = [
   "BudgetCategory",
   "Budget",
   "Category",
+  "Holding",
+  "Instrument",
   "Account",
   "Session",
   "AuthAccount",
