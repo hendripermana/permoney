@@ -127,6 +127,26 @@ describe("holdings core (PER-232 / ADR-0051 — Instrument + Holding + value=Σ 
       expect(holding.quantity).toBe("2.01800000")
     })
 
+    test("accepts locale-formatted IDR amounts (thousands '.' + decimal ',')", async () => {
+      // The real bug: a user pastes the BSI-app figures "2.760.809,32" /
+      // "2.520.000,00" (Indonesian formatting) — parseUserInput must handle them,
+      // not toMinorUnits (which only takes a canonical decimal).
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeInvestmentAccount(owner)
+
+      const holding = await addGoldHolding(owner, account.id, {
+        quantity: "2.0180",
+        avgUnitCost: "2.760.809,32",
+        lastPrice: "2.520.000,00",
+      })
+
+      // 2.0180 × Rp 2,520,000.00 = Rp 5,085,360.00 → 508_536_000 sen.
+      expect(holding.valueMinor).toBe("508536000")
+      // 2.0180 × Rp 2,760,809.32 = Rp 5,571,313.207… → half-up 557_131_321 sen.
+      expect(holding.costMinor).toBe("557131321")
+      expect(holding.gainMinor).toBe("-48595321")
+    })
+
     test("account balance materializes to Σ holding values via a valuation anchor", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
       const account = await makeInvestmentAccount(owner)

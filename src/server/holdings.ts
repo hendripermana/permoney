@@ -10,7 +10,7 @@ import {
   quantityToScaled,
   sumHoldingValuesMinor,
 } from "@/lib/holdings"
-import { toMinorUnits } from "@/lib/money"
+import { parseUserInput } from "@/lib/money"
 import {
   auditLog,
   createAuditContext,
@@ -252,20 +252,19 @@ function assertKnownCurrency(currency: string): CurrencyCode {
   return currency as CurrencyCode
 }
 
-// Parse a MAJOR-unit decimal string to a non-negative minor-unit bigint, turning
-// a malformed input into a typed HoldingError (never a raw TypeError).
+// Parse a user-entered MAJOR-unit amount to a non-negative minor-unit bigint.
+// Uses `parseUserInput` (locale-aware: handles the currency's thousands
+// delimiter + decimal separator, so IDR "2.760.809,32" parses correctly) — NOT
+// `toMinorUnits`, which demands a canonical decimal and throws on user-formatted
+// strings. Returns a typed HoldingError on malformed input (never a raw throw).
 function parseMinor(
   raw: string,
   currency: CurrencyCode,
   field: string
 ): bigint {
-  let minor: bigint
-  try {
-    minor = toMinorUnits(raw, currency)
-  } catch (error) {
-    throw new HoldingError(
-      `${field} is not a valid ${currency} amount: ${error instanceof Error ? error.message : String(error)}`
-    )
+  const minor = parseUserInput(raw, currency)
+  if (minor === null) {
+    throw new HoldingError(`${field} is not a valid ${currency} amount`)
   }
   if (minor < 0n) {
     throw new HoldingError(`${field} cannot be negative`)
