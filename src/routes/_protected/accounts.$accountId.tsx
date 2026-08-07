@@ -46,6 +46,10 @@ import {
   HoldingFormDialog,
   type HoldingFormState,
 } from "@/components/blocks/holding-form-dialog"
+import {
+  TradeDialog,
+  type TradeDialogState,
+} from "@/components/blocks/trade-dialog"
 import { TransactionFormModal } from "@/components/transaction-form-modal"
 import {
   accountCollection,
@@ -136,6 +140,10 @@ function AccountDetailPage() {
   // PER-232 — add/edit holding dialog (create vs edit a single position).
   const [holdingDialog, setHoldingDialog] =
     React.useState<HoldingFormState | null>(null)
+  // PER-198 — buy/sell trade dialog (atomic cash ↔ holding).
+  const [tradeDialog, setTradeDialog] = React.useState<TradeDialogState | null>(
+    null
+  )
 
   const { data: accounts } = useLiveQuery((q) =>
     q.from({ a: accountCollection })
@@ -215,6 +223,22 @@ function AccountDetailPage() {
   async function refreshHoldings() {
     await Promise.all([refetchHoldings(), refreshAccountData()])
   }
+
+  // PER-198 — cash-like accounts (same currency, active, not this account) that
+  // can fund a buy or receive a sell. Derived from the live account collection.
+  const fundingAccounts = React.useMemo(
+    () =>
+      (accounts ?? [])
+        .filter(
+          (a) =>
+            a.id !== accountId &&
+            a.balanceSource === "transaction_flow" &&
+            a.status === "active" &&
+            a.currency === currency
+        )
+        .map((a) => ({ id: a.id, name: a.name, currency: a.currency })),
+    [accounts, accountId, currency]
+  )
 
   // PER-239 / ADR-0051 — flip this INVESTMENT account to valuation tracking,
   // then resync the account collections (so `tracked` becomes true and the
@@ -485,6 +509,13 @@ function AccountDetailPage() {
               onAdd={() => setHoldingDialog({ mode: "create" })}
               onEdit={(holding) => setHoldingDialog({ mode: "edit", holding })}
               onDelete={handleDeleteHolding}
+              onBuy={() => setTradeDialog({ side: "buy" })}
+              onBuyHolding={(holding) =>
+                setTradeDialog({ side: "buy", holding })
+              }
+              onSellHolding={(holding) =>
+                setTradeDialog({ side: "sell", holding })
+              }
             />
           ) : null}
           {health ? <AccountHealthPanel health={health} /> : null}
@@ -669,6 +700,27 @@ function AccountDetailPage() {
           onSaved={async () => {
             await refreshHoldings()
             setHoldingDialog(null)
+          }}
+        />
+      ) : null}
+
+      {tradeDialog ? (
+        <TradeDialog
+          // Remount per open so the form re-initializes cleanly.
+          key={
+            "holding" in tradeDialog
+              ? `trade-${tradeDialog.side}-${tradeDialog.holding.id}`
+              : `trade-${tradeDialog.side}`
+          }
+          state={tradeDialog}
+          investmentAccountId={accountId}
+          currency={currency}
+          fundingAccounts={fundingAccounts}
+          holdings={holdingsView?.holdings ?? []}
+          onClose={() => setTradeDialog(null)}
+          onSaved={async () => {
+            await refreshHoldings()
+            setTradeDialog(null)
           }}
         />
       ) : null}

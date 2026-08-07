@@ -97,6 +97,54 @@ function divideScaledHalfUp(a: bigint): bigint {
 }
 
 /**
+ * Average unit cost (per-unit, MINOR units) implied by a total cost basis over a
+ * quantity — the exact inverse of `holdingCostMinor`:
+ *   avgUnitCost = round_half_up(totalCostMinor × QUANTITY_SCALE / unitsScaled)
+ *
+ * Used by the buy/sell trade primitive (PER-198) to blend a new average cost
+ * when units are added at a fresh cash outlay. `unitsScaled` must be positive
+ * (a zero-unit position has no meaningful average) and the total cost
+ * non-negative. Half-up rounding keeps the stored per-unit figure as close as
+ * the per-unit representation allows; the residual sub-unit is inherent to
+ * carrying cost basis as a rounded per-unit price (the same rounding
+ * `holdingCostMinor` already exhibits) and is bounded by one minor unit.
+ */
+export function averageUnitCostMinor(
+  totalCostMinor: bigint,
+  unitsScaled: bigint
+): bigint {
+  if (totalCostMinor < 0n) {
+    throw new RangeError(
+      `averageUnitCostMinor: totalCostMinor must be non-negative, got ${totalCostMinor}`
+    )
+  }
+  if (unitsScaled <= 0n) {
+    throw new RangeError(
+      `averageUnitCostMinor: unitsScaled must be positive, got ${unitsScaled}`
+    )
+  }
+  return (totalCostMinor * QUANTITY_SCALE + unitsScaled / 2n) / unitsScaled
+}
+
+/**
+ * Render a scaled-bigint quantity back to the canonical fixed-scale decimal
+ * string the `Holding.quantity` `Decimal(38, 8)` column stores ("6.00000000").
+ * Exact inverse of `quantityToScaled`; never uses float. A negative input is a
+ * bug (quantity is non-negative by domain) and throws.
+ */
+export function scaledToQuantityString(scaled: bigint): string {
+  if (scaled < 0n) {
+    throw new RangeError(
+      `scaledToQuantityString: expected non-negative scaled quantity, got ${scaled}`
+    )
+  }
+  const digits = scaled.toString().padStart(QUANTITY_SCALE_DIGITS + 1, "0")
+  const whole = digits.slice(0, digits.length - QUANTITY_SCALE_DIGITS)
+  const fraction = digits.slice(digits.length - QUANTITY_SCALE_DIGITS)
+  return `${whole}.${fraction}`
+}
+
+/**
  * Current market value of a holding, in MINOR units:
  *   round_half_up(quantityScaled × pricePerUnitMinor / QUANTITY_SCALE)
  *

@@ -188,3 +188,118 @@ genuine INVESTMENT account **opts in** through one dedicated, audited endpoint,
   writes a second anchor or moves the balance again), and before/after `Account`
   audit rows in the same transaction. Supersedes the PER-239 account-level value
   approach folded into this ADR.
+
+## Buy / Sell trade primitive (PER-198)
+
+Recording a purchase or sale used to be two manual motions: a valuation-linked
+transfer (ADR-0048) to move the cash, then a separate holding edit to update the
+position. PER-198 collapses them into ONE atomic ledger action,
+`recordTradeForFamily` (`src/server/holdings.ts`), exposed as `recordTradeFn`.
+Semantically: cash **into** a valuation-tracked investment account is a BUY; cash
+**out** is a SELL.
+
+- **Atomic cash ↔ holding link.** A trade is a single valuation-linked transfer
+  whose tracked-side `Valuation` is the Σ-holdings anchor, plus the position
+  mutation, all in one `scopedTenantTransaction`. It reuses the ADR-0048 double-
+  entry primitive `postValuationLinkedTransferLegs` (factored out of the transfer
+  path so a non-transfer caller can drive it): the funding (cash-like,
+  `balanceSource="transaction_flow"`) leg is a real, guarded `Transaction`; the
+  investment (`balanceSource="valuation"`) side never takes an incremental
+  balance write. One `Transfer` row (ADR-0048 §4 shape: one `Transaction` FK +
+  `valuationId`) links them, so delete, drift detection, and reporting treat a
+  trade exactly like any other valuation-linked move.
+
+- **Dependence on the PER-196 valuation-transfer guard.** The whole design rests
+  on ADR-0048 §3 / PER-196: `applyAccountBalanceDelta` refuses to mutate a
+  `balanceSource="valuation"` account's stored balance. The funding leg
+  decrements/credits normally; the investment account moves ONLY through the
+  Σ-holdings valuation this primitive supplies. Without that guard a trade would
+  double-count (a cash leg AND a valuation both hitting the tracked balance). The
+  guard was verified to leave a valuation account's balance untouched while
+  decrementing the funding account — this is what makes the trade a clean
+  net-worth-conserving swap. See ADR-0048 (amends ADR-0042/ADR-0043 dual-leg).
+
+- **Net-worth conservation.** The funding account moves by exactly `cashAmount`
+  and the investment account's COST BASIS moves by exactly `cashAmount` (buy) /
+  `costRemoved` (sell). When holdings are carried at cost (no market `lastPrice`
+  — the freshly-traded case), the investment account's materialized value moves
+  by the same amount, so family net worth is unchanged. A holding already
+  carrying a market `lastPrice` values at market (honest cost basis, above); the
+  difference is unrealized gain already recognized, not a conservation
+  violation. Fractional-quantity rounding is bounded by one minor unit per
+  holding (inherent to carrying cost as a rounded per-unit price). A trade never
+  touches `lastPrice`.
+
+- **Average cost.** BUY blends: `newAvgUnitCost = round_half_up((oldUnits ×
+oldAvg + cashAmount) × SCALE / newUnits)` (`averageUnitCostMinor`,
+  `src/lib/holdings.ts`), so `cost += cashAmount`. SELL removes cost pro-rata at
+  the current average (`costRemoved = quantity × avgUnitCost`) and leaves the
+  average of the remaining units unchanged — the average-cost method, not FIFO.
+
+- **Derived realized gain.** SELL returns `realizedGain = cashAmount −
+costRemoved` (signed, minor units). It is DERIVED and returned for display
+  only — this slice does NOT post an income/expense row for it.
+
+- **One-way holding close at zero.** Selling the last unit
+  (`newUnits === 0`) closes the position by hard-deleting the `Holding` row
+  (mirroring `deleteHoldingForFamily`); the ledger history (`Transaction`,
+  `Valuation`, `Transfer`, `AuditLog`) is preserved.
+
+- **`kind` reuse (not a new domain value).** A trade posts under the existing
+  transfer kind the account pair implies (`deriveTransferKindForAccounts`;
+  cash ↔ investment ⇒ `funds_movement`, or `liability_draw`/`cc_payment` when the
+  funding account is a credit line). The DB trigger
+  `enforce_transfer_liability_kind_invariant` derives the expected kind purely
+  from account class/type, so it cannot distinguish a "trade" from a plain
+  valuation-linked cash move between the same accounts — a dedicated
+  `investment_buy`/`investment_sell` kind would have to teach that trigger the
+  same pair means two different kinds, which is not expressible. The trade's
+  identity lives in the position mutation and the `source="holdings"` valuation,
+  not in a new kind.
+
+- **Full §5A contract.** One interactive tenant transaction with the
+  `app.family_id` RLS GUC; endpoint-scoped idempotency (`recordTradeFn`
+  `IdempotencyRecord`, replay + unique-race replay so a retry never posts a
+  second transfer or moves a balance/position again); tenant-owned validation of
+  BOTH accounts and the instrument; append-only `AuditLog` rows for every entity
+  written (the cash `Transaction`, the `Transfer`, the `Holding`, and the
+  `Valuation`) in the same transaction.
+
+### Guarded: trade transactions cannot be deleted until trade reversal exists
+
+A trade posts a normal valuation-linked transfer `Transaction` that shows in the
+transaction list, so the delete UI can reach it. The generic valuation-linked
+delete (`softDeleteValuationLinkedTransferWithinTx`) reverses the cash leg and
+tombstones the trade's `Valuation`, but the paired `Holding` is outside the
+transfer graph and would NOT be reversed — the account would re-materialize from
+the prior valuation while the position still shows the traded units, silently
+inflating net worth (the read-only drift detector would flag it, but the data
+would already be wrong). That is a UI-reachable corruption of money data, so it
+is **guarded, not deferred**:
+
+- `softDeleteValuationLinkedTransferWithinTx` throws
+  `HoldingsTradeDeleteUnsupportedError` (422) **before mutating anything** when
+  the linked `Valuation.source === HOLDINGS_VALUATION_SOURCE` (`"holdings"`) —
+  the exact, per-transfer, definitional marker of a trade (its tracked-side move
+  is a Σ-holdings anchor). The constant lives in `valuations.ts` and is shared by
+  the holdings anchor writer and this guard. A per-account heuristic ("the
+  account has any `Holding` rows") was rejected because it would false-block a
+  legitimate plain valuation transfer to an account that also holds positions;
+  the per-transfer valuation source cannot false-block — a plain valuation-linked
+  transfer's own `Valuation.source` is `"transfer"`, so it still deletes
+  normally.
+- Full trade reversal (also undoing the `Holding` position, and eventually
+  restoring sold-to-zero closes) is a later slice that pairs naturally with lots
+  (PER-141-adjacent). Until then, trade transactions cannot be deleted; a real-PG
+  test asserts the delete is rejected with the funding balance, investment value,
+  and holding all unchanged.
+
+### Deferred (out of scope this slice)
+
+- **Trade EDIT and full trade REVERSAL** (see the guard above): editing a trade,
+  or a delete that also undoes the position, needs its own design (PER-141-
+  adjacent). This slice is create-only, mirroring ADR-0048 §4's deferral of
+  valuation-linked transfer editing.
+- **FIFO / tax lots** (PER-141), **realized-gain-as-income posting**,
+  **market-data auto-pricing** (the next slice sets `lastPrice` from a feed
+  rather than leaving positions at cost), and **transfer fees**.

@@ -1,4 +1,6 @@
 import {
+  ArrowDownLeft,
+  ArrowUpRight,
   Coins,
   PiggyBank,
   Plus,
@@ -11,6 +13,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { formatCurrency } from "@/lib/currency"
+import { instrumentKindLabel } from "@/lib/instruments"
 import { cn } from "@/lib/utils"
 import type { getAccountHoldingsFn } from "@/server/holdings"
 
@@ -27,21 +30,6 @@ export type AccountHoldingsView = Awaited<
   ReturnType<typeof getAccountHoldingsFn>
 >
 export type HoldingRecord = AccountHoldingsView["holdings"][number]
-
-// Human labels for the six instrument kinds (ADR-0051). Kept local to the UI —
-// the DB stores the machine token.
-const KIND_LABEL: Record<string, string> = {
-  mutual_fund: "Mutual fund",
-  metal: "Metal",
-  stock: "Stock",
-  crypto: "Crypto",
-  bond: "Bond",
-  deposit: "Deposit",
-}
-
-function kindLabel(kind: string): string {
-  return KIND_LABEL[kind] ?? kind
-}
 
 function GainText({
   gainMinor,
@@ -95,6 +83,9 @@ export function HoldingsPanel({
   onAdd,
   onEdit,
   onDelete,
+  onBuy,
+  onBuyHolding,
+  onSellHolding,
 }: Readonly<{
   view: AccountHoldingsView | undefined
   currency: string
@@ -102,6 +93,9 @@ export function HoldingsPanel({
   onAdd: () => void
   onEdit: (holding: HoldingRecord) => void
   onDelete: (holding: HoldingRecord) => void
+  onBuy: () => void
+  onBuyHolding: (holding: HoldingRecord) => void
+  onSellHolding: (holding: HoldingRecord) => void
 }>) {
   const holdings = view?.holdings ?? []
 
@@ -112,10 +106,16 @@ export function HoldingsPanel({
           <PiggyBank className="size-3.5" aria-hidden />
           Holdings
         </h2>
-        <Button size="sm" variant="outline" onClick={onAdd}>
-          <Plus className="size-4" />
-          Add holding
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" onClick={onBuy}>
+            <ArrowDownLeft className="size-4" />
+            Buy
+          </Button>
+          <Button size="sm" variant="outline" onClick={onAdd}>
+            <Plus className="size-4" />
+            Add holding
+          </Button>
+        </div>
       </div>
 
       {isLoading ? (
@@ -124,8 +124,8 @@ export function HoldingsPanel({
         <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed py-8 text-center">
           <Coins className="size-6 text-muted-foreground" aria-hidden />
           <p className="max-w-xs text-sm text-muted-foreground">
-            No holdings yet — add your funds, gold, or shares to track value and
-            returns.
+            No holdings yet — record a buy, or add a position you already own to
+            track value and returns.
           </p>
         </div>
       ) : (
@@ -142,7 +142,7 @@ export function HoldingsPanel({
                       {holding.instrument.name}
                     </p>
                     <Badge variant="secondary" className="shrink-0">
-                      {kindLabel(holding.instrument.kind)}
+                      {instrumentKindLabel(holding.instrument.kind)}
                     </Badge>
                   </div>
                   <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
@@ -150,6 +150,26 @@ export function HoldingsPanel({
                     {formatCurrency(holding.costMinor, currency)}
                   </p>
                   <div className="mt-1.5 flex items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => onBuyHolding(holding)}
+                    >
+                      <ArrowDownLeft className="size-3.5" />
+                      Buy
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => onSellHolding(holding)}
+                    >
+                      <ArrowUpRight className="size-3.5" />
+                      Sell
+                    </Button>
                     <Button
                       type="button"
                       variant="ghost"
