@@ -5,10 +5,13 @@ import {
   ACCOUNT_TYPE_VALUES,
   BALANCE_SOURCE_VALUES,
   allowsNegativeAssetBalance,
+  canEnableHoldingsTracking,
+  evaluateHoldingsTrackingEligibility,
   getAccountClassForType,
   getAccountNormalBalance,
   getBalanceSourceForType,
   getDefaultAccountSubtype,
+  type HoldingsTrackingEligibilityInput,
   isCashLikeAccount,
   isLiabilityAccountType,
   normalizeAccountTaxonomy,
@@ -144,5 +147,82 @@ describe("account taxonomy", () => {
     expect(allowsNegativeAssetBalance("TRACKED_ASSET")).toBe(false)
     expect(allowsNegativeAssetBalance("CREDIT")).toBe(false)
     expect(allowsNegativeAssetBalance("LOAN")).toBe(false)
+  })
+})
+
+describe("holdings tracking eligibility (PER-239 / ADR-0051)", () => {
+  const eligibleInvestment: HoldingsTrackingEligibilityInput = {
+    accountClass: "ASSET",
+    accountType: "INVESTMENT",
+    balanceSource: "transaction_flow",
+    reserveBalance: null,
+    counterpartyMerchantId: null,
+    status: "active",
+  }
+
+  test("a live, reserve-free INVESTMENT account is eligible", () => {
+    expect(evaluateHoldingsTrackingEligibility(eligibleInvestment)).toEqual({
+      eligible: true,
+    })
+    expect(canEnableHoldingsTracking(eligibleInvestment)).toBe(true)
+  })
+
+  test("rejects a non-INVESTMENT type", () => {
+    const result = evaluateHoldingsTrackingEligibility({
+      ...eligibleInvestment,
+      accountType: "DEPOSITORY",
+    })
+    expect(result.eligible).toBe(false)
+    expect(result).toMatchObject({ reason: /only.*INVESTMENT/i })
+  })
+
+  test("rejects an already valuation-tracked account (balanceSource)", () => {
+    const result = evaluateHoldingsTrackingEligibility({
+      ...eligibleInvestment,
+      balanceSource: "valuation",
+    })
+    expect(result).toEqual({
+      eligible: false,
+      reason: "Account is already valuation-tracked",
+    })
+  })
+
+  test("rejects a TRACKED_ASSET account as already tracked", () => {
+    const result = evaluateHoldingsTrackingEligibility({
+      ...eligibleInvestment,
+      accountType: "TRACKED_ASSET",
+      balanceSource: "valuation",
+    })
+    expect(result).toEqual({
+      eligible: false,
+      reason: "Account is already valuation-tracked",
+    })
+  })
+
+  test("rejects when a reserve balance is set", () => {
+    const result = evaluateHoldingsTrackingEligibility({
+      ...eligibleInvestment,
+      reserveBalance: 1000n,
+    })
+    expect(result).toEqual({
+      eligible: false,
+      reason: "Clear the reserve balance before enabling holdings tracking",
+    })
+  })
+
+  test("rejects a person-debt (counterparty) account", () => {
+    const result = evaluateHoldingsTrackingEligibility({
+      ...eligibleInvestment,
+      counterpartyMerchantId: "merchant_1",
+    })
+    expect(result.eligible).toBe(false)
+  })
+
+  test("rejects a non-active (archived) account", () => {
+    const result = evaluateHoldingsTrackingEligibility({
+      ...eligibleInvestment,
+      status: "closed",
+    })
+    expect(result.eligible).toBe(false)
   })
 })

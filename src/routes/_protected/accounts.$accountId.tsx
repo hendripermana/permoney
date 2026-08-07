@@ -11,6 +11,7 @@ import {
   Receipt,
   Scale,
   Search,
+  TrendingUp,
 } from "lucide-react"
 
 import { AppSidebar } from "@/components/app-sidebar"
@@ -20,6 +21,24 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { AccountVisual } from "@/components/blocks/account-visual"
 import { AccountFormDialog } from "@/components/blocks/account-form-dialog"
 import { ValuationActionDialog } from "@/components/blocks/valuation-action-dialog"
@@ -54,6 +73,8 @@ import { computeAccountRunway } from "@/lib/account-runway"
 import { computeIdleCash } from "@/lib/account-idle-cash"
 import { computeAccountPerformance } from "@/lib/account-performance"
 import { getAccountOpeningValueFn } from "@/server/valuations"
+import { enableHoldingsTrackingFn } from "@/server/accounts"
+import { canEnableHoldingsTracking } from "@/lib/accounts"
 import { deleteHoldingFn, getAccountHoldingsFn } from "@/server/holdings"
 import { HoldingsPanel, type HoldingRecord } from "./-account-holdings"
 import { computeAccountHealth } from "@/lib/account-health"
@@ -146,6 +167,22 @@ function AccountDetailPage() {
   const tracked = account?.balanceSource === "valuation"
   const currentBalance = account ? BigInt(account.balance) : 0n
 
+  // PER-239 / ADR-0051 — whether this INVESTMENT account can opt into holdings
+  // (valuation) tracking. Same pure predicate the server enforces, so the CTA
+  // never offers an account the server would reject.
+  const eligibleForHoldings = React.useMemo(() => {
+    if (!account) return false
+    return canEnableHoldingsTracking({
+      accountClass: account.accountClass,
+      accountType: account.accountType,
+      balanceSource: account.balanceSource,
+      reserveBalance:
+        account.reserveBalance !== null ? BigInt(account.reserveBalance) : null,
+      counterpartyMerchantId: account.counterpartyMerchantId,
+      status: account.status,
+    })
+  }, [account])
+
   // PER-229 — the opening valuation scalar (the one piece the client can't
   // derive) for investment/gold cost basis. Fetched declaratively; only for
   // valuation-tracked accounts. No useEffect (no-use-effect rule).
@@ -177,6 +214,26 @@ function AccountDetailPage() {
   // collections the hero/KPIs read from.
   async function refreshHoldings() {
     await Promise.all([refetchHoldings(), refreshAccountData()])
+  }
+
+  // PER-239 / ADR-0051 — flip this INVESTMENT account to valuation tracking,
+  // then resync the account collections (so `tracked` becomes true and the
+  // HoldingsPanel renders) and the holdings query.
+  async function handleEnableHoldingsTracking() {
+    try {
+      await enableHoldingsTrackingFn({
+        data: { accountId, idempotencyKey: createUuidV7() },
+      })
+      await refreshAccountData()
+      await refetchHoldings()
+      toast.success("Holdings tracking enabled")
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to enable holdings tracking"
+      )
+    }
   }
 
   async function handleDeleteHolding(holding: HoldingRecord) {
@@ -414,6 +471,12 @@ function AccountDetailPage() {
           {performance ? (
             <PerformancePanel performance={performance} currency={currency} />
           ) : null}
+          {eligibleForHoldings ? (
+            <EnableHoldingsCta
+              balanceLabel={formatCurrency(currentBalance, currency)}
+              onConfirm={handleEnableHoldingsTracking}
+            />
+          ) : null}
           {tracked ? (
             <HoldingsPanel
               view={holdingsView}
@@ -621,6 +684,64 @@ async function refreshAccountData() {
     accountCollection.utils.refetch(),
     transactionCollection.utils.refetch(),
   ])
+}
+
+// PER-239 / ADR-0051 — CTA that promotes an eligible INVESTMENT account to
+// holdings (valuation) tracking. Confirm is guarded by an AlertDialog because
+// the flip is one-way for now. Self-contained pending state so a double-click
+// can't fire the mutation twice.
+function EnableHoldingsCta({
+  balanceLabel,
+  onConfirm,
+}: Readonly<{ balanceLabel: string; onConfirm: () => Promise<void> }>) {
+  const [pending, setPending] = React.useState(false)
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <TrendingUp className="size-4" />
+          Track as holdings portfolio
+        </CardTitle>
+        <CardDescription>
+          Record each fund or position (units × market price). Your current
+          balance {balanceLabel} becomes the starting value until you add
+          holdings.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button size="sm" disabled={pending}>
+              <TrendingUp className="size-4" />
+              Enable holdings tracking
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Enable holdings tracking?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This account&apos;s balance will be tracked from the holdings
+                you add. Your current balance {balanceLabel} is kept as the
+                starting value until you record your first position. This
+                can&apos;t be undone yet.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  setPending(true)
+                  void onConfirm().finally(() => setPending(false))
+                }}
+              >
+                Enable
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </CardContent>
+    </Card>
+  )
 }
 
 function BackLink() {
