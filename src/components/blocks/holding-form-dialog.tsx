@@ -21,6 +21,11 @@ import {
 } from "@/components/ui/select"
 import { MoneyInput } from "@/components/blocks/money-input"
 import type { CurrencyCode } from "@/lib/data/currencies"
+import {
+  INSTRUMENT_KIND_OPTIONS,
+  instrumentKindLabel,
+  type InstrumentKind,
+} from "@/lib/instruments"
 import { parseMoneyInput, toDecimalString } from "@/lib/money"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import type { HoldingRecord } from "@/routes/_protected/-account-holdings"
@@ -33,29 +38,6 @@ import { upsertHoldingFn } from "@/server/holdings"
 // decimal strings straight to `upsertHoldingFn` (quantity as units, avgUnitCost
 // / lastPrice as MAJOR-unit amounts); the server parses + computes value/cost/
 // gain and re-materializes the account balance from the holdings anchor.
-
-// The six instrument kinds (ADR-0051), machine token → human label. The union
-// mirrors upsertHoldingFn's `instrument.kind` enum so no `any`/loose string
-// reaches the server contract.
-type InstrumentKind =
-  | "mutual_fund"
-  | "metal"
-  | "stock"
-  | "crypto"
-  | "bond"
-  | "deposit"
-
-const INSTRUMENT_KINDS: ReadonlyArray<{
-  value: InstrumentKind
-  label: string
-}> = [
-  { value: "mutual_fund", label: "Mutual fund" },
-  { value: "metal", label: "Metal" },
-  { value: "stock", label: "Stock" },
-  { value: "crypto", label: "Crypto" },
-  { value: "bond", label: "Bond" },
-  { value: "deposit", label: "Deposit" },
-]
 
 export type HoldingFormState =
   | { mode: "create" }
@@ -195,9 +177,7 @@ export function HoldingFormDialog({
                 </p>
               </div>
               <Badge variant="secondary" className="shrink-0">
-                {INSTRUMENT_KINDS.find(
-                  (k) => k.value === editing.instrument.kind
-                )?.label ?? editing.instrument.kind}
+                {instrumentKindLabel(editing.instrument.kind)}
               </Badge>
             </div>
           ) : (
@@ -222,7 +202,7 @@ export function HoldingFormDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {INSTRUMENT_KINDS.map((k) => (
+                    {INSTRUMENT_KIND_OPTIONS.map((k) => (
                       <SelectItem key={k.value} value={k.value}>
                         {k.label}
                       </SelectItem>

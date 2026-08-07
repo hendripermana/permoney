@@ -23,6 +23,7 @@ import { MoneyInput } from "@/components/blocks/money-input"
 import { formatCurrency } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
 import { holdingCostMinor, quantityToScaled } from "@/lib/holdings"
+import { INSTRUMENT_KIND_OPTIONS, type InstrumentKind } from "@/lib/instruments"
 import { parseMoneyInput } from "@/lib/money"
 import { cn } from "@/lib/utils"
 import { createUuidV7 } from "@/lib/uuid-v7"
@@ -37,28 +38,6 @@ import { recordTradeFn } from "@/server/holdings"
 // the cash total live. Money math on the client is limited to deriving the
 // total from quantity × unit price via the SAME pure helper the server uses, so
 // the previewed total is exactly what will move.
-
-// Machine token → human label for the instrument kinds (ADR-0051), reused for
-// the "new instrument" branch of a BUY.
-type InstrumentKind =
-  | "mutual_fund"
-  | "metal"
-  | "stock"
-  | "crypto"
-  | "bond"
-  | "deposit"
-
-const INSTRUMENT_KINDS: ReadonlyArray<{
-  value: InstrumentKind
-  label: string
-}> = [
-  { value: "mutual_fund", label: "Mutual fund" },
-  { value: "metal", label: "Metal" },
-  { value: "stock", label: "Stock" },
-  { value: "crypto", label: "Crypto" },
-  { value: "bond", label: "Bond" },
-  { value: "deposit", label: "Deposit" },
-]
 
 // Sentinel option value for "create a new instrument" (BUY only).
 const NEW_INSTRUMENT = "__new__"
@@ -301,7 +280,7 @@ export function TradeDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {INSTRUMENT_KINDS.map((k) => (
+                    {INSTRUMENT_KIND_OPTIONS.map((k) => (
                       <SelectItem key={k.value} value={k.value}>
                         {k.label}
                       </SelectItem>

@@ -13,6 +13,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { formatCurrency } from "@/lib/currency"
+import { instrumentKindLabel } from "@/lib/instruments"
 import { cn } from "@/lib/utils"
 import type { getAccountHoldingsFn } from "@/server/holdings"
 
@@ -29,21 +30,6 @@ export type AccountHoldingsView = Awaited<
   ReturnType<typeof getAccountHoldingsFn>
 >
 export type HoldingRecord = AccountHoldingsView["holdings"][number]
-
-// Human labels for the six instrument kinds (ADR-0051). Kept local to the UI —
-// the DB stores the machine token.
-const KIND_LABEL: Record<string, string> = {
-  mutual_fund: "Mutual fund",
-  metal: "Metal",
-  stock: "Stock",
-  crypto: "Crypto",
-  bond: "Bond",
-  deposit: "Deposit",
-}
-
-function kindLabel(kind: string): string {
-  return KIND_LABEL[kind] ?? kind
-}
 
 function GainText({
   gainMinor,
@@ -156,7 +142,7 @@ export function HoldingsPanel({
                       {holding.instrument.name}
                     </p>
                     <Badge variant="secondary" className="shrink-0">
-                      {kindLabel(holding.instrument.kind)}
+                      {instrumentKindLabel(holding.instrument.kind)}
                     </Badge>
                   </div>
                   <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
