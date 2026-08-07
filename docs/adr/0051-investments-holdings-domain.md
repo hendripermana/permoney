@@ -303,3 +303,41 @@ is **guarded, not deferred**:
 - **FIFO / tax lots** (PER-141), **realized-gain-as-income posting**,
   **market-data auto-pricing** (the next slice sets `lastPrice` from a feed
   rather than leaving positions at cost), and **transfer fees**.
+
+## Market-data auto-pricing (PER-238)
+
+The holdings `Instrument` now carries an OPTIONAL, nullable
+`marketInstrumentId → MarketInstrument` (ADR-0050's global price series;
+`onDelete: SetNull`). This is the bridge the PER-233 note deferred, and it makes
+ADR-0050 §5's promise concrete: a linked position values at `quantity × latest
+price/unit` from the quote store instead of at cost.
+
+- **The link is on the holdings `Instrument`, priced onto the `Holding`.** When
+  a holding's instrument is linked, `refreshHoldingPricesForFamily`
+  (`src/server/holdings.ts`) reads the latest `MarketQuote`, converts it to the
+  holding's price basis (`marketQuoteToHoldingPriceMinor`, pure — metal derives
+  per-gram from the canonical per-troy-ounce quote; security/crypto are
+  per-unit), sets `Holding.lastPriceMinor`, and re-materializes the Σ-holdings
+  anchor via the SAME `recomputeAccountValueAnchorWithinTx` that every holding
+  mutation uses. So value/cost/gain and the account balance stay derived from
+  ONE mechanism.
+
+- **Anchor-safe — a price is an OBSERVATION (ADR-0043/0050 §2).** The refresh
+  only ever moves a holding's `lastPriceMinor` and the derived `source="holdings"`
+  valuation of the SAME investment account. It never touches a cash balance, a
+  user `opening`/`reconciliation`/`manual` anchor, or a non-holdings account, and
+  a refresh with unchanged quotes is a NO-OP (no duplicate anchor, no balance
+  move). Same-currency (`MarketInstrument.quoteCurrency` == account currency) is
+  required this slice; cross-currency via FX is deferred.
+
+- **Contract.** Setting the link (`upsertHoldingFn`) and the refresh
+  (`refreshHoldingPricesFn`) both run the full §5A ledger-mutation contract
+  (RLS-scoped tenant tx, idempotency, tenant validation, append-only audit).
+  Real-Postgres tests cover link, refresh, anchor-safety (cash + non-holdings
+  anchors untouched), idempotent re-refresh, same-currency rejection, unlinked
+  holdings, and tenant isolation
+  (`tests/integration/holding-market-prices.integration.ts`).
+
+- **Deferred:** the scheduled refresh worker (PER-237 — this slice exposes an
+  explicit "Refresh prices" action only), real scraper adapters (PER-235
+  gold-local; reksadana NAV), and cross-currency quote → holding.

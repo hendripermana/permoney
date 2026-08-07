@@ -7,6 +7,7 @@ import {
   FX_PRICE_DECIMALS,
   isMarketInstrumentKind,
   MARKET_INSTRUMENT_KINDS,
+  marketQuoteToHoldingPriceMinor,
   normalizeObservations,
   priceScaleForKind,
   SPOT_PRICE_DECIMALS,
@@ -178,5 +179,87 @@ describe("normalizeObservations", () => {
     ])
     expect(result.quotes).toHaveLength(0)
     expect(result.rejected[0]?.reason).toContain("only valid for fx")
+  })
+})
+
+// PER-238 — quote -> holding-price conversion (pure). Verifies the unit contract
+// (metal per-gram derivation, security/crypto per-unit) and the scaled-integer →
+// minor-unit scaling. IDR/USD minorUnitConversion = 100 (sen/cents).
+describe("marketQuoteToHoldingPriceMinor (PER-238 quote -> holding price)", () => {
+  test("security NAV/unit maps straight to minor units (per unit)", () => {
+    // Reksadana NAV Rp 1,477.63/unit -> 147763 sen/unit.
+    const nav = encodeSpotPrice("1477.63")
+    expect(
+      marketQuoteToHoldingPriceMinor({
+        kind: "security",
+        priceScaled: nav,
+        priceScale: SPOT_PRICE_DECIMALS,
+        minorUnitConversion: 100n,
+      })
+    ).toBe(147763n)
+  })
+
+  test("crypto per-coin price rounds 8dp precision to minor units", () => {
+    // BTC $67000.12345678/coin -> 6700012 cents/coin (round-half-to-even).
+    const btc = encodeSpotPrice("67000.12345678")
+    expect(
+      marketQuoteToHoldingPriceMinor({
+        kind: "crypto",
+        priceScaled: btc,
+        priceScale: SPOT_PRICE_DECIMALS,
+        minorUnitConversion: 100n,
+      })
+    ).toBe(6700012n)
+  })
+
+  test("metal price per TROY OUNCE is derived to per-GRAM then minor units", () => {
+    // Gold $2400.53/oz -> per gram = 2400.53 / 31.1034768 = $77.178.../g -> 7718 cents/g.
+    const perOunce = encodeSpotPrice("2400.53")
+    // The derivation must match the canonical per-gram helper composed with scaling.
+    const perGramScaled = spotPriceScaledPerGram(perOunce)
+    expect(perGramScaled).toBe(7717883166n)
+    expect(
+      marketQuoteToHoldingPriceMinor({
+        kind: "metal",
+        priceScaled: perOunce,
+        priceScale: SPOT_PRICE_DECIMALS,
+        minorUnitConversion: 100n,
+      })
+    ).toBe(7718n)
+  })
+
+  test("a zero-fraction currency (JPY, conversion 1) keeps whole units", () => {
+    // A ¥3500/share stock -> 3500 (no minor subdivision).
+    const price = encodeSpotPrice("3500")
+    expect(
+      marketQuoteToHoldingPriceMinor({
+        kind: "security",
+        priceScaled: price,
+        priceScale: SPOT_PRICE_DECIMALS,
+        minorUnitConversion: 1n,
+      })
+    ).toBe(3500n)
+  })
+
+  test("rejects a non-spot price scale (an fx pair cannot price a holding)", () => {
+    expect(() =>
+      marketQuoteToHoldingPriceMinor({
+        kind: "security",
+        priceScaled: 100n,
+        priceScale: FX_PRICE_DECIMALS, // 12 — fx scale, not a per-unit spot price
+        minorUnitConversion: 100n,
+      })
+    ).toThrow()
+  })
+
+  test("rejects a non-positive price", () => {
+    expect(() =>
+      marketQuoteToHoldingPriceMinor({
+        kind: "crypto",
+        priceScaled: 0n,
+        priceScale: SPOT_PRICE_DECIMALS,
+        minorUnitConversion: 100n,
+      })
+    ).toThrow()
   })
 })

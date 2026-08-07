@@ -79,7 +79,11 @@ import { computeAccountPerformance } from "@/lib/account-performance"
 import { getAccountOpeningValueFn } from "@/server/valuations"
 import { enableHoldingsTrackingFn } from "@/server/accounts"
 import { canEnableHoldingsTracking } from "@/lib/accounts"
-import { deleteHoldingFn, getAccountHoldingsFn } from "@/server/holdings"
+import {
+  deleteHoldingFn,
+  getAccountHoldingsFn,
+  refreshHoldingPricesFn,
+} from "@/server/holdings"
 import { HoldingsPanel, type HoldingRecord } from "./-account-holdings"
 import { computeAccountHealth } from "@/lib/account-health"
 import { selectDriftBadge } from "@/lib/account-drift-presentation"
@@ -257,6 +261,31 @@ function AccountDetailPage() {
           ? error.message
           : "Failed to enable holdings tracking"
       )
+    }
+  }
+
+  // PER-238 — refresh linked holdings' prices from the latest market quotes.
+  // Anchor-safe on the server (only moves lastPrice + the Σ-holdings anchor);
+  // here we just trigger it, then resync the holdings query + account balance.
+  const [refreshingPrices, setRefreshingPrices] = React.useState(false)
+  async function handleRefreshPrices() {
+    setRefreshingPrices(true)
+    try {
+      const result = await refreshHoldingPricesFn({
+        data: { accountId, idempotencyKey: createUuidV7() },
+      })
+      await refreshHoldings()
+      toast.success(
+        result.updatedHoldings > 0
+          ? `Updated ${result.updatedHoldings} price${result.updatedHoldings === 1 ? "" : "s"}`
+          : "Prices already up to date"
+      )
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to refresh prices"
+      )
+    } finally {
+      setRefreshingPrices(false)
     }
   }
 
@@ -516,6 +545,8 @@ function AccountDetailPage() {
               onSellHolding={(holding) =>
                 setTradeDialog({ side: "sell", holding })
               }
+              onRefreshPrices={handleRefreshPrices}
+              refreshingPrices={refreshingPrices}
             />
           ) : null}
           {health ? <AccountHealthPanel health={health} /> : null}

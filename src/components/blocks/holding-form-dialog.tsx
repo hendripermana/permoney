@@ -1,4 +1,5 @@
 import * as React from "react"
+import { useQuery } from "@tanstack/react-query"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -29,7 +30,11 @@ import {
 import { parseMoneyInput, toDecimalString } from "@/lib/money"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import type { HoldingRecord } from "@/routes/_protected/-account-holdings"
-import { upsertHoldingFn } from "@/server/holdings"
+import { listMarketInstrumentsFn, upsertHoldingFn } from "@/server/holdings"
+
+// Sentinel Select value for "no live price source" (manual pricing). Radix
+// Select forbids an empty-string item value, so null is modeled explicitly.
+const MANUAL_PRICE_VALUE = "__manual__"
 
 // PER-232 / ADR-0051 — shared add/edit holding dialog. Mirrors
 // account-form-dialog.tsx: self-contained (its own idempotency key + submit +
@@ -88,8 +93,20 @@ export function HoldingFormDialog({
   const [lastPrice, setLastPrice] = React.useState<string>(() =>
     editing ? majorFromMinor(editing.lastPriceMinor, currencyCode) : ""
   )
+  // PER-238 — optional live price source (a global MarketInstrument). null =
+  // manual pricing. When linked, "Refresh prices" on the account marks the
+  // holding's last price from the latest quote (anchor-safe observation).
+  const [marketInstrumentId, setMarketInstrumentId] = React.useState<
+    string | null
+  >(editing?.instrument.marketInstrumentId ?? null)
   const [error, setError] = React.useState<string | null>(null)
   const [submitting, setSubmitting] = React.useState(false)
+
+  // Same-currency series only (cross-currency auto-pricing is a later slice).
+  const { data: marketInstruments } = useQuery({
+    queryKey: ["market_instruments", currency],
+    queryFn: async () => await listMarketInstrumentsFn({ data: { currency } }),
+  })
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
@@ -124,6 +141,7 @@ export function HoldingFormDialog({
             quantity: quantity.trim(),
             avgUnitCost: avgUnitCostValue,
             lastPrice: lastPriceValue,
+            marketInstrumentId,
             idempotencyKey: createUuidV7(),
           },
         })
@@ -135,6 +153,7 @@ export function HoldingFormDialog({
             quantity: quantity.trim(),
             avgUnitCost: avgUnitCostValue,
             lastPrice: lastPriceValue,
+            marketInstrumentId,
             idempotencyKey: createUuidV7(),
           },
         })
@@ -259,6 +278,38 @@ export function HoldingFormDialog({
             Price per unit. Leave last price empty to show value at cost (no
             gain fabricated) until you have today&apos;s price.
           </p>
+
+          <div className="flex flex-col gap-2">
+            <Label>Live price source</Label>
+            <Select
+              value={marketInstrumentId ?? MANUAL_PRICE_VALUE}
+              onValueChange={(value) =>
+                setMarketInstrumentId(
+                  value === MANUAL_PRICE_VALUE ? null : value
+                )
+              }
+            >
+              <SelectTrigger aria-label="Live price source">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={MANUAL_PRICE_VALUE}>
+                  Manual (no live price)
+                </SelectItem>
+                {(marketInstruments ?? []).map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.symbol}
+                    {m.name ? ` · ${m.name}` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Link a market price series to auto-fill the last price on
+              &ldquo;Refresh prices&rdquo;. Only same-currency ({currency})
+              sources are shown.
+            </p>
+          </div>
 
           {error ? (
             <p className="text-sm text-destructive" role="alert">

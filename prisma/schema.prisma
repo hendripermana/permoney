@@ -970,6 +970,17 @@ model Instrument {
   // (this slice). "yield" (principal + accrued interest) is a later slice.
   priceModel String @default("market")
 
+  // PER-238 / ADR-0050+0051 — OPTIONAL link to a GLOBAL market-data price series
+  // (MarketInstrument). When set, `refreshHoldingPricesForFamily` reads the
+  // latest MarketQuote for it and marks this instrument's holdings' lastPrice
+  // (anchor-safe: a price is an observation, ADR-0050 §2 — it only ever moves a
+  // holding's lastPrice and the derived Σ-holdings anchor, never a cash balance
+  // or a user opening/reconciliation/manual anchor). NULL = manual pricing.
+  // The target is a family-NEUTRAL row (no tenant data); onDelete: SetNull so
+  // retiring a price series quietly unlinks holdings rather than blocking.
+  marketInstrumentId String?
+  marketInstrument   MarketInstrument? @relation("HoldingInstrumentMarketLink", fields: [marketInstrumentId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "instrument_market_instrument_fkey")
+
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
@@ -1072,6 +1083,10 @@ model MarketInstrument {
   updatedAt DateTime @default(now()) @updatedAt
 
   quotes MarketQuote[]
+
+  // PER-238 — holdings `Instrument` rows that link here for auto-pricing. Back-
+  // relation only; the link + onDelete: SetNull live on the holdings side.
+  linkedHoldingInstruments Instrument[] @relation("HoldingInstrumentMarketLink")
 
   // Instrument identity is (kind, symbol, mic, quoteCurrency). Enforced by a
   // COALESCE(mic,'') UNIQUE INDEX in the migration so NULL mics still dedupe.
