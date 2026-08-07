@@ -147,3 +147,44 @@ live write. Supersedes PER-239 (its account-level value+cost is the degenerate
 5. **Lots + realized gains** — FIFO/average cost, dividends/coupons reinvest.
 6. **Portfolio + dashboard** — PER-230/231 read holdings (total value, cost,
    gain, allocation by kind), base-currency normalized (ADR-0035).
+
+## Opt-in valuation for investment accounts (PER-239)
+
+Genuine INVESTMENT accounts default to `balanceSource="transaction_flow"`
+(`getBalanceSourceForType` in `src/lib/accounts.ts` maps only `TRACKED_ASSET` →
+`"valuation"`). The holdings core (Slice 1) attaches only to valuation-tracked
+accounts, so an INVESTMENT account cannot record holdings until it is promoted.
+Rather than change the default derivation — which would ripple through the
+account-create path, the negative-balance carve-out, and existing accounts — a
+genuine INVESTMENT account **opts in** through one dedicated, audited endpoint,
+`enableHoldingsTrackingFn` (`src/server/accounts.ts`).
+
+- **Controlled override, not a new default.** `getBalanceSourceForType` and the
+  account-CREATE path are unchanged; the ADR-0008 taxonomy `balanceSource` is now
+  a **derived default, overridable to `valuation` for INVESTMENT via explicit
+  opt-in**. TRACKED_ASSET behavior is untouched.
+- **Safe-seed-anchor invariant (no data loss).** A valuation-tracked account
+  derives its balance from its latest valuation, not from transaction flow.
+  Inside the same tenant transaction, after flipping `balanceSource` →
+  `"valuation"`, the endpoint seeds a `reconciliation` anchor
+  (`source="manual"`, `valuationDate = now`, so it is the latest anchor) equal to
+  the account's current signed balance. `computeCanonicalBalance` then resolves
+  to exactly the pre-flip balance. When the user later adds holdings, the
+  holdings-derived anchor (`source="holdings"`, written afterwards) supersedes
+  the seed. A real-PG test asserts the balance is preserved on flip and equals
+  Σ holdings after the first holding.
+- **Preconditions.** Eligibility is one pure predicate
+  (`evaluateHoldingsTrackingEligibility`) shared by the endpoint and the UI CTA:
+  `accountClass="ASSET"`, `accountType="INVESTMENT"`,
+  `balanceSource="transaction_flow"`, `status="active"`, and **reserve must be
+  clear** (`reserveBalance IS NULL`) and no person-debt link
+  (`counterpartyMerchantId IS NULL`) — a reserve floor is cash-only and a
+  counterparty link is RECEIVABLE/LOAN-only, both incompatible with a
+  valuation-sourced account. TRACKED_ASSET / already-`valuation` accounts are
+  rejected as "already valuation-tracked".
+- **One-way for now.** The reverse (`valuation` → `transaction_flow`) is a later
+  slice; the endpoint only promotes. Full §5A contract: RLS-scoped tenant
+  transaction, endpoint idempotency (replay + unique-race replay so a retry never
+  writes a second anchor or moves the balance again), and before/after `Account`
+  audit rows in the same transaction. Supersedes the PER-239 account-level value
+  approach folded into this ADR.

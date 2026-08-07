@@ -4,6 +4,7 @@ import { z } from "zod"
 import {
   ACCOUNT_TYPE_VALUES,
   allowsNegativeAssetBalance,
+  evaluateHoldingsTrackingEligibility,
   normalizeAccountTaxonomy,
   type AccountType,
 } from "@/lib/accounts"
@@ -32,6 +33,7 @@ import {
   softDeleteTransactionWithinTenantTransaction,
   TransactionGoneError,
 } from "./transactions"
+import { createValuationWithinTx } from "./valuations"
 
 // =============================================================================
 // PER-143 — Account manual UX vertical slice (CRUD, archive, cash-vs-tracked).
@@ -55,6 +57,7 @@ const CREATE_ACCOUNT_ENDPOINT = "createAccountFn"
 const UPDATE_ACCOUNT_ENDPOINT = "updateAccountFn"
 const ARCHIVE_ACCOUNT_ENDPOINT = "archiveAccountFn"
 const REACTIVATE_ACCOUNT_ENDPOINT = "reactivateAccountFn"
+const ENABLE_HOLDINGS_TRACKING_ENDPOINT = "enableHoldingsTrackingFn"
 
 /**
  * Raised when a mutation targets an account id that does not belong to the
@@ -166,6 +169,15 @@ export const updateAccountInputSchema = z.object({
 
 export const accountIdActionInputSchema = z.object({
   id: z.string().min(1),
+  idempotencyKey: uuidV7Schema,
+})
+
+// PER-239 / ADR-0051 — opt an INVESTMENT account into holdings (valuation)
+// tracking. Deliberately its own schema (accountId, not id) to keep it distinct
+// from the generic id-actions: this is a one-way ledger-shape change, not a
+// metadata edit.
+export const enableHoldingsTrackingInputSchema = z.object({
+  accountId: z.string().min(1),
   idempotencyKey: uuidV7Schema,
 })
 
@@ -667,6 +679,163 @@ export const updateAccountFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data, context }) => {
     return await updateAccountForFamily({
+      data,
+      familyId: context.familyId,
+      user: context.user,
+    })
+  })
+
+// ============================================================================
+// ENABLE HOLDINGS TRACKING (PER-239 / ADR-0051)
+// ============================================================================
+//
+// Genuine INVESTMENT accounts default to balanceSource="transaction_flow"
+// (getBalanceSourceForType), so the holdings layer's eligibility gate
+// (src/server/holdings.ts) rejects them — even though the whole holdings core
+// (Instrument + Holding + value=Σ holdings) is already built. This endpoint is
+// the ONE explicit, controlled override of that default: it flips a qualifying
+// INVESTMENT account to balanceSource="valuation" so it can record holdings.
+//
+// The safe-seed-anchor invariant: a valuation-tracked account derives its
+// balance from its LATEST valuation, not from transaction flow. Flipping the
+// source alone would make the balance resolve to the account's opening
+// valuation and silently drop any accumulated flow. So, inside the SAME
+// transaction and AFTER the flip, we seed a `reconciliation` anchor equal to
+// the account's CURRENT signed balance (valuationDate = now, hence the latest
+// anchor). computeCanonicalBalance then resolves to exactly the old balance —
+// zero data loss — until the user enters holdings, at which point the
+// holdings-derived anchor (source="holdings", written later) supersedes it.
+//
+// One-way for now: the reverse (valuation → transaction_flow) is a later slice.
+// Full §5A contract: RLS-scoped tenant tx, endpoint idempotency (replay +
+// unique-race replay), before/after Account audit, tenant-owned validation.
+
+export async function enableHoldingsTrackingForFamily({
+  data: rawData,
+  familyId,
+  user,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  data: z.input<typeof enableHoldingsTrackingInputSchema>
+  familyId: string
+  user: ServerUser
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<SerializedAccount> {
+  const data = enableHoldingsTrackingInputSchema.parse(rawData)
+  const requestHash = await hashCanonicalPayload({ accountId: data.accountId })
+  const auditCtx = await createAuditContext(
+    { user: { id: user.id, familyId } },
+    data.idempotencyKey
+  )
+
+  const runOnce = async () =>
+    await runInTenantTransaction(familyId, user.id, async (tx) => {
+      const replay = await replayIdempotentEndpointResponse<SerializedAccount>(
+        tx,
+        {
+          endpoint: ENABLE_HOLDINGS_TRACKING_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+        }
+      )
+      if (replay) return replay
+
+      // Tenant isolation: RLS + the explicit familyId filter. A soft-deleted or
+      // cross-tenant account is simply "not found" here.
+      const before = await tx.account.findFirst({
+        where: { id: data.accountId, familyId },
+      })
+      if (!before || before.deletedAt !== null) {
+        throw new AccountNotFoundError(data.accountId)
+      }
+
+      // Single pure predicate shared with the UI CTA gate (no drift).
+      const eligibility = evaluateHoldingsTrackingEligibility(before)
+      if (!eligibility.eligible) {
+        throw new AccountValidationError(eligibility.reason)
+      }
+
+      // (a) Flip the balance source FIRST, so the seed anchor below is written
+      // and re-materialized under valuation semantics (latest valuation wins).
+      await tx.account.update({
+        where: { id: data.accountId },
+        data: { balanceSource: "valuation" },
+      })
+
+      // (b) Seed the balance-preserving anchor. createValuationWithinTx signs
+      // the magnitude, writes the Valuation + its audit row, and re-materializes
+      // Account.balance from canonical rows. For an INVESTMENT (ASSET) account
+      // the stored balance is a non-negative magnitude, so passing it straight
+      // through is exactly the current signed value. This anchor is the latest
+      // (valuationDate = now), so canonical resolves to it == old balance.
+      await createValuationWithinTx(
+        tx,
+        familyId,
+        {
+          accountId: data.accountId,
+          value: before.balance.toString(),
+          currency: before.currency,
+          type: "reconciliation",
+          source: "manual",
+          valuationDate: new Date(),
+          idempotencyKey: data.idempotencyKey,
+        },
+        user,
+        auditCtx
+      )
+
+      // Re-read: the flip + seed anchor may have touched balance/version.
+      const after = await tx.account.findFirstOrThrow({
+        where: { id: data.accountId, familyId },
+      })
+      const serialized = serializeAccount(after)
+      await auditLog(tx, auditCtx, {
+        action: "update",
+        entityType: "Account",
+        entityId: after.id,
+        before: serializeAccount(before),
+        after: serialized,
+      })
+      await persistIdempotentEndpointResponse(tx, {
+        endpoint: ENABLE_HOLDINGS_TRACKING_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+        response: serialized,
+      })
+      return serialized
+    })
+
+  try {
+    return await runOnce()
+  } catch (error) {
+    // Concurrent same-key request won the IdempotencyRecord unique race; resolve
+    // by replaying the stored response (mirrors createAccountForFamily).
+    if (!isUniqueConstraintError(error)) throw error
+    const replay = await scopedTenantTransaction(
+      familyId,
+      user.id,
+      async (tx) =>
+        replayIdempotentEndpointResponse<SerializedAccount>(tx, {
+          endpoint: ENABLE_HOLDINGS_TRACKING_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+        })
+    )
+    if (replay) return replay
+    throw error
+  }
+}
+
+export const enableHoldingsTrackingFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("account:write")])
+  .inputValidator((data: z.input<typeof enableHoldingsTrackingInputSchema>) =>
+    enableHoldingsTrackingInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await enableHoldingsTrackingForFamily({
       data,
       familyId: context.familyId,
       user: context.user,

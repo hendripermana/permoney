@@ -204,6 +204,104 @@ export function allowsNegativeAssetBalance(accountType: AccountType): boolean {
   return NEGATIVE_BALANCE_ALLOWED_ACCOUNT_TYPE_SET.has(accountType)
 }
 
+// PER-239 / ADR-0051 — opt-in holdings tracking eligibility (pure).
+//
+// Genuine INVESTMENT accounts default to balanceSource="transaction_flow"
+// (getBalanceSourceForType), so they cannot hold `Holding` rows until they are
+// explicitly promoted to valuation-tracked. This is the single, pure predicate
+// that decides whether an account may be promoted — kept Prisma-free so the
+// server endpoint (enableHoldingsTrackingForFamily) and the UI CTA gate read
+// ONE source of truth and can never disagree about who is eligible.
+//
+// It is deliberately a controlled OVERRIDE of the `getBalanceSourceForType`
+// default: the default derivation and the account-create path are unchanged;
+// only this explicit opt-in flips an INVESTMENT account to "valuation".
+
+export interface HoldingsTrackingEligibilityInput {
+  accountClass: string
+  accountType: string
+  balanceSource: string
+  reserveBalance: bigint | null
+  counterpartyMerchantId: string | null
+  status: string
+}
+
+export type HoldingsTrackingEligibility =
+  | { eligible: true }
+  | { eligible: false; reason: string }
+
+/**
+ * Whether a (live, non-deleted) account may opt into holdings tracking. Returns
+ * a machine-checkable verdict with a user-facing reason on rejection. Existence
+ * and `deletedAt` are the caller's concern (they surface as a not-found error
+ * before this runs). Reserve/counterparty must be clear because holdings
+ * tracking re-materializes the balance from a valuation anchor: a reserve floor
+ * (cash-only) and a person-debt link (RECEIVABLE/LOAN only) are incompatible
+ * with a valuation-sourced INVESTMENT account.
+ */
+export function evaluateHoldingsTrackingEligibility(
+  account: HoldingsTrackingEligibilityInput
+): HoldingsTrackingEligibility {
+  if (account.status !== "active") {
+    return {
+      eligible: false,
+      reason: "Only an active account can enable holdings tracking",
+    }
+  }
+  if (account.accountClass !== "ASSET") {
+    return {
+      eligible: false,
+      reason: `Holdings tracking is only available for ASSET accounts, not ${account.accountClass}`,
+    }
+  }
+  // TRACKED_ASSET (and anything already valuation-sourced) is already tracked.
+  if (
+    account.accountType === "TRACKED_ASSET" ||
+    account.balanceSource === "valuation"
+  ) {
+    return {
+      eligible: false,
+      reason: "Account is already valuation-tracked",
+    }
+  }
+  if (account.accountType !== "INVESTMENT") {
+    return {
+      eligible: false,
+      reason: `Holdings tracking is only available for INVESTMENT accounts, not ${account.accountType}`,
+    }
+  }
+  if (account.balanceSource !== "transaction_flow") {
+    return {
+      eligible: false,
+      reason: `Account balanceSource must be transaction_flow to enable holdings tracking, not ${account.balanceSource}`,
+    }
+  }
+  if (account.reserveBalance !== null) {
+    return {
+      eligible: false,
+      reason: "Clear the reserve balance before enabling holdings tracking",
+    }
+  }
+  if (account.counterpartyMerchantId !== null) {
+    return {
+      eligible: false,
+      reason: "Holdings tracking is not available for a person-debt account",
+    }
+  }
+  return { eligible: true }
+}
+
+/**
+ * UI convenience over `evaluateHoldingsTrackingEligibility` — a boolean gate for
+ * rendering the "Track as holdings portfolio" CTA. Same predicate, so the CTA
+ * can never offer an account the server would reject.
+ */
+export function canEnableHoldingsTracking(
+  account: HoldingsTrackingEligibilityInput
+): boolean {
+  return evaluateHoldingsTrackingEligibility(account).eligible
+}
+
 export function normalizeAccountTaxonomy(
   input: AccountTaxonomyInput
 ): AccountTaxonomy {
