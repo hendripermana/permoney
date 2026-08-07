@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { MoneyInput } from "@/components/blocks/money-input"
 import {
   Select,
   SelectContent,
@@ -32,7 +33,7 @@ import { accountSupportsReserve } from "@/lib/account-reserve"
 import type { AccountRecord } from "@/lib/account-collections"
 import { CURRENCY_OPTIONS } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
-import { parseUserInput, toDisplayNumber } from "@/lib/money"
+import { parseMoneyInput, toDecimalString } from "@/lib/money"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import { createAccountFn, updateAccountFn } from "@/server/accounts"
 
@@ -81,11 +82,9 @@ export function AccountFormDialog({
   // edit, seed from the stored minor-unit value (lazy init, no useEffect).
   const [reserveInput, setReserveInput] = React.useState<string>(() =>
     editing?.reserveBalance
-      ? String(
-          toDisplayNumber(
-            BigInt(editing.reserveBalance),
-            (editing.currency as CurrencyCode) ?? "IDR"
-          )
+      ? toDecimalString(
+          BigInt(editing.reserveBalance),
+          (editing.currency as CurrencyCode) ?? "IDR"
         )
       : ""
   )
@@ -124,8 +123,8 @@ export function AccountFormDialog({
         if (reserveInput.trim() === "") {
           reserveMinor = editing ? null : undefined
         } else {
-          const parsedReserve = parseUserInput(
-            reserveInput.trim(),
+          const parsedReserve = parseMoneyInput(
+            reserveInput,
             currency as CurrencyCode
           )
           if (parsedReserve === null || parsedReserve < 0n) {
@@ -150,14 +149,15 @@ export function AccountFormDialog({
           },
         })
       } else {
-        // PER-207: parse the user-typed opening balance with `parseUserInput`
-        // (handles thousands separators / locale decimal, returns null on
-        // malformed) — NOT `toMinorUnits`, which expects a canonical decimal
-        // and throws on user-formatted strings.
+        // PER-207/PER-240: parse the user-typed opening balance with
+        // `parseMoneyInput` (locale-agnostic, handles thousands separators /
+        // either decimal convention, returns null on malformed) — NOT
+        // `toMinorUnits`, which expects a canonical decimal and throws on
+        // user-formatted strings. `<MoneyInput>` previews the same value.
         let openingMinor = "0"
         if (openingBalance.trim() !== "") {
-          const parsed = parseUserInput(
-            openingBalance.trim(),
+          const parsed = parseMoneyInput(
+            openingBalance,
             currency as CurrencyCode
           )
           if (parsed === null) {
@@ -277,11 +277,11 @@ export function AccountFormDialog({
               <Label htmlFor="opening-balance">
                 Opening balance ({currency})
               </Label>
-              <Input
+              <MoneyInput
                 id="opening-balance"
-                inputMode="decimal"
+                currency={currency as CurrencyCode}
                 value={openingBalance}
-                onChange={(e) => setOpeningBalance(e.target.value)}
+                onChange={setOpeningBalance}
                 placeholder="0"
               />
               <p className="text-xs text-muted-foreground">
@@ -313,11 +313,11 @@ export function AccountFormDialog({
               <Label htmlFor="reserve-balance">
                 Reserve / minimum balance ({currency})
               </Label>
-              <Input
+              <MoneyInput
                 id="reserve-balance"
-                inputMode="decimal"
+                currency={currency as CurrencyCode}
                 value={reserveInput}
-                onChange={(e) => setReserveInput(e.target.value)}
+                onChange={setReserveInput}
                 placeholder="0"
               />
               <p className="text-xs text-muted-foreground">

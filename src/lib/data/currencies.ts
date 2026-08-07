@@ -17,6 +17,18 @@ export interface CurrencyDefinition {
   readonly minorUnitConversion: number
   /** Smallest physical denomination (UX hint, NOT a storage constraint). null for non-physical. */
   readonly smallestDenomination: number | null
+  /**
+   * Locale decimal/thousands separators from the source dataset.
+   *
+   * NOT used for PARSING anymore (PER-240): `parseMoneyInput` is
+   * locale-agnostic and auto-detects the decimal separator from the input's
+   * own shape, because the app DISPLAYS money via `Intl.NumberFormat`
+   * (en-US: comma thousands, dot decimal) rather than these flags. Parsing
+   * with them caused a 100× IDR misparse. They are also NOT read by
+   * `formatMoney`/`formatCurrency` (which delegate to `Intl`). Kept only as
+   * descriptive reference metadata; do not reintroduce a parse/format
+   * dependency on them.
+   */
   readonly separator: string
   readonly delimiter: string
   /** Format string: `%u` = currency symbol/code, `%n` = number. */

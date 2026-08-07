@@ -16,6 +16,7 @@ import {
   isWireMoney,
   mulMoney,
   negateMoney,
+  parseMoneyInput,
   parseUserInput,
   subMoney,
   sumMoney,
@@ -416,8 +417,163 @@ describe("parseUserInput", () => {
     })
 
     it("excessive precision is rejected", () => {
-      expect(parseUserInput("$1.234", "USD")).toBeNull()
+      // PER-240: genuine over-precision (single dot, 4 trailing digits, or an
+      // explicit decimal separator with >2 fraction digits) is rejected.
+      expect(parseUserInput("$1.2345", "USD")).toBeNull()
+      expect(parseUserInput("$1,234.567", "USD")).toBeNull()
     })
+
+    it("PER-240: single dot with exactly 3 trailing digits is thousands, not over-precision", () => {
+      // Previously `$1.234` → null (treated as 3-dp over-precision). The
+      // locale-agnostic parser now reads it as the finance-convention
+      // thousands grouping `1,234` — symmetric with `5,000`/`5.000` — because
+      // a bare `1.234` cannot be a valid 2-dp amount and dot-as-thousands is
+      // the dominant real-world Indonesian input. See parseMoneyInput docs.
+      expect(parseUserInput("$1.234", "USD")).toBe(123_400n)
+    })
+  })
+})
+
+// =============================================================================
+// parseMoneyInput — locale-agnostic, forgiving parser (PER-240)
+// =============================================================================
+
+describe("parseMoneyInput", () => {
+  describe("the PER-240 acceptance matrix (IDR, 2dp)", () => {
+    // Every string a user could read (en-US display) or type (either
+    // convention) must resolve to the SAME minor-unit value.
+    const cases: ReadonlyArray<readonly [string, bigint]> = [
+      ["5000000", 500_000_000n], // plain → 5,000,000.00
+      ["5,085,360.00", 508_536_000n], // US-style display echo
+      ["5.085.360,00", 508_536_000n], // ID-style
+      ["2760809.32", 276_080_932n], // THE regression case
+      ["2.760.809,32", 276_080_932n], // ID-style w/ decimals
+      ["1000", 100_000n],
+      ["1000,00", 100_000n], // comma decimal, 2 trailing
+      ["1000.00", 100_000n], // dot decimal, 2 trailing
+      ["5,000", 500_000n], // comma thousands (finance convention)
+      ["5.000", 500_000n], // dot thousands (finance convention)
+      ["0.32", 32n],
+      [".32", 32n], // leading-dot decimal
+      ["Rp 5.085.360,00", 508_536_000n], // symbol + ID-style
+      ["Rp 5,085,360.00", 508_536_000n], // symbol + US-style
+    ]
+    for (const [input, expected] of cases) {
+      it(`"${input}" → ${expected}n`, () => {
+        expect(parseMoneyInput(input, "IDR")).toBe(expected)
+      })
+    }
+
+    it("THE 100× regression is fixed: 2760809.32 → 276080932 (NOT 27608093200)", () => {
+      expect(parseMoneyInput("2760809.32", "IDR")).toBe(276_080_932n)
+      expect(parseMoneyInput("2760809.32", "IDR")).not.toBe(27_608_093_200n)
+    })
+  })
+
+  describe("invalid input → null (IDR)", () => {
+    const invalid = ["", "-", ".", "1.2.3", "abc", "1.234.5", "1,2,3"]
+    for (const input of invalid) {
+      it(`"${input}" → null`, () => {
+        expect(parseMoneyInput(input, "IDR")).toBeNull()
+      })
+    }
+
+    it("over-precision for a 2dp currency → null", () => {
+      expect(parseMoneyInput("1,234.567", "IDR")).toBeNull() // 3 dp via decimal
+      expect(parseMoneyInput("1.2345", "IDR")).toBeNull() // 4 dp via single dot
+    })
+
+    it("non-string input → null", () => {
+      // @ts-expect-error runtime-guard coverage
+      expect(parseMoneyInput(123, "IDR")).toBeNull()
+      // @ts-expect-error runtime-guard coverage
+      expect(parseMoneyInput(null, "IDR")).toBeNull()
+    })
+  })
+
+  describe("USD (2dp) — symbols, ISO prefixes, negatives, whitespace", () => {
+    it("symbol + thousands + decimals", () => {
+      expect(parseMoneyInput("$1,234,567.89", "USD")).toBe(123_456_789n)
+      expect(parseMoneyInput("$ 1,234,567.89", "USD")).toBe(123_456_789n)
+    })
+
+    it("ISO code prefix (any case)", () => {
+      expect(parseMoneyInput("USD 100", "USD")).toBe(10_000n)
+      expect(parseMoneyInput("usd 100.50", "USD")).toBe(10_050n)
+    })
+
+    it("negatives with symbol/sign in either order", () => {
+      expect(parseMoneyInput("-100.50", "USD")).toBe(-10_050n)
+      expect(parseMoneyInput("$-100.50", "USD")).toBe(-10_050n)
+      expect(parseMoneyInput("-$100.50", "USD")).toBe(-10_050n)
+    })
+
+    it("internal whitespace stripped", () => {
+      expect(parseMoneyInput("1 000 000.00", "USD")).toBe(100_000_000n)
+    })
+
+    it("double sign → null", () => {
+      expect(parseMoneyInput("--5", "USD")).toBeNull()
+    })
+  })
+
+  describe("JPY (0dp) — no fraction allowed", () => {
+    it("plain and grouped integers", () => {
+      expect(parseMoneyInput("12345", "JPY")).toBe(12_345n)
+      expect(parseMoneyInput("12,345", "JPY")).toBe(12_345n)
+      expect(parseMoneyInput("12.345", "JPY")).toBe(12_345n) // dot thousands
+      expect(parseMoneyInput("¥1,000,000", "JPY")).toBe(1_000_000n)
+    })
+
+    it("any fraction → null (0dp currency)", () => {
+      expect(parseMoneyInput("1.5", "JPY")).toBeNull()
+      expect(parseMoneyInput("100,50", "JPY")).toBeNull()
+    })
+  })
+
+  describe("BTC (8dp) — high-precision subunit", () => {
+    it("accepts up to 8 fraction digits", () => {
+      expect(parseMoneyInput("1", "BTC")).toBe(100_000_000n)
+      expect(parseMoneyInput("1.23456789", "BTC")).toBe(123_456_789n)
+      expect(parseMoneyInput("0.00000001", "BTC")).toBe(1n)
+      expect(parseMoneyInput("₿1.5", "BTC")).toBe(150_000_000n)
+    })
+
+    it("9 fraction digits → null (over-precision)", () => {
+      expect(parseMoneyInput("1.234567891", "BTC")).toBeNull()
+    })
+
+    it("PER-240 precision-aware: single dot + 3 trailing digits stays DECIMAL for high-precision (no 1000× inflation)", () => {
+      // For fiat, "1.234" reads as thousands (1,234). For BTC (8dp) it is a
+      // genuine decimal 1.234 — must NOT become 1234 BTC.
+      expect(parseMoneyInput("1.234", "BTC")).toBe(123_400_000n)
+      expect(parseMoneyInput("0.500", "BTC")).toBe(50_000_000n)
+      // Contrast: the SAME string is thousands for a 2dp fiat currency.
+      expect(parseMoneyInput("1.234", "IDR")).toBe(123_400n)
+      expect(parseMoneyInput("1.234", "USD")).toBe(123_400n)
+    })
+  })
+
+  describe("parseUserInput delegates to parseMoneyInput", () => {
+    const samples: ReadonlyArray<readonly [string, CurrencyCode]> = [
+      ["5.085.360,00", "IDR"],
+      ["5,085,360.00", "IDR"],
+      ["2760809.32", "IDR"],
+      ["$1,234,567.89", "USD"],
+      ["-100.50", "USD"],
+      ["1.23456789", "BTC"],
+      ["12,345", "JPY"],
+      ["1.2.3", "IDR"],
+      ["abc", "USD"],
+      ["", "USD"],
+    ]
+    for (const [input, currency] of samples) {
+      it(`"${input}" (${currency}) matches parseMoneyInput`, () => {
+        expect(parseUserInput(input, currency)).toBe(
+          parseMoneyInput(input, currency)
+        )
+      })
+    }
   })
 })
 
