@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start"
-import type { Account, Prisma } from "@prisma/client"
+import type { Account, Prisma, Valuation } from "@prisma/client"
 import { z } from "zod"
 import {
   deriveTransferKindForAccounts,
@@ -1630,6 +1630,151 @@ async function normalizeBulkDeleteTransactionsTransportInput(
 // (valuationId set, exactly one of outflowTransactionId/inflowTransactionId
 // set) — never a raw dual-leg transfer. Called from createTransactionForFamily's
 // transfer branch once it detects either side is valuation-tracked.
+// The cash-side leg fields a valuation-linked move needs. A narrow view of
+// `CreateTransactionInput` so a non-transfer caller (PER-198 trades) can drive
+// the same double-entry primitive without constructing a full transaction
+// payload.
+export interface ValuationLinkedTransferLeg {
+  amount: bigint
+  date: Date
+  description: string
+  notes?: string | null
+  id?: string
+  categoryId?: string | null
+  merchantId?: string | null
+  status: string
+  attachmentUrl?: string | null
+  idempotencyKey: string
+}
+
+// PER-196 / ADR-0048 §1/§4 — the shared double-entry primitive for a valuation-
+// linked move: decrement/credit the CASH account through the guarded
+// `applyAccountBalanceDelta` path, post the single cash `Transaction` leg, and
+// pair it with a `Valuation` on the tracked-asset side under one `Transfer`
+// row (valuationId set, exactly one of outflow/inflow Transaction FKs set —
+// the ADR-0048 §4 shape). It never mutates the tracked account's balance
+// directly (the PER-196 guard forbids that); the tracked side moves ONLY
+// through the `Valuation` the caller supplies via `resolveValuation`.
+//
+// `resolveValuation` runs AFTER the cash leg is posted and BEFORE the Transfer
+// is created, inside the same transaction. The default valuation-linked
+// transfer supplies the ADR-0048 prefill (latest ∓ cashAmount); PER-198 trades
+// supply Σ-holdings after applying the position change — same structural shape,
+// different source of the tracked account's new value.
+export async function postValuationLinkedTransferLegs(
+  tx: TenantTransactionClient,
+  {
+    cashAccount,
+    trackedAccount,
+    direction,
+    kind,
+    leg,
+    familyId,
+    user,
+    auditCtx,
+    baseCurrency,
+    resolveValuation,
+  }: {
+    cashAccount: Account
+    trackedAccount: Account
+    direction: "contribution" | "redemption"
+    kind: string
+    leg: ValuationLinkedTransferLeg
+    familyId: string
+    user: { id: string }
+    auditCtx: AuditContext
+    baseCurrency: string
+    resolveValuation: (
+      tx: TenantTransactionClient
+    ) => Promise<{ valuation: Valuation }>
+  }
+) {
+  // v1 scope (ADR-0048 §1): the cash leg and the tracked account are both
+  // denominated in one currency. Cross-currency valuation-linked moves need
+  // their own FX design and are not supported yet — fail loud rather than
+  // silently mixing currencies.
+  if (cashAccount.currency !== trackedAccount.currency) {
+    throw new ValuationError(
+      `Valuation-linked transfer requires matching currencies (cash account ${cashAccount.currency}, tracked account ${trackedAccount.currency}); cross-currency is not yet supported`
+    )
+  }
+
+  const isContribution = direction === "contribution"
+  const cashAmount = absMoney(leg.amount)
+  const cashDelta = isContribution ? negateMoney(cashAmount) : cashAmount
+
+  const cashMutation = await applyAccountBalanceDelta(tx, {
+    accountId: cashAccount.id,
+    delta: cashDelta,
+    familyId,
+    notFoundMessage: "Cash account not found or access denied!",
+  })
+  const cashBalanceAfter = cashMutation.after.balance
+
+  const projection = await computeBaseProjectionForAmount(tx, familyId, {
+    amount: cashDelta,
+    currency: cashAccount.currency,
+    date: leg.date,
+    baseCurrency,
+  })
+
+  const cashTx = await tx.transaction.create({
+    data: {
+      ...(leg.id ? { id: leg.id } : {}),
+      type: "transfer",
+      kind,
+      currency: cashAccount.currency,
+      amount: cashDelta,
+      description: leg.description,
+      date: leg.date,
+      notes: leg.notes || null,
+      accountId: cashAccount.id,
+      toAccountId: trackedAccount.id,
+      categoryId: leg.categoryId || null,
+      merchantId: leg.merchantId || null,
+      userId: user.id,
+      familyId,
+      status: leg.status,
+      baseAmount: projection.baseAmount,
+      baseCurrency: projection.baseCurrency,
+      fxRateScaled: projection.fxRateScaled,
+      fxRateSnapshotId: projection.fxRateSnapshotId,
+      accountBalanceAfter: cashBalanceAfter,
+      attachmentUrl: leg.attachmentUrl,
+      idempotencyKey: leg.idempotencyKey,
+    },
+  })
+
+  // Tracked side: whatever Valuation the caller decides. A redemption that
+  // would drive the tracked value negative is rejected by
+  // createValuationWithinTx's existing ADR-0045 sign check.
+  const { valuation } = await resolveValuation(tx)
+
+  const createdTransfer = await tx.transfer.create({
+    data: {
+      ...(isContribution
+        ? { outflowTransactionId: cashTx.id }
+        : { inflowTransactionId: cashTx.id }),
+      valuationId: valuation.id,
+    },
+  })
+
+  const newCashAccount = await tx.account.findUniqueOrThrow({
+    where: { id: cashAccount.id },
+  })
+
+  await auditLogs(tx, auditCtx, [
+    ...accountBalanceAuditEntries([cashAccount], [newCashAccount]),
+    ...createdAuditEntries("Transaction", [cashTx]),
+    ...createdAuditEntries("Transfer", [createdTransfer]),
+  ])
+
+  return serializeTransaction({
+    ...cashTx,
+    amount: absMoney(cashTx.amount),
+  })
+}
+
 async function createValuationLinkedTransferWithinTx(
   tx: TenantTransactionClient,
   {
@@ -1654,116 +1799,59 @@ async function createValuationLinkedTransferWithinTx(
     baseCurrency: string
   }
 ) {
-  // v1 scope (ADR-0048 §1): the prefill formula (latest ∓ cashAmount) and the
-  // cash leg's own amount are both denominated in one currency. Cross-
-  // currency valuation-linked transfers need their own FX design and are not
-  // supported yet — fail loud rather than silently mixing currencies.
-  if (cashAccount.currency !== trackedAccount.currency) {
-    throw new ValuationError(
-      `Valuation-linked transfer requires matching currencies (cash account ${cashAccount.currency}, tracked account ${trackedAccount.currency}); cross-currency is not yet supported`
-    )
-  }
-
-  const isContribution = direction === "contribution"
-  const cashAmount = absMoney(data.amount)
-  const cashDelta = isContribution ? negateMoney(cashAmount) : cashAmount
-
-  const cashMutation = await applyAccountBalanceDelta(tx, {
-    accountId: cashAccount.id,
-    delta: cashDelta,
-    familyId,
-    notFoundMessage: "Cash account not found or access denied!",
-  })
-  const cashBalanceAfter = cashMutation.after.balance
-
-  const projection = await computeBaseProjectionForAmount(tx, familyId, {
-    amount: cashDelta,
-    currency: cashAccount.currency,
-    date: data.date,
-    baseCurrency,
-  })
-
-  const cashTx = await tx.transaction.create({
-    data: {
-      ...(data.id ? { id: data.id } : {}),
-      type: "transfer",
-      kind,
-      currency: cashAccount.currency,
-      amount: cashDelta,
-      description: data.description,
+  return postValuationLinkedTransferLegs(tx, {
+    cashAccount,
+    trackedAccount,
+    direction,
+    kind,
+    leg: {
+      amount: data.amount,
       date: data.date,
-      notes: data.notes || null,
-      accountId: cashAccount.id,
-      toAccountId: trackedAccount.id,
-      categoryId: data.categoryId || null,
-      merchantId: data.merchantId || null,
-      userId: user.id,
-      familyId,
+      description: data.description,
+      notes: data.notes,
+      id: data.id,
+      categoryId: data.categoryId,
+      merchantId: data.merchantId,
       status: data.status,
-      baseAmount: projection.baseAmount,
-      baseCurrency: projection.baseCurrency,
-      fxRateScaled: projection.fxRateScaled,
-      fxRateSnapshotId: projection.fxRateSnapshotId,
-      accountBalanceAfter: cashBalanceAfter,
       attachmentUrl: data.attachmentUrl,
       idempotencyKey: data.idempotencyKey,
     },
-  })
-
-  // New valuation value (ADR-0048 §1): prefilled latest ∓ cashAmount,
-  // editable via data.newValuationValue. A redemption that would drive the
-  // tracked value negative is rejected by createValuationWithinTx's existing
-  // ADR-0045 sign check — you cannot redeem more than the tracked asset is
-  // currently worth.
-  const latest = await latestValuation(tx, familyId, trackedAccount.id)
-  const latestValue = latest?.value ?? toMoney(trackedAccount.balance)
-  const prefill = isContribution
-    ? addMoney(latestValue, cashAmount)
-    : subMoney(latestValue, cashAmount)
-  const newValuationMagnitude = data.newValuationValue
-    ? BigInt(data.newValuationValue)
-    : prefill
-
-  const valuationInput: CreateValuationInput = {
-    accountId: trackedAccount.id,
-    value: newValuationMagnitude.toString(),
-    currency: trackedAccount.currency,
-    valuationDate: data.date,
-    type: "manual",
-    source: "transfer",
-    note: null,
-    idempotencyKey: data.idempotencyKey,
-  }
-  const { valuation } = await createValuationWithinTx(
-    tx,
     familyId,
-    valuationInput,
     user,
-    auditCtx
-  )
-
-  const createdTransfer = await tx.transfer.create({
-    data: {
-      ...(isContribution
-        ? { outflowTransactionId: cashTx.id }
-        : { inflowTransactionId: cashTx.id }),
-      valuationId: valuation.id,
+    auditCtx,
+    baseCurrency,
+    // ADR-0048 §1 prefill: latest ∓ cashAmount, editable via
+    // data.newValuationValue. Runs after the cash leg is posted (order
+    // preserved from the pre-refactor path).
+    resolveValuation: async (t) => {
+      const isContribution = direction === "contribution"
+      const cashAmount = absMoney(data.amount)
+      const latest = await latestValuation(t, familyId, trackedAccount.id)
+      const latestValue = latest?.value ?? toMoney(trackedAccount.balance)
+      const prefill = isContribution
+        ? addMoney(latestValue, cashAmount)
+        : subMoney(latestValue, cashAmount)
+      const newValuationMagnitude = data.newValuationValue
+        ? BigInt(data.newValuationValue)
+        : prefill
+      const valuationInput: CreateValuationInput = {
+        accountId: trackedAccount.id,
+        value: newValuationMagnitude.toString(),
+        currency: trackedAccount.currency,
+        valuationDate: data.date,
+        type: "manual",
+        source: "transfer",
+        note: null,
+        idempotencyKey: data.idempotencyKey,
+      }
+      return createValuationWithinTx(
+        t,
+        familyId,
+        valuationInput,
+        user,
+        auditCtx
+      )
     },
-  })
-
-  const newCashAccount = await tx.account.findUniqueOrThrow({
-    where: { id: cashAccount.id },
-  })
-
-  await auditLogs(tx, auditCtx, [
-    ...accountBalanceAuditEntries([cashAccount], [newCashAccount]),
-    ...createdAuditEntries("Transaction", [cashTx]),
-    ...createdAuditEntries("Transfer", [createdTransfer]),
-  ])
-
-  return serializeTransaction({
-    ...cashTx,
-    amount: absMoney(cashTx.amount),
   })
 }
 

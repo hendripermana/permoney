@@ -1,12 +1,14 @@
 import fc from "fast-check"
 import { describe, expect, test } from "vite-plus/test"
 import {
+  averageUnitCostMinor,
   holdingCostMinor,
   holdingGainMinor,
   holdingReturnPct,
   holdingValueMinor,
   QUANTITY_SCALE,
   quantityToScaled,
+  scaledToQuantityString,
   sumHoldingValuesMinor,
 } from "./holdings"
 
@@ -203,5 +205,49 @@ describe("valuation invariants (property-based)", () => {
         expect(scaled).toBe(expected)
       })
     )
+  })
+})
+
+describe("averageUnitCostMinor (PER-198 trade cost blend)", () => {
+  test("inverts holdingCostMinor for exact divisions", () => {
+    // 200 units, total cost 3,000,000 → 15,000/unit.
+    const units = quantityToScaled("200")
+    const avg = averageUnitCostMinor(3_000_000n, units)
+    expect(avg).toBe(15_000n)
+    expect(holdingCostMinor(units, avg)).toBe(3_000_000n)
+  })
+
+  test("blends two buys to the weighted average", () => {
+    // 100 @ 10,000 then 100 @ 20,000 → 200 units, cost 3,000,000, avg 15,000.
+    const units = quantityToScaled("100") + quantityToScaled("100")
+    expect(averageUnitCostMinor(1_000_000n + 2_000_000n, units)).toBe(15_000n)
+  })
+
+  test("rounds half-up and rejects non-positive units", () => {
+    // 3 units, cost 1,000 → 333.33/unit → 333 (rounds to nearest sen).
+    expect(averageUnitCostMinor(1_000n, quantityToScaled("3"))).toBe(333n)
+    expect(() => averageUnitCostMinor(1_000n, 0n)).toThrow()
+    expect(() => averageUnitCostMinor(-1n, quantityToScaled("1"))).toThrow()
+  })
+})
+
+describe("scaledToQuantityString", () => {
+  test("renders the canonical fixed-scale decimal string", () => {
+    expect(scaledToQuantityString(quantityToScaled("100"))).toBe("100.00000000")
+    expect(scaledToQuantityString(quantityToScaled("2.018"))).toBe("2.01800000")
+    expect(scaledToQuantityString(0n)).toBe("0.00000000")
+    expect(scaledToQuantityString(1n)).toBe("0.00000001")
+  })
+
+  test("round-trips with quantityToScaled", () => {
+    fc.assert(
+      fc.property(fc.bigInt({ min: 0n, max: 10n ** 20n }), (scaled) => {
+        expect(quantityToScaled(scaledToQuantityString(scaled))).toBe(scaled)
+      })
+    )
+  })
+
+  test("rejects a negative scaled quantity", () => {
+    expect(() => scaledToQuantityString(-1n)).toThrow()
   })
 })
