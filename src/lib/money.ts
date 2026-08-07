@@ -302,11 +302,13 @@ export function toDisplayNumber(
  *    digits). Return `null` on ANY malformed / over-precision input; never
  *    throw.
  *
- * NOTE on the single-separator finance convention: `1.234` (single dot, 3
- * trailing digits) parses as **1,234** (thousands), NOT as an over-precision
- * `1.234` → null. This is deliberate and symmetric with `5,000`/`5.000`: a
- * bare `1.234` cannot be a valid 2-dp amount anyway, and dot-as-thousands is
- * the dominant real-world input for Indonesian users. See PER-240.
+ * NOTE on the single-separator finance convention: for a currency that cannot
+ * represent 3 fraction digits (fiat — IDR/USD 2dp, JPY 0dp), `1.234` (single
+ * dot, 3 trailing digits) parses as **1,234** (thousands), NOT an over-
+ * precision `1.234` → null — symmetric with `5,000`/`5.000`, matching the
+ * dominant real-world Indonesian `Rp 5.000` input. For a high-precision
+ * currency (BTC, 8dp) the SAME `1.234` stays a genuine decimal (1.234), so the
+ * value is never 1000×-inflated. The rule is precision-aware. See PER-240.
  */
 export function parseMoneyInput(
   raw: string,
@@ -373,10 +375,17 @@ export function parseMoneyInput(
       const idx = body.indexOf(sep)
       const leading = body.slice(0, idx)
       const trailing = body.slice(idx + 1)
-      if (/^\d{3}$/.test(trailing) && /\d/.test(leading)) {
-        thouSep = sep // "5,000" / "5.000" → thousands (finance convention)
+      // A single separator with exactly 3 trailing digits ("5,000" / "5.000")
+      // is the finance-convention thousands group — BUT only for a currency
+      // that cannot represent 3 fraction digits (fiat: IDR/USD 2dp, JPY 0dp).
+      // For a high-precision currency (BTC, 8dp) "1.234" is a genuine decimal
+      // amount, so it must stay decimal. Precision-aware disambiguation keeps
+      // the IDR `Rp 5.000`→5000 reading while never 1000×-inflating BTC.
+      const maxFraction = decimalPlacesOf(def.minorUnitConversion)
+      if (/^\d{3}$/.test(trailing) && /\d/.test(leading) && maxFraction < 3) {
+        thouSep = sep // "5,000" / "5.000" → thousands (fiat only)
       } else {
-        decSep = sep // "1000.00", "0.32", ".32", "1000,5" → decimal
+        decSep = sep // "1000.00", "0.32", ".32", "1000,5", BTC "1.234" → decimal
       }
     }
   }

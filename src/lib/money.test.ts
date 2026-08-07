@@ -542,6 +542,16 @@ describe("parseMoneyInput", () => {
     it("9 fraction digits → null (over-precision)", () => {
       expect(parseMoneyInput("1.234567891", "BTC")).toBeNull()
     })
+
+    it("PER-240 precision-aware: single dot + 3 trailing digits stays DECIMAL for high-precision (no 1000× inflation)", () => {
+      // For fiat, "1.234" reads as thousands (1,234). For BTC (8dp) it is a
+      // genuine decimal 1.234 — must NOT become 1234 BTC.
+      expect(parseMoneyInput("1.234", "BTC")).toBe(123_400_000n)
+      expect(parseMoneyInput("0.500", "BTC")).toBe(50_000_000n)
+      // Contrast: the SAME string is thousands for a 2dp fiat currency.
+      expect(parseMoneyInput("1.234", "IDR")).toBe(123_400n)
+      expect(parseMoneyInput("1.234", "USD")).toBe(123_400n)
+    })
   })
 
   describe("parseUserInput delegates to parseMoneyInput", () => {
