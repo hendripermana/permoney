@@ -14,6 +14,10 @@ import {
   recordTradeForFamily,
 } from "@/server/holdings"
 import {
+  deleteTransactionForFamily,
+  HoldingsTradeDeleteUnsupportedError,
+} from "@/server/transactions"
+import {
   createIntegrationHarness,
   type IntegrationHarness,
 } from "./support/database"
@@ -494,5 +498,68 @@ describe("buy/sell trades (PER-198 / ADR-0051)", () => {
     expect(entityTypes.has("Transfer")).toBe(true)
     expect(entityTypes.has("Holding")).toBe(true)
     expect(entityTypes.has("Valuation")).toBe(true)
+  })
+
+  // --------------------------------------------------------------------------
+  // Trade-delete guard (PER-198): deleting a trade transaction is BLOCKED so it
+  // can never leave the holding un-reversed (silent net-worth drift).
+  // --------------------------------------------------------------------------
+  test("deleting a trade's transaction is rejected and causes no drift", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const investment = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(owner)
+
+    const buy = await recordTradeForFamily({
+      data: {
+        investmentAccountId: investment.id,
+        fundingAccountId: cash.id,
+        instrument: fundInline,
+        side: "buy",
+        cashAmount: "1000000",
+        quantity: "100",
+        unitPrice: "10000",
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+    const cashAfterBuy = await balanceOf(owner, cash.id)
+    const investAfterBuy = await balanceOf(owner, investment.id)
+
+    // Attempt to delete the trade's cash Transaction via the SAME path the UI
+    // uses (deleteTransactionFn → deleteTransactionForFamily).
+    await expect(
+      deleteTransactionForFamily({
+        id: buy.transaction.id,
+        idempotencyKey: factories.createIdempotencyKey(),
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+    ).rejects.toBeInstanceOf(HoldingsTradeDeleteUnsupportedError)
+
+    // No drift: funding balance, investment value, and the holding are all
+    // exactly as they were after the buy (the delete rolled back entirely).
+    expect(await balanceOf(owner, cash.id)).toBe(cashAfterBuy)
+    expect(await balanceOf(owner, investment.id)).toBe(investAfterBuy)
+
+    const view = await getAccountHoldingsForFamily({
+      accountId: investment.id,
+      familyId: owner.family.id,
+      userId: owner.user.id,
+    })
+    expect(view.holdings).toHaveLength(1)
+    expect(view.holdings[0]?.quantity).toBe("100.00000000")
+    expect(view.holdings[0]?.valueMinor).toBe("1000000")
+
+    // The trade's Transaction, Transfer, and Valuation are all still live.
+    const live = await harness.withFamily(owner.family.id, async (tx) => ({
+      txns: await tx.transaction.count({
+        where: { id: buy.transaction.id, deletedAt: null },
+      }),
+      transfers: await tx.transfer.count({ where: { deletedAt: null } }),
+    }))
+    expect(live.txns).toBe(1)
+    expect(live.transfers).toBe(1)
   })
 })

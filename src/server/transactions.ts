@@ -50,6 +50,7 @@ import {
 import {
   createValuationWithinTx,
   fetchAccountFacts,
+  HOLDINGS_VALUATION_SOURCE,
   latestValuation,
   rebuildWithinTx,
   valueMagnitudeSchema,
@@ -631,6 +632,26 @@ export class ValuationLinkedTransferUnsupportedError extends Error {
   readonly statusCode = 422
   constructor(
     message = "Editing a valuation-linked transfer is not yet supported. Delete it and record a new transfer instead."
+  ) {
+    super(message)
+  }
+}
+
+// PER-198 / ADR-0051: deleting a valuation-linked transfer that is a Buy/Sell
+// TRADE is blocked. Such a transfer's tracked-side move is a Σ-holdings anchor
+// (its Valuation.source === HOLDINGS_VALUATION_SOURCE), but the paired Holding
+// position is NOT part of the transfer graph. The generic valuation-linked
+// delete reverses the cash leg + tombstones the anchor while the Holding stays,
+// so Σ-holdings would no longer equal the reverted balance — silent net-worth
+// drift. Full trade reversal (also undoing the position) is a later slice
+// (PER-141-adjacent); until then trade transactions cannot be deleted. This is
+// a fail-safe guard, not a weakening of any invariant: a plain valuation-linked
+// transfer (no holding involved; source !== "holdings") still deletes normally.
+export class HoldingsTradeDeleteUnsupportedError extends Error {
+  override readonly name = "HoldingsTradeDeleteUnsupportedError"
+  readonly statusCode = 422
+  constructor(
+    message = "This is a Buy/Sell trade. Deleting it would leave the holding un-reversed; trade reversal isn't supported yet."
   ) {
     super(message)
   }
@@ -2307,6 +2328,17 @@ async function softDeleteValuationLinkedTransferWithinTx(
   const oldValuation = await tx.valuation.findUniqueOrThrow({
     where: { id: transfer.valuationId },
   })
+
+  // PER-198 / ADR-0051 — fail-safe TRADE guard. When the tracked-side move was a
+  // Σ-holdings restatement (a Buy/Sell trade), the paired Holding is outside the
+  // transfer graph and would NOT be reversed here, silently drifting the account
+  // off Σ holdings. Block the delete before mutating anything (the surrounding
+  // transaction rolls back, so no balance/tombstone is written). A plain
+  // valuation-linked transfer (source !== "holdings") is unaffected.
+  if (oldValuation.source === HOLDINGS_VALUATION_SOURCE) {
+    throw new HoldingsTradeDeleteUnsupportedError()
+  }
+
   const trackedAccountFacts = await fetchAccountFacts(
     tx,
     familyId,

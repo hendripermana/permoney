@@ -44,7 +44,11 @@ import {
   type RunInTenantTransaction,
 } from "./mutation-kit"
 import { validateTenantReferences } from "./validation/tenant-references"
-import { createValuationWithinTx, type ServerActor } from "./valuations"
+import {
+  createValuationWithinTx,
+  HOLDINGS_VALUATION_SOURCE,
+  type ServerActor,
+} from "./valuations"
 
 // =============================================================================
 // PER-232 / ADR-0051 — Holdings core (Slice 1: market-priced).
@@ -76,9 +80,9 @@ import { createValuationWithinTx, type ServerActor } from "./valuations"
 const UPSERT_HOLDING_ENDPOINT = "upsertHoldingFn"
 const DELETE_HOLDING_ENDPOINT = "deleteHoldingFn"
 
-// Source tag on the holdings-derived valuation anchor, so a consumer can tell a
-// holdings restatement from a live user reconciliation or a Sure import.
-const HOLDINGS_ANCHOR_SOURCE = "holdings"
+// Source tag on the holdings-derived valuation anchor (shared with the trade-
+// delete guard in transactions.ts, hence defined once in valuations.ts).
+const HOLDINGS_ANCHOR_SOURCE = HOLDINGS_VALUATION_SOURCE
 
 /**
  * Raised for holdings-specific domain rejections (ineligible account, currency

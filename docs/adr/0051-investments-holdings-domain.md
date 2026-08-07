@@ -265,17 +265,41 @@ costRemoved` (signed, minor units). It is DERIVED and returned for display
   written (the cash `Transaction`, the `Transfer`, the `Holding`, and the
   `Valuation`) in the same transaction.
 
+### Guarded: trade transactions cannot be deleted until trade reversal exists
+
+A trade posts a normal valuation-linked transfer `Transaction` that shows in the
+transaction list, so the delete UI can reach it. The generic valuation-linked
+delete (`softDeleteValuationLinkedTransferWithinTx`) reverses the cash leg and
+tombstones the trade's `Valuation`, but the paired `Holding` is outside the
+transfer graph and would NOT be reversed — the account would re-materialize from
+the prior valuation while the position still shows the traded units, silently
+inflating net worth (the read-only drift detector would flag it, but the data
+would already be wrong). That is a UI-reachable corruption of money data, so it
+is **guarded, not deferred**:
+
+- `softDeleteValuationLinkedTransferWithinTx` throws
+  `HoldingsTradeDeleteUnsupportedError` (422) **before mutating anything** when
+  the linked `Valuation.source === HOLDINGS_VALUATION_SOURCE` (`"holdings"`) —
+  the exact, per-transfer, definitional marker of a trade (its tracked-side move
+  is a Σ-holdings anchor). The constant lives in `valuations.ts` and is shared by
+  the holdings anchor writer and this guard. A per-account heuristic ("the
+  account has any `Holding` rows") was rejected because it would false-block a
+  legitimate plain valuation transfer to an account that also holds positions;
+  the per-transfer valuation source cannot false-block — a plain valuation-linked
+  transfer's own `Valuation.source` is `"transfer"`, so it still deletes
+  normally.
+- Full trade reversal (also undoing the `Holding` position, and eventually
+  restoring sold-to-zero closes) is a later slice that pairs naturally with lots
+  (PER-141-adjacent). Until then, trade transactions cannot be deleted; a real-PG
+  test asserts the delete is rejected with the funding balance, investment value,
+  and holding all unchanged.
+
 ### Deferred (out of scope this slice)
 
-- **Trade EDIT / DELETE that reverses the position.** Deleting the linked
-  transfer through the existing valuation-linked delete path reverses the cash
-  leg and tombstones the trade's `Valuation`, but does NOT reverse the `Holding`
-  mutation — the account would then re-materialize from the prior valuation while
-  the position still shows the traded units (drift the read-only detector would
-  flag). A correct trade reversal must also undo the position and needs its own
-  design (it pairs naturally with lots, PER-141). Until then, trade recording is
-  create-only, mirroring ADR-0048 §4's deferral of valuation-linked transfer
-  editing.
+- **Trade EDIT and full trade REVERSAL** (see the guard above): editing a trade,
+  or a delete that also undoes the position, needs its own design (PER-141-
+  adjacent). This slice is create-only, mirroring ADR-0048 §4's deferral of
+  valuation-linked transfer editing.
 - **FIFO / tax lots** (PER-141), **realized-gain-as-income posting**,
   **market-data auto-pricing** (the next slice sets `lastPrice` from a feed
   rather than leaving positions at cost), and **transfer fees**.

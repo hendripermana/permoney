@@ -61,6 +61,14 @@ import { validateTenantReferences } from "./validation/tenant-references"
 
 const CREATE_VALUATION_ENDPOINT = "createValuationFn"
 
+// The `source` tag on a valuation written from Σ holdings (PER-232 / ADR-0051).
+// A DURABLE, purpose-built discriminator: it lets a consumer tell a holdings
+// restatement from a live reconciliation or a Sure import. PER-198 also keys the
+// trade-delete guard off it — a valuation-linked Transfer whose Valuation has
+// this source IS a Buy/Sell trade (its tracked-side move is a holdings anchor),
+// which is exactly what must not be deleted until trade reversal exists.
+export const HOLDINGS_VALUATION_SOURCE = "holdings"
+
 // Valuation types a user/provider may record. "opening" is intentionally NOT
 // here: it is written exactly once, inside account create (ADR-0034 §3).
 const PUBLIC_VALUATION_TYPES = ["reconciliation", "market", "manual"] as const
