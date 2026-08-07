@@ -10,12 +10,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { MoneyInput } from "@/components/blocks/money-input"
 import type { AccountRecord } from "@/lib/account-collections"
 import { formatCurrency } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
-import { negateMoney, parseUserInput } from "@/lib/money"
+import { negateMoney, parseMoneyInput } from "@/lib/money"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import { createValuationFn, getAccountBalanceFn } from "@/server/valuations"
 
@@ -50,14 +50,15 @@ export function ValuationActionDialog({
   })
 
   const currentMinor = BigInt(account.balance)
-  // PER-207: `parseUserInput` (locale-aware, returns null on malformed) — NOT
-  // `toMinorUnits`, which throws on user-formatted strings. This runs at RENDER
-  // on every keystroke, so a throw here crashes the dialog into the error
-  // boundary; null is the safe "not a valid amount yet" state instead.
+  // PER-207/PER-240: `parseMoneyInput` (locale-agnostic, returns null on
+  // malformed) — NOT `toMinorUnits`, which throws on user-formatted strings.
+  // This runs at RENDER on every keystroke, so a throw here would crash the
+  // dialog into the error boundary; null is the safe "not a valid amount yet"
+  // state instead. `<MoneyInput>` shows the same parsed value as a live preview.
   const targetMagnitude =
     valueInput.trim() === ""
       ? null
-      : parseUserInput(valueInput.trim(), account.currency as CurrencyCode)
+      : parseMoneyInput(valueInput, account.currency as CurrencyCode)
   const signedTarget =
     targetMagnitude === null
       ? null
@@ -153,11 +154,11 @@ export function ValuationActionDialog({
                 ? `Real balance (${account.currency})`
                 : `New value (${account.currency})`}
             </Label>
-            <Input
+            <MoneyInput
               id="valuation-value"
-              inputMode="decimal"
+              currency={account.currency as CurrencyCode}
               value={valueInput}
-              onChange={(e) => setValueInput(e.target.value)}
+              onChange={setValueInput}
               placeholder="0"
               autoFocus
             />

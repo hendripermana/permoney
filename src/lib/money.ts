@@ -159,6 +159,39 @@ export function toMinorUnits(decimal: string, currency: CurrencyCode): Money {
 }
 
 /**
+ * Inverse of {@link toMinorUnits}: render a Money as a CANONICAL major-unit
+ * decimal string (dot decimal, NO thousands separators, trailing zeros
+ * trimmed) — e.g. `10050n` USD → `"100.5"`, `500000n` IDR → `"5000"`.
+ *
+ * Exact for every power-of-10 currency (all realistic ones): it does bigint
+ * division, never `Number`, so large IDR balances never lose precision. Use
+ * this to feed a parsed `Money` back into a server contract that accepts a
+ * major-unit decimal string (e.g. `upsertHoldingFn`), so the value the user
+ * saw in the live preview is exactly what gets re-parsed server-side.
+ */
+export function toDecimalString(
+  money: Money | bigint,
+  currency: CurrencyCode
+): string {
+  const def = CURRENCIES[currency]
+  const conv = BigInt(def.minorUnitConversion)
+  const m = money as bigint
+  const negative = m < 0n
+  const abs = negative ? -m : m
+  const sign = negative ? "-" : ""
+  if (conv === 1n) return sign + abs.toString()
+  const whole = abs / conv
+  const fraction = abs % conv
+  // Width = decimal places = digits of the (power-of-10) conversion minus one.
+  const width = def.minorUnitConversion.toString().length - 1
+  const fractionStr = fraction
+    .toString()
+    .padStart(width, "0")
+    .replace(/0+$/, "")
+  return sign + whole.toString() + (fractionStr === "" ? "" : `.${fractionStr}`)
+}
+
+/**
  * Convert Money back to a structured decimal representation.
  *
  * Returns `{ whole, fraction, isNegative }` so display layers can format
@@ -227,67 +260,175 @@ export function toDisplayNumber(
 // =============================================================================
 
 /**
- * Parse a user-typed string into Money. Tolerant of:
- *   - currency symbols/codes ("Rp ", "$", "USD ") — stripped
- *   - thousands separators (`.` or `,` based on currency)
- *   - decimal separator (the OPPOSITE of thousands separator)
- *   - leading/trailing whitespace
+ * Locale-agnostic, forgiving money parser — the single source of truth for
+ * turning any human-typed amount into `Money` minor units.
+ * =============================================================================
  *
- * Returns `null` on un-parseable input (rather than throwing) so the form
- * layer can attach a structured validation error instead of crashing.
+ * WHY flag-independent (does NOT read `CURRENCIES[c].delimiter`/`.separator`)?
+ * --------------------------------------------------------------------------
+ * The app DISPLAYS money via `Intl.NumberFormat` defaulting to en-US
+ * (`Rp 5,085,360.00` — comma thousands, dot decimal), regardless of the
+ * currency's Indonesian `separator`/`delimiter` metadata. If we parsed using
+ * those per-currency flags, the exact string the user just READ and retyped
+ * (`5,085,360.00`) would be misparsed — for IDR the `.` would be treated as a
+ * thousands delimiter, stripping the decimal and inflating the value 100×
+ * (PER-240). So parsing must NOT depend on the currency's locale flags. It
+ * auto-detects the decimal separator from the string's own shape instead.
  *
- * Indonesian convention (IDR): "Rp 15.000.000,50"
- *   - thousands = "."
- *   - decimal   = ","
- * US convention (USD): "$15,000,000.50"
- *   - thousands = ","
- *   - decimal   = "."
+ * ALGORITHM
+ * ---------
+ * 1. Trim; strip a leading currency symbol (`def.symbol`, e.g. `Rp`, `$`) and
+ *    /or ISO-code prefix (in either order relative to a leading `-`); strip
+ *    ALL internal whitespace; extract an optional single leading `-`.
+ * 2. Consider only `.` and `,` as possible separators. Decide which is the
+ *    DECIMAL separator:
+ *      - BOTH occur → the LAST-occurring of the two is decimal, the other is
+ *        thousands (handles both `5,085,360.00` US and `5.085.360,00` ID).
+ *        The decimal separator must occur exactly once.
+ *      - ONE type occurs:
+ *          · more than once → thousands separator, no decimal (`15.000.000`).
+ *          · exactly once → DECIMAL, UNLESS it has exactly 3 trailing digits
+ *            AND ≥1 leading digit (`5,000` / `5.000`), which is treated as
+ *            THOUSANDS (finance convention — critical so an Indonesian typing
+ *            `Rp 5.000` dot-thousands is NOT rejected as over-precision).
+ *            Everything else (`1000,00`, `1000.00`, `1000,5`, `0.32`, `.32`)
+ *            is DECIMAL.
+ * 3. When a thousands separator is present, validate the integer grouping
+ *    (first group 1-3 digits, every later group exactly 3) so garbage like
+ *    `1.2.3` is rejected rather than silently concatenated.
+ * 4. Remove the thousands separator; normalize the decimal separator to `.`;
+ *    prepend a `0` to a leading-dot value (`.32` → `0.32`); then delegate to
+ *    `toMinorUnits` (which enforces `minorUnitConversion` + max fraction
+ *    digits). Return `null` on ANY malformed / over-precision input; never
+ *    throw.
  *
- * The currency's `separator` (decimal) and `delimiter` (thousands) drive the
- * parse rules.
+ * NOTE on the single-separator finance convention: `1.234` (single dot, 3
+ * trailing digits) parses as **1,234** (thousands), NOT as an over-precision
+ * `1.234` → null. This is deliberate and symmetric with `5,000`/`5.000`: a
+ * bare `1.234` cannot be a valid 2-dp amount anyway, and dot-as-thousands is
+ * the dominant real-world input for Indonesian users. See PER-240.
  */
-export function parseUserInput(
+export function parseMoneyInput(
   raw: string,
   currency: CurrencyCode
 ): Money | null {
   if (typeof raw !== "string") return null
   const def = CURRENCIES[currency]
 
-  // Strip currency symbol, ISO code, and surrounding whitespace.
+  // --- Step 1: normalize surface (symbol/ISO/whitespace/sign) ----------------
   let body = raw.trim()
   if (body === "") return null
-
-  // Remove the symbol if present (case-sensitive: `Rp`, `$`, `oz t`).
-  if (def.symbol && body.startsWith(def.symbol)) {
-    body = body.slice(def.symbol.length).trim()
-  }
-  // Also strip the ISO code prefix (e.g. "USD 100").
-  if (body.toUpperCase().startsWith(currency)) {
-    body = body.slice(currency.length).trim()
-  }
-
-  // Replace the currency's thousands delimiter with empty, then map its
-  // decimal separator to ".". Order matters: strip delimiter first.
-  // Use a `replaceAll` loop because the separators may overlap with regex
-  // metacharacters when inserted naively.
-  if (def.delimiter !== "") {
-    body = body.split(def.delimiter).join("")
-  }
-  if (def.separator !== "." && def.separator !== "") {
-    // Map locale decimal to canonical "."
-    body = body.split(def.separator).join(".")
-  }
-
-  // Strip any remaining whitespace inside the body (e.g. "1 000 000").
+  // Collapse all internal whitespace first ("1 000 000", "$ 100", "Rp 5.000").
   body = body.replace(/\s+/g, "")
 
-  if (body === "" || body === "-" || body === ".") return null
+  // Strip a leading currency symbol / ISO code that may appear before OR after
+  // a leading sign ("$-100.50", "-$100"). Peel prefixes, then a single sign,
+  // then prefixes again to cover both orderings.
+  const stripPrefixes = (s: string): string => {
+    let changed = true
+    while (changed) {
+      changed = false
+      if (def.symbol !== "" && s.startsWith(def.symbol)) {
+        s = s.slice(def.symbol.length)
+        changed = true
+      } else if (s.toUpperCase().startsWith(currency)) {
+        s = s.slice(currency.length)
+        changed = true
+      }
+    }
+    return s
+  }
+
+  body = stripPrefixes(body)
+  let negative = false
+  if (body.startsWith("-")) {
+    negative = true
+    body = body.slice(1)
+  }
+  body = stripPrefixes(body)
+
+  if (body === "") return null
+  // Only digits and the two candidate separators may remain.
+  if (!/^[0-9.,]+$/.test(body)) return null
+
+  // --- Step 2: decide the decimal separator from the string's own shape ------
+  const dotCount = (body.match(/\./g) ?? []).length
+  const commaCount = (body.match(/,/g) ?? []).length
+
+  let decSep: "." | "," | null = null
+  let thouSep: "." | "," | null = null
+
+  if (dotCount > 0 && commaCount > 0) {
+    // Last-occurring separator is the decimal; the other is thousands.
+    decSep = body.lastIndexOf(".") > body.lastIndexOf(",") ? "." : ","
+    thouSep = decSep === "." ? "," : "."
+    const decCount = decSep === "." ? dotCount : commaCount
+    if (decCount !== 1) return null // decimal separator must be unique
+  } else if (dotCount > 0 || commaCount > 0) {
+    const sep: "." | "," = dotCount > 0 ? "." : ","
+    const count = dotCount > 0 ? dotCount : commaCount
+    if (count > 1) {
+      thouSep = sep // repeated single type → grouping only
+    } else {
+      const idx = body.indexOf(sep)
+      const leading = body.slice(0, idx)
+      const trailing = body.slice(idx + 1)
+      if (/^\d{3}$/.test(trailing) && /\d/.test(leading)) {
+        thouSep = sep // "5,000" / "5.000" → thousands (finance convention)
+      } else {
+        decSep = sep // "1000.00", "0.32", ".32", "1000,5" → decimal
+      }
+    }
+  }
+
+  // --- Step 3: split integer / fraction and validate thousands grouping ------
+  let integerPart: string
+  let fractionPart: string | null = null
+  if (decSep !== null) {
+    const idx = body.indexOf(decSep)
+    integerPart = body.slice(0, idx)
+    fractionPart = body.slice(idx + 1)
+  } else {
+    integerPart = body
+  }
+
+  if (thouSep !== null) {
+    const groups = integerPart.split(thouSep)
+    if (groups.length < 2) return null
+    const [first, ...rest] = groups
+    if (!/^\d{1,3}$/.test(first)) return null
+    if (!rest.every((g) => /^\d{3}$/.test(g))) return null
+    integerPart = groups.join("")
+  }
+
+  // --- Step 4: build a canonical decimal string and delegate -----------------
+  if (integerPart === "") integerPart = "0" // ".32" → "0.32"
+  if (!/^\d+$/.test(integerPart)) return null
+  if (fractionPart !== null && !/^\d*$/.test(fractionPart)) return null
+
+  const normalized =
+    (negative ? "-" : "") +
+    integerPart +
+    (fractionPart !== null ? `.${fractionPart}` : "")
 
   try {
-    return toMinorUnits(body, currency)
+    return toMinorUnits(normalized, currency)
   } catch {
     return null
   }
+}
+
+/**
+ * @deprecated Prefer {@link parseMoneyInput}. Retained as a thin alias so the
+ * existing call sites keep working; it now delegates to the locale-agnostic
+ * parser (PER-240) — the currency's `separator`/`delimiter` flags are NO
+ * LONGER consulted for parsing.
+ */
+export function parseUserInput(
+  raw: string,
+  currency: CurrencyCode
+): Money | null {
+  return parseMoneyInput(raw, currency)
 }
 
 // =============================================================================

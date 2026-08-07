@@ -19,8 +19,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { MoneyInput } from "@/components/blocks/money-input"
 import type { CurrencyCode } from "@/lib/data/currencies"
-import { toDisplayNumber } from "@/lib/money"
+import { parseMoneyInput, toDecimalString } from "@/lib/money"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import type { HoldingRecord } from "@/routes/_protected/-account-holdings"
 import { upsertHoldingFn } from "@/server/holdings"
@@ -60,17 +61,13 @@ export type HoldingFormState =
   | { mode: "create" }
   | { mode: "edit"; holding: HoldingRecord }
 
-// Prefill a MAJOR-unit amount from a stored minor-unit digit-string. Convenience
-// only — the server re-parses and is the source of truth.
+// Prefill a MAJOR-unit amount from a stored minor-unit digit-string, using the
+// EXACT bigint inverse (`toDecimalString`) so a large IDR amount never loses
+// precision through a float round-trip. Convenience only — the server re-parses
+// and is the source of truth.
 function majorFromMinor(minor: string | null, currency: CurrencyCode): string {
   if (minor === null) return ""
-  // toLocaleString (not String()) so a large amount never prefills in scientific
-  // notation, which the number input would reject. Convenience only — the server
-  // re-parses and is the source of truth.
-  return toDisplayNumber(BigInt(minor), currency).toLocaleString("en-US", {
-    useGrouping: false,
-    maximumFractionDigits: 8,
-  })
+  return toDecimalString(BigInt(minor), currency)
 }
 
 // Trim trailing zeros from a fixed-scale quantity string ("2.01800000" → "2.018")
@@ -117,8 +114,25 @@ export function HoldingFormDialog({
     setError(null)
     setSubmitting(true)
     try {
-      const lastPriceValue =
-        lastPrice.trim() === "" ? undefined : lastPrice.trim()
+      // PER-240: `avgUnitCost` / `lastPrice` are money; the server parses them
+      // as CANONICAL major-unit decimals (`toMinorUnits`). Canonicalize the
+      // user's forgiving input (e.g. "5.000" / "5,000" / "Rp 5.000") through
+      // `parseMoneyInput` → `toDecimalString` so the value the server stores is
+      // EXACTLY the one previewed under the field. Quantity is units, not money.
+      const avgCostMoney = parseMoneyInput(avgUnitCost, currencyCode)
+      if (avgCostMoney === null) {
+        throw new Error("Enter a valid average unit cost.")
+      }
+      const avgUnitCostValue = toDecimalString(avgCostMoney, currencyCode)
+
+      let lastPriceValue: string | undefined
+      if (lastPrice.trim() !== "") {
+        const lastPriceMoney = parseMoneyInput(lastPrice, currencyCode)
+        if (lastPriceMoney === null) {
+          throw new Error("Enter a valid last price.")
+        }
+        lastPriceValue = toDecimalString(lastPriceMoney, currencyCode)
+      }
       if (editing) {
         // Instrument identity is fixed on edit — only quantity/cost/price move.
         await upsertHoldingFn({
@@ -126,7 +140,7 @@ export function HoldingFormDialog({
             holdingId: editing.id,
             accountId,
             quantity: quantity.trim(),
-            avgUnitCost: avgUnitCost.trim(),
+            avgUnitCost: avgUnitCostValue,
             lastPrice: lastPriceValue,
             idempotencyKey: createUuidV7(),
           },
@@ -137,7 +151,7 @@ export function HoldingFormDialog({
             accountId,
             instrument: { kind, name: name.trim() },
             quantity: quantity.trim(),
-            avgUnitCost: avgUnitCost.trim(),
+            avgUnitCost: avgUnitCostValue,
             lastPrice: lastPriceValue,
             idempotencyKey: createUuidV7(),
           },
@@ -239,11 +253,11 @@ export function HoldingFormDialog({
               <Label htmlFor="holding-avg-cost">
                 Average unit cost ({currency})
               </Label>
-              <Input
+              <MoneyInput
                 id="holding-avg-cost"
-                inputMode="decimal"
+                currency={currencyCode}
                 value={avgUnitCost}
-                onChange={(e) => setAvgUnitCost(e.target.value)}
+                onChange={setAvgUnitCost}
                 placeholder="0"
                 required
               />
@@ -252,11 +266,11 @@ export function HoldingFormDialog({
               <Label htmlFor="holding-last-price">
                 Last price ({currency})
               </Label>
-              <Input
+              <MoneyInput
                 id="holding-last-price"
-                inputMode="decimal"
+                currency={currencyCode}
                 value={lastPrice}
-                onChange={(e) => setLastPrice(e.target.value)}
+                onChange={setLastPrice}
                 placeholder="Optional"
               />
             </div>
