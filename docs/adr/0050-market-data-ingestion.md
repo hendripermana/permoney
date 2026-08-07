@@ -163,3 +163,60 @@ price/unit` straight from the quote store.
    stale feeds.
 6. **Auto-revaluation wiring** — quotes → `market` valuations for linked
    accounts, honoring the anchor/observation rule (ADR-0043).
+
+## Implementation notes (PER-233, Slice 1 — core)
+
+Slice 1 landed the provider-agnostic core: the three global tables, the
+`MarketDataProvider` seam, a deterministic fixture adapter, the normalizer, and
+the idempotent write path (real-Postgres tested). Decisions made during
+implementation that refine — but do not change — the decision above:
+
+- **Naming vs the holdings `Instrument` (collision resolved).** ADR-0051 already
+  ships a tenant-scoped `Instrument`/`Holding` domain (a fund/gold/share a
+  family HOLDS). The market-data "instrument" of this ADR is a different concept
+  — a GLOBAL, family-neutral tradeable PRICE SERIES — so the tables are named
+  **`MarketInstrument`**, **`MarketQuote`**, and **`RawMarketDataFetch`** to keep
+  the two concepts distinct and non-colliding. The `Instrument`/`InstrumentQuote`
+  names in §1 above refer to these `Market*` tables. The future bridge (a
+  holdings `Instrument` referencing a `MarketInstrument` for auto-pricing) is
+  **PER-238** and is intentionally NOT built here — no FK links the two yet.
+
+- **Price-scale encoding (self-describing quotes).** A quote stores a scaled
+  integer `price` plus an explicit `priceScale` (the decimal exponent), so each
+  row is self-describing and normalization stays replayable rather than relying
+  on implicit per-kind knowledge. Two conventions, both round-half-to-even:
+  - **FX pairs** — `priceScale = 12`, reusing `RATE_SCALE`/`encodeRate` from
+    `@/lib/fx` (value = quote-currency major per 1 base-currency major). An FX
+    `MarketInstrument` carries a `baseCurrency` (the "from" side) so the pair is
+    fully identified; a CHECK ties `baseCurrency` presence exactly to `kind = 'fx'`.
+  - **Spot (metal / security / crypto)** — `priceScale = 8` (`SPOT_PRICE_SCALE`,
+    value = quote-currency major per instrument unit). 8 fraction digits cover
+    crypto's satoshi-grade precision. A DB CHECK constrains `priceScale IN (8, 12)`;
+    later slices needing another scale add it via migration.
+
+- **Metal unit convention.** Metal quotes are stored CANONICALLY **per troy
+  ounce**; per-gram is DERIVED (`spotPriceScaledPerGram`, 1 troy oz = 31.1034768 g,
+  one banker's-rounding step) at the same 1e8 scale. Storing one canonical unit
+  and deriving the other keeps the store unambiguous while making both priceable.
+
+- **Instrument identity / idempotency.** `MarketInstrument` identity is
+  `(kind, symbol, COALESCE(mic,''), quoteCurrency)` (a `COALESCE` unique index so
+  NULL MICs still dedupe); `MarketQuote` idempotency is `UNIQUE (marketInstrumentId,
+asOf, source)` with re-ingest upserting in place. `mic` is constrained to
+  securities only.
+
+- **Audit trail for global tables.** The tenant-scoped `AuditLog` does not apply
+  to these family-neutral tables (no `familyId` to record). Provenance IS the
+  audit trail: every canonical `MarketQuote` is dated, `source`-stamped, and
+  linked via `rawFetchId` to the exact `RawMarketDataFetch` it was normalized
+  from. Failed fetches are recorded (`status = 'error'`) and yield zero quotes,
+  leaving the last good quote intact (graceful degradation).
+
+- **Ledger isolation (tested invariant).** An ingest writes ONLY the three global
+  tables and never a `Transaction`, an account `balance`, or a `Valuation`
+  (`tests/integration/market-data.integration.ts`).
+
+Files: `prisma/schema.prisma` + migration
+`20260807130000_market_data_core`; `src/lib/market-data.ts` (pure encoding +
+normalizer); `src/server/market-data.server.ts` (provider interface, fixture
+adapter, `ingestMarketDataOnce`); unit + real-Postgres tests.
