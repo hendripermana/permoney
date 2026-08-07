@@ -4,10 +4,12 @@ import {
   Coins,
   PiggyBank,
   Plus,
+  RefreshCw,
   TrendingDown,
   TrendingUp,
   Trash2,
   Wallet,
+  Zap,
 } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
@@ -86,6 +88,8 @@ export function HoldingsPanel({
   onBuy,
   onBuyHolding,
   onSellHolding,
+  onRefreshPrices,
+  refreshingPrices,
 }: Readonly<{
   view: AccountHoldingsView | undefined
   currency: string
@@ -96,8 +100,14 @@ export function HoldingsPanel({
   onBuy: () => void
   onBuyHolding: (holding: HoldingRecord) => void
   onSellHolding: (holding: HoldingRecord) => void
+  onRefreshPrices: () => void
+  refreshingPrices: boolean
 }>) {
   const holdings = view?.holdings ?? []
+  // Any linked holding means "Refresh prices" can do something.
+  const hasLinkedHolding = holdings.some(
+    (holding) => holding.instrument.marketInstrumentId !== null
+  )
 
   return (
     <div className="rounded-2xl border p-4">
@@ -107,6 +117,20 @@ export function HoldingsPanel({
           Holdings
         </h2>
         <div className="flex items-center gap-2">
+          {hasLinkedHolding ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={onRefreshPrices}
+              disabled={refreshingPrices}
+              aria-label="Refresh prices"
+            >
+              <RefreshCw
+                className={cn("size-4", refreshingPrices && "animate-spin")}
+              />
+              Refresh prices
+            </Button>
+          ) : null}
           <Button size="sm" onClick={onBuy}>
             <ArrowDownLeft className="size-4" />
             Buy
@@ -144,6 +168,27 @@ export function HoldingsPanel({
                     <Badge variant="secondary" className="shrink-0">
                       {instrumentKindLabel(holding.instrument.kind)}
                     </Badge>
+                    {holding.instrument.marketInstrumentId !== null ? (
+                      <Badge
+                        variant="outline"
+                        className="shrink-0 gap-1 text-xs"
+                        title={
+                          holding.latestMarketQuoteAsOf
+                            ? `Latest quote ${new Date(holding.latestMarketQuoteAsOf).toLocaleDateString()}`
+                            : "Linked to a live price source"
+                        }
+                      >
+                        <Zap className="size-3" aria-hidden />
+                        Auto
+                        {holding.latestMarketQuoteAsOf ? (
+                          <span className="text-muted-foreground">
+                            {new Date(
+                              holding.latestMarketQuoteAsOf
+                            ).toLocaleDateString()}
+                          </span>
+                        ) : null}
+                      </Badge>
+                    ) : null}
                   </div>
                   <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
                     {holding.quantity} {holding.instrument.name} · cost{" "}

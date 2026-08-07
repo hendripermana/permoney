@@ -220,3 +220,63 @@ Files: `prisma/schema.prisma` + migration
 `20260807130000_market_data_core`; `src/lib/market-data.ts` (pure encoding +
 normalizer); `src/server/market-data.server.ts` (provider interface, fixture
 adapter, `ingestMarketDataOnce`); unit + real-Postgres tests.
+
+## Implementation notes (PER-238, Slice 6 — auto-revaluation wiring)
+
+Slice 6 builds the bridge deferred in the PER-233 note: a holdings `Instrument`
+(ADR-0051, a fund/gold/share a family HOLDS) now carries an OPTIONAL, nullable
+FK `marketInstrumentId → MarketInstrument` (global; `onDelete: SetNull`). The
+wiring is one deliberately narrow path:
+
+```
+holdings Instrument.marketInstrumentId
+  → latest MarketQuote (append-only, per (instrument, asOf, source))
+  → holding.lastPriceMinor  (converted to the holding's price basis)
+  → Σ-holdings valuation anchor (source="holdings", the account's own value)
+```
+
+- **Prices stay observations, never clobber user truth (§2 made real).**
+  `refreshHoldingPricesForFamily` (`src/server/holdings.ts`) ONLY ever moves a
+  linked holding's `lastPriceMinor` and re-materializes the derived Σ-holdings
+  anchor for the SAME investment account (via the existing
+  `recomputeAccountValueAnchorWithinTx`). It never writes a cash/funding
+  balance, never an `opening`/`reconciliation`/`manual` user anchor, and never
+  an account that is not a holdings-tracked (`balanceSource="valuation"`)
+  investment account. A refresh whose computed price equals the holding's
+  current `lastPriceMinor` is a NO-OP (no holding write, no re-materialization,
+  no duplicate valuation) — so re-running with unchanged quotes changes nothing.
+
+- **Unit contract (pure, unit-tested).** `marketQuoteToHoldingPriceMinor`
+  (`src/lib/market-data.ts`) converts a canonical quote to minor units per
+  holding unit: a **metal** quote is stored per TROY OUNCE and DERIVED to
+  per-GRAM (`spotPriceScaledPerGram`) because a metal holding's quantity is in
+  grams (ADR-0051); a **security** (fund NAV/unit, share price) or **crypto**
+  quote is per-unit and used directly; an **fx** pair can never price a holding
+  (rejected — it is a currency pair, not a per-unit price). Result =
+  `round_half_even(perUnitScaled × minorUnitConversion / 1e8)`.
+
+- **Same-currency constraint (this slice).** The `MarketInstrument.quoteCurrency`
+  MUST equal the holding's currency (== account currency). A mismatch is
+  rejected at LINK time and skipped (with a clear reason) at refresh time —
+  never silently mis-priced. Cross-currency (quote → holding via FX, ADR-0035)
+  is a later slice.
+
+- **Full §5A contract on the refresh.** One RLS-scoped tenant transaction with
+  the `app.family_id` GUC; endpoint-scoped idempotency (`refreshHoldingPricesFn`
+  `IdempotencyRecord`, replay + unique-race replay); tenant validation of the
+  optional `accountId`; append-only `AuditLog` rows for every `Holding` price
+  update and the holdings anchor. The link itself (set via `upsertHoldingFn`) is
+  likewise audited and validated (existence, non-fx, same-currency).
+
+- **Deferred.** The scheduled refresh worker (PER-237 — this slice is an
+  explicit "Refresh prices" trigger only), real scraper adapters (gold-local
+  Antam/Pegadaian = PER-235, reksadana NAV), and cross-currency quote → holding
+  via FX.
+
+Files: `prisma/schema.prisma` + migration `20260808120000_holding_market_link`;
+`src/lib/market-data.ts` (`marketQuoteToHoldingPriceMinor`); `src/server/holdings.ts`
+(`refreshHoldingPricesForFamily`/`refreshHoldingPricesFn`, `listMarketInstrumentsFn`,
+market link on `upsertHoldingFn`); `src/components/blocks/holding-form-dialog.tsx` +
+`src/routes/_protected/-account-holdings.tsx` + `accounts.$accountId.tsx` (UI);
+unit (`src/lib/market-data.test.ts`) + real-Postgres
+(`tests/integration/holding-market-prices.integration.ts`) tests.

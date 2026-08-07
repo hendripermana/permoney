@@ -3,6 +3,11 @@ import type { Holding, Instrument, Valuation } from "@prisma/client"
 import { z } from "zod"
 import { CURRENCIES, type CurrencyCode } from "@/lib/data/currencies"
 import {
+  isMarketInstrumentKind,
+  marketQuoteToHoldingPriceMinor,
+  type MarketPricedHoldingKind,
+} from "@/lib/market-data"
+import {
   averageUnitCostMinor,
   holdingCostMinor,
   holdingGainMinor,
@@ -141,6 +146,11 @@ export const upsertHoldingInputSchema = z.object({
   quantity: decimalStringSchema,
   avgUnitCost: decimalStringSchema,
   lastPrice: decimalStringSchema.optional(),
+  // PER-238 — OPTIONAL link to a global MarketInstrument for auto-pricing.
+  // `undefined` leaves the link unchanged; `null` unlinks; a string links (and
+  // is validated to exist, be non-fx, and share the account's currency). The
+  // link alone never changes a price — it takes effect on the next refresh.
+  marketInstrumentId: z.string().min(1).nullable().optional(),
   idempotencyKey: uuidV7Schema,
 })
 
@@ -169,6 +179,8 @@ export interface SerializedInstrument {
   symbol: string | null
   quoteCurrency: string
   priceModel: string
+  /** PER-238 — linked global MarketInstrument for auto-pricing, or null. */
+  marketInstrumentId: string | null
 }
 
 export interface SerializedHolding {
@@ -193,6 +205,13 @@ export interface SerializedHolding {
   gainMinor: string
   /** Unrealized return as a fraction, or null when cost is 0. */
   returnPct: number | null
+  /**
+   * PER-238 — as-of of the latest MarketQuote for the linked MarketInstrument
+   * (ISO string), or null when the holding is not linked / has no quote yet.
+   * Populated by the read view (getAccountHoldingsForFamily); a bare
+   * serializeHolding (audit snapshots) leaves it null.
+   */
+  latestMarketQuoteAsOf: string | null
   createdAt: string
   updatedAt: string
 }
@@ -216,6 +235,7 @@ function serializeInstrument(instrument: Instrument): SerializedInstrument {
     symbol: instrument.symbol,
     quoteCurrency: instrument.quoteCurrency,
     priceModel: instrument.priceModel,
+    marketInstrumentId: instrument.marketInstrumentId,
   }
 }
 
@@ -251,6 +271,7 @@ function serializeHolding(holding: HoldingWithInstrument): SerializedHolding {
     costMinor: cost.toString(),
     gainMinor: gain.toString(),
     returnPct: holdingReturnPct(value, cost),
+    latestMarketQuoteAsOf: null,
     createdAt: holding.createdAt.toISOString(),
     updatedAt: holding.updatedAt.toISOString(),
   }
@@ -391,6 +412,77 @@ async function resolveInstrument(
 }
 
 // -----------------------------------------------------------------------------
+// PER-238 — market-data price link (holdings Instrument -> global MarketInstrument)
+// -----------------------------------------------------------------------------
+
+// Validate a market-instrument link before persisting it. The MarketInstrument
+// is GLOBAL (family-neutral, no RLS): we validate EXISTENCE (reference data, not
+// tenant data) plus the two slice constraints — it must NOT be an fx pair (a
+// currency pair is not a per-unit price) and its quoteCurrency MUST equal the
+// holding/account currency (cross-currency auto-pricing via FX is a later
+// slice). Throws a typed HoldingError; returns the validated market kind.
+async function validateMarketInstrumentLink(
+  tx: TenantTransactionClient,
+  marketInstrumentId: string,
+  accountCurrency: string
+): Promise<MarketPricedHoldingKind> {
+  const market = await tx.marketInstrument.findUnique({
+    where: { id: marketInstrumentId },
+    select: { id: true, kind: true, quoteCurrency: true },
+  })
+  if (!market) {
+    throw new HoldingError(`Market instrument ${marketInstrumentId} not found`)
+  }
+  if (!isMarketInstrumentKind(market.kind) || market.kind === "fx") {
+    throw new HoldingError(
+      `Market instrument ${marketInstrumentId} (kind "${market.kind}") cannot price a holding; an FX pair is a currency pair, not a per-unit price`
+    )
+  }
+  if (market.quoteCurrency !== accountCurrency) {
+    throw new HoldingError(
+      `Market instrument currency ${market.quoteCurrency} must match the holding currency ${accountCurrency} (cross-currency auto-pricing is a later slice)`
+    )
+  }
+  return market.kind
+}
+
+// Persist (or clear) a holdings Instrument's market link inside the caller's
+// transaction, audited. A no-op when the value is unchanged (so idempotent
+// re-saves write nothing). Validation runs only when linking (non-null).
+async function applyMarketLinkWithinTx(
+  tx: TenantTransactionClient,
+  familyId: string,
+  instrumentId: string,
+  marketInstrumentId: string | null,
+  accountCurrency: string,
+  auditCtx: AuditContext
+): Promise<void> {
+  const before = await tx.instrument.findFirst({
+    where: { id: instrumentId, familyId },
+  })
+  if (!before) {
+    throw new HoldingError(
+      `Instrument ${instrumentId} not found for this family`
+    )
+  }
+  if (before.marketInstrumentId === marketInstrumentId) return
+  if (marketInstrumentId !== null) {
+    await validateMarketInstrumentLink(tx, marketInstrumentId, accountCurrency)
+  }
+  const after = await tx.instrument.update({
+    where: { id: instrumentId },
+    data: { marketInstrumentId },
+  })
+  await auditLog(tx, auditCtx, {
+    action: "update",
+    entityType: "Instrument",
+    entityId: instrumentId,
+    before: serializeInstrument(before),
+    after: serializeInstrument(after),
+  })
+}
+
+// -----------------------------------------------------------------------------
 // Account-value anchor: value = Σ holdings' current value, written as a manual
 // valuation anchor so the account balance materializes from holdings (ADR-0051).
 // Runs inside the caller's transaction; createValuationWithinTx signs the value,
@@ -471,6 +563,10 @@ export async function upsertHoldingForFamily({
     instrument: data.instrument ?? null,
     instrumentId: data.instrumentId ?? null,
     lastPrice: data.lastPrice ?? null,
+    marketInstrumentId:
+      data.marketInstrumentId === undefined
+        ? "__unset__"
+        : data.marketInstrumentId,
     quantity: data.quantity,
   })
   const auditCtx = await createAuditContext(
@@ -514,6 +610,7 @@ export async function upsertHoldingForFamily({
           : parseMinor(data.lastPrice, currency, "lastPrice")
 
       let holdingId: string
+      let resolvedInstrumentId: string
       if (data.holdingId) {
         // UPDATE — instrument identity is fixed; only quantity/cost/price move.
         const existing = await loadHoldingWithInstrument(
@@ -543,6 +640,7 @@ export async function upsertHoldingForFamily({
           after: serializeHolding(updated),
         })
         holdingId = updated.id
+        resolvedInstrumentId = existing.instrumentId
       } else {
         // CREATE — resolve/create the instrument, then the holding.
         const instrument = await resolveInstrument(
@@ -570,6 +668,21 @@ export async function upsertHoldingForFamily({
           after: serializeHolding(created),
         })
         holdingId = created.id
+        resolvedInstrumentId = created.instrumentId
+      }
+
+      // PER-238 — persist/clear the optional market-data price link (audited,
+      // no-op when unchanged). The link never changes a price; it takes effect
+      // on the next `refreshHoldingPricesFn`. Applied for BOTH create + update.
+      if (data.marketInstrumentId !== undefined) {
+        await applyMarketLinkWithinTx(
+          tx,
+          familyId,
+          resolvedInstrumentId,
+          data.marketInstrumentId,
+          account.currency,
+          auditCtx
+        )
       }
 
       // Re-materialize the account balance from Σ holdings as a valuation anchor.
@@ -789,7 +902,45 @@ export async function getAccountHoldingsForFamily({
       include: { instrument: true },
       orderBy: { createdAt: "asc" },
     })
-    const holdings = rows.map(serializeHolding)
+
+    // PER-238 — attach each linked holding's latest MarketQuote as-of (for the
+    // "auto" indicator + freshness in the UI). MarketQuote is GLOBAL (no RLS);
+    // one query per distinct linked series, memoized.
+    const linkedIds = [
+      ...new Set(
+        rows
+          .map((row) => row.instrument.marketInstrumentId)
+          .filter((id): id is string => id !== null)
+      ),
+    ]
+    const latestAsOfByMarketId = new Map<string, string>()
+    await Promise.all(
+      linkedIds.map(async (marketInstrumentId) => {
+        const latest = await tx.marketQuote.findFirst({
+          where: { marketInstrumentId },
+          orderBy: { asOf: "desc" },
+          select: { asOf: true },
+        })
+        if (latest) {
+          latestAsOfByMarketId.set(
+            marketInstrumentId,
+            latest.asOf.toISOString()
+          )
+        }
+      })
+    )
+
+    const holdings = rows.map((row) => {
+      const serialized = serializeHolding(row)
+      const marketId = row.instrument.marketInstrumentId
+      return {
+        ...serialized,
+        latestMarketQuoteAsOf:
+          marketId === null
+            ? null
+            : (latestAsOfByMarketId.get(marketId) ?? null),
+      }
+    })
 
     let totalValue = 0n
     let totalCost = 0n
@@ -1290,6 +1441,347 @@ export const recordTradeFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data, context }) => {
     return await recordTradeForFamily({
+      data,
+      familyId: context.familyId,
+      user: context.user,
+    })
+  })
+
+// =============================================================================
+// MARKET-DATA PRICE LINK + AUTO-REVALUATION (PER-238 / ADR-0050 + ADR-0051)
+// =============================================================================
+//
+// A holdings `Instrument` may OPTIONALLY link to a GLOBAL `MarketInstrument`
+// (a price series). `refreshHoldingPricesForFamily` reads the LATEST
+// `MarketQuote` for each linked series, converts it to the holding's price
+// basis (`marketQuoteToHoldingPriceMinor`, pure), marks the holding's
+// `lastPriceMinor`, and re-materializes each affected account's Σ-holdings
+// anchor via the SAME primitive holdings CRUD uses.
+//
+// ANCHOR-SAFETY (the load-bearing invariant, ADR-0050 §2 / ADR-0043):
+//   A quote is an OBSERVATION. This path ONLY ever moves a holding's
+//   `lastPriceMinor` and the DERIVED Σ-holdings valuation (source="holdings" —
+//   the investment account's OWN value mechanism). It NEVER writes a cash /
+//   funding balance, NEVER an opening/reconciliation/manual user anchor, and
+//   NEVER an account that is not a holdings-tracked (balanceSource="valuation")
+//   investment account. Re-running with unchanged quotes is a NO-OP: a holding
+//   whose computed price equals its current `lastPriceMinor` is skipped, so no
+//   account is re-materialized and no duplicate valuation is written.
+//
+// SAME-CURRENCY constraint (this slice): the MarketInstrument.quoteCurrency MUST
+// equal the holding's currency (== account currency). A mismatch is SKIPPED with
+// a clear reason (never silently mis-priced); cross-currency via FX is a later
+// slice. An `fx` series is never a holding price basis. Unlinked holdings are
+// untouched.
+
+const REFRESH_HOLDING_PRICES_ENDPOINT = "refreshHoldingPricesFn"
+
+// -----------------------------------------------------------------------------
+// GET — list the global market instruments a holding can link to (non-fx).
+// -----------------------------------------------------------------------------
+
+export interface SerializedMarketInstrument {
+  id: string
+  kind: string
+  symbol: string
+  name: string | null
+  quoteCurrency: string
+  baseCurrency: string | null
+  mic: string | null
+}
+
+export const listMarketInstrumentsQuerySchema = z.object({
+  // Optional currency filter — the dialog passes the holding account's currency
+  // so the picker only offers same-currency (linkable) series this slice.
+  currency: z.string().trim().optional(),
+})
+
+export async function listMarketInstrumentsForFamily({
+  currency,
+  familyId,
+  userId,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  currency?: string
+  familyId: string
+  userId: string
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<SerializedMarketInstrument[]> {
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
+    // MarketInstrument is GLOBAL (no RLS); reading it inside the tenant tx is
+    // fine — it carries no tenant data. Only non-fx series can price a holding.
+    const rows = await tx.marketInstrument.findMany({
+      where: {
+        kind: { not: "fx" },
+        ...(currency ? { quoteCurrency: currency.toUpperCase() } : {}),
+      },
+      orderBy: [{ kind: "asc" }, { symbol: "asc" }],
+      select: {
+        id: true,
+        kind: true,
+        symbol: true,
+        name: true,
+        quoteCurrency: true,
+        baseCurrency: true,
+        mic: true,
+      },
+    })
+    return rows
+  })
+}
+
+export const listMarketInstrumentsFn = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .inputValidator((data: z.infer<typeof listMarketInstrumentsQuerySchema>) =>
+    listMarketInstrumentsQuerySchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await listMarketInstrumentsForFamily({
+      currency: data.currency,
+      familyId: context.familyId,
+      userId: context.user.id,
+    })
+  })
+
+// -----------------------------------------------------------------------------
+// POST — refresh linked holdings' prices from the latest quotes (anchor-safe).
+// -----------------------------------------------------------------------------
+
+export const refreshHoldingPricesInputSchema = z.object({
+  // Optional: restrict to one account; omit to refresh every linked holding in
+  // the family. Either way ONLY holdings whose Instrument.marketInstrumentId is
+  // set are ever touched — unlinked holdings are guaranteed untouched.
+  accountId: z.string().min(1).optional(),
+  idempotencyKey: uuidV7Schema,
+})
+
+type RefreshHoldingPricesInput = z.infer<typeof refreshHoldingPricesInputSchema>
+
+export interface RefreshHoldingPricesResult {
+  /** Holdings whose lastPrice was moved by a fresher quote. */
+  updatedHoldings: number
+  /** Distinct accounts whose Σ-holdings anchor was re-materialized. */
+  updatedAccounts: number
+  /** Linked holdings considered (had a market link). */
+  consideredHoldings: number
+  /** Linked holdings left unchanged, with the reason (no quote / same price / skipped). */
+  skipped: { holdingId: string; reason: string }[]
+}
+
+// The market series + its latest quote, loaded once per marketInstrumentId.
+interface LatestMarketPrice {
+  kind: string
+  quoteCurrency: string
+  latest: { price: bigint; priceScale: number; asOf: Date } | null
+}
+
+export async function refreshHoldingPricesForFamily({
+  data: rawData,
+  familyId,
+  user,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  data: z.input<typeof refreshHoldingPricesInputSchema>
+  familyId: string
+  user: ServerActor
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<RefreshHoldingPricesResult> {
+  const data: RefreshHoldingPricesInput =
+    refreshHoldingPricesInputSchema.parse(rawData)
+  const requestHash = await hashCanonicalPayload({
+    accountId: data.accountId ?? null,
+  })
+  const auditCtx = await createAuditContext(
+    { user: { id: user.id, familyId } },
+    data.idempotencyKey
+  )
+
+  const runOnce = async () =>
+    await runInTenantTransaction(familyId, user.id, async (tx) => {
+      const replay =
+        await replayIdempotentEndpointResponse<RefreshHoldingPricesResult>(tx, {
+          endpoint: REFRESH_HOLDING_PRICES_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+        })
+      if (replay) return replay
+
+      // If scoped to one account, validate tenant ownership up front (a cross-
+      // tenant accountId short-circuits before any read of holdings).
+      if (data.accountId) {
+        await validateTenantReferences(tx, familyId, {
+          accountId: data.accountId,
+        })
+      }
+
+      // Only LINKED holdings are ever considered (marketInstrumentId set). RLS
+      // guarantees family scoping; the optional accountId narrows further.
+      const holdings = await tx.holding.findMany({
+        where: {
+          familyId,
+          ...(data.accountId ? { accountId: data.accountId } : {}),
+          instrument: { marketInstrumentId: { not: null } },
+        },
+        include: { instrument: true },
+      })
+
+      const priceCache = new Map<string, LatestMarketPrice>()
+      const loadLatestPrice = async (
+        marketInstrumentId: string
+      ): Promise<LatestMarketPrice> => {
+        const cached = priceCache.get(marketInstrumentId)
+        if (cached) return cached
+        const market = await tx.marketInstrument.findUnique({
+          where: { id: marketInstrumentId },
+          select: {
+            kind: true,
+            quoteCurrency: true,
+            quotes: {
+              orderBy: { asOf: "desc" },
+              take: 1,
+              select: { price: true, priceScale: true, asOf: true },
+            },
+          },
+        })
+        const value: LatestMarketPrice = market
+          ? {
+              kind: market.kind,
+              quoteCurrency: market.quoteCurrency,
+              latest: market.quotes[0] ?? null,
+            }
+          : { kind: "", quoteCurrency: "", latest: null }
+        priceCache.set(marketInstrumentId, value)
+        return value
+      }
+
+      const skipped: { holdingId: string; reason: string }[] = []
+      const affectedAccounts = new Set<string>()
+      let updatedHoldings = 0
+
+      for (const holding of holdings) {
+        const marketId = holding.instrument.marketInstrumentId
+        if (marketId === null) continue // impossible (filtered), keeps types honest
+        const market = await loadLatestPrice(marketId)
+
+        if (!isMarketInstrumentKind(market.kind) || market.kind === "fx") {
+          skipped.push({
+            holdingId: holding.id,
+            reason: `market series is not priceable (kind "${market.kind}")`,
+          })
+          continue
+        }
+        const marketKind: MarketPricedHoldingKind = market.kind
+        if (!market.latest) {
+          skipped.push({ holdingId: holding.id, reason: "no quote yet" })
+          continue
+        }
+        // SAME-CURRENCY constraint: the quote currency must equal the holding's
+        // currency (== account currency). Never silently mis-price a mismatch.
+        if (market.quoteCurrency !== holding.instrument.quoteCurrency) {
+          skipped.push({
+            holdingId: holding.id,
+            reason: `currency mismatch: quote ${market.quoteCurrency} vs holding ${holding.instrument.quoteCurrency} (same-currency required this slice)`,
+          })
+          continue
+        }
+
+        const currency = assertKnownCurrency(holding.instrument.quoteCurrency)
+        const minorUnitConversion = BigInt(
+          CURRENCIES[currency].minorUnitConversion
+        )
+        const newLastPrice = marketQuoteToHoldingPriceMinor({
+          kind: marketKind,
+          priceScaled: market.latest.price,
+          priceScale: market.latest.priceScale,
+          minorUnitConversion,
+        })
+
+        // Idempotent: an unchanged price writes nothing (no holding mutation, no
+        // account re-materialization, no duplicate valuation).
+        if (holding.lastPriceMinor === newLastPrice) {
+          skipped.push({
+            holdingId: holding.id,
+            reason: "price unchanged",
+          })
+          continue
+        }
+
+        const updated = await tx.holding.update({
+          where: { id: holding.id },
+          data: { lastPriceMinor: newLastPrice },
+          include: { instrument: true },
+        })
+        await auditLog(tx, auditCtx, {
+          action: "update",
+          entityType: "Holding",
+          entityId: updated.id,
+          before: serializeHolding(holding),
+          after: serializeHolding(updated),
+        })
+        updatedHoldings += 1
+        affectedAccounts.add(holding.accountId)
+      }
+
+      // Re-materialize each affected account's Σ-holdings anchor ONCE. Anchor-
+      // safety: recompute only ever writes a source="holdings" valuation for a
+      // valuation-tracked account; a defensive eligibility check refuses any
+      // non-valuation account (holdings can only exist on such accounts, so this
+      // is belt-and-braces — it can never touch a cash/user anchor).
+      let updatedAccounts = 0
+      for (const accountId of affectedAccounts) {
+        const account = await fetchEligibleAccount(tx, familyId, accountId)
+        await recomputeAccountValueAnchorWithinTx(
+          tx,
+          familyId,
+          accountId,
+          account.currency,
+          user,
+          auditCtx
+        )
+        updatedAccounts += 1
+      }
+
+      const response: RefreshHoldingPricesResult = {
+        updatedHoldings,
+        updatedAccounts,
+        consideredHoldings: holdings.length,
+        skipped,
+      }
+      await persistIdempotentEndpointResponse(tx, {
+        endpoint: REFRESH_HOLDING_PRICES_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+        response,
+      })
+      return response
+    })
+
+  try {
+    return await runOnce()
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error
+    const replay = await scopedTenantTransaction(familyId, user.id, (tx) =>
+      replayIdempotentEndpointResponse<RefreshHoldingPricesResult>(tx, {
+        endpoint: REFRESH_HOLDING_PRICES_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+      })
+    )
+    if (replay) return replay
+    throw error
+  }
+}
+
+export const refreshHoldingPricesFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("ledger:write")])
+  .inputValidator((data: z.input<typeof refreshHoldingPricesInputSchema>) =>
+    refreshHoldingPricesInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await refreshHoldingPricesForFamily({
       data,
       familyId: context.familyId,
       user: context.user,

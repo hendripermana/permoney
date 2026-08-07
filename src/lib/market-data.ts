@@ -196,6 +196,66 @@ export function spotPriceScaledPerGram(perOunceScaled: bigint): bigint {
   return divRoundHalfEven(perOunceScaled * 10_000_000n, 311_034_768n)
 }
 
+/**
+ * Kinds that can price a HOLDING (PER-238). An `fx` MarketInstrument is a
+ * currency PAIR, not a per-unit price, so it can never back a holding's price.
+ */
+export type MarketPricedHoldingKind = Exclude<MarketInstrumentKind, "fx">
+
+/**
+ * Convert a canonical `MarketQuote` price into a holding's `lastPriceMinor`
+ * (MINOR units of the holding's currency, per ONE holding unit) — PER-238.
+ *
+ * UNIT CONTRACT (the load-bearing part — must match the holding's quantity unit):
+ *   * metal    — the quote is stored CANONICALLY per TROY OUNCE (spot scale 1e8);
+ *     a metal holding's quantity is in GRAMS (ADR-0051 gold = grams), so we
+ *     derive the per-gram price first (`spotPriceScaledPerGram`) before scaling
+ *     to minor units.
+ *   * security — the quote is per UNIT (a fund's NAV/unit, a share's last price)
+ *     at spot scale 1e8; used directly (a reksadana/stock holding's quantity is
+ *     units/shares).
+ *   * crypto   — the quote is per COIN at spot scale 1e8; used directly.
+ *   * fx       — NOT a holding price basis (excluded from the input type).
+ *
+ * `minorUnitConversion` is the currency's major→minor multiplier (100 for
+ * IDR/USD, 1 for JPY). The result is
+ *   lastPriceMinor = round( perUnitScaled * minorUnitConversion / 1e8 )
+ * with round-half-to-even, matching every other scaled-integer conversion in the
+ * codebase. Same-currency (quote currency == account currency) is enforced by
+ * the caller; cross-currency (FX) is a later slice.
+ *
+ * Pure: no DB, no side effects. Throws on a non-positive price, an unexpected
+ * price scale (metal/security/crypto quotes are always spot-scaled), or a
+ * non-positive conversion — a corrupt price must fail loud, never mis-mark money.
+ */
+export function marketQuoteToHoldingPriceMinor(params: {
+  kind: MarketPricedHoldingKind
+  priceScaled: bigint
+  priceScale: number
+  minorUnitConversion: bigint
+}): bigint {
+  const { kind, priceScaled, priceScale, minorUnitConversion } = params
+  if (priceScaled <= 0n) {
+    throw new RangeError(
+      `marketQuoteToHoldingPriceMinor: price must be positive, got ${priceScaled}`
+    )
+  }
+  if (priceScale !== SPOT_PRICE_DECIMALS) {
+    throw new RangeError(
+      `marketQuoteToHoldingPriceMinor: expected spot price scale ${SPOT_PRICE_DECIMALS}, got ${priceScale} (an fx pair cannot price a holding)`
+    )
+  }
+  if (minorUnitConversion <= 0n) {
+    throw new RangeError(
+      `marketQuoteToHoldingPriceMinor: minorUnitConversion must be positive, got ${minorUnitConversion}`
+    )
+  }
+  const perUnitScaled =
+    kind === "metal" ? spotPriceScaledPerGram(priceScaled) : priceScaled
+  const scaleDivisor = 10n ** BigInt(SPOT_PRICE_DECIMALS)
+  return divRoundHalfEven(perUnitScaled * minorUnitConversion, scaleDivisor)
+}
+
 /** Convert `RATE_SCALE` fx price + `SPOT_PRICE_SCALE` — exported for callers. */
 export { RATE_SCALE }
 
