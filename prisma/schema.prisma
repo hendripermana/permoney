@@ -27,6 +27,9 @@ model Iso4217Currency {
   fxToCurrencies                   FxRateSnapshot[] @relation("FxRateToCurrency")
   budgetCurrencies                 Budget[]      @relation("BudgetCurrency")
   instrumentQuoteCurrencies        Instrument[]  @relation("InstrumentQuoteCurrency")
+  marketInstrumentBaseCurrencies   MarketInstrument[] @relation("MarketInstrumentBaseCurrency")
+  marketInstrumentQuoteCurrencies  MarketInstrument[] @relation("MarketInstrumentQuoteCurrency")
+  marketQuoteCurrencies            MarketQuote[]      @relation("MarketQuoteCurrency")
 
   @@map("iso_4217_currency")
 }
@@ -1012,4 +1015,146 @@ model Holding {
 
   @@unique([id, familyId], map: "Holding_id_familyId_key")
   @@index([familyId, accountId])
+}
+
+// ADR-0050 (PER-233) — Market-data ingestion: global, family-neutral price store.
+// =============================================================================
+// These three models are the provider-agnostic market-data subsystem. They are
+// GLOBAL (family-neutral) and carry NO tenant data, so — unlike every ledger
+// table — they are deliberately NOT under family Row-Level Security: a USD/IDR
+// rate or the XAU spot price is identical for every family (see the migration
+// header for the full rationale). Per-family consumers (the FX projection cache
+// `FxRateSnapshot`, valuations) keep their existing RLS + familyId scoping and
+// become READERS of this store in later slices.
+//
+// NAMING: this `MarketInstrument` is DISTINCT from the tenant-scoped holdings
+// `Instrument` above (ADR-0051). Holdings `Instrument` = a fund/gold/share a
+// family HOLDS; `MarketInstrument` = a global tradeable PRICE SERIES (an FX
+// pair, a metal, a security, a crypto). A future slice (PER-238) will let a
+// holdings `Instrument` reference a `MarketInstrument` for auto-pricing; that
+// link is intentionally NOT built here. The two concepts never collide.
+//
+// See src/lib/market-data.ts (pure encoding + normalization) and
+// src/server/market-data.server.ts (provider interface, fixture adapter, and
+// the idempotent raw -> staged -> canonical ingest pipeline).
+
+model MarketInstrument {
+  id String @id @default(cuid())
+
+  // Instrument taxonomy (CHECK domain in migration): 'fx' | 'metal' |
+  // 'security' | 'crypto'.
+  kind String
+
+  // Provider-independent symbol: "USD/IDR" (fx), "XAU" (metal), "AAPL"
+  // (security), "BTC" (crypto). Non-empty (CHECK).
+  symbol String
+
+  // Optional display label ("Gold", "Apple Inc.").
+  name String?
+
+  // FX pairs only: the BASE (from) currency. For "USD/IDR" this is USD and
+  // `quoteCurrency` is IDR, so a quote reuses the fx.ts Rate encoding
+  // ("1 base major = price quote major"). NULL for non-fx kinds; a CHECK ties
+  // its presence exactly to kind = 'fx'.
+  baseCurrency         String?
+  baseCurrencyRegistry Iso4217Currency? @relation("MarketInstrumentBaseCurrency", fields: [baseCurrency], references: [code], onDelete: Restrict, onUpdate: Cascade, map: "market_instrument_base_currency_is_iso_4217")
+
+  // The currency a price is quoted in. For fx = the QUOTE (to) currency; for
+  // metal/security/crypto = the pricing currency (e.g. USD, IDR).
+  quoteCurrency         String
+  quoteCurrencyRegistry Iso4217Currency @relation("MarketInstrumentQuoteCurrency", fields: [quoteCurrency], references: [code], onDelete: Restrict, onUpdate: Cascade, map: "market_instrument_quote_currency_is_iso_4217")
+
+  // Securities only: the market MIC / exchange code (disambiguates a ticker
+  // across exchanges). A CHECK keeps it NULL unless kind = 'security'.
+  mic String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  quotes MarketQuote[]
+
+  // Instrument identity is (kind, symbol, mic, quoteCurrency). Enforced by a
+  // COALESCE(mic,'') UNIQUE INDEX in the migration so NULL mics still dedupe.
+  @@index([kind])
+}
+
+model MarketQuote {
+  id String @id @default(cuid())
+
+  marketInstrumentId String
+  marketInstrument   MarketInstrument @relation(fields: [marketInstrumentId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  // Observation time (as-of). The latest asOf per (instrument, source) is the
+  // "current price".
+  asOf DateTime
+
+  // Price of ONE instrument unit, as a SCALED INTEGER: price = round(value *
+  // 10^priceScale). `priceScale` makes each row self-describing rather than
+  // relying on implicit per-kind knowledge:
+  //   * fx      -> priceScale = 12 (RATE_SCALE, reuses @/lib/fx encodeRate;
+  //               value = quote major per 1 base major)
+  //   * spot    -> priceScale = 8  (SPOT_PRICE_SCALE; value = quoteCurrency
+  //               major per instrument unit)
+  // Metals are stored per TROY OUNCE (canonical); per-gram is DERIVED
+  // (perOunce / 31.1034768) — see src/lib/market-data.ts. CHECK price > 0 and
+  // priceScale IN (8, 12).
+  price      BigInt
+  priceScale Int
+
+  // Denormalized currency of THIS observation (equals the instrument's
+  // quoteCurrency); ISO-4217 shape + FK. Present because ADR-0050 §1 defines the
+  // canonical tuple as (instrumentId, asOf, price, quoteCurrency, source, providerRef).
+  quoteCurrency         String
+  quoteCurrencyRegistry Iso4217Currency @relation("MarketQuoteCurrency", fields: [quoteCurrency], references: [code], onDelete: Restrict, onUpdate: Cascade, map: "market_quote_currency_is_iso_4217")
+
+  // Source/provider label ("fixture", "manual", or a vendor id). Distinguishes
+  // concurrent providers reporting the same instrument+asOf.
+  source String
+
+  // Provider's own id/reference for this observation (audit trail), if any.
+  providerRef String?
+
+  // Provenance link to the raw fetch this canonical quote was normalized from
+  // (raw -> staged -> canonical). Restrict so provenance is never orphaned.
+  rawFetchId String?
+  rawFetch   RawMarketDataFetch? @relation(fields: [rawFetchId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  createdAt DateTime @default(now())
+
+  // Idempotency key of the canonical store: re-ingesting the same observation
+  // upserts in place, never duplicates. Latest-quote lookups use the DESC index.
+  @@unique([marketInstrumentId, asOf, source], map: "market_quote_instrument_asof_source_key")
+  @@index([marketInstrumentId, asOf(sort: Desc)])
+}
+
+model RawMarketDataFetch {
+  id String @id @default(cuid())
+
+  // Provider/adapter that produced this fetch ("fixture" in this slice).
+  provider String
+
+  // The instrument set that was requested (symbols/ids), as sent to the provider.
+  requestedInstruments Json
+
+  // The raw provider response payload, verbatim. Canonical `MarketQuote` rows
+  // are normalized FROM this; the raw payload is never itself canonical.
+  payload Json
+
+  // Outcome of the fetch: 'ok' | 'error' (CHECK). An 'error' fetch is still
+  // recorded (graceful degradation: keep the last good quote, record the
+  // failure) and yields zero canonical quotes.
+  status String
+
+  // Transport status when applicable (HTTP code); NULL for adapters with no HTTP.
+  httpStatus Int?
+
+  // Failure detail for status = 'error'.
+  error String?
+
+  fetchedAt DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  quotes MarketQuote[]
+
+  @@index([provider, fetchedAt(sort: Desc)])
 }
