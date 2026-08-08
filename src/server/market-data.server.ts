@@ -596,7 +596,7 @@ async function safeReadText(response: Response): Promise<string> {
  * Safe to call repeatedly; recovers from the unique-index race. Returns its id.
  */
 export async function ensureBsiGoldInstrument(
-  db: MarketDataDb = prisma
+  db: Pick<PrismaClient, "marketInstrument"> = prisma
 ): Promise<string> {
   const where = {
     kind: "metal",
@@ -669,4 +669,52 @@ export async function ingestGoldPricesOnce(
     requests: [GOLD_INSTRUMENT_REQUEST],
     db,
   })
+}
+
+// -----------------------------------------------------------------------------
+// On-demand price sync trigger — the graceful boundary the UI/serverFn call
+// (PER-235b). Wraps `ingestGoldPricesOnce` so a MISSING config
+// (`LOGAM_MULIA_API_URL` unset → the provider constructor throws) or ANY other
+// unexpected throw degrades to a structured result instead of a 500. A fetch
+// that reaches the pipeline already degrades internally (a failed
+// `RawMarketDataFetch` + zero quotes), so the last-good quote is always kept.
+// This performs a GLOBAL ingest only — it writes exclusively the three global
+// market tables and NEVER the ledger, so it runs OUTSIDE any family RLS
+// transaction (its caller keeps the family-scoped holdings refresh separate).
+// -----------------------------------------------------------------------------
+
+export interface SyncMarketPricesResult {
+  /** Canonical quotes written this run (0 on any failure). */
+  ingested: number
+  /** Present only when the sync degraded (unreachable / non-2xx / config unset). */
+  error?: string
+}
+
+/**
+ * Run one on-demand market-price sync (currently BSI gold). NEVER throws: an
+ * unreachable worker, a non-2xx / `success:false` payload, or an unset
+ * `LOGAM_MULIA_API_URL` all resolve to `{ ingested: 0, error }`. The canonical
+ * instrument is still ensured on every attempt (linkable before any fetch
+ * succeeds), and the last good quote is left intact on failure.
+ */
+export async function syncMarketPricesOnce(
+  options?: IngestGoldOptions
+): Promise<SyncMarketPricesResult> {
+  try {
+    const summary = await ingestGoldPricesOnce(options)
+    if (summary.status !== "ok") {
+      return {
+        ingested: 0,
+        error: summary.error ?? "market data source unavailable",
+      }
+    }
+    return { ingested: summary.quotesUpserted }
+  } catch (error) {
+    // Config unset (provider constructor throws) or any other unexpected error —
+    // degrade gracefully rather than surfacing a 500 to the browser.
+    return {
+      ingested: 0,
+      error: error instanceof Error ? error.message : "market sync failed",
+    }
+  }
 }

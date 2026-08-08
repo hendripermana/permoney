@@ -83,6 +83,7 @@ import {
   deleteHoldingFn,
   getAccountHoldingsFn,
   refreshHoldingPricesFn,
+  syncMarketPricesFn,
 } from "@/server/holdings"
 import { HoldingsPanel, type HoldingRecord } from "./-account-holdings"
 import { computeAccountHealth } from "@/lib/account-health"
@@ -264,22 +265,40 @@ function AccountDetailPage() {
     }
   }
 
-  // PER-238 — refresh linked holdings' prices from the latest market quotes.
-  // Anchor-safe on the server (only moves lastPrice + the Σ-holdings anchor);
-  // here we just trigger it, then resync the holdings query + account balance.
+  // PER-235b — one "Refresh prices" click = FETCH then APPLY. First trigger a
+  // global market-data sync (fetch the latest quotes into the global quote
+  // store), THEN apply the latest known quotes to this account's linked holdings
+  // (anchor-safe on the server: only moves lastPrice + the Σ-holdings anchor).
+  // The two stay separate operations — a GLOBAL ingest must never nest inside
+  // the family RLS transaction. The sync degrades gracefully (never throws), so
+  // even when the price source is unreachable we still apply the last good data.
   const [refreshingPrices, setRefreshingPrices] = React.useState(false)
   async function handleRefreshPrices() {
     setRefreshingPrices(true)
+    // 1. Fetch latest quotes (best-effort — the server never throws here, but
+    //    guard anyway so a transport error can't skip the apply step below).
+    let syncError: string | undefined
+    try {
+      const sync = await syncMarketPricesFn()
+      syncError = sync.error
+    } catch {
+      syncError = "Couldn't reach the price source"
+    }
+    // 2. Apply the latest known quotes to this account's linked holdings.
     try {
       const result = await refreshHoldingPricesFn({
         data: { accountId, idempotencyKey: createUuidV7() },
       })
       await refreshHoldings()
-      toast.success(
+      const applied =
         result.updatedHoldings > 0
           ? `Updated ${result.updatedHoldings} price${result.updatedHoldings === 1 ? "" : "s"}`
           : "Prices already up to date"
-      )
+      if (syncError) {
+        toast.info(`Couldn't reach the price source — applied last known`)
+      } else {
+        toast.success(applied)
+      }
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Failed to refresh prices"

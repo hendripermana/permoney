@@ -7,6 +7,16 @@ import {
   marketQuoteToHoldingPriceMinor,
   type MarketPricedHoldingKind,
 } from "@/lib/market-data"
+// NOTE: `market-data.server.ts` is a HARD-FENCE server module (imports Prisma).
+// This file (holdings.ts) is in the CLIENT graph because the account route
+// imports its createServerFn values, so a STATIC `import ... from
+// "./market-data.server"` is denied by import-protection at build time (only
+// `vp build` catches it — not tsc/vitest). We therefore keep only a TYPE-ONLY
+// import (fully erased, no runtime edge) and pull the runtime functions via a
+// DYNAMIC `import("./market-data.server")` INSIDE server-fn handler bodies /
+// server-only functions, where the splitter strips the code from the client —
+// mirroring how the rest of the ledger reaches Prisma only inside handlers.
+import type { SyncMarketPricesResult } from "./market-data.server"
 import {
   averageUnitCostMinor,
   holdingCostMinor,
@@ -1508,6 +1518,15 @@ export async function listMarketInstrumentsForFamily({
   runInTenantTransaction?: RunInTenantTransaction
 }): Promise<SerializedMarketInstrument[]> {
   return await runInTenantTransaction(familyId, userId, async (tx) => {
+    // PER-235b — ensure the canonical BSI-gold series exists so it is LINKABLE
+    // immediately, before any successful worker fetch. Idempotent (unique-race
+    // safe) and writes only the GLOBAL MarketInstrument reference row — no ledger
+    // data, no RLS dependency — so it is safe inside the tenant tx. Reached via a
+    // DYNAMIC import so the `.server` hard-fence module never enters the client
+    // graph (this fn is server-only; the client never runs this body).
+    const { ensureBsiGoldInstrument } = await import("./market-data.server")
+    await ensureBsiGoldInstrument(tx)
+
     // MarketInstrument is GLOBAL (no RLS); reading it inside the tenant tx is
     // fine — it carries no tenant data. Only non-fx series can price a holding.
     const rows = await tx.marketInstrument.findMany({
@@ -1541,6 +1560,35 @@ export const listMarketInstrumentsFn = createServerFn({ method: "GET" })
       familyId: context.familyId,
       userId: context.user.id,
     })
+  })
+
+// -----------------------------------------------------------------------------
+// POST — trigger ONE on-demand market-price sync (PER-235b).
+// -----------------------------------------------------------------------------
+//
+// The ingest trigger the merged-but-inert PER-235 gold feed was missing: it runs
+// `ingestGoldPricesOnce` (fetch the self-hosted worker → RawMarketDataFetch →
+// normalize → MarketQuote) behind a graceful boundary. This is a GLOBAL ingest —
+// it writes ONLY the three global market tables, never the ledger, so it runs
+// OUTSIDE any family RLS transaction. It is capability-gated (`ledger:write`,
+// matching the family-scoped market/holdings mutations) purely to keep the
+// trigger authenticated + authorized; the write itself is family-neutral.
+//
+// GRACEFUL: `LOGAM_MULIA_API_URL` unset, an unreachable/erroring worker, or a
+// `success:false` payload all resolve to `{ ingested: 0, error }` — NEVER a 500
+// — and the last good quote is kept. The caller (the account "Refresh prices"
+// button) then applies the latest known quote via `refreshHoldingPricesFn`, so a
+// sync failure still refreshes holdings from the last good data.
+
+export type { SyncMarketPricesResult }
+
+export const syncMarketPricesFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("ledger:write")])
+  .handler(async (): Promise<SyncMarketPricesResult> => {
+    // DYNAMIC import inside the (client-stripped) handler body keeps the
+    // Prisma-importing `.server` module out of the client graph.
+    const { syncMarketPricesOnce } = await import("./market-data.server")
+    return await syncMarketPricesOnce()
   })
 
 // -----------------------------------------------------------------------------
