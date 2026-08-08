@@ -1,14 +1,18 @@
 import { describe, expect, test } from "vite-plus/test"
 import { encodeRate } from "./fx"
 import {
+  BSI_GOLD_SOURCE,
+  BSI_GOLD_SYMBOL,
   decodeSpotPrice,
   encodePriceForKind,
   encodeSpotPrice,
   FX_PRICE_DECIMALS,
+  goldPerGramMajorToPerOunceDecimal,
   isMarketInstrumentKind,
   MARKET_INSTRUMENT_KINDS,
   marketQuoteToHoldingPriceMinor,
   normalizeObservations,
+  parseLogamMuliaGoldResponse,
   priceScaleForKind,
   SPOT_PRICE_DECIMALS,
   SPOT_PRICE_SCALE,
@@ -261,5 +265,149 @@ describe("marketQuoteToHoldingPriceMinor (PER-238 quote -> holding price)", () =
         minorUnitConversion: 100n,
       })
     ).toThrow()
+  })
+})
+
+// =============================================================================
+// BSI gold feed — logam-mulia-api parsing (PER-235)
+// =============================================================================
+
+// The documented logam-mulia-api response contract (recorded as the fixture).
+const GOLD_PAYLOAD = {
+  success: true,
+  data: [
+    {
+      source: "bankbsi",
+      material: "gold",
+      materialType: "BSI",
+      weight: 1,
+      weightUnit: "gr",
+      sellPrice: 2_700_000,
+      buybackPrice: 2_650_000,
+      currency: "IDR",
+      recordedDate: "2026-05-16",
+    },
+  ],
+  count: 1,
+  timestamp: "2026-05-16T05:06:58.888Z",
+  cached: true,
+}
+
+describe("goldPerGramMajorToPerOunceDecimal (per-gram -> per-troy-ounce, exact)", () => {
+  test("converts an integer per-gram price with zero float error", () => {
+    // Rp 2,650,000/gram × 31.1034768 g/oz = Rp 82,424,213.52/oz.
+    expect(goldPerGramMajorToPerOunceDecimal(2_650_000)).toBe("82424213.52")
+    // Rp 2,700,000/gram × 31.1034768 = Rp 83,979,387.36/oz.
+    expect(goldPerGramMajorToPerOunceDecimal(2_700_000)).toBe("83979387.36")
+  })
+
+  test("round-trips per-ounce -> per-gram with ZERO loss (integer per-gram)", () => {
+    const perOunceDecimal = goldPerGramMajorToPerOunceDecimal(2_650_000)
+    const perOunceScaled = encodeSpotPrice(perOunceDecimal)
+    // The PER-238 derivation gives back exactly 2,650,000 × 1e8 (per gram).
+    expect(spotPriceScaledPerGram(perOunceScaled)).toBe(
+      2_650_000n * SPOT_PRICE_SCALE
+    )
+  })
+
+  test("throws on a non-positive or non-finite price", () => {
+    expect(() => goldPerGramMajorToPerOunceDecimal(0)).toThrow()
+    expect(() => goldPerGramMajorToPerOunceDecimal(-1)).toThrow()
+    expect(() => goldPerGramMajorToPerOunceDecimal(Number.NaN)).toThrow()
+  })
+})
+
+describe("parseLogamMuliaGoldResponse", () => {
+  test("maps the bankbsi fixture -> one per-troy-ounce metal observation (buyback)", () => {
+    const result = parseLogamMuliaGoldResponse(GOLD_PAYLOAD)
+    expect(result.status).toBe("ok")
+    expect(result.observations).toHaveLength(1)
+    const obs = result.observations[0]
+    expect(obs?.kind).toBe("metal")
+    expect(obs?.symbol).toBe(BSI_GOLD_SYMBOL) // "XAU-BSI"
+    expect(obs?.quoteCurrency).toBe("IDR")
+    expect(obs?.priceDecimal).toBe("82424213.52") // buyback per gram -> per oz
+    expect(obs?.providerRef).toBe(BSI_GOLD_SOURCE) // "bankbsi"
+    expect(obs?.asOf.toISOString()).toBe("2026-05-16T00:00:00.000Z")
+  })
+
+  test("normalizes to a canonical spot quote (priceScale=8) whose per-gram mark equals buyback", () => {
+    const result = parseLogamMuliaGoldResponse(GOLD_PAYLOAD)
+    const normalized = normalizeObservations(result.observations)
+    expect(normalized.rejected).toHaveLength(0)
+    const quote = normalized.quotes[0]
+    expect(quote?.priceScale).toBe(8)
+    expect(quote?.price).toBe(encodeSpotPrice("82424213.52"))
+    // Priced through the UNCHANGED PER-238 metal path: Rp 2,650,000/gram in sen.
+    const perGramMinor = marketQuoteToHoldingPriceMinor({
+      kind: "metal",
+      priceScaled: quote?.price ?? 0n,
+      priceScale: quote?.priceScale ?? 0,
+      minorUnitConversion: 100n,
+    })
+    expect(perGramMinor).toBe(265_000_000n) // Rp 2,650,000.00
+  })
+
+  test("honors the sellPrice option", () => {
+    const result = parseLogamMuliaGoldResponse(GOLD_PAYLOAD, {
+      priceField: "sellPrice",
+    })
+    expect(result.observations[0]?.priceDecimal).toBe("83979387.36")
+  })
+
+  test("picks the 1-gram row when several weights are present", () => {
+    const multi = {
+      ...GOLD_PAYLOAD,
+      data: [
+        { ...GOLD_PAYLOAD.data[0], weight: 5, buybackPrice: 13_000_000 },
+        GOLD_PAYLOAD.data[0],
+        { ...GOLD_PAYLOAD.data[0], weight: 10, buybackPrice: 26_000_000 },
+      ],
+    }
+    const result = parseLogamMuliaGoldResponse(multi)
+    expect(result.status).toBe("ok")
+    expect(result.observations[0]?.priceDecimal).toBe("82424213.52")
+  })
+
+  test("success:false -> graceful skip (no throw, no observations)", () => {
+    const result = parseLogamMuliaGoldResponse({
+      ...GOLD_PAYLOAD,
+      success: false,
+    })
+    expect(result.status).toBe("error")
+    expect(result.observations).toHaveLength(0)
+    expect(result.error).toContain("success")
+  })
+
+  test("empty data -> graceful skip", () => {
+    const result = parseLogamMuliaGoldResponse({ ...GOLD_PAYLOAD, data: [] })
+    expect(result.status).toBe("error")
+    expect(result.observations).toHaveLength(0)
+  })
+
+  test("no 1-gram row -> graceful skip", () => {
+    const result = parseLogamMuliaGoldResponse({
+      ...GOLD_PAYLOAD,
+      data: [{ ...GOLD_PAYLOAD.data[0], weight: 5 }],
+    })
+    expect(result.status).toBe("error")
+    expect(result.error).toContain("1-gram")
+  })
+
+  test("malformed payloads -> graceful skip (no throw)", () => {
+    expect(parseLogamMuliaGoldResponse(null).status).toBe("error")
+    expect(parseLogamMuliaGoldResponse("nope").status).toBe("error")
+    expect(parseLogamMuliaGoldResponse({}).status).toBe("error")
+    expect(
+      parseLogamMuliaGoldResponse({ success: true, data: "not-array" }).status
+    ).toBe("error")
+  })
+
+  test("a non-positive price -> graceful skip", () => {
+    const result = parseLogamMuliaGoldResponse({
+      ...GOLD_PAYLOAD,
+      data: [{ ...GOLD_PAYLOAD.data[0], buybackPrice: 0 }],
+    })
+    expect(result.status).toBe("error")
   })
 })

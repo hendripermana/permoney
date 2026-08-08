@@ -31,7 +31,12 @@
 
 import type { Prisma, PrismaClient } from "@prisma/client"
 import {
+  BSI_GOLD_QUOTE_CURRENCY,
+  BSI_GOLD_SOURCE,
+  BSI_GOLD_SYMBOL,
   normalizeObservations,
+  parseLogamMuliaGoldResponse,
+  type GoldPriceField,
   type MarketInstrumentIdentity,
   type MarketInstrumentKind,
   type MarketObservation,
@@ -416,4 +421,252 @@ function isUniqueViolation(error: unknown): boolean {
 
 function toJson(value: unknown): Prisma.InputJsonValue {
   return (value ?? null) as Prisma.InputJsonValue
+}
+
+// -----------------------------------------------------------------------------
+// Gold feed adapter — self-hosted logam-mulia-api (PER-235 / ADR-0050 slice 3)
+// -----------------------------------------------------------------------------
+//
+// The ONLY code that knows the gold vendor exists. It fetches the worker's
+// `GET {base}/api/prices/bankbsi` endpoint, stages the raw JSON verbatim, and
+// hands the pure parser (`parseLogamMuliaGoldResponse`, @/lib/market-data) a
+// single per-troy-ounce metal observation. Secrets/config (`LOGAM_MULIA_API_URL`)
+// are read ONLY here, at CALL time (never module scope). Graceful degradation is
+// total: a worker outage, a non-2xx status, non-JSON, `success:false`, or a
+// malformed shape all return `status:"error"` with the raw payload captured —
+// never a throw, never a bad quote (ADR-0050 §4).
+
+/**
+ * Minimal fetch surface the gold adapter needs (typed, no `any`). Tests inject a
+ * fixture returning a canned `Response`; production uses the global `fetch`.
+ */
+export type FetchLike = (
+  url: string,
+  init?: { headers?: Record<string, string> }
+) => Promise<Response>
+
+/** The canonical BSI-gold instrument identity (metal, IDR, per-troy-ounce). */
+export const GOLD_INSTRUMENT_IDENTITY: MarketInstrumentIdentity = {
+  kind: "metal",
+  symbol: BSI_GOLD_SYMBOL,
+  baseCurrency: null,
+  quoteCurrency: BSI_GOLD_QUOTE_CURRENCY,
+  mic: null,
+}
+
+/** The request recorded on the raw fetch when ingesting BSI gold. */
+export const GOLD_INSTRUMENT_REQUEST: MarketInstrumentRequest = {
+  kind: "metal",
+  symbol: BSI_GOLD_SYMBOL,
+  quoteCurrency: BSI_GOLD_QUOTE_CURRENCY,
+}
+
+/** Read the worker base URL at CALL time; a clear error if unset (never module scope). */
+function requireLogamMuliaApiUrl(): string {
+  const raw = process.env.LOGAM_MULIA_API_URL
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    throw new Error(
+      "LOGAM_MULIA_API_URL is not set — configure the self-hosted logam-mulia-api base URL to ingest gold prices (ADR-0050 / PER-235)."
+    )
+  }
+  return raw.trim().replace(/\/+$/, "")
+}
+
+export interface LogamMuliaGoldProviderOptions {
+  /** Base URL; defaults to reading `LOGAM_MULIA_API_URL` at call time. */
+  baseUrl?: string
+  /** Injectable fetch (tests pass a fixture; prod uses the global `fetch`). */
+  fetchImpl?: FetchLike
+  /** Which published price to quote (buyback default). */
+  priceField?: GoldPriceField
+  /** Clock for the as-of fallback (tests pin it). */
+  now?: () => Date
+}
+
+/**
+ * The self-hosted logam-mulia-api gold adapter. Serves gold spot only; FX/other
+ * spot are different feeds (a no-op empty-ok result here, so a mixed ingest never
+ * errors on this provider).
+ */
+export class LogamMuliaGoldProvider implements MarketDataProvider {
+  readonly name = BSI_GOLD_SOURCE
+  private readonly baseUrl: string
+  private readonly fetchImpl: FetchLike
+  private readonly priceField: GoldPriceField | undefined
+  private readonly now: () => Date
+
+  constructor(options?: LogamMuliaGoldProviderOptions) {
+    this.baseUrl = options?.baseUrl ?? requireLogamMuliaApiUrl()
+    this.fetchImpl = options?.fetchImpl ?? ((url, init) => fetch(url, init))
+    this.priceField = options?.priceField
+    this.now = options?.now ?? (() => new Date())
+  }
+
+  fetchFxRates(): Promise<MarketFetchResult> {
+    return Promise.resolve({
+      status: "ok",
+      httpStatus: 200,
+      observations: [],
+      rawPayload: null,
+    })
+  }
+
+  fetchSpot(): Promise<MarketFetchResult> {
+    return this.fetchGold()
+  }
+
+  fetchQuotes(): Promise<MarketFetchResult> {
+    return this.fetchGold()
+  }
+
+  private async fetchGold(): Promise<MarketFetchResult> {
+    const url = `${this.baseUrl}/api/prices/bankbsi`
+
+    let response: Response
+    try {
+      response = await this.fetchImpl(url, {
+        headers: { accept: "application/json" },
+      })
+    } catch (error) {
+      return {
+        status: "error",
+        error: error instanceof Error ? error.message : "gold fetch failed",
+        observations: [],
+        rawPayload: { error: String(error) },
+      }
+    }
+
+    if (!response.ok) {
+      const body = await safeReadText(response)
+      return {
+        status: "error",
+        httpStatus: response.status,
+        error: `gold feed HTTP ${response.status}`,
+        observations: [],
+        rawPayload: { httpStatus: response.status, body },
+      }
+    }
+
+    let json: unknown
+    try {
+      json = await response.json()
+    } catch (error) {
+      return {
+        status: "error",
+        httpStatus: response.status,
+        error: "gold feed returned non-JSON",
+        observations: [],
+        rawPayload: { httpStatus: response.status, parseError: String(error) },
+      }
+    }
+
+    const parsed = parseLogamMuliaGoldResponse(json, {
+      priceField: this.priceField,
+      fallbackAsOf: this.now(),
+    })
+    if (parsed.status !== "ok") {
+      return {
+        status: "error",
+        httpStatus: response.status,
+        error: parsed.error,
+        observations: [],
+        rawPayload: json,
+      }
+    }
+    return {
+      status: "ok",
+      httpStatus: response.status,
+      observations: parsed.observations,
+      rawPayload: json,
+    }
+  }
+}
+
+async function safeReadText(response: Response): Promise<string> {
+  try {
+    return await response.text()
+  } catch {
+    return ""
+  }
+}
+
+/**
+ * Idempotently ensure the canonical BSI-gold `MarketInstrument` exists so a
+ * holding can be LINKED to it (PER-238) even before the first successful fetch.
+ * Safe to call repeatedly; recovers from the unique-index race. Returns its id.
+ */
+export async function ensureBsiGoldInstrument(
+  db: MarketDataDb = prisma
+): Promise<string> {
+  const where = {
+    kind: "metal",
+    symbol: BSI_GOLD_SYMBOL,
+    baseCurrency: null,
+    quoteCurrency: BSI_GOLD_QUOTE_CURRENCY,
+    mic: null,
+  } as const
+
+  const existing = await db.marketInstrument.findFirst({
+    where,
+    select: { id: true },
+  })
+  if (existing) return existing.id
+
+  try {
+    const created = await db.marketInstrument.create({
+      data: {
+        kind: "metal",
+        symbol: BSI_GOLD_SYMBOL,
+        name: "BSI Gold",
+        quoteCurrency: BSI_GOLD_QUOTE_CURRENCY,
+      },
+      select: { id: true },
+    })
+    return created.id
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      const raced = await db.marketInstrument.findFirst({
+        where,
+        select: { id: true },
+      })
+      if (raced) return raced.id
+    }
+    throw error
+  }
+}
+
+export interface IngestGoldOptions {
+  /** Base URL; defaults to reading `LOGAM_MULIA_API_URL` at call time. */
+  baseUrl?: string
+  /** Injectable fetch (tests pass a fixture; prod uses the global `fetch`). */
+  fetchImpl?: FetchLike
+  /** Which published price to quote (buyback default). */
+  priceField?: GoldPriceField
+  /** Clock for the as-of fallback (tests pin it). */
+  now?: () => Date
+  db?: MarketDataDb
+}
+
+/**
+ * Run ONE BSI-gold ingest cycle. No scheduler — that is PER-237. First ENSURES
+ * the canonical instrument exists (so it stays linkable even when the fetch then
+ * fails), then runs the shared raw → staged → canonical pipeline. Safe to call
+ * repeatedly: the canonical write path is idempotent.
+ */
+export async function ingestGoldPricesOnce(
+  options?: IngestGoldOptions
+): Promise<IngestSummary> {
+  const db = options?.db ?? prisma
+  await ensureBsiGoldInstrument(db)
+  const provider = new LogamMuliaGoldProvider({
+    baseUrl: options?.baseUrl,
+    fetchImpl: options?.fetchImpl,
+    priceField: options?.priceField,
+    now: options?.now,
+  })
+  return await ingestMarketDataOnce({
+    provider,
+    requests: [GOLD_INSTRUMENT_REQUEST],
+    db,
+  })
 }
