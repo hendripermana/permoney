@@ -8,6 +8,11 @@ import {
   type MarketPricedHoldingKind,
 } from "@/lib/market-data"
 import {
+  ensureBsiGoldInstrument,
+  syncMarketPricesOnce,
+  type SyncMarketPricesResult,
+} from "./market-data.server"
+import {
   averageUnitCostMinor,
   holdingCostMinor,
   holdingGainMinor,
@@ -1508,6 +1513,12 @@ export async function listMarketInstrumentsForFamily({
   runInTenantTransaction?: RunInTenantTransaction
 }): Promise<SerializedMarketInstrument[]> {
   return await runInTenantTransaction(familyId, userId, async (tx) => {
+    // PER-235b — ensure the canonical BSI-gold series exists so it is LINKABLE
+    // immediately, before any successful worker fetch. Idempotent (unique-race
+    // safe) and writes only the GLOBAL MarketInstrument reference row — no ledger
+    // data, no RLS dependency — so it is safe inside the tenant tx.
+    await ensureBsiGoldInstrument(tx)
+
     // MarketInstrument is GLOBAL (no RLS); reading it inside the tenant tx is
     // fine — it carries no tenant data. Only non-fx series can price a holding.
     const rows = await tx.marketInstrument.findMany({
@@ -1541,6 +1552,32 @@ export const listMarketInstrumentsFn = createServerFn({ method: "GET" })
       familyId: context.familyId,
       userId: context.user.id,
     })
+  })
+
+// -----------------------------------------------------------------------------
+// POST — trigger ONE on-demand market-price sync (PER-235b).
+// -----------------------------------------------------------------------------
+//
+// The ingest trigger the merged-but-inert PER-235 gold feed was missing: it runs
+// `ingestGoldPricesOnce` (fetch the self-hosted worker → RawMarketDataFetch →
+// normalize → MarketQuote) behind a graceful boundary. This is a GLOBAL ingest —
+// it writes ONLY the three global market tables, never the ledger, so it runs
+// OUTSIDE any family RLS transaction. It is capability-gated (`ledger:write`,
+// matching the family-scoped market/holdings mutations) purely to keep the
+// trigger authenticated + authorized; the write itself is family-neutral.
+//
+// GRACEFUL: `LOGAM_MULIA_API_URL` unset, an unreachable/erroring worker, or a
+// `success:false` payload all resolve to `{ ingested: 0, error }` — NEVER a 500
+// — and the last good quote is kept. The caller (the account "Refresh prices"
+// button) then applies the latest known quote via `refreshHoldingPricesFn`, so a
+// sync failure still refreshes holdings from the last good data.
+
+export type { SyncMarketPricesResult }
+
+export const syncMarketPricesFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("ledger:write")])
+  .handler(async (): Promise<SyncMarketPricesResult> => {
+    return await syncMarketPricesOnce()
   })
 
 // -----------------------------------------------------------------------------
