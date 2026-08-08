@@ -7,7 +7,10 @@ import {
   test,
 } from "vite-plus/test"
 import type { AccountType } from "@/lib/accounts"
-import { encodeSpotPrice } from "@/lib/market-data"
+import {
+  encodeSpotPrice,
+  goldPerGramMajorToPerOunceDecimal,
+} from "@/lib/market-data"
 import { createAccountForFamily } from "@/server/accounts"
 import {
   getAccountHoldingsForFamily,
@@ -91,6 +94,110 @@ const successFalseFetch: FetchLike = () =>
       headers: { "content-type": "application/json" },
     })
   )
+
+// ---------------------------------------------------------------------------
+// PER-235c fallback-chain fixtures: anekalogam (Antam LM, many bars) + pegadaian
+// (0.01-gram row). Each has a DIFFERENT shape; the parser normalizes all three
+// to a per-gram IDR buyback -> per troy ounce (the ONE XAU-BSI series).
+// ---------------------------------------------------------------------------
+const ANEKALOGAM_BUYBACK_PER_GRAM = 2_620_000
+const ANEKALOGAM_PAYLOAD = {
+  success: true,
+  data: [
+    {
+      source: "anekalogam",
+      material: "gold",
+      materialType: "LM",
+      weight: 0.5,
+      weightUnit: "gr",
+      sellPrice: 1_360_000,
+      buybackPrice: 1_310_000,
+      currency: "IDR",
+      recordedDate: "2026-05-16",
+    },
+    {
+      source: "anekalogam",
+      material: "gold",
+      materialType: "LM",
+      weight: 1,
+      weightUnit: "gr",
+      sellPrice: 2_680_000,
+      buybackPrice: ANEKALOGAM_BUYBACK_PER_GRAM,
+      currency: "IDR",
+      recordedDate: "2026-05-16",
+    },
+    {
+      source: "anekalogam",
+      material: "gold",
+      materialType: "LM",
+      weight: 2,
+      weightUnit: "gr",
+      sellPrice: 5_300_000,
+      buybackPrice: 5_240_000,
+      currency: "IDR",
+      recordedDate: "2026-05-16",
+    },
+  ],
+  count: 3,
+  timestamp: "2026-05-16T05:06:58.888Z",
+}
+// pegadaian publishes the price of 0.01 gram -> per gram = buyback x 100.
+const PEGADAIAN_BUYBACK_PER_GRAM = 2_590_000
+const PEGADAIAN_PAYLOAD = {
+  success: true,
+  data: [
+    {
+      source: "pegadaian",
+      material: "gold",
+      materialType: "LM",
+      weight: 0.01,
+      weightUnit: "gram",
+      sellPrice: 27_000,
+      buybackPrice: PEGADAIAN_BUYBACK_PER_GRAM / 100,
+      currency: "IDR",
+      recordedDate: "2026-05-16",
+    },
+  ],
+  count: 1,
+  timestamp: "2026-05-16T05:06:58.888Z",
+}
+
+const jsonResponse = (payload: unknown): Response =>
+  new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  })
+
+/** How a single endpoint should respond in a chain test. */
+type SourceBehavior =
+  | { kind: "ok"; payload: unknown }
+  | { kind: "http"; status: number }
+  | { kind: "throw" }
+
+/**
+ * A URL-routing fetch fixture: dispatches on `/api/prices/{source}` so a test can
+ * make bankbsi 429 while anekalogam succeeds, exercising the real fallback chain
+ * with NO live network. An unconfigured endpoint 404s (treated as a failure).
+ */
+const chainFetch =
+  (behaviors: Partial<Record<string, SourceBehavior>>): FetchLike =>
+  (url) => {
+    for (const [source, behavior] of Object.entries(behaviors)) {
+      if (!url.includes(`/api/prices/${source}`)) continue
+      if (behavior?.kind === "throw") {
+        return Promise.reject(new Error(`ECONNREFUSED ${source}`))
+      }
+      if (behavior?.kind === "http") {
+        return Promise.resolve(
+          new Response(`error ${behavior.status}`, { status: behavior.status })
+        )
+      }
+      if (behavior?.kind === "ok") {
+        return Promise.resolve(jsonResponse(behavior.payload))
+      }
+    }
+    return Promise.resolve(new Response("not found", { status: 404 }))
+  }
 
 describe("gold price feed (PER-235 — logam-mulia-api adapter, fixture-injected)", () => {
   let harness: IntegrationHarness
@@ -311,6 +418,143 @@ describe("gold price feed (PER-235 — logam-mulia-api adapter, fixture-injected
       tx.account.findUniqueOrThrow({ where: { id: account.id } })
     )
     expect(row.balance).toBe(795_000_000n)
+  })
+
+  // ===========================================================================
+  // PER-235c — gold source fallback chain (bankbsi -> anekalogam -> pegadaian).
+  // The FIRST source that returns success:true wins; the winning source is
+  // stamped as the quote `source` (provenance). All sources feed the ONE
+  // XAU-BSI series, so idempotency stays UNIQUE (marketInstrumentId, asOf,
+  // source). Nested here to reuse the one integration harness for this file.
+  // ===========================================================================
+  describe("gold source fallback chain (PER-235c, fixture-injected, no network)", () => {
+    const onlyQuote = () => harness.prisma.marketQuote.findFirstOrThrow({})
+
+    test("bankbsi up -> uses bankbsi (exact BSI price, source=bankbsi)", async () => {
+      const summary = await ingestGoldPricesOnce({
+        baseUrl: BASE_URL,
+        fetchImpl: chainFetch({
+          bankbsi: { kind: "ok", payload: GOLD_PAYLOAD },
+        }),
+        db: harness.prisma,
+      })
+      expect(summary.status).toBe("ok")
+      expect(summary.quotesUpserted).toBe(1)
+
+      const quote = await onlyQuote()
+      expect(quote.source).toBe("bankbsi")
+      expect(quote.price).toBe(EXPECTED_PER_OUNCE) // Rp 2,650,000/gram buyback
+
+      const raw = await harness.prisma.rawMarketDataFetch.findUniqueOrThrow({
+        where: { id: summary.rawFetchId },
+      })
+      expect(raw.provider).toBe("bankbsi")
+    })
+
+    test("bankbsi 429 -> falls back to anekalogam (source=anekalogam, ~Antam LM)", async () => {
+      const summary = await ingestGoldPricesOnce({
+        baseUrl: BASE_URL,
+        fetchImpl: chainFetch({
+          bankbsi: { kind: "http", status: 429 },
+          anekalogam: { kind: "ok", payload: ANEKALOGAM_PAYLOAD },
+        }),
+        db: harness.prisma,
+      })
+      expect(summary.status).toBe("ok")
+      expect(summary.quotesUpserted).toBe(1)
+
+      const quote = await onlyQuote()
+      // The winning source is recorded (provenance), not the primary.
+      expect(quote.source).toBe("anekalogam")
+      // The 1-gram Antam bar's buyback, normalized per troy ounce.
+      expect(quote.price).toBe(
+        encodeSpotPrice(
+          goldPerGramMajorToPerOunceDecimal(ANEKALOGAM_BUYBACK_PER_GRAM)
+        )
+      )
+      expect(quote.providerRef).toBe("anekalogam")
+
+      const raw = await harness.prisma.rawMarketDataFetch.findUniqueOrThrow({
+        where: { id: summary.rawFetchId },
+      })
+      expect(raw.provider).toBe("anekalogam")
+    })
+
+    test("bankbsi 429 + anekalogam unreachable -> falls back to pegadaian", async () => {
+      const summary = await ingestGoldPricesOnce({
+        baseUrl: BASE_URL,
+        fetchImpl: chainFetch({
+          bankbsi: { kind: "http", status: 429 },
+          anekalogam: { kind: "throw" },
+          pegadaian: { kind: "ok", payload: PEGADAIAN_PAYLOAD },
+        }),
+        db: harness.prisma,
+      })
+      expect(summary.status).toBe("ok")
+      expect(summary.quotesUpserted).toBe(1)
+
+      const quote = await onlyQuote()
+      expect(quote.source).toBe("pegadaian")
+      // 0.01-gram row -> per-gram = buyback x 100, normalized per troy ounce (exact).
+      expect(quote.price).toBe(
+        encodeSpotPrice(
+          goldPerGramMajorToPerOunceDecimal(PEGADAIAN_BUYBACK_PER_GRAM)
+        )
+      )
+    })
+
+    test("ALL sources fail -> graceful { ingested: 0, error }, no quote written", async () => {
+      const summary = await ingestGoldPricesOnce({
+        baseUrl: BASE_URL,
+        fetchImpl: chainFetch({
+          bankbsi: { kind: "http", status: 429 },
+          anekalogam: { kind: "throw" },
+          pegadaian: { kind: "http", status: 503 },
+        }),
+        db: harness.prisma,
+      })
+      expect(summary.status).toBe("error")
+      expect(summary.quotesUpserted).toBe(0)
+      expect(summary.error).toBeTruthy()
+      // The instrument is still ensured (linkable), but no bad quote was written.
+      const instrument = await goldInstrument()
+      expect(instrument.id).toBeTruthy()
+      expect(await harness.prisma.marketQuote.count()).toBe(0)
+      // The failure is staged (provenance).
+      const raw = await harness.prisma.rawMarketDataFetch.findUniqueOrThrow({
+        where: { id: summary.rawFetchId },
+      })
+      expect(raw.status).toBe("error")
+    })
+
+    test("a fallback win is idempotent + leaves the ledger untouched", async () => {
+      const owner =
+        await createTestFactories(harness).createAuthenticatedOnboardedUser()
+      const before = await ledgerSnapshot(harness, owner.family.id)
+
+      const fetchImpl = chainFetch({
+        bankbsi: { kind: "http", status: 429 },
+        anekalogam: { kind: "ok", payload: ANEKALOGAM_PAYLOAD },
+      })
+      await ingestGoldPricesOnce({
+        baseUrl: BASE_URL,
+        fetchImpl,
+        db: harness.prisma,
+      })
+      const second = await ingestGoldPricesOnce({
+        baseUrl: BASE_URL,
+        fetchImpl,
+        db: harness.prisma,
+      })
+
+      expect(second.status).toBe("ok")
+      // Same (instrument, asOf, source) -> re-ingest upserts in place, no duplicate.
+      expect(await harness.prisma.marketInstrument.count()).toBe(1)
+      expect(await harness.prisma.marketQuote.count()).toBe(1)
+
+      const after = await ledgerSnapshot(harness, owner.family.id)
+      expect(after).toEqual(before)
+    })
   })
 })
 

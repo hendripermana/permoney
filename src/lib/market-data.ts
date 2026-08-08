@@ -499,8 +499,8 @@ function renderScaledDecimal(value: bigint, decimals: number): string {
 }
 
 /**
- * Convert a metal price quoted per GRAM (major currency units, as the BSI feed
- * publishes it) into the per-TROY-OUNCE decimal string the canonical metal store
+ * Convert a metal price quoted per GRAM (major currency units, as the gold feeds
+ * publish it) into the per-TROY-OUNCE decimal string the canonical metal store
  * uses. Exact BigInt math via `TROY_OUNCE_GRAMS` (31.1034768 = 311034768 / 1e7)
  * — no float. An integer per-gram price round-trips through
  * `spotPriceScaledPerGram` with ZERO loss. Throws on a non-finite / non-positive
@@ -514,16 +514,130 @@ export function goldPerGramMajorToPerOunceDecimal(
       `goldPerGramMajorToPerOunceDecimal: price must be a positive finite number, got ${perGramMajor}`
     )
   }
-  const gramText = perGramMajor.toString()
-  if (!/^\d+(\.\d+)?$/.test(gramText)) {
+  return goldPerGramDecimalToPerOunceDecimal(perGramMajor.toString())
+}
+
+/**
+ * Exact per-GRAM decimal string → per-TROY-OUNCE decimal string (the string core
+ * of `goldPerGramMajorToPerOunceDecimal`, used when the per-gram price is derived
+ * via BigInt from a source whose entry is priced per some other weight — see
+ * `perGramBuybackDecimal`). No float: `× 311034768 / 1e7`. Throws on a malformed
+ * or non-positive input.
+ */
+function goldPerGramDecimalToPerOunceDecimal(gramText: string): string {
+  const trimmed = gramText.trim()
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) {
     throw new RangeError(
-      `goldPerGramMajorToPerOunceDecimal: unrepresentable price ${gramText}`
+      `goldPerGramDecimalToPerOunceDecimal: unrepresentable price ${gramText}`
     )
   }
-  const [whole, fraction = ""] = gramText.split(".")
+  const [whole, fraction = ""] = trimmed.split(".")
   const gramScaled = BigInt(whole + fraction) // value × 10^fraction.length
+  if (gramScaled <= 0n) {
+    throw new RangeError(
+      `goldPerGramDecimalToPerOunceDecimal: price must be positive, got ${gramText}`
+    )
+  }
   const ounceScaled = gramScaled * 311_034_768n // × 10^(fraction.length + 7)
   return renderScaledDecimal(ounceScaled, fraction.length + 7)
+}
+
+/**
+ * Parse a positive decimal string ("2650000", "0.01", "0.5") into a scaled
+ * BigInt plus its fraction-digit count, so the caller can do exact rational math
+ * with no float error. Throws on a malformed / non-positive-shaped input.
+ */
+function decimalToScaled(text: string): { scaled: bigint; fracDigits: number } {
+  const t = text.trim()
+  if (!/^\d+(\.\d+)?$/.test(t)) {
+    throw new RangeError(`decimalToScaled: not a positive decimal: ${text}`)
+  }
+  const [whole, frac = ""] = t.split(".")
+  return { scaled: BigInt(whole + frac), fracDigits: frac.length }
+}
+
+/**
+ * Exact per-GRAM (major-currency) decimal for a chosen feed entry:
+ * `perGram = priceMajor / weightGrams`, computed as an exact rational with
+ * BigInt (NO float division — `26500 / 0.01` in IEEE-754 is NOT 2_650_000) and
+ * rounded half-to-even to at most `SPOT_PRICE_DECIMALS` (8) fraction digits.
+ *
+ * This is the GENERAL rule that unifies the three gold sources' differing shapes:
+ *   - a `weight == 1 gr` bar (bankbsi / anekalogam plain LM) → perGram = buyback,
+ *   - a `weight == 0.01 gram` row (pegadaian) → perGram = buyback × 100,
+ *   - any other bar → perGram = buyback / weightInGrams.
+ * Integer per-gram results round-trip through `spotPriceScaledPerGram` with zero
+ * loss, so a linked holding still marks at exactly `pricePerGram × grams`.
+ */
+function perGramBuybackDecimal(
+  priceMajor: number,
+  weightGrams: number
+): string {
+  const b = decimalToScaled(String(priceMajor))
+  const w = decimalToScaled(String(weightGrams))
+  // perGram = (b.scaled / 10^b.frac) / (w.scaled / 10^w.frac)
+  //         = (b.scaled × 10^w.frac) / (w.scaled × 10^b.frac)
+  const num = b.scaled * 10n ** BigInt(w.fracDigits)
+  const den = w.scaled * 10n ** BigInt(b.fracDigits)
+  if (den <= 0n) {
+    throw new RangeError(`perGramBuybackDecimal: weight must be positive`)
+  }
+  const scaled = divRoundHalfEven(num * 10n ** BigInt(SPOT_PRICE_DECIMALS), den)
+  if (scaled <= 0n) {
+    throw new RangeError(`perGramBuybackDecimal: non-positive per-gram price`)
+  }
+  return renderScaledDecimal(scaled, SPOT_PRICE_DECIMALS)
+}
+
+/**
+ * A feed row's weight expressed in GRAMS, or `null` when the row's weight/unit is
+ * not a usable positive gram weight. Accepts the gram units the three sources use
+ * (`gr` — bankbsi/anekalogam, `gram`/`grams` — pegadaian); any other unit is
+ * rejected (fail closed rather than mis-scale a price).
+ */
+function weightInGrams(weight: unknown, unit: unknown): number | null {
+  const w = Number(weight)
+  if (!Number.isFinite(w) || w <= 0) return null
+  const u = typeof unit === "string" ? unit.trim().toLowerCase() : ""
+  if (u === "gr" || u === "gram" || u === "grams") return w
+  return null
+}
+
+/**
+ * Choose the pricing row from a gold feed's `data` array. Prefers a plain
+ * 1-gram bar (the exact per-gram source: bankbsi's single row, anekalogam's `1gr`
+ * entry); failing that, the smallest-weight valid entry (so pegadaian's
+ * `0.01 gram` row and any multi-weight list still yield a per-gram price via the
+ * general `buyback / weightInGrams` rule). Rows with a non-gram unit or a
+ * non-positive price are skipped. Returns `null` when no row is usable.
+ */
+function chooseGoldEntry(
+  data: readonly unknown[],
+  priceField: GoldPriceField
+): {
+  row: Record<string, unknown>
+  weightGrams: number
+  priceMajor: number
+} | null {
+  const candidates: {
+    row: Record<string, unknown>
+    weightGrams: number
+    priceMajor: number
+  }[] = []
+  for (const candidate of data) {
+    if (!isRecord(candidate)) continue
+    const grams = weightInGrams(candidate.weight, candidate.weightUnit)
+    if (grams === null) continue
+    const priceMajor = Number(candidate[priceField])
+    if (!Number.isFinite(priceMajor) || priceMajor <= 0) continue
+    candidates.push({ row: candidate, weightGrams: grams, priceMajor })
+  }
+  if (candidates.length === 0) return null
+  const oneGram = candidates.find((entry) => entry.weightGrams === 1)
+  if (oneGram) return oneGram
+  return candidates.reduce((best, entry) =>
+    entry.weightGrams < best.weightGrams ? entry : best
+  )
 }
 
 function resolveGoldAsOf(
@@ -544,18 +658,31 @@ function resolveGoldAsOf(
 }
 
 /**
- * Parse a logam-mulia-api gold payload into a single canonical metal observation
- * (per TROY OUNCE — see the unit decision above). Defensive: any shape problem
- * (`success !== true`, empty/absent `data`, no 1-gram row, a non-positive price,
- * an unparseable date) yields `status: "error"` with a reason and ZERO
- * observations — NEVER a throw — so the ingest pipeline degrades gracefully and
- * keeps the last good quote.
+ * Parse a logam-mulia-api gold payload (from ANY of the fallback-chain sources —
+ * `bankbsi`, `anekalogam`, `pegadaian`; PER-235c) into a single canonical metal
+ * observation (per TROY OUNCE — see the unit decision above). The sources share
+ * the `{ success, data: [ { weight, weightUnit, buybackPrice, ... } ] }` envelope
+ * but differ in shape (bankbsi: one `1 gr` row; anekalogam: many rows; pegadaian:
+ * one `0.01 gram` row); `chooseGoldEntry` + `perGramBuybackDecimal` normalize any
+ * of them to a per-gram buyback, then to per-troy-ounce. The observation always
+ * carries the SAME `XAU-BSI` symbol (all sources price the one gold series) — the
+ * winning source is recorded as the quote `source`/provenance by the caller.
+ *
+ * Defensive: any shape problem (`success !== true`, empty/absent `data`, no
+ * usable priced gram row, an unparseable date) yields `status: "error"` with a
+ * reason and ZERO observations — NEVER a throw — so the ingest pipeline degrades
+ * gracefully and keeps the last good quote.
  *
  * Pure: no DB, no network, no secrets.
  */
 export function parseLogamMuliaGoldResponse(
   payload: unknown,
-  opts?: { priceField?: GoldPriceField; fallbackAsOf?: Date }
+  opts?: {
+    priceField?: GoldPriceField
+    fallbackAsOf?: Date
+    /** Provenance fallback for `providerRef` when the row omits its own source. */
+    sourceLabel?: string
+  }
 ): LogamMuliaParseResult {
   const priceField = opts?.priceField ?? BSI_GOLD_PRICE_FIELD
   const err = (reason: string): LogamMuliaParseResult => ({
@@ -573,19 +700,13 @@ export function parseLogamMuliaGoldResponse(
     return err("payload data is empty")
   }
 
-  // BSI publishes several weights; we price per gram, so take the 1-gram row.
-  const row = data.find(
-    (candidate) =>
-      isRecord(candidate) &&
-      Number(candidate.weight) === 1 &&
-      String(candidate.weightUnit).toLowerCase() === "gr"
-  )
-  if (!isRecord(row)) return err("no 1-gram (weightUnit=gr) row in payload")
-
-  const perGram = Number(row[priceField])
-  if (!Number.isFinite(perGram) || perGram <= 0) {
-    return err(`invalid ${priceField} ${String(row[priceField])}`)
+  const chosen = chooseGoldEntry(data, priceField)
+  if (chosen === null) {
+    return err(
+      `no usable ${priceField} row (need a positive price on a gram-weighted row)`
+    )
   }
+  const { row } = chosen
 
   const currency = typeof row.currency === "string" ? row.currency.trim() : ""
   if (currency.length === 0) return err("row is missing a currency")
@@ -599,7 +720,8 @@ export function parseLogamMuliaGoldResponse(
 
   let priceDecimal: string
   try {
-    priceDecimal = goldPerGramMajorToPerOunceDecimal(perGram)
+    const perGram = perGramBuybackDecimal(chosen.priceMajor, chosen.weightGrams)
+    priceDecimal = goldPerGramDecimalToPerOunceDecimal(perGram)
   } catch (error) {
     return err(error instanceof Error ? error.message : "unconvertible price")
   }
@@ -614,7 +736,9 @@ export function parseLogamMuliaGoldResponse(
         asOf,
         priceDecimal,
         providerRef:
-          typeof row.source === "string" ? row.source : BSI_GOLD_SOURCE,
+          typeof row.source === "string"
+            ? row.source
+            : (opts?.sourceLabel ?? BSI_GOLD_SOURCE),
       },
     ],
   }

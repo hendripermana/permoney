@@ -32,7 +32,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client"
 import {
   BSI_GOLD_QUOTE_CURRENCY,
-  BSI_GOLD_SOURCE,
   BSI_GOLD_SYMBOL,
   normalizeObservations,
   parseLogamMuliaGoldResponse,
@@ -427,14 +426,35 @@ function toJson(value: unknown): Prisma.InputJsonValue {
 // Gold feed adapter — self-hosted logam-mulia-api (PER-235 / ADR-0050 slice 3)
 // -----------------------------------------------------------------------------
 //
-// The ONLY code that knows the gold vendor exists. It fetches the worker's
-// `GET {base}/api/prices/bankbsi` endpoint, stages the raw JSON verbatim, and
-// hands the pure parser (`parseLogamMuliaGoldResponse`, @/lib/market-data) a
-// single per-troy-ounce metal observation. Secrets/config (`LOGAM_MULIA_API_URL`)
-// are read ONLY here, at CALL time (never module scope). Graceful degradation is
-// total: a worker outage, a non-2xx status, non-JSON, `success:false`, or a
-// malformed shape all return `status:"error"` with the raw payload captured —
-// never a throw, never a bad quote (ADR-0050 §4).
+// The ONLY code that knows the gold vendor exists. It tries the worker's gold
+// endpoints in a priority FALLBACK CHAIN (PER-235c) — `GET {base}/api/prices/
+// {source}` for each source in `GOLD_SOURCE_CHAIN` — and uses the FIRST that
+// returns `success:true`, so gold ALWAYS gets a number as close to the user's BSI
+// Gold as is currently available. It stages the winning source's JSON verbatim
+// and hands the pure parser (`parseLogamMuliaGoldResponse`, @/lib/market-data) a
+// single per-troy-ounce metal observation (all sources price the ONE `XAU-BSI`
+// series). Secrets/config (`LOGAM_MULIA_API_URL`) are read ONLY here, at CALL
+// time (never module scope). Graceful degradation is total: if EVERY source fails
+// (worker outage, non-2xx such as the persistent BSI 429, non-JSON,
+// `success:false`, or a malformed shape) the chain returns `status:"error"` with
+// the aggregated reasons captured — never a throw, never a bad quote (ADR-0050 §4).
+
+/**
+ * The gold source fallback chain, in PRIORITY order — the FIRST source that
+ * returns `success:true` wins (PER-235c). Each label is BOTH the worker endpoint
+ * path segment (`/api/prices/{source}`) AND the quote `source`/provenance tag.
+ *
+ *   1. `bankbsi`    — the creator's exact BSI Gold price (when the source is up).
+ *   2. `anekalogam` — Antam LM; BSI sells Antam gold, so this is the CLOSEST
+ *                     reliable proxy (~1% below BSI's mark — flagged as a known
+ *                     approximation on fallback).
+ *   3. `pegadaian`  — the final reliable fallback.
+ *
+ * A small, readable constant so re-ordering the priority is a one-line change.
+ */
+export const GOLD_SOURCE_CHAIN = ["bankbsi", "anekalogam", "pegadaian"] as const
+
+export type GoldSource = (typeof GOLD_SOURCE_CHAIN)[number]
 
 /**
  * Minimal fetch surface the gold adapter needs (typed, no `any`). Tests inject a
@@ -489,11 +509,22 @@ export interface LogamMuliaGoldProviderOptions {
  * errors on this provider).
  */
 export class LogamMuliaGoldProvider implements MarketDataProvider {
-  readonly name = BSI_GOLD_SOURCE
   private readonly baseUrl: string
   private readonly fetchImpl: FetchLike
   private readonly priceField: GoldPriceField | undefined
   private readonly now: () => Date
+  /**
+   * The source that actually returned a usable quote this run (set during
+   * `fetchGold`). The pipeline reads `provider.name` AFTER the fetch resolves to
+   * stamp the quote `source`/provenance, so it reflects the WINNING source (or
+   * the primary `bankbsi` when every source failed and no quote is written).
+   */
+  private succeededSource: GoldSource | undefined
+
+  /** Provenance the ingest pipeline stamps on the raw fetch + canonical quote. */
+  get name(): string {
+    return this.succeededSource ?? GOLD_SOURCE_CHAIN[0]
+  }
 
   constructor(options?: LogamMuliaGoldProviderOptions) {
     this.baseUrl = options?.baseUrl ?? requireLogamMuliaApiUrl()
@@ -519,8 +550,39 @@ export class LogamMuliaGoldProvider implements MarketDataProvider {
     return this.fetchGold()
   }
 
+  /**
+   * Try each source in `GOLD_SOURCE_CHAIN` in priority order and return the FIRST
+   * that yields a usable quote. `succeededSource` is set to the winner so the
+   * pipeline stamps the correct provenance. If EVERY source fails, the aggregated
+   * per-source reasons are returned as one graceful error (no throw, no quote).
+   */
   private async fetchGold(): Promise<MarketFetchResult> {
-    const url = `${this.baseUrl}/api/prices/bankbsi`
+    this.succeededSource = undefined
+    const failures: string[] = []
+    let lastHttpStatus: number | undefined
+
+    for (const source of GOLD_SOURCE_CHAIN) {
+      const outcome = await this.fetchOneSource(source)
+      if (outcome.status === "ok") {
+        this.succeededSource = source
+        return outcome
+      }
+      failures.push(`${source}: ${outcome.error ?? "failed"}`)
+      lastHttpStatus = outcome.httpStatus ?? lastHttpStatus
+    }
+
+    return {
+      status: "error",
+      httpStatus: lastHttpStatus,
+      error: `all gold sources failed — ${failures.join("; ")}`,
+      observations: [],
+      rawPayload: { errors: failures },
+    }
+  }
+
+  /** Fetch + parse ONE source endpoint. Never throws; returns a staged result. */
+  private async fetchOneSource(source: GoldSource): Promise<MarketFetchResult> {
+    const url = `${this.baseUrl}/api/prices/${source}`
 
     let response: Response
     try {
@@ -563,6 +625,7 @@ export class LogamMuliaGoldProvider implements MarketDataProvider {
     const parsed = parseLogamMuliaGoldResponse(json, {
       priceField: this.priceField,
       fallbackAsOf: this.now(),
+      sourceLabel: source,
     })
     if (parsed.status !== "ok") {
       return {
