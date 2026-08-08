@@ -280,3 +280,65 @@ market link on `upsertHoldingFn`); `src/components/blocks/holding-form-dialog.ts
 `src/routes/_protected/-account-holdings.tsx` + `accounts.$accountId.tsx` (UI);
 unit (`src/lib/market-data.test.ts`) + real-Postgres
 (`tests/integration/holding-market-prices.integration.ts`) tests.
+
+## Implementation notes (PER-235, Slice 3 — gold price feed)
+
+Slice 3 lands the FIRST real market-data adapter: gold, sourced from a
+SELF-HOSTED `iamutaki/logam-mulia-api` worker (MIT, a separate Cloudflare Worker
+service). The fragile scraping of Indonesian gold sources stays entirely in the
+worker; Permoney consumes only its clean HTTPS JSON. The adapter slots into the
+PER-233 `MarketDataProvider` seam with ZERO schema change and ZERO consumer
+change — proof the raw → staged → canonical boundary holds.
+
+- **The adapter (vendor seam).** `LogamMuliaGoldProvider`
+  (`src/server/market-data.server.ts`) fetches
+  `GET {LOGAM_MULIA_API_URL}/api/prices/bankbsi` (BSI Gold — the creator's
+  primary source; `/logammulia` (Antam) and `/pegadaian` are documented
+  fallbacks). The base URL is env config, read ONLY inside the `.server.ts`
+  adapter at CALL time (never module scope); unset throws a clear, actionable
+  error. `fetchImpl` is injectable so tests exercise the whole pipeline against a
+  recorded fixture with NO live network.
+
+- **Price choice — `buybackPrice` (documented, flippable).** The quote uses
+  BSI's `buybackPrice` (what BSI pays to buy a gram BACK) — the realizable
+  current value of gold you HOLD, the honest mark for a position. It is a named
+  constant (`BSI_GOLD_PRICE_FIELD`) so a flip to `sellPrice` is one line, pending
+  the creator confirming which number their BSI app shows as position value.
+
+- **Unit — stored per TROY OUNCE (consistency over the ticket wording).** BSI
+  publishes per GRAM, but the canonical metal store is per TROY OUNCE (the
+  PER-233 metal convention; PER-238's `marketQuoteToHoldingPriceMinor` DERIVES
+  per-gram from a per-ounce quote). Rather than fork the metal unit or touch the
+  merged PER-238 refresh, the pure parser
+  (`parseLogamMuliaGoldResponse`/`goldPerGramMajorToPerOunceDecimal`,
+  `src/lib/market-data.ts`) converts BSI's per-gram price to a per-troy-ounce
+  `priceDecimal` before the normalizer. The conversion is EXACT for integer
+  per-gram prices (`price × 31.1034768`, then the reverse `/ 31.1034768` cancels
+  with zero loss), so a linked gold holding still marks at exactly
+  `pricePerGram × grams`. The BSI series symbol is `XAU-BSI` (a metal, quote
+  currency IDR).
+
+- **Idempotent ensure/seed.** `ensureBsiGoldInstrument` upserts the canonical
+  `XAU-BSI` `MarketInstrument` (idempotent, unique-race-safe). `ingestGoldPricesOnce`
+  calls it FIRST, so the instrument is linkable (PER-238) even when the fetch
+  then fails — no data migration needed.
+
+- **Graceful degradation (total).** A worker outage (throw), a non-2xx status,
+  non-JSON, `success:false`, an empty/absent `data` array, no 1-gram row, or a
+  non-positive price all record a failed `RawMarketDataFetch` and write ZERO
+  canonical quotes — the last good quote is untouched, the pipeline never throws.
+
+- **Ledger isolation (tested).** A gold ingest writes ONLY the three global
+  market tables; a real onboarded family's ledger snapshot is byte-identical
+  before/after. Quotes → holdings/valuations remain PER-238's separate,
+  anchor-safe refresh — unchanged here.
+
+- **Deferred.** The scheduled refresh worker (PER-237 — this slice is a single
+  `ingestGoldPricesOnce` trigger), the reksadana NAV adapter, and the Antam /
+  Pegadaian fallbacks.
+
+Files: `src/lib/market-data.ts` (pure BSI parser + per-gram→per-ounce
+conversion); `src/server/market-data.server.ts` (`LogamMuliaGoldProvider`,
+`ensureBsiGoldInstrument`, `ingestGoldPricesOnce`); `.env.example`
+(`LOGAM_MULIA_API_URL`); unit (`src/lib/market-data.test.ts`) + real-Postgres
+(`tests/integration/gold-price-feed.integration.ts`) tests.

@@ -413,3 +413,209 @@ export function normalizeObservations(
 
   return { quotes: [...byKey.values()], rejected }
 }
+
+// =============================================================================
+// BSI gold feed — logam-mulia-api parsing (PER-235 / ADR-0050 slice 3)
+// =============================================================================
+//
+// We self-host `iamutaki/logam-mulia-api` (MIT, a Cloudflare Worker) as a
+// SEPARATE service that scrapes Indonesian gold sources and exposes clean JSON.
+// Permoney consumes only its HTTPS JSON; the fragile scraping stays in the
+// worker. This section is the PURE parser + unit conversion — no network, no
+// Prisma, no secrets — so it is fully unit-testable. The network adapter and
+// ingest trigger live in `src/server/market-data.server.ts`.
+//
+// UNIT DECISION (load-bearing): BSI publishes gold prices per GRAM, but the
+// canonical metal store is per TROY OUNCE (PER-233 metal convention; PER-238's
+// `marketQuoteToHoldingPriceMinor` DERIVES per-gram from a per-ounce quote via
+// `spotPriceScaledPerGram`). To stay consistent with that ONE metal unit — and
+// so a linked gold holding auto-prices correctly through the UNCHANGED PER-238
+// refresh — this parser converts BSI's per-gram price to a per-TROY-OUNCE
+// `priceDecimal` before handing it to the normalizer. The conversion is exact
+// (integer per-gram prices round-trip with zero loss), so a holding still marks
+// at exactly `pricePerGram × grams`.
+
+/** Canonical symbol of the self-hosted BSI gold price series (a metal). */
+export const BSI_GOLD_SYMBOL = "XAU-BSI"
+
+/** Quote `source` / provider label for the BSI gold feed (endpoint path). */
+export const BSI_GOLD_SOURCE = "bankbsi"
+
+/** BSI gold is quoted in Indonesian rupiah. */
+export const BSI_GOLD_QUOTE_CURRENCY = "IDR"
+
+/**
+ * Which published price we treat as the quote. `buybackPrice` is what BSI pays
+ * to buy a gram BACK from you — the realizable current value of gold you HOLD —
+ * so it is the honest mark for a holding's worth. Flip to `sellPrice` (the price
+ * to acquire a new gram) ONLY if the creator confirms their BSI app shows that
+ * number as the position value. Kept a named constant so the flip is one line.
+ */
+export type GoldPriceField = "buybackPrice" | "sellPrice"
+export const BSI_GOLD_PRICE_FIELD: GoldPriceField = "buybackPrice"
+
+/** One published price row from logam-mulia-api (documented response shape). */
+export interface LogamMuliaPriceRow {
+  source: string
+  material: string
+  materialType: string
+  weight: number
+  weightUnit: string
+  sellPrice: number
+  buybackPrice: number
+  currency: string
+  recordedDate: string
+}
+
+/** The logam-mulia-api response envelope (documented response shape). */
+export interface LogamMuliaResponse {
+  success: boolean
+  data: LogamMuliaPriceRow[]
+  count: number
+  timestamp: string
+  cached?: boolean
+}
+
+/** The outcome of parsing a logam-mulia-api payload into observations. */
+export interface LogamMuliaParseResult {
+  status: "ok" | "error"
+  /** Human-readable reason when `status` is "error" (graceful skip, no throw). */
+  error?: string
+  observations: MarketObservation[]
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null
+}
+
+function renderScaledDecimal(value: bigint, decimals: number): string {
+  if (decimals === 0) return value.toString()
+  const divisor = 10n ** BigInt(decimals)
+  const whole = value / divisor
+  const frac = value % divisor
+  if (frac === 0n) return whole.toString()
+  const fracText = frac.toString().padStart(decimals, "0").replace(/0+$/, "")
+  return `${whole.toString()}.${fracText}`
+}
+
+/**
+ * Convert a metal price quoted per GRAM (major currency units, as the BSI feed
+ * publishes it) into the per-TROY-OUNCE decimal string the canonical metal store
+ * uses. Exact BigInt math via `TROY_OUNCE_GRAMS` (31.1034768 = 311034768 / 1e7)
+ * — no float. An integer per-gram price round-trips through
+ * `spotPriceScaledPerGram` with ZERO loss. Throws on a non-finite / non-positive
+ * input (a corrupt price must fail loud, never mis-mark money).
+ */
+export function goldPerGramMajorToPerOunceDecimal(
+  perGramMajor: number
+): string {
+  if (!Number.isFinite(perGramMajor) || perGramMajor <= 0) {
+    throw new RangeError(
+      `goldPerGramMajorToPerOunceDecimal: price must be a positive finite number, got ${perGramMajor}`
+    )
+  }
+  const gramText = perGramMajor.toString()
+  if (!/^\d+(\.\d+)?$/.test(gramText)) {
+    throw new RangeError(
+      `goldPerGramMajorToPerOunceDecimal: unrepresentable price ${gramText}`
+    )
+  }
+  const [whole, fraction = ""] = gramText.split(".")
+  const gramScaled = BigInt(whole + fraction) // value × 10^fraction.length
+  const ounceScaled = gramScaled * 311_034_768n // × 10^(fraction.length + 7)
+  return renderScaledDecimal(ounceScaled, fraction.length + 7)
+}
+
+function resolveGoldAsOf(
+  recordedDate: unknown,
+  timestamp: unknown,
+  fallback: Date | undefined
+): Date | null {
+  if (typeof recordedDate === "string" && recordedDate.trim().length > 0) {
+    const d = new Date(`${recordedDate.trim()}T00:00:00.000Z`)
+    if (!Number.isNaN(d.getTime())) return d
+  }
+  if (typeof timestamp === "string" && timestamp.trim().length > 0) {
+    const d = new Date(timestamp)
+    if (!Number.isNaN(d.getTime())) return d
+  }
+  if (fallback && !Number.isNaN(fallback.getTime())) return fallback
+  return null
+}
+
+/**
+ * Parse a logam-mulia-api gold payload into a single canonical metal observation
+ * (per TROY OUNCE — see the unit decision above). Defensive: any shape problem
+ * (`success !== true`, empty/absent `data`, no 1-gram row, a non-positive price,
+ * an unparseable date) yields `status: "error"` with a reason and ZERO
+ * observations — NEVER a throw — so the ingest pipeline degrades gracefully and
+ * keeps the last good quote.
+ *
+ * Pure: no DB, no network, no secrets.
+ */
+export function parseLogamMuliaGoldResponse(
+  payload: unknown,
+  opts?: { priceField?: GoldPriceField; fallbackAsOf?: Date }
+): LogamMuliaParseResult {
+  const priceField = opts?.priceField ?? BSI_GOLD_PRICE_FIELD
+  const err = (reason: string): LogamMuliaParseResult => ({
+    status: "error",
+    error: reason,
+    observations: [],
+  })
+
+  if (!isRecord(payload)) return err("payload is not an object")
+  if (payload.success !== true) {
+    return err(`provider reported success=${String(payload.success)}`)
+  }
+  const data = payload.data
+  if (!Array.isArray(data) || data.length === 0) {
+    return err("payload data is empty")
+  }
+
+  // BSI publishes several weights; we price per gram, so take the 1-gram row.
+  const row = data.find(
+    (candidate) =>
+      isRecord(candidate) &&
+      Number(candidate.weight) === 1 &&
+      String(candidate.weightUnit).toLowerCase() === "gr"
+  )
+  if (!isRecord(row)) return err("no 1-gram (weightUnit=gr) row in payload")
+
+  const perGram = Number(row[priceField])
+  if (!Number.isFinite(perGram) || perGram <= 0) {
+    return err(`invalid ${priceField} ${String(row[priceField])}`)
+  }
+
+  const currency = typeof row.currency === "string" ? row.currency.trim() : ""
+  if (currency.length === 0) return err("row is missing a currency")
+
+  const asOf = resolveGoldAsOf(
+    row.recordedDate,
+    payload.timestamp,
+    opts?.fallbackAsOf
+  )
+  if (asOf === null) return err("row has no parseable recordedDate/timestamp")
+
+  let priceDecimal: string
+  try {
+    priceDecimal = goldPerGramMajorToPerOunceDecimal(perGram)
+  } catch (error) {
+    return err(error instanceof Error ? error.message : "unconvertible price")
+  }
+
+  return {
+    status: "ok",
+    observations: [
+      {
+        kind: "metal",
+        symbol: BSI_GOLD_SYMBOL,
+        quoteCurrency: currency,
+        asOf,
+        priceDecimal,
+        providerRef:
+          typeof row.source === "string" ? row.source : BSI_GOLD_SOURCE,
+      },
+    ],
+  }
+}
