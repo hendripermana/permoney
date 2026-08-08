@@ -342,3 +342,56 @@ conversion); `src/server/market-data.server.ts` (`LogamMuliaGoldProvider`,
 `ensureBsiGoldInstrument`, `ingestGoldPricesOnce`); `.env.example`
 (`LOGAM_MULIA_API_URL`); unit (`src/lib/market-data.test.ts`) + real-Postgres
 (`tests/integration/gold-price-feed.integration.ts`) tests.
+
+## Implementation notes (PER-235c — gold source fallback chain)
+
+Slice 3 hardcoded ONE endpoint (`/api/prices/bankbsi`). That source scrapes BSI
+via a Google-Translate proxy that is persistently HTTP 429, so every
+`syncMarketPricesFn` returned `{ ingested: 0, error }` and the user's "Refresh
+prices" showed "Couldn't reach the price source" even though egress and the OTHER
+worker endpoints were healthy. PER-235c makes the gold provider try sources in a
+PRIORITY FALLBACK CHAIN and use the FIRST that returns `success: true`, so gold
+ALWAYS gets a number as close to the user's BSI Gold as is currently available.
+
+- **The chain (a small, reorderable constant).** `GOLD_SOURCE_CHAIN =
+["bankbsi", "anekalogam", "pegadaian"]` (`src/server/market-data.server.ts`).
+  Each label is BOTH the worker endpoint path (`/api/prices/{source}`) AND the
+  quote `source`/provenance tag. `bankbsi` = exact BSI price; `anekalogam` =
+  Antam LM (BSI SELLS Antam gold, so ≈1% below BSI's mark — the closest reliable
+  proxy); `pegadaian` = final fallback.
+
+- **Per-source normalization to a per-gram IDR buyback (shapes differ).** The
+  three feeds share the `{ success, data: [ { weight, weightUnit, buybackPrice }
+] }` envelope but not the shape: `bankbsi` is one `1 gr` row, `anekalogam` is
+  many bars (pick the `1 gr` plain-LM row), `pegadaian` is one `0.01 gram` row.
+  The generalized pure parser (`parseLogamMuliaGoldResponse` +
+  `chooseGoldEntry`/`perGramBuybackDecimal`, `src/lib/market-data.ts`) prefers a
+  1-gram bar, else the smallest-weight valid gram row, and applies the GENERAL
+  rule `perGramBuyback = buyback / weightInGrams` via EXACT BigInt rational math
+  (no float — `26500 / 0.01` in IEEE-754 is not 2_650_000). It still converts to
+  the canonical per-TROY-OUNCE quote, so the merged PER-238 holding refresh is
+  untouched. `buybackPrice` remains the priced field (PER-235 decision).
+
+- **Provenance = the winning source.** All sources price the ONE `XAU-BSI`
+  `MarketInstrument`; the quote `source` (and staged `RawMarketDataFetch`
+  provider) is the source that actually succeeded — `LogamMuliaGoldProvider.name`
+  became a getter returning the winner. Idempotency stays
+  `UNIQUE (marketInstrumentId, asOf, source)`; the apply path already reads the
+  latest quote by `asOf` regardless of source.
+
+- **Graceful all-fail preserved.** If EVERY source fails (429 / unreachable /
+  non-JSON / `success:false`), the chain returns one aggregated `status:"error"`
+  with the per-source reasons staged — never a throw, zero quotes written, the
+  last good quote intact. No schema, `syncMarketPricesFn`, or `XAU-BSI` identity
+  change.
+
+- **Known approximation (flagged).** On fallback, `anekalogam`/`pegadaian` are
+  NOT the exact BSI mark. BSI sells Antam gold, so Antam buyback ≈1% below BSI's;
+  the value is the closest reliable proxy until `bankbsi` recovers, not an exact
+  BSI position value. If exactness on fallback matters, a per-source calibration
+  factor is a future slice.
+
+Files: `src/lib/market-data.ts` (generalized parser + exact per-gram
+normalization); `src/server/market-data.server.ts` (`GOLD_SOURCE_CHAIN`,
+chained `LogamMuliaGoldProvider`); unit (`src/lib/market-data.test.ts`) +
+real-Postgres (`tests/integration/gold-price-feed.integration.ts`) tests.

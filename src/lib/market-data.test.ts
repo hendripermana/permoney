@@ -385,13 +385,113 @@ describe("parseLogamMuliaGoldResponse", () => {
     expect(result.observations).toHaveLength(0)
   })
 
-  test("no 1-gram row -> graceful skip", () => {
+  test("no 1-gram row -> falls back to buyback / weightInGrams (PER-235c general rule)", () => {
+    // A single 5-gram bar priced Rp 13,250,000 -> per-gram Rp 2,650,000 -> the
+    // same per-troy-ounce mark as the 1-gram row. The general rule prices ANY
+    // gram-weighted bar, so a source that omits the 1-gram row is no longer a skip.
     const result = parseLogamMuliaGoldResponse({
       ...GOLD_PAYLOAD,
-      data: [{ ...GOLD_PAYLOAD.data[0], weight: 5 }],
+      data: [{ ...GOLD_PAYLOAD.data[0], weight: 5, buybackPrice: 13_250_000 }],
+    })
+    expect(result.status).toBe("ok")
+    expect(result.observations[0]?.priceDecimal).toBe("82424213.52")
+  })
+
+  test("anekalogam shape (many bars) -> prefers the 1-gram bar", () => {
+    // Antam LM list: 0.5gr, 1gr, 2gr. The 1-gram bar's buyback is the per-gram.
+    const anekalogam = {
+      success: true,
+      data: [
+        {
+          source: "anekalogam",
+          weight: 0.5,
+          weightUnit: "gr",
+          buybackPrice: 1_310_000,
+          currency: "IDR",
+          recordedDate: "2026-05-16",
+        },
+        {
+          source: "anekalogam",
+          weight: 1,
+          weightUnit: "gr",
+          buybackPrice: 2_620_000,
+          currency: "IDR",
+          recordedDate: "2026-05-16",
+        },
+        {
+          source: "anekalogam",
+          weight: 2,
+          weightUnit: "gr",
+          buybackPrice: 5_240_000,
+          currency: "IDR",
+          recordedDate: "2026-05-16",
+        },
+      ],
+      count: 3,
+      timestamp: "2026-05-16T05:06:58.888Z",
+    }
+    const result = parseLogamMuliaGoldResponse(anekalogam, {
+      sourceLabel: "anekalogam",
+    })
+    expect(result.status).toBe("ok")
+    // Rp 2,620,000/gram -> per troy ounce (exact).
+    expect(result.observations[0]?.priceDecimal).toBe(
+      goldPerGramMajorToPerOunceDecimal(2_620_000)
+    )
+    expect(result.observations[0]?.providerRef).toBe("anekalogam")
+    // Round-trips per-ounce -> per-gram minor with ZERO loss.
+    const quote = normalizeObservations(result.observations).quotes[0]
+    const perGramMinor = marketQuoteToHoldingPriceMinor({
+      kind: "metal",
+      priceScaled: quote?.price ?? 0n,
+      priceScale: quote?.priceScale ?? 0,
+      minorUnitConversion: 100n,
+    })
+    expect(perGramMinor).toBe(262_000_000n) // Rp 2,620,000.00
+  })
+
+  test("pegadaian shape (weight 0.01 gram) -> per-gram = buyback x 100 (exact)", () => {
+    const pegadaian = {
+      success: true,
+      data: [
+        {
+          source: "pegadaian",
+          weight: 0.01,
+          weightUnit: "gram",
+          buybackPrice: 25_900,
+          currency: "IDR",
+          recordedDate: "2026-05-16",
+        },
+      ],
+      count: 1,
+      timestamp: "2026-05-16T05:06:58.888Z",
+    }
+    const result = parseLogamMuliaGoldResponse(pegadaian, {
+      sourceLabel: "pegadaian",
+    })
+    expect(result.status).toBe("ok")
+    // Rp 25,900 per 0.01 gram = Rp 2,590,000/gram -> per troy ounce (exact).
+    expect(result.observations[0]?.priceDecimal).toBe(
+      goldPerGramMajorToPerOunceDecimal(2_590_000)
+    )
+    expect(result.observations[0]?.providerRef).toBe("pegadaian")
+    const quote = normalizeObservations(result.observations).quotes[0]
+    const perGramMinor = marketQuoteToHoldingPriceMinor({
+      kind: "metal",
+      priceScaled: quote?.price ?? 0n,
+      priceScale: quote?.priceScale ?? 0,
+      minorUnitConversion: 100n,
+    })
+    expect(perGramMinor).toBe(259_000_000n) // Rp 2,590,000.00 (exact x100)
+  })
+
+  test("a non-gram unit row -> graceful skip (no usable row)", () => {
+    const result = parseLogamMuliaGoldResponse({
+      ...GOLD_PAYLOAD,
+      data: [{ ...GOLD_PAYLOAD.data[0], weight: 1, weightUnit: "oz" }],
     })
     expect(result.status).toBe("error")
-    expect(result.error).toContain("1-gram")
+    expect(result.error).toContain("no usable")
   })
 
   test("malformed payloads -> graceful skip (no throw)", () => {
