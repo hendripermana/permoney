@@ -7,11 +7,16 @@ import {
   marketQuoteToHoldingPriceMinor,
   type MarketPricedHoldingKind,
 } from "@/lib/market-data"
-import {
-  ensureBsiGoldInstrument,
-  syncMarketPricesOnce,
-  type SyncMarketPricesResult,
-} from "./market-data.server"
+// NOTE: `market-data.server.ts` is a HARD-FENCE server module (imports Prisma).
+// This file (holdings.ts) is in the CLIENT graph because the account route
+// imports its createServerFn values, so a STATIC `import ... from
+// "./market-data.server"` is denied by import-protection at build time (only
+// `vp build` catches it — not tsc/vitest). We therefore keep only a TYPE-ONLY
+// import (fully erased, no runtime edge) and pull the runtime functions via a
+// DYNAMIC `import("./market-data.server")` INSIDE server-fn handler bodies /
+// server-only functions, where the splitter strips the code from the client —
+// mirroring how the rest of the ledger reaches Prisma only inside handlers.
+import type { SyncMarketPricesResult } from "./market-data.server"
 import {
   averageUnitCostMinor,
   holdingCostMinor,
@@ -1516,7 +1521,10 @@ export async function listMarketInstrumentsForFamily({
     // PER-235b — ensure the canonical BSI-gold series exists so it is LINKABLE
     // immediately, before any successful worker fetch. Idempotent (unique-race
     // safe) and writes only the GLOBAL MarketInstrument reference row — no ledger
-    // data, no RLS dependency — so it is safe inside the tenant tx.
+    // data, no RLS dependency — so it is safe inside the tenant tx. Reached via a
+    // DYNAMIC import so the `.server` hard-fence module never enters the client
+    // graph (this fn is server-only; the client never runs this body).
+    const { ensureBsiGoldInstrument } = await import("./market-data.server")
     await ensureBsiGoldInstrument(tx)
 
     // MarketInstrument is GLOBAL (no RLS); reading it inside the tenant tx is
@@ -1577,6 +1585,9 @@ export type { SyncMarketPricesResult }
 export const syncMarketPricesFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
   .handler(async (): Promise<SyncMarketPricesResult> => {
+    // DYNAMIC import inside the (client-stripped) handler body keeps the
+    // Prisma-importing `.server` module out of the client graph.
+    const { syncMarketPricesOnce } = await import("./market-data.server")
     return await syncMarketPricesOnce()
   })
 
