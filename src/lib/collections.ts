@@ -1,5 +1,6 @@
 import { createCollection } from "@tanstack/react-db"
 import { queryCollectionOptions } from "@tanstack/query-db-collection"
+import { accountCollection } from "./account-collections"
 import type { TransactionKind } from "./liability-semantics"
 import type { TransferPurpose } from "./money-movement"
 import { decodeMoney, encodeMoney, type Money } from "./money"
@@ -104,6 +105,20 @@ export type TransactionRecord = ReturnType<
   typeof reviveTransaction<RawTransactionFromServer>
 >
 
+// A transaction mutation changes account balances (the server applies an atomic
+// signed delta), so resync the account collection too — not just the ledger.
+// Without it, the account-page hero balance + KPIs (which read `account.balance`
+// from `accountCollection`) stay stale until a manual page reload. Drift is not
+// refetched here: a normal transaction_flow mutation cannot change valuation
+// drift, and its own mutation paths already resync it. AGENTS.md §5.B: sync
+// client collections with the Postgres source of truth after every mutation.
+async function resyncLedgerAndBalances(): Promise<void> {
+  await Promise.all([
+    transactionCollection.utils.refetch(),
+    accountCollection.utils.refetch(),
+  ])
+}
+
 // 1. Definisikan Koleksi Transaksi kita
 export const transactionCollection = createCollection(
   queryCollectionOptions({
@@ -206,7 +221,7 @@ export const transactionCollection = createCollection(
           },
         })
         // WAJIB: Tunggu server untuk sync ulang agar optimistic state tetap valid
-        await transactionCollection.utils.refetch()
+        await resyncLedgerAndBalances()
       } catch (error) {
         console.error("Optimistic Insert Failed! Rolled back:", error)
         throw error
@@ -279,7 +294,7 @@ export const transactionCollection = createCollection(
           },
         })
         // WAJIB: Tunggu server sync ulang agar data edit tersinkron permanen
-        await transactionCollection.utils.refetch()
+        await resyncLedgerAndBalances()
       } catch (error) {
         console.error("Optimistic Update Failed! Rolled back:", error)
         throw error
@@ -293,7 +308,7 @@ export const transactionCollection = createCollection(
           data: { id: id as string, idempotencyKey: createUuidV7() },
         })
         // WAJIB: Sync ulang setelah hapus agar UI konsisten dengan server
-        await transactionCollection.utils.refetch()
+        await resyncLedgerAndBalances()
       } catch (error) {
         console.error("Optimistic Delete Failed! Rolled back:", error)
         throw error
