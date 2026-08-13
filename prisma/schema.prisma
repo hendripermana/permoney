@@ -409,7 +409,8 @@ model Transaction {
   // Relasi ke Transfer (Hanya terisi jika type == "transfer")
   transferOut Transfer? @relation("OutflowTransaction")
   transferIn  Transfer? @relation("InflowTransaction")
-  // This row is the FX fee leg of a transfer (kind == "fx_fee"); ADR-0035 §6.
+  // This row is the fee leg of a transfer (kind == "fx_fee" — ADR-0035 §6, or
+  // kind == "transfer_fee" — PER-247).
   feeForTransfer Transfer? @relation("FxFeeTransaction")
 
   createdAt DateTime @default(now())
@@ -501,7 +502,16 @@ model Transfer {
   fromCurrency String?
   toCurrency   String?
 
-  // Optional FX fee leg (kind == "fx_fee", a standalone expense row). ADR-0035 §6.
+  // PER-247: constrained, nullable purpose label for a funds_movement
+  // transfer (top_up / investment_contribution / investment_withdrawal /
+  // savings / cash_withdrawal). NULL for liability transfer kinds (cc_payment,
+  // loan_payment, liability_draw) whose kind already carries the meaning.
+  // Domain-CHECKed + trigger-guarded (purpose only on funds_movement).
+  purpose String?
+
+  // Optional fee leg (a standalone expense row; kind == "fx_fee" for a
+  // cross-currency transfer — ADR-0035 §6, or "transfer_fee" otherwise —
+  // PER-247). At most ONE fee leg per transfer.
   feeTransactionId String?      @unique
   feeTransaction   Transaction? @relation("FxFeeTransaction", fields: [feeTransactionId], references: [id], onDelete: Restrict)
 

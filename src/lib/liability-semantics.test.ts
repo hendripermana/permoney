@@ -20,6 +20,7 @@ describe("liability semantics", () => {
       "liability_fee",
       "balance_adjustment",
       "fx_fee",
+      "transfer_fee",
     ])
   })
 

@@ -4,6 +4,7 @@ import {
   buildBalanceSeries,
   buildStatementCsv,
   matchesQuery,
+  orderStatementRows,
   rangeCutoff,
   signedDeltaForAccount,
   summarizeCategories,
@@ -137,6 +138,64 @@ describe("summarizeCategories", () => {
     const inn = summarizeCategories(txns, ID, { direction: "in" })
     expect(inn).toEqual([{ name: "Salary", color: null, total: 100_000n }])
   })
+
+  // PER-247 — transfers are bucketed by their CONTEXTUAL money-movement label
+  // (derived from kind + purpose), never lumped under one meaningless
+  // "Transfer". Different purposes/kinds must NOT collapse into one bucket.
+  it("buckets transfers by contextual money-movement label", () => {
+    const transferTxns: AnalyticsTxn[] = [
+      // Liability payment kinds read from `kind` (no purpose).
+      txn({
+        type: "transfer",
+        amount: 40_000n,
+        toAccountId: "cc",
+        kind: "cc_payment",
+      }),
+      // Investment contribution reads from `purpose`.
+      txn({
+        type: "transfer",
+        amount: 25_000n,
+        toAccountId: "bibit",
+        kind: "funds_movement",
+        transferPurpose: "investment_contribution",
+      }),
+      // A plain movement (no purpose) falls back to "Transfer".
+      txn({
+        type: "transfer",
+        amount: 15_000n,
+        toAccountId: "other",
+        kind: "funds_movement",
+      }),
+    ]
+    const out = summarizeCategories(transferTxns, ID, { direction: "out" })
+    expect(out.map((s) => [s.name, s.total])).toEqual([
+      ["Pay credit card", 40_000n],
+      ["Invest", 25_000n],
+      ["Transfer", 15_000n],
+    ])
+  })
+
+  it("does not merge two different-purpose transfers into one bucket", () => {
+    const transferTxns: AnalyticsTxn[] = [
+      txn({
+        type: "transfer",
+        amount: 30_000n,
+        toAccountId: "bibit",
+        kind: "funds_movement",
+        transferPurpose: "investment_contribution",
+      }),
+      txn({
+        type: "transfer",
+        amount: 20_000n,
+        toAccountId: "gopay",
+        kind: "funds_movement",
+        transferPurpose: "top_up",
+      }),
+    ]
+    const out = summarizeCategories(transferTxns, ID, { direction: "out" })
+    expect(out).toHaveLength(2)
+    expect(out.map((s) => s.name).sort()).toEqual(["Invest", "Top-up"])
+  })
 })
 
 describe("buildStatementCsv", () => {
@@ -185,6 +244,49 @@ describe("buildStatementCsv", () => {
     expect(buildStatementCsv([], ID)).toBe(
       "Date,Description,Category,Type,Amount,Currency"
     )
+  })
+})
+
+describe("orderStatementRows", () => {
+  // PER-247 — the per-account live query is unordered (TanStack DB is
+  // non-deterministic without orderBy), so the statement must sort explicitly:
+  // newest date first, most-recently-created first within the same date.
+  it("orders newest date first", () => {
+    const rows = [
+      txn({ date: "2026-01-01" }),
+      txn({ date: "2026-03-01" }),
+      txn({ date: "2026-02-01" }),
+    ]
+    expect(orderStatementRows(rows).map((r) => r.date)).toEqual([
+      "2026-03-01",
+      "2026-02-01",
+      "2026-01-01",
+    ])
+  })
+
+  it("surfaces a just-added backdated entry above same-date older rows", () => {
+    // Both dated the same day; the one CREATED later (recorded today for a
+    // past posting day) must sort first so reconciliation sees it immediately.
+    // `amount` is the per-row discriminator here.
+    const olderlyRecorded = txn({
+      date: "2026-02-10",
+      createdAt: "2026-02-10T09:00:00Z",
+      amount: 111n,
+    })
+    const justAdded = txn({
+      date: "2026-02-10",
+      createdAt: "2026-08-12T09:00:00Z",
+      amount: 222n,
+    })
+    const ordered = orderStatementRows([olderlyRecorded, justAdded])
+    expect(ordered.map((r) => r.amount)).toEqual([222n, 111n])
+  })
+
+  it("does not mutate the input array", () => {
+    const rows = [txn({ date: "2026-01-01" }), txn({ date: "2026-02-01" })]
+    const snapshot = rows.map((r) => r.date)
+    orderStatementRows(rows)
+    expect(rows.map((r) => r.date)).toEqual(snapshot)
   })
 })
 

@@ -323,7 +323,7 @@ describe("currency + FX snapshots + cross-currency transfers (PER-147 / ADR-0035
         toAccountId: idr.id,
         destinationAmount: 162_500_000n,
         destinationCurrency: "IDR",
-        fxFeeAmount: 2_500n, // $25.00 fee on the source account
+        feeAmount: 2_500n, // $25.00 fee on the source account
         description: "transfer with fee",
         date: new Date("2026-06-01"),
         idempotencyKey: factories.createIdempotencyKey(),

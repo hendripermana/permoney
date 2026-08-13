@@ -92,6 +92,7 @@ import {
   buildBalanceSeries,
   buildStatementCsv,
   matchesQuery,
+  orderStatementRows,
   rangeCutoff,
   signedDeltaForAccount,
   summarizeCategories,
@@ -99,7 +100,8 @@ import {
 } from "@/lib/account-analytics"
 import { ACCOUNT_TYPE_LABEL } from "./-account-card"
 import { formatCurrency } from "@/lib/currency"
-import { toMoney, ZERO_MONEY, type Money } from "@/lib/money"
+import { decodeMoney, toMoney, ZERO_MONEY, type Money } from "@/lib/money"
+import { moneyMovementLabel } from "@/lib/money-movement"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
@@ -401,12 +403,20 @@ function AccountDetailPage() {
     return { inflow, outflow }
   }, [rangedLedger, accountId])
 
+  // A per-account live query has no intrinsic order (TanStack DB differential
+  // dataflow is non-deterministic without an orderBy), so sort explicitly —
+  // newest date first, most-recently-added first within a day — matching the
+  // /transactions ledger. Without this a just-added backdated entry can land
+  // anywhere in the list, so "All" appears not to surface recent work (PER-247
+  // reconciliation fix).
   const statement = React.useMemo(
     () =>
-      rangedLedger.filter(
-        (t) =>
-          matchesQuery(t, query) &&
-          (types.length === 0 || types.includes(t.type))
+      orderStatementRows(
+        rangedLedger.filter(
+          (t) =>
+            matchesQuery(t, query) &&
+            (types.length === 0 || types.includes(t.type))
+        )
       ),
     [rangedLedger, query, types]
   )
@@ -670,11 +680,38 @@ function AccountDetailPage() {
                 {statement.map((trx) => {
                   const dir =
                     signedDeltaForAccount(trx, accountId) >= 0n ? 1 : -1
+                  // PER-247: contextual money-movement label — a nabung/invest
+                  // reads "Invest to Bibit", a withdrawal "Withdraw from Bibit",
+                  // an e-wallet top-up "Top-up to GoPay" — instead of a bare
+                  // "Transfer" — with the fee (if any) annotated inline.
+                  const transferNoun = moneyMovementLabel({
+                    kind: trx.kind,
+                    purpose: trx.transferPurpose,
+                  })
+                  const feeSuffix =
+                    trx.transferFee != null
+                      ? ` · ${formatCurrency(
+                          decodeMoney(trx.transferFee.amount),
+                          trx.transferFee.currency
+                        )} fee`
+                      : ""
+                  // The counterparty is always the OTHER account, never the one
+                  // being viewed — never assume accountId is the source. A
+                  // valuation-linked reksadana redemption stores the cash leg
+                  // as accountId=BankJago (dest), toAccountId=HasilJualan
+                  // (source); reading `dir` (money direction from the viewed
+                  // account) picks "from"/"to" and this picks the counterparty,
+                  // so it reads "Withdraw from Hasil Jualan" — not the reversed
+                  // "Withdraw from Bank Jago".
+                  const counterpartyName =
+                    (trx.accountId === accountId
+                      ? trx.toAccount?.name
+                      : trx.account?.name) ?? "account"
                   const secondary =
                     trx.type === "transfer"
                       ? dir === 1
-                        ? `Transfer from ${trx.account?.name ?? "account"}`
-                        : `Transfer to ${trx.toAccount?.name ?? "account"}`
+                        ? `${transferNoun} from ${counterpartyName}${feeSuffix}`
+                        : `${transferNoun} to ${counterpartyName}${feeSuffix}`
                       : (trx.category?.name ??
                         trx.merchant?.name ??
                         (trx.isSplit ? "Split" : "Uncategorized"))

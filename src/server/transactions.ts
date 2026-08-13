@@ -6,6 +6,7 @@ import {
   isLiabilityCostKind,
   parseAccountType,
   TRANSACTION_KIND_VALUES,
+  type TransferTransactionKind,
 } from "@/lib/liability-semantics"
 import {
   absMoney,
@@ -17,6 +18,11 @@ import {
   type Money,
 } from "@/lib/money"
 import { deriveTransferFx } from "@/lib/fx"
+import {
+  deriveTransferPurpose,
+  TRANSFER_PURPOSE_VALUES,
+  type TransferPurpose,
+} from "@/lib/money-movement"
 import { assertSplitParity } from "@/lib/split-parity"
 import { computeBaseProjectionForAmount, getFamilyBaseCurrency } from "./fx"
 import {
@@ -496,6 +502,54 @@ export async function findLedgerTransactionsForFamily(
     if (splitEntry.merchantId) merchantIds.add(splitEntry.merchantId)
   }
 
+  // PER-247: hydrate the contextual money-movement labels (Transfer.purpose)
+  // and fee legs so lists can render self-explanatory movements ("Top-up
+  // GoPay (+Rp1.000 fee)") without a second round-trip per row.
+  const transfers =
+    transactionIds.length > 0
+      ? await tx.transfer.findMany({
+          where: {
+            deletedAt: null,
+            OR: [
+              { outflowTransactionId: { in: transactionIds } },
+              { inflowTransactionId: { in: transactionIds } },
+            ],
+          },
+          select: {
+            outflowTransactionId: true,
+            inflowTransactionId: true,
+            purpose: true,
+            feeTransactionId: true,
+          },
+        })
+      : []
+  const feeTransactionIds = transfers
+    .map((transfer) => transfer.feeTransactionId)
+    .filter((id): id is string => id != null)
+  const transferFees =
+    feeTransactionIds.length > 0
+      ? await tx.transaction.findMany({
+          where: { id: { in: feeTransactionIds } },
+          select: {
+            id: true,
+            accountId: true,
+            amount: true,
+            categoryId: true,
+            currency: true,
+          },
+        })
+      : []
+  const transferFeesById = indexById(transferFees)
+  const transferByTransactionId = new Map<string, (typeof transfers)[number]>()
+  for (const transfer of transfers) {
+    if (transfer.outflowTransactionId) {
+      transferByTransactionId.set(transfer.outflowTransactionId, transfer)
+    }
+    if (transfer.inflowTransactionId) {
+      transferByTransactionId.set(transfer.inflowTransactionId, transfer)
+    }
+  }
+
   const [accounts, categories, merchants] =
     await runTenantTransactionQueriesInOrder([
       () =>
@@ -547,6 +601,37 @@ export async function findLedgerTransactionsForFamily(
 
     return {
       ...transaction,
+      // PER-247: contextual money-movement fields (null for non-transfers).
+      // The fee amount is wire-encoded as a positive magnitude string (the
+      // same boundary convention as serializeTransaction).
+      transferPurpose:
+        transferByTransactionId.get(transaction.id)?.purpose ?? null,
+      // PER-247: does this surfaced transfer leg RECEIVE money into its own
+      // `accountId` (money flows toAccount → account), rather than send it out
+      // (account → toAccount)? True only for a valuation-linked redemption —
+      // its single cash leg sits in the Transfer's inflow slot with no outflow
+      // twin (classic inflow legs are hidden from this list). The renderer uses
+      // this to orient the account arrow, otherwise a reksadana withdrawal
+      // ("Hasil Jualan → Bank Jago") displays reversed as "Bank Jago → Hasil
+      // Jualan" — the data (accountId=cash, toAccountId=tracked) is correct,
+      // only the direction label needs it. See docs/adr/0048.
+      transferIncoming:
+        transferByTransactionId.get(transaction.id)?.inflowTransactionId ===
+        transaction.id,
+      transferFee: (() => {
+        const transfer = transferByTransactionId.get(transaction.id)
+        const fee = transfer?.feeTransactionId
+          ? transferFeesById.get(transfer.feeTransactionId)
+          : null
+        return fee
+          ? {
+              accountId: fee.accountId,
+              amount: encodeMoney(absMoney(fee.amount)),
+              categoryId: fee.categoryId,
+              currency: fee.currency,
+            }
+          : null
+      })(),
       account: accountListRelation(account),
       toAccount: toAccount ? accountListRelation(toAccount) : null,
       category: category ? categoryListRelation(category) : null,
@@ -799,13 +884,21 @@ const transactionInputSchema = z.object({
   destinationAmount: positiveMoneyInputSchema.nullable().optional(),
   destinationCurrency: z.string().nullable().optional(),
   attachmentUrl: z.string().nullable().optional(),
-  // Optional FX fee on a cross-currency transfer (PER-147 / ADR-0035 §6). When
-  // present, a standalone `fx_fee` expense row is posted on `fxFeeAccountId`
-  // (default: the source account) in that account's currency, linked to the
-  // Transfer. Ignored for non-transfer transactions.
-  fxFeeAmount: positiveMoneyInputSchema.nullable().optional(),
-  fxFeeAccountId: z.string().nullable().optional(),
-  fxFeeCategoryId: z.string().nullable().optional(),
+  // Optional fee on ANY transfer (PER-247, generalizing ADR-0035 §6's
+  // cross-currency-only fxFee* inputs). When present, a standalone fee expense
+  // row is posted on `feeAccountId` (default: the source account) in that
+  // account's currency and linked to the Transfer via feeTransactionId (one
+  // fee leg max per transfer). The server derives the leg's kind: `fx_fee`
+  // for a cross-currency transfer, `transfer_fee` otherwise. Rejected for
+  // non-transfer transactions (assertManualTransactionKindShape).
+  feeAmount: positiveMoneyInputSchema.nullable().optional(),
+  feeAccountId: z.string().nullable().optional(),
+  feeCategoryId: z.string().nullable().optional(),
+  // PER-247: optional override of the derived funds_movement transfer purpose
+  // (see src/lib/money-movement.ts). Null/absent = derive from the account
+  // taxonomy. Rejected for liability transfer kinds (cc_payment /
+  // loan_payment / liability_draw) — their kind already carries the meaning.
+  transferPurpose: z.enum(TRANSFER_PURPOSE_VALUES).nullable().optional(),
   // PER-196 / ADR-0048 §1: valuation-linked transfer. When either transfer
   // side is a balanceSource="valuation" account, this is the new valuation
   // value for that account (prefilled client-side as latest ∓ amount,
@@ -944,12 +1037,23 @@ function assertManualTransactionKindShape(data: {
   kind: string
   toAccountId?: string | null
   type: "expense" | "income" | "transfer"
+  feeAmount?: bigint | null
+  transferPurpose?: string | null
 }): void {
   if (data.type === "transfer") {
     if (data.kind !== "standard") {
       throw new Error("Transfer kind is derived from account direction")
     }
     return
+  }
+
+  // PER-247: fee + purpose are transfer-only inputs. Never silently drop
+  // money-shaped client input — reject it loud instead.
+  if (data.feeAmount) {
+    throw new Error("A transfer fee can only be attached to a transfer")
+  }
+  if (data.transferPurpose) {
+    throw new Error("A transfer purpose can only be attached to a transfer")
   }
 
   if (
@@ -977,68 +1081,92 @@ function assertManualTransactionKindShape(data: {
 }
 
 /**
- * Create the optional FX-fee leg of a cross-currency transfer (PER-147 /
- * ADR-0035 §6). A standalone `fx_fee` expense posted on `fxFeeAccountId`
- * (default: the source account) in that account's native currency, with its own
- * atomic balance delta, base projection, and audit. Returns the new fee
- * transaction id, or null when no fee was requested. The caller links it onto
- * the `Transfer` row.
+ * Create the optional fee leg of a transfer (PER-247, generalized from the
+ * PER-147 / ADR-0035 §6 cross-currency-only fee). A standalone expense posted
+ * on `feeAccountId` (default: the source account) in that account's native
+ * currency, with its own atomic balance delta, base projection, and audit.
+ * `feeKind` is "fx_fee" for a cross-currency transfer (ADR-0035 §6) and
+ * "transfer_fee" otherwise (PER-247). Returns the new fee transaction id, or
+ * null when no fee was requested. The caller links it onto the `Transfer`
+ * row.
  */
-async function createFxFeeLegIfRequested(
+async function createTransferFeeLegIfRequested(
   tx: TenantTransactionClient,
   {
-    data,
     familyId,
     user,
     baseCurrency,
     auditCtx,
+    feeKind,
+    feeAmount: requestedFeeAmount,
+    feeAccountId: requestedFeeAccountId,
+    feeCategoryId,
+    defaultFeeAccountId,
+    date,
+    description,
+    notes,
+    status,
   }: {
-    data: CreateTransactionInput
     familyId: string
     user: { id: string }
     baseCurrency: string
     auditCtx: Awaited<ReturnType<typeof createAuditContext>>
+    feeKind: "fx_fee" | "transfer_fee"
+    feeAmount: bigint | null | undefined
+    feeAccountId: string | null | undefined
+    feeCategoryId: string | null | undefined
+    // The fee bearer when feeAccountId is not specified: the transfer's
+    // source/cash account (PER-247 locked decision: origin bears the fee by
+    // default, editable via feeAccountId).
+    defaultFeeAccountId: string
+    date: Date
+    description: string
+    notes?: string | null
+    status: string
   }
 ): Promise<string | null> {
-  if (!data.fxFeeAmount) return null
+  if (!requestedFeeAmount) return null
 
-  const feeAccountId = data.fxFeeAccountId ?? data.accountId
+  const feeAccountId = requestedFeeAccountId ?? defaultFeeAccountId
   await validateTenantReferences(tx, familyId, {
     accountId: feeAccountId,
-    categoryId: data.fxFeeCategoryId,
+    categoryId: feeCategoryId,
   })
 
   const oldFeeAccount = await tx.account.findUniqueOrThrow({
     where: { id: feeAccountId },
   })
-  const feeAmount = negateMoney(absMoney(data.fxFeeAmount))
+  const feeAmount = negateMoney(absMoney(requestedFeeAmount))
   const feeMutation = await applyAccountBalanceDelta(tx, {
     accountId: feeAccountId,
     delta: feeAmount,
     familyId,
-    notFoundMessage: "FX fee account not found or access denied!",
+    notFoundMessage: "Transfer fee account not found or access denied!",
   })
   const feeProjection = await computeBaseProjectionForAmount(tx, familyId, {
     amount: feeAmount,
     currency: oldFeeAccount.currency,
-    date: data.date,
+    date,
     baseCurrency,
   })
 
   const feeTx = await tx.transaction.create({
     data: {
       type: "expense",
-      kind: "fx_fee",
+      kind: feeKind,
       amount: feeAmount,
       currency: oldFeeAccount.currency,
-      description: `FX fee: ${data.description}`,
-      date: data.date,
-      notes: data.notes || null,
+      description:
+        feeKind === "fx_fee"
+          ? `FX fee: ${description}`
+          : `Transfer fee: ${description}`,
+      date,
+      notes: notes || null,
       accountId: feeAccountId,
-      categoryId: data.fxFeeCategoryId || null,
+      categoryId: feeCategoryId || null,
       userId: user.id,
       familyId,
-      status: data.status,
+      status,
       baseAmount: feeProjection.baseAmount,
       baseCurrency: feeProjection.baseCurrency,
       fxRateScaled: feeProjection.fxRateScaled,
@@ -1056,6 +1184,110 @@ async function createFxFeeLegIfRequested(
   ])
 
   return feeTx.id
+}
+
+/**
+ * PER-247: resolve the effective purpose for a transfer. The client may
+ * override the taxonomy-derived default, but a purpose is only meaningful on
+ * a funds_movement transfer — liability kinds (cc_payment / loan_payment /
+ * liability_draw) already carry their meaning via `kind` (also guarded by the
+ * transfer_liability_kind_safe constraint trigger at the DB layer).
+ */
+function resolveTransferPurpose({
+  kind,
+  override,
+  fromAccount,
+  toAccount,
+}: {
+  kind: string
+  override: TransferPurpose | null | undefined
+  fromAccount: Account
+  toAccount: Account
+}): TransferPurpose | null {
+  if (kind !== "funds_movement") {
+    if (override) {
+      throw new Error(
+        `A transfer purpose only applies to funds_movement transfers, not ${kind}`
+      )
+    }
+    return null
+  }
+  return (
+    override ??
+    deriveTransferPurpose({
+      fromAccountType: parseAccountType(fromAccount.accountType),
+      toAccountType: parseAccountType(toAccount.accountType),
+      toAccountSubtype: toAccount.accountSubtype,
+    })
+  )
+}
+
+/**
+ * PER-247: resolve everything about a transfer request that the ledger
+ * DERIVES rather than trusts from the client — the kind (from account
+ * direction), the purpose (override or taxonomy-derived default), and the
+ * default fee bearer. Runs BEFORE the idempotency replay check so the
+ * canonical request payload hashes the same resolved values the persisted
+ * side stores: a faithful replay matches, and the same idempotency key with
+ * a different purpose/fee fails with a conflict (ADR-0006).
+ */
+interface ResolvedTransferSemantics {
+  data: CreateTransactionInput
+  fromAccount: Account
+  toAccount: Account
+  kind: TransferTransactionKind
+  purpose: TransferPurpose | null
+}
+
+async function resolveTransferSemantics(
+  tx: TenantTransactionClient,
+  data: CreateTransactionInput
+): Promise<ResolvedTransferSemantics> {
+  if (!data.toAccountId) {
+    throw new Error("Transfer requires a destination account!")
+  }
+  const toAccountId = data.toAccountId
+
+  const [fromAccount, toAccount] = await runTenantTransactionQueriesInOrder([
+    () =>
+      tx.account.findUniqueOrThrow({
+        where: { id: data.accountId },
+      }),
+    () =>
+      tx.account.findUniqueOrThrow({
+        where: { id: toAccountId },
+      }),
+  ] as const)
+
+  const kind = deriveTransferKindForAccounts({
+    fromAccountType: parseAccountType(fromAccount.accountType),
+    toAccountType: parseAccountType(toAccount.accountType),
+  })
+  const purpose = resolveTransferPurpose({
+    kind,
+    override: data.transferPurpose,
+    fromAccount,
+    toAccount,
+  })
+
+  // Default fee bearer: the source account (locked PER-247 decision: origin
+  // bears the fee, editable via feeAccountId). A valuation-linked
+  // REDEMPTION's source is the tracked (valuation) account, which cannot
+  // post expense deltas (ADR-0048 §3) — the cash destination bears the fee.
+  const feeAccountId = data.feeAmount
+    ? (data.feeAccountId ??
+      (fromAccount.balanceSource === "valuation"
+        ? toAccountId
+        : data.accountId))
+    : data.feeAccountId
+
+  return {
+    data: { ...data, transferPurpose: purpose, feeAccountId },
+    fromAccount,
+    toAccount,
+    kind,
+    purpose,
+  }
 }
 
 async function assertLiabilityCostTarget(
@@ -1182,7 +1414,18 @@ interface PersistedSplitEntryForIdempotency {
   merchantId: string | null
 }
 
-interface PersistedTransferOutForIdempotency {
+interface PersistedTransferFeeForIdempotency {
+  accountId: string
+  amount: bigint
+  categoryId: string | null
+}
+
+interface PersistedTransferRelationForIdempotency {
+  purpose: string | null
+  feeTransaction: PersistedTransferFeeForIdempotency | null
+}
+
+interface PersistedTransferOutForIdempotency extends PersistedTransferRelationForIdempotency {
   inflowTransaction: {
     accountId: string
     amount: bigint
@@ -1224,7 +1467,7 @@ interface PersistedTransactionForIdempotency {
   splitEntries: PersistedSplitEntryForIdempotency[]
   status: string
   toAccountId: string | null
-  transferIn: unknown
+  transferIn: PersistedTransferRelationForIdempotency | null
   transferOut: PersistedTransferOutForIdempotency | null
   type: string
   updatedAt: Date
@@ -1271,6 +1514,15 @@ function canonicalRequestPayload(
     description: data.description,
     destinationAmount: canonicalMoney(data.destinationAmount),
     destinationCurrency: data.destinationCurrency ?? null,
+    // PER-247: the transfer fee + purpose are part of the canonical payload —
+    // replaying the same key with a different fee/purpose must conflict, and
+    // (create path only) the caller pre-normalizes derived purpose + default
+    // fee bearer so a faithful replay hashes the same values the persisted
+    // side stores (see resolveTransferSemantics).
+    feeAmount: canonicalMoney(data.feeAmount),
+    feeAccountId: data.feeAmount ? (data.feeAccountId ?? null) : null,
+    feeCategoryId: data.feeAmount ? (data.feeCategoryId ?? null) : null,
+    transferPurpose: data.transferPurpose ?? null,
     isSplit: data.isSplit,
     kind: data.type === "transfer" ? null : data.kind,
     // PER-210: a split parent keeps its single merchant (merchant = whole
@@ -1386,6 +1638,12 @@ function assertAllRequestedTransactionsLoaded(
 
 function canonicalPersistedPayload(tx: PersistedTransactionForIdempotency) {
   const transferPartner = tx.transferOut?.inflowTransaction ?? null
+  // PER-247: the persisted purpose + fee leg live on the Transfer row — in
+  // whichever FK slot the idempotency-key-carrying cash leg landed (outflow
+  // for a classic transfer / valuation-linked contribution, inflow for a
+  // valuation-linked redemption).
+  const transferRelation = tx.transferOut ?? tx.transferIn
+  const persistedFee = transferRelation?.feeTransaction ?? null
 
   return {
     accountId: tx.accountId,
@@ -1397,6 +1655,10 @@ function canonicalPersistedPayload(tx: PersistedTransactionForIdempotency) {
     description: tx.description,
     destinationAmount: canonicalMoney(tx.destinationAmount),
     destinationCurrency: tx.destinationCurrency,
+    feeAmount: persistedFee ? canonicalMoney(persistedFee.amount) : null,
+    feeAccountId: persistedFee?.accountId ?? null,
+    feeCategoryId: persistedFee?.categoryId ?? null,
+    transferPurpose: transferRelation?.purpose ?? null,
     isSplit: tx.isSplit,
     kind: tx.type === "transfer" ? null : tx.kind,
     // PER-210: split parent keeps its merchant. Symmetric twin of
@@ -1487,9 +1749,38 @@ async function findIdempotentTransaction(
         }),
     ] as const)
 
+  // PER-247: hydrate the fee leg (if any) linked from whichever Transfer row
+  // this transaction anchors, so the canonical persisted payload can compare
+  // fee + purpose against a replayed request.
+  const feeTransactionIds = [
+    transferIn?.feeTransactionId,
+    transferOut?.feeTransactionId,
+  ].filter((id): id is string => id != null)
+  const feeTransactions =
+    feeTransactionIds.length > 0
+      ? await tx.transaction.findMany({
+          where: { id: { in: feeTransactionIds } },
+          select: {
+            id: true,
+            accountId: true,
+            amount: true,
+            categoryId: true,
+          },
+        })
+      : []
+  const feeTransactionsById = indexById(feeTransactions)
+  const feeFor = (
+    feeTransactionId: string | null | undefined
+  ): PersistedTransferFeeForIdempotency | null =>
+    feeTransactionId
+      ? (feeTransactionsById.get(feeTransactionId) ?? null)
+      : null
+
   const transferOutWithInflowTransaction = transferOut
     ? {
         ...transferOut,
+        purpose: transferOut.purpose,
+        feeTransaction: feeFor(transferOut.feeTransactionId),
         // PER-196 / ADR-0048 §4: null for a valuation-linked transfer where
         // THIS transaction is the outflow (contribution) leg — there is no
         // inflow Transaction, only a linked Valuation.
@@ -1504,7 +1795,12 @@ async function findIdempotentTransaction(
   return {
     ...transaction,
     splitEntries,
-    transferIn,
+    transferIn: transferIn
+      ? {
+          purpose: transferIn.purpose,
+          feeTransaction: feeFor(transferIn.feeTransactionId),
+        }
+      : null,
     transferOut: transferOutWithInflowTransaction,
   }
 }
@@ -1695,6 +1991,8 @@ export async function postValuationLinkedTransferLegs(
     auditCtx,
     baseCurrency,
     resolveValuation,
+    purpose = null,
+    fee = null,
   }: {
     cashAccount: Account
     trackedAccount: Account
@@ -1708,6 +2006,15 @@ export async function postValuationLinkedTransferLegs(
     resolveValuation: (
       tx: TenantTransactionClient
     ) => Promise<{ valuation: Valuation }>
+    // PER-247: optional purpose label (funds_movement only — callers
+    // resolve/validate it) and optional transfer-fee request, both written
+    // onto the canonical Transfer row in the same transaction.
+    purpose?: TransferPurpose | null
+    fee?: {
+      amount: bigint | null | undefined
+      accountId?: string | null
+      categoryId?: string | null
+    } | null
   }
 ) {
   // v1 scope (ADR-0048 §1): the cash leg and the tracked account are both
@@ -1777,6 +2084,7 @@ export async function postValuationLinkedTransferLegs(
         ? { outflowTransactionId: cashTx.id }
         : { inflowTransactionId: cashTx.id }),
       valuationId: valuation.id,
+      purpose,
     },
   })
 
@@ -1789,6 +2097,31 @@ export async function postValuationLinkedTransferLegs(
     ...createdAuditEntries("Transaction", [cashTx]),
     ...createdAuditEntries("Transfer", [createdTransfer]),
   ])
+
+  // PER-247: optional transfer-fee leg on a valuation-linked move (e.g. the
+  // bank charge on a nabung/invest transfer into a tracked investment
+  // account). Single-currency path (enforced above) => always transfer_fee.
+  const feeTransactionId = await createTransferFeeLegIfRequested(tx, {
+    familyId,
+    user,
+    baseCurrency,
+    auditCtx,
+    feeKind: "transfer_fee",
+    feeAmount: fee?.amount,
+    feeAccountId: fee?.accountId,
+    feeCategoryId: fee?.categoryId,
+    defaultFeeAccountId: cashAccount.id,
+    date: leg.date,
+    description: leg.description,
+    notes: leg.notes,
+    status: leg.status,
+  })
+  if (feeTransactionId) {
+    await tx.transfer.update({
+      where: { id: createdTransfer.id },
+      data: { feeTransactionId },
+    })
+  }
 
   return serializeTransaction({
     ...cashTx,
@@ -1808,6 +2141,7 @@ async function createValuationLinkedTransferWithinTx(
     user,
     auditCtx,
     baseCurrency,
+    purpose = null,
   }: {
     cashAccount: Account
     trackedAccount: Account
@@ -1818,6 +2152,9 @@ async function createValuationLinkedTransferWithinTx(
     user: { id: string }
     auditCtx: AuditContext
     baseCurrency: string
+    // PER-247: resolved funds_movement purpose label (null for liability
+    // kinds and for plain transfers).
+    purpose?: TransferPurpose | null
   }
 ) {
   return postValuationLinkedTransferLegs(tx, {
@@ -1825,6 +2162,12 @@ async function createValuationLinkedTransferWithinTx(
     trackedAccount,
     direction,
     kind,
+    purpose,
+    fee: {
+      amount: data.feeAmount,
+      accountId: data.feeAccountId,
+      categoryId: data.feeCategoryId,
+    },
     leg: {
       amount: data.amount,
       date: data.date,
@@ -1882,10 +2225,10 @@ export async function createTransactionForFamily({
   runInTenantTransaction = scopedTenantTransaction,
   user,
 }: CreateTransactionForFamilyArgs) {
-  const data = createTransactionInputSchema.parse(rawData)
+  const parsedData = createTransactionInputSchema.parse(rawData)
   const auditCtx = await createAuditContext(
     { user: { id: user.id, familyId } },
-    data.idempotencyKey
+    parsedData.idempotencyKey
   )
 
   const createOrReplay = async () =>
@@ -1893,20 +2236,31 @@ export async function createTransactionForFamily({
       familyId,
       user.id,
       async (tx: TenantTransactionClient) => {
-        const replay = await replayIdempotentTransaction(tx, familyId, data)
-        if (replay) return replay
-
         // PER-94: tenant-owned foreign reference validation. Runs first so a
         // cross-tenant payload short-circuits with a typed
         // `TenantReferenceError` before any balance update or audit row is
         // written. PER-104 DB triggers remain the backstop for raw-SQL paths.
         await validateTenantReferences(tx, familyId, {
-          accountId: data.accountId,
-          toAccountId: data.toAccountId,
-          merchantId: data.merchantId,
-          categoryId: data.categoryId,
-          splitEntries: data.splitEntries,
+          accountId: parsedData.accountId,
+          toAccountId: parsedData.toAccountId,
+          merchantId: parsedData.merchantId,
+          categoryId: parsedData.categoryId,
+          splitEntries: parsedData.splitEntries,
         })
+
+        // PER-247: resolve the derived transfer semantics (kind, purpose,
+        // default fee bearer) BEFORE the replay check, so the canonical
+        // request payload hashes the same resolved values the persisted side
+        // stores — a faithful replay matches, and the same idempotency key
+        // with a different purpose/fee fails with a conflict.
+        const transferSemantics =
+          parsedData.type === "transfer" && parsedData.toAccountId
+            ? await resolveTransferSemantics(tx, parsedData)
+            : null
+        const data = transferSemantics?.data ?? parsedData
+
+        const replay = await replayIdempotentTransaction(tx, familyId, data)
+        if (replay) return replay
 
         // === SPLIT PARITY GUARD (GAAP Compliance) ===
         // Backend MUST validate that SplitEntries sum === parent.amount.
@@ -1923,23 +2277,20 @@ export async function createTransactionForFamily({
         if (data.type === "transfer") {
           if (!data.toAccountId)
             throw new Error("Transfer requires a destination account!")
+          if (!transferSemantics) {
+            // Unreachable: semantics resolve for every transfer that carries
+            // a destination account. Internal invariant, not a user error.
+            throw new Error(
+              "Invariant violated: transfer semantics unresolved for a transfer with a destination account"
+            )
+          }
           const toAccountId = data.toAccountId
-
-          const [oldSrcAcc, oldDstAcc] =
-            await runTenantTransactionQueriesInOrder([
-              () =>
-                tx.account.findUniqueOrThrow({
-                  where: { id: data.accountId },
-                }),
-              () =>
-                tx.account.findUniqueOrThrow({
-                  where: { id: toAccountId },
-                }),
-            ] as const)
-          const kind = deriveTransferKindForAccounts({
-            fromAccountType: parseAccountType(oldSrcAcc.accountType),
-            toAccountType: parseAccountType(oldDstAcc.accountType),
-          })
+          const {
+            fromAccount: oldSrcAcc,
+            toAccount: oldDstAcc,
+            kind,
+            purpose,
+          } = transferSemantics
 
           // PER-196 / ADR-0048 §1/§2: route to the valuation-linked path
           // whenever either side is balanceSource="valuation" — the classic
@@ -1963,6 +2314,7 @@ export async function createTransactionForFamily({
               user,
               auditCtx,
               baseCurrency,
+              purpose,
             })
           }
 
@@ -2093,6 +2445,7 @@ export async function createTransactionForFamily({
               fxRateScaled: transferFx.fxRateScaled,
               fromCurrency: transferFx.fromCurrency,
               toCurrency: transferFx.toCurrency,
+              purpose,
             },
           })
 
@@ -2120,15 +2473,26 @@ export async function createTransactionForFamily({
             ...createdAuditEntries("Transfer", [createdTransfer]),
           ])
 
-          // Optional FX fee leg (ADR-0035 §6): a standalone fx_fee expense on the
-          // fee account (default: source) in that account's native currency,
-          // linked back onto the Transfer. Fully audited inside the helper.
-          const feeTransactionId = await createFxFeeLegIfRequested(tx, {
-            data,
+          // Optional fee leg (PER-247, generalized from ADR-0035 §6): a
+          // standalone expense on the fee account (default: source) in that
+          // account's native currency, linked back onto the Transfer. Kind is
+          // fx_fee for a cross-currency transfer, transfer_fee otherwise.
+          // Fully audited inside the helper.
+          const feeTransactionId = await createTransferFeeLegIfRequested(tx, {
             familyId,
             user,
             baseCurrency,
             auditCtx,
+            feeKind:
+              transferFx.fxRateScaled !== null ? "fx_fee" : "transfer_fee",
+            feeAmount: data.feeAmount,
+            feeAccountId: data.feeAccountId,
+            feeCategoryId: data.feeCategoryId,
+            defaultFeeAccountId: data.accountId,
+            date: data.date,
+            description: data.description,
+            notes: data.notes,
+            status: data.status,
           })
           if (feeTransactionId) {
             await tx.transfer.update({
@@ -2262,8 +2626,19 @@ export async function createTransactionForFamily({
     const replay = await runInTenantTransaction(
       familyId,
       user.id,
-      async (tx: TenantTransactionClient) =>
-        await replayIdempotentTransaction(tx, familyId, data)
+      async (tx: TenantTransactionClient) => {
+        // PER-247: the replay hash must use the same resolved transfer
+        // semantics as the create attempt (see createOrReplay).
+        const transferSemantics =
+          parsedData.type === "transfer" && parsedData.toAccountId
+            ? await resolveTransferSemantics(tx, parsedData)
+            : null
+        return await replayIdempotentTransaction(
+          tx,
+          familyId,
+          transferSemantics?.data ?? parsedData
+        )
+      }
     )
     if (replay) return replay
 
@@ -2549,7 +2924,7 @@ export async function softDeleteTransactionWithinTenantTransaction(
         accountId: feeTx.accountId,
         delta: absMoney(feeTx.amount),
         familyId,
-        notFoundMessage: "FX fee account not found or access denied!",
+        notFoundMessage: "Transfer fee account not found or access denied!",
       })
     }
   } else {
@@ -2860,10 +3235,25 @@ async function replaceTransactionWithinTenantTransaction(
         )
       : null
 
+  // PER-247: the old transfer's fee leg (fx_fee / transfer_fee) must be
+  // reversed and soft-deleted symmetrically with the legs — previously the
+  // replace path silently left the fee expense active and orphaned. The new
+  // fee (if any) is re-created fresh below from the request payload.
+  const oldFeeTx = oldTransferGraph?.feeTransactionId
+    ? await findOptionalTransactionWithSplitEntries(
+        tx,
+        oldTransferGraph.feeTransactionId
+      )
+    : null
+
   // Kumpulkan semua akun yang terpengaruh (sebelum dan sesudah).
   const touchedAccountIds = new Set([oldTx.accountId, data.accountId])
   if (oldInflowTx) touchedAccountIds.add(oldInflowTx.accountId)
   if (data.toAccountId) touchedAccountIds.add(data.toAccountId)
+  if (oldFeeTx) touchedAccountIds.add(oldFeeTx.accountId)
+  if (data.type === "transfer" && data.feeAmount) {
+    touchedAccountIds.add(data.feeAccountId ?? data.accountId)
+  }
 
   const oldAccounts = await tx.account.findMany({
     where: { id: { in: Array.from(touchedAccountIds) } },
@@ -2886,6 +3276,15 @@ async function replaceTransactionWithinTenantTransaction(
       oldInflowTx.accountId,
       negateMoney(absMoney(oldInflowTx.amount))
     )
+    // PER-247: reverse the old fee expense (add back its magnitude on the fee
+    // account) in the same aggregate delta pass.
+    if (oldFeeTx && oldFeeTx.deletedAt === null) {
+      addAccountDelta(
+        accountDeltas,
+        oldFeeTx.accountId,
+        absMoney(oldFeeTx.amount)
+      )
+    }
   } else {
     addAccountDelta(accountDeltas, oldTx.accountId, negateMoney(oldTx.amount))
   }
@@ -2918,6 +3317,14 @@ async function replaceTransactionWithinTenantTransaction(
     const kind = deriveTransferKindForAccounts({
       fromAccountType: parseAccountType(fromAccount.accountType),
       toAccountType: parseAccountType(toAccount.accountType),
+    })
+    // PER-247: resolve the contextual purpose (client override or
+    // taxonomy-derived default) for the replacement transfer.
+    const purpose = resolveTransferPurpose({
+      kind,
+      override: data.transferPurpose,
+      fromAccount,
+      toAccount,
     })
 
     const inAmount = data.destinationAmount ?? data.amount
@@ -3049,8 +3456,34 @@ async function replaceTransactionWithinTenantTransaction(
         fxRateScaled: transferFx.fxRateScaled,
         fromCurrency: transferFx.fromCurrency,
         toCurrency: transferFx.toCurrency,
+        purpose,
       },
     })
+
+    // PER-247: create the replacement transfer's fee leg (if requested) and
+    // link it onto the new Transfer. The old fee leg was reversed in the
+    // aggregate delta pass above and is soft-deleted below.
+    const newFeeTransactionId = await createTransferFeeLegIfRequested(tx, {
+      familyId,
+      user,
+      baseCurrency,
+      auditCtx,
+      feeKind: transferFx.fxRateScaled !== null ? "fx_fee" : "transfer_fee",
+      feeAmount: data.feeAmount,
+      feeAccountId: data.feeAccountId,
+      feeCategoryId: data.feeCategoryId,
+      defaultFeeAccountId: data.accountId,
+      date: data.date,
+      description: data.description,
+      notes: data.notes,
+      status: data.status,
+    })
+    if (newFeeTransactionId) {
+      createdTransfer = await tx.transfer.update({
+        where: { id: createdTransfer.id },
+        data: { feeTransactionId: newFeeTransactionId },
+      })
+    }
 
     resultTransaction = outflowTx
     createdInflowTx = inflowTx
@@ -3164,6 +3597,15 @@ async function replaceTransactionWithinTenantTransaction(
     if (transferUpdate.count !== 1) throw new TransactionGoneError()
   }
 
+  // PER-247: tombstone the old fee leg symmetrically with the old legs.
+  if (oldFeeTx && oldFeeTx.deletedAt === null) {
+    const feeUpdate = await tx.transaction.updateMany({
+      where: { id: oldFeeTx.id, familyId, deletedAt: null },
+      data: { deletedAt },
+    })
+    if (feeUpdate.count !== 1) throw new TransactionGoneError()
+  }
+
   const [
     updatedOldOutflow,
     updatedOldInflow,
@@ -3172,6 +3614,7 @@ async function replaceTransactionWithinTenantTransaction(
     updatedOldTransfer,
     newTransferGraph,
     newAccounts,
+    updatedOldFee,
   ] = await runTenantTransactionQueriesInOrder([
     () => findTransactionWithSplitEntries(tx, oldTx.id),
     () =>
@@ -3195,6 +3638,10 @@ async function replaceTransactionWithinTenantTransaction(
       tx.account.findMany({
         where: { id: { in: Array.from(touchedAccountIds) } },
       }),
+    () =>
+      oldFeeTx
+        ? findTransactionWithSplitEntries(tx, oldFeeTx.id)
+        : Promise.resolve(null),
   ] as const)
 
   await auditLogs(tx, auditCtx, [
@@ -3225,6 +3672,17 @@ async function replaceTransactionWithinTenantTransaction(
             entityId: oldTransferGraph.id,
             before: oldTransferGraph,
             after: updatedOldTransfer,
+          },
+        ]
+      : []),
+    ...(oldFeeTx && updatedOldFee
+      ? [
+          {
+            action: "soft_delete" as const,
+            entityType: "Transaction",
+            entityId: oldFeeTx.id,
+            before: oldFeeTx,
+            after: updatedOldFee,
           },
         ]
       : []),
