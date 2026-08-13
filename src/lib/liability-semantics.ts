@@ -19,6 +19,12 @@ export const TRANSACTION_KIND_VALUES = [
   // expense finance-cost row created alongside the transfer; never ordinary
   // spending. Naturally exempt from the liability cost-target trigger.
   "fx_fee",
+  // General transfer fee on any transfer (PER-247): top-up/e-wallet/bank
+  // charges. Same shape as fx_fee (standalone expense row linked via
+  // Transfer.feeTransactionId); the kind distinguishes it from an FX
+  // conversion fee. Never client-settable — synthesized by the transfer
+  // mutation path only.
+  "transfer_fee",
 ] as const
 
 export type TransactionKind = (typeof TRANSACTION_KIND_VALUES)[number]

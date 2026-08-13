@@ -23,7 +23,22 @@ import { cn } from "@/lib/utils"
 import { getTransactionFormData } from "@/server/transactions"
 import { createMerchantFn } from "@/server/merchants"
 import { createCategoryFn } from "@/server/categories"
-import { toDisplayNumber, toMinorUnits, type Money } from "@/lib/money"
+import {
+  decodeMoney,
+  toDisplayNumber,
+  toMinorUnits,
+  type Money,
+} from "@/lib/money"
+import {
+  deriveTransferPurpose,
+  TRANSFER_PURPOSE_LABELS,
+  TRANSFER_PURPOSE_VALUES,
+  type TransferPurpose,
+} from "@/lib/money-movement"
+import {
+  deriveTransferKindForAccounts,
+  parseAccountType,
+} from "@/lib/liability-semantics"
 import { CURRENCIES, type CurrencyCode } from "@/lib/data/currencies"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import {
@@ -97,11 +112,19 @@ const transactionSchema = z.object({
   // Enterprise: Multi-Currency Transfer (Implied Rate Architecture)
   // destinationAmount hanya diisi saat transfer antar akun dengan mata uang berbeda
   destinationAmount: z.number().positive().optional(),
-  // PER-147 / ADR-0035 §6: optional FX fee charged on a cross-currency transfer.
-  // Denominated in the SOURCE account currency; posts a separate `fx_fee`
-  // expense row server-side. Optional category for that expense.
-  fxFeeAmount: z.number().nonnegative().optional(),
-  fxFeeCategoryId: z.string().optional(),
+  // PER-247 (generalizing PER-147 / ADR-0035 §6): optional fee on ANY
+  // transfer (top-up/e-wallet/bank charge, or FX spread on cross-currency).
+  // Denominated in the fee-bearing account's currency; posts a separate
+  // `transfer_fee`/`fx_fee` expense row server-side, linked to the Transfer.
+  feeAmount: z.number().nonnegative().optional(),
+  feeCategoryId: z.string().optional(),
+  // Which side bears the fee (default: the source account). Constrained to
+  // the two transfer accounts in this form; the server accepts any
+  // tenant-owned account via feeAccountId.
+  feeBearerAccountId: z.string().optional(),
+  // Optional override of the taxonomy-derived transfer purpose. Empty/undefined
+  // = derive server-side (→ E_WALLET = top_up, → INVESTMENT = invest, etc.).
+  transferPurpose: z.enum(TRANSFER_PURPOSE_VALUES).optional(),
   // PER-196 / ADR-0048 §1: valuation-linked transfer. Only meaningful when
   // either transfer side is a balanceSource="valuation" account — prefilled
   // client-side as latest ∓ amount (see NewValuationValueField), editable.
@@ -133,11 +156,23 @@ type EditAmount = number | bigint | Money
 
 interface TransactionFormModalProps {
   editData?:
-    | (Omit<TransactionFormValues, "amount" | "destinationAmount"> & {
+    | (Omit<
+        TransactionFormValues,
+        "amount" | "destinationAmount" | "transferPurpose"
+      > & {
         id: string
         amount: EditAmount
         destinationAmount?: EditAmount
         currency?: string
+        // PER-247: hydrated from the canonical Transfer row on the ledger
+        // record (see findLedgerTransactionsForFamily).
+        transferPurpose?: string | null
+        transferFee?: {
+          accountId: string
+          amount: string
+          categoryId: string | null
+          currency: string
+        } | null
         isSplit?: boolean
         splitEntries?: Array<
           Omit<SplitEntryValue, "amount"> & { amount: EditAmount }
@@ -668,7 +703,12 @@ function DestinationAmountField({
   )
 }
 
-function FxFeeField({
+// PER-247 — contextual money movement fields: a purpose label (derived from
+// the account taxonomy, overridable) and a fee leg on ANY transfer (not only
+// cross-currency), with an explicit bearer (default: the source account).
+// Both are pure derived-value renders via form.Subscribe (no-use-effect Rule
+// 1) — no state sync, everything recomputes from the selected accounts.
+function TransferContextFields({
   activeTab,
   form,
   formData,
@@ -680,88 +720,192 @@ function FxFeeField({
       selector={(state) => ({
         accountId: state.values.accountId,
         toAccountId: state.values.toAccountId,
+        feeBearerAccountId: state.values.feeBearerAccountId,
       })}
     >
-      {({ accountId, toAccountId }) => {
+      {({ accountId, toAccountId, feeBearerAccountId }) => {
         const srcAccount = formData?.accounts.find((a) => a.id === accountId)
         const dstAccount = formData?.accounts.find((a) => a.id === toAccountId)
-        const isCrossCurrency =
-          srcAccount &&
-          dstAccount &&
-          srcAccount.currency !== dstAccount.currency
+        if (!srcAccount || !dstAccount) return null
 
-        // The fx_fee contract (ADR-0035 §6) is scoped to cross-currency
-        // transfers: the bank/exchange spread is a real, separate cost.
-        if (!isCrossCurrency) return null
+        const isCrossCurrency = srcAccount.currency !== dstAccount.currency
+        const transferKind = deriveTransferKindForAccounts({
+          fromAccountType: parseAccountType(srcAccount.accountType),
+          toAccountType: parseAccountType(dstAccount.accountType),
+        })
+        // Purpose only applies to funds_movement (cc_payment / loan_payment /
+        // liability_draw already carry their meaning via kind — the server
+        // rejects a purpose override for them).
+        const isFundsMovement = transferKind === "funds_movement"
+        const derivedPurpose = isFundsMovement
+          ? deriveTransferPurpose({
+              fromAccountType: parseAccountType(srcAccount.accountType),
+              toAccountType: parseAccountType(dstAccount.accountType),
+              toAccountSubtype: dstAccount.accountSubtype,
+            })
+          : null
+
+        // The fee is an expense row: it can only post on a transaction_flow
+        // account (a valuation-tracked account has no expense deltas).
+        const bearerOptions = [srcAccount, dstAccount].filter(
+          (account) => account.balanceSource !== "valuation"
+        )
+        const bearerAccount =
+          bearerOptions.find((a) => a.id === feeBearerAccountId) ??
+          bearerOptions.find((a) => a.id === srcAccount.id) ??
+          bearerOptions[0]
 
         return (
-          <form.Field name="fxFeeAmount">
-            {(field) => (
-              <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50/40 p-3 dark:border-amber-800 dark:bg-amber-950/20">
-                <Label
-                  htmlFor="fx-fee-amount"
-                  className="flex items-center gap-1.5 text-sm font-semibold text-amber-700 dark:text-amber-400"
-                >
-                  <IconArrowsExchange className="size-4" />
-                  FX / transfer fee ({srcAccount.currency})
-                  <span className="text-xs font-normal text-muted-foreground">
-                    (Optional)
-                  </span>
-                </Label>
-                <p className="text-xs text-muted-foreground">
-                  The bank or exchange spread charged on this conversion. Posted
-                  as a separate expense on the source account — it never
-                  distorts the transferred amounts.
-                </p>
-                <div className="relative">
-                  <span className="absolute top-2.5 left-3 text-sm font-medium text-muted-foreground">
-                    {getCurrencySymbol(srcAccount.currency)}
-                  </span>
-                  <Input
-                    id="fx-fee-amount"
-                    name="fx-fee-amount"
-                    type="number"
-                    className="pl-8 font-semibold"
-                    placeholder="0"
-                    value={field.state.value ?? ""}
-                    onBlur={field.handleBlur}
-                    onChange={(e) =>
-                      field.handleChange(
-                        e.target.value ? Number(e.target.value) : undefined
-                      )
-                    }
-                  />
-                </div>
-                <form.Field name="fxFeeCategoryId">
-                  {(categoryField) => (
-                    <div className="space-y-1.5">
-                      <Label
-                        htmlFor="fx-fee-category"
-                        className="text-xs text-muted-foreground"
-                      >
-                        Fee category (optional)
-                      </Label>
-                      <select
-                        id="fx-fee-category"
-                        name="fx-fee-category"
-                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-                        value={categoryField.state.value ?? ""}
-                        onChange={(e) =>
-                          categoryField.handleChange(e.target.value)
-                        }
-                      >
-                        <option value="">-- No category --</option>
-                        <CategoryOptions
-                          categories={formData?.categories}
-                          type="expense"
-                        />
-                      </select>
-                    </div>
-                  )}
-                </form.Field>
-              </div>
+          <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50/40 p-3 dark:border-amber-800 dark:bg-amber-950/20">
+            {isFundsMovement && (
+              <form.Field name="transferPurpose">
+                {(field) => (
+                  <div className="space-y-1.5">
+                    <Label
+                      htmlFor="transfer-purpose"
+                      className="flex items-center gap-1.5 text-sm font-semibold text-amber-700 dark:text-amber-400"
+                    >
+                      <IconArrowsExchange className="size-4" />
+                      Transfer purpose
+                      <span className="text-xs font-normal text-muted-foreground">
+                        (Optional)
+                      </span>
+                    </Label>
+                    <select
+                      id="transfer-purpose"
+                      name="transfer-purpose"
+                      className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                      value={field.state.value ?? ""}
+                      onBlur={field.handleBlur}
+                      onChange={(e) =>
+                        field.handleChange(
+                          e.target.value
+                            ? (e.target.value as TransferPurpose)
+                            : undefined
+                        )
+                      }
+                    >
+                      <option value="">
+                        {derivedPurpose
+                          ? `Automatic — ${TRANSFER_PURPOSE_LABELS[derivedPurpose]}`
+                          : "Automatic"}
+                      </option>
+                      {TRANSFER_PURPOSE_VALUES.map((purpose) => (
+                        <option key={purpose} value={purpose}>
+                          {TRANSFER_PURPOSE_LABELS[purpose]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </form.Field>
             )}
-          </form.Field>
+
+            <form.Field name="feeAmount">
+              {(field) => (
+                <div className="space-y-3">
+                  <Label
+                    htmlFor="transfer-fee-amount"
+                    className="flex items-center gap-1.5 text-sm font-semibold text-amber-700 dark:text-amber-400"
+                  >
+                    <IconArrowsExchange className="size-4" />
+                    {isCrossCurrency
+                      ? `FX / transfer fee (${bearerAccount?.currency ?? srcAccount.currency})`
+                      : `Transfer fee (${bearerAccount?.currency ?? srcAccount.currency})`}
+                    <span className="text-xs font-normal text-muted-foreground">
+                      (Optional)
+                    </span>
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    {isCrossCurrency
+                      ? "The bank or exchange spread charged on this conversion."
+                      : "The fee charged on this movement (e.g. an e-wallet top-up charge)."}{" "}
+                    Posted as a separate expense — it never distorts the
+                    transferred amounts.
+                  </p>
+                  <div className="relative">
+                    <span className="absolute top-2.5 left-3 text-sm font-medium text-muted-foreground">
+                      {getCurrencySymbol(
+                        bearerAccount?.currency ?? srcAccount.currency
+                      )}
+                    </span>
+                    <Input
+                      id="transfer-fee-amount"
+                      name="transfer-fee-amount"
+                      type="number"
+                      className="pl-8 font-semibold"
+                      placeholder="0"
+                      value={field.state.value ?? ""}
+                      onBlur={field.handleBlur}
+                      onChange={(e) =>
+                        field.handleChange(
+                          e.target.value ? Number(e.target.value) : undefined
+                        )
+                      }
+                    />
+                  </div>
+                </div>
+              )}
+            </form.Field>
+
+            {bearerOptions.length > 1 && (
+              <form.Field name="feeBearerAccountId">
+                {(bearerField) => (
+                  <div className="space-y-1.5">
+                    <Label
+                      htmlFor="fee-bearer-account"
+                      className="text-xs text-muted-foreground"
+                    >
+                      Fee paid by (default: source account)
+                    </Label>
+                    <select
+                      id="fee-bearer-account"
+                      name="fee-bearer-account"
+                      className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                      value={bearerField.state.value ?? ""}
+                      onBlur={bearerField.handleBlur}
+                      onChange={(e) =>
+                        bearerField.handleChange(e.target.value || undefined)
+                      }
+                    >
+                      <option value="">Source account</option>
+                      {bearerOptions.map((account) => (
+                        <option key={account.id} value={account.id}>
+                          {account.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </form.Field>
+            )}
+
+            <form.Field name="feeCategoryId">
+              {(categoryField) => (
+                <div className="space-y-1.5">
+                  <Label
+                    htmlFor="transfer-fee-category"
+                    className="text-xs text-muted-foreground"
+                  >
+                    Fee category (optional)
+                  </Label>
+                  <select
+                    id="transfer-fee-category"
+                    name="transfer-fee-category"
+                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                    value={categoryField.state.value ?? ""}
+                    onChange={(e) => categoryField.handleChange(e.target.value)}
+                  >
+                    <option value="">-- No category --</option>
+                    <CategoryOptions
+                      categories={formData?.categories}
+                      type="expense"
+                    />
+                  </select>
+                </div>
+              )}
+            </form.Field>
+          </div>
         )
       }}
     </form.Subscribe>
@@ -1555,8 +1699,20 @@ function useTransactionFormModalController({
         notes: editData.notes ?? "",
         status: "CLEARED" as const,
         destinationAmount: undefined,
-        fxFeeAmount: undefined,
-        fxFeeCategoryId: "",
+        // PER-247: prefill the fee + purpose from the edited transfer's
+        // canonical Transfer row (exposed on the ledger record as
+        // transferPurpose / transferFee).
+        feeAmount: editData.transferFee
+          ? editAmountToInputNumber(
+              decodeMoney(editData.transferFee.amount),
+              editData.transferFee.currency
+            )
+          : undefined,
+        feeCategoryId: editData.transferFee?.categoryId ?? "",
+        feeBearerAccountId: editData.transferFee?.accountId ?? undefined,
+        transferPurpose:
+          (editData.transferPurpose as TransferPurpose | null | undefined) ??
+          undefined,
         attachmentUrl: "",
       }
     : {
@@ -1572,8 +1728,10 @@ function useTransactionFormModalController({
         notes: "",
         status: "CLEARED" as const,
         destinationAmount: undefined,
-        fxFeeAmount: undefined,
-        fxFeeCategoryId: "",
+        feeAmount: undefined,
+        feeCategoryId: "",
+        feeBearerAccountId: undefined,
+        transferPurpose: undefined,
         attachmentUrl: "",
       }
 
@@ -1660,16 +1818,25 @@ function useTransactionFormModalController({
           value.destinationAmount != null && destCurrency
             ? toMoney(value.destinationAmount, destCurrency)
             : null
-        // FX fee (ADR-0035 §6): only meaningful on a cross-currency transfer.
-        // Denominated in the source account currency; the server posts it as a
-        // separate fx_fee expense leg linked to the Transfer.
-        const fxFeeMoney: Money | null =
+        // Transfer fee (PER-247): ANY transfer can carry a fee (top-up /
+        // e-wallet / bank charge, or FX spread cross-currency). Denominated
+        // in the fee bearer's currency (default: the source account); the
+        // server posts it as a separate expense leg linked to the Transfer
+        // (fx_fee when cross-currency, transfer_fee otherwise).
+        const feeBearerAccount =
+          value.type === "transfer"
+            ? (formData?.accounts.find(
+                (a) => a.id === (value.feeBearerAccountId || value.accountId)
+              ) ?? null)
+            : null
+        const feeMoney: Money | null =
           value.type === "transfer" &&
-          destCurrency != null &&
-          destCurrency !== sourceCurrency &&
-          value.fxFeeAmount != null &&
-          value.fxFeeAmount > 0
-            ? toMoney(value.fxFeeAmount, sourceCurrency)
+          value.feeAmount != null &&
+          value.feeAmount > 0
+            ? toMoney(
+                value.feeAmount,
+                feeBearerAccount?.currency ?? sourceCurrency
+              )
             : null
         // PER-196 / ADR-0048 §1: only sent when the user manually edited the
         // prefill (NewValuationValueField leaves the field undefined until
@@ -1696,6 +1863,19 @@ function useTransactionFormModalController({
         const selectedToAccount =
           value.toAccountId && value.type === "transfer"
             ? formData?.accounts.find((a) => a.id === value.toAccountId)
+            : null
+        // Purpose override: only funds_movement transfers carry a purpose
+        // (liability kinds already mean something via `kind`; the server
+        // rejects an override there). Recomputed here — the user may have
+        // changed the destination AFTER picking a purpose.
+        const transferPurposePayload: TransferPurpose | null =
+          value.type === "transfer" && selectedAccount && selectedToAccount
+            ? deriveTransferKindForAccounts({
+                fromAccountType: parseAccountType(selectedAccount.accountType),
+                toAccountType: parseAccountType(selectedToAccount.accountType),
+              }) === "funds_movement"
+              ? (value.transferPurpose ?? null)
+              : null
             : null
         const accountRelation = selectedAccount
           ? {
@@ -1771,13 +1951,15 @@ function useTransactionFormModalController({
             }
             return null
           })(),
-          // FX-fee inputs are write-only ledger inputs (not collection columns).
-          // They ride along on the optimistic insert so `onInsert` can forward
-          // them to the server; the post-mutation refetch then surfaces the
-          // server-posted fx_fee expense as its own ledger row.
-          fxFeeAmount: fxFeeMoney,
-          fxFeeAccountId: fxFeeMoney ? value.accountId : null,
-          fxFeeCategoryId: fxFeeMoney ? value.fxFeeCategoryId || null : null,
+          // Transfer fee + purpose inputs are write-only ledger inputs (not
+          // collection columns). They ride along on the optimistic insert so
+          // `onInsert` can forward them to the server; the post-mutation
+          // refetch then surfaces the server-posted fee expense as its own
+          // ledger row and the resolved purpose on the movement.
+          feeAmount: feeMoney,
+          feeAccountId: feeMoney ? (feeBearerAccount?.id ?? null) : null,
+          feeCategoryId: feeMoney ? value.feeCategoryId || null : null,
+          transferPurpose: transferPurposePayload,
           newValuationValue: newValuationValueString,
           accountBalanceAfter: null, // Computed server-side
           attachmentUrl: value.attachmentUrl || null,
@@ -1824,6 +2006,16 @@ function useTransactionFormModalController({
               payload.destinationCurrency
             ;(draft as Record<string, unknown>)["attachmentUrl"] =
               payload.attachmentUrl
+            // PER-247: ephemeral fee + purpose inputs must ride on the draft
+            // so collections.onUpdate can forward them to updateTransactionFn
+            // (they are write-only, not collection columns).
+            ;(draft as Record<string, unknown>)["transferPurpose"] =
+              payload.transferPurpose
+            ;(draft as Record<string, unknown>)["feeAmount"] = payload.feeAmount
+            ;(draft as Record<string, unknown>)["feeAccountId"] =
+              payload.feeAccountId
+            ;(draft as Record<string, unknown>)["feeCategoryId"] =
+              payload.feeCategoryId
             draft.updatedAt = payload.updatedAt
             // Immer draft hanya mengenal scalar fields di schema collection-nya.
             // Relasi dan field baru (account, isSplit, splitEntries) di-cast secara eksplisit.
@@ -1862,6 +2054,15 @@ function useTransactionFormModalController({
             // transactions never carry one.
             externalProvider: null,
             externalId: null,
+            // PER-247: the fee leg is posted server-side as its own row; the
+            // post-mutation refetch surfaces it + the resolved purpose.
+            transferFee: null,
+            // PER-247: `transferIncoming` orients the account arrow for a
+            // valuation-linked redemption's cash leg (server-only). A
+            // form-authored transfer is always the outflow-authored leg, so the
+            // optimistic row is `false`; the post-mutation refetch replaces it
+            // with the authoritative server value.
+            transferIncoming: false,
             // splitEntries di optimistic payload adalah versi ringkas (tanpa relasi Prisma)
             splitEntries:
               payload.splitEntries as TransactionRecord["splitEntries"],
@@ -2035,7 +2236,11 @@ export function TransactionFormModal({
             form={form}
             formData={formData}
           />
-          <FxFeeField activeTab={activeTab} form={form} formData={formData} />
+          <TransferContextFields
+            activeTab={activeTab}
+            form={form}
+            formData={formData}
+          />
           <DateTimeFields form={form} />
           <MerchantField
             activeTab={activeTab}

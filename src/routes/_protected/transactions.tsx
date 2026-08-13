@@ -46,7 +46,8 @@ import {
   getTransactionFormData,
 } from "@/server/transactions"
 import { formatCurrency } from "@/lib/currency"
-import { ZERO_MONEY, type Money } from "@/lib/money"
+import { decodeMoney, ZERO_MONEY, type Money } from "@/lib/money"
+import { moneyMovementLabel } from "@/lib/money-movement"
 import {
   applyFilters,
   applySearch,
@@ -925,8 +926,11 @@ function TransactionRow({
             >
               <IconArrowsExchange size={15} />
               {isIncomingTransfer
-                ? `Transfer from ${trx.account.name}`
-                : "Transfer"}
+                ? `${moneyMovementLabel({ kind: trx.kind, purpose: trx.transferPurpose })} from ${trx.account.name}`
+                : moneyMovementLabel({
+                    kind: trx.kind,
+                    purpose: trx.transferPurpose,
+                  })}
             </span>
           ) : trx.isSplit ? (
             <span className="flex items-center gap-1 text-sm font-medium text-amber-600 dark:text-amber-400">
@@ -949,14 +953,22 @@ function TransactionRow({
         {/* Account column (hidden until xl) */}
         <div className="hidden w-52 shrink-0 px-4 pt-0.5 xl:block">
           <div className="flex flex-wrap items-center gap-1">
+            {/* PER-247: orient the source → dest chips by money flow. A
+                valuation-linked redemption RECEIVES into `account` (its cash
+                leg is the inflow), so the true source is `toAccount` — render
+                "Hasil Jualan → Bank Jago", not the reversed "Bank Jago → Hasil
+                Jualan". The stored data (accountId=cash, toAccountId=tracked)
+                is correct; only the display direction needed the flip. */}
             <span className="rounded-md border bg-zinc-100 px-2 py-0.5 text-xs dark:bg-zinc-800">
-              {trx.account.name}
+              {trx.type === "transfer" && trx.transferIncoming && trx.toAccount
+                ? trx.toAccount.name
+                : trx.account.name}
             </span>
             {trx.type === "transfer" && trx.toAccount && (
               <>
                 <IconArrowRight size={12} className="text-muted-foreground" />
                 <span className="rounded-md border bg-zinc-100 px-2 py-0.5 text-xs dark:bg-zinc-800">
-                  {trx.toAccount.name}
+                  {trx.transferIncoming ? trx.account.name : trx.toAccount.name}
                 </span>
               </>
             )}
@@ -992,6 +1004,20 @@ function TransactionRow({
                 {formatCurrency(trx.destinationAmount, trx.destinationCurrency)}
               </div>
             )}
+
+          {/* PER-247: fee carried by this transfer (e.g. an e-wallet top-up
+              charge). A muted annotation — the fee is also its own expense
+              row, this just makes the movement self-explanatory in context. */}
+          {trx.transferFee != null && (
+            <div className="mt-0.5 text-[10px] font-normal text-muted-foreground">
+              +
+              {formatCurrency(
+                decodeMoney(trx.transferFee.amount),
+                trx.transferFee.currency
+              )}{" "}
+              fee
+            </div>
+          )}
         </div>
 
         {/* Actions column */}

@@ -1,6 +1,7 @@
 import { createCollection } from "@tanstack/react-db"
 import { queryCollectionOptions } from "@tanstack/query-db-collection"
 import type { TransactionKind } from "./liability-semantics"
+import type { TransferPurpose } from "./money-movement"
 import { decodeMoney, encodeMoney, type Money } from "./money"
 import { getQueryClient } from "./query-client"
 import { createUuidV7 } from "./uuid-v7"
@@ -134,11 +135,12 @@ export const transactionCollection = createCollection(
     onInsert: async ({ transaction }) => {
       try {
         const payload = transaction.mutations[0].changes
-        // FX-fee inputs ride along as write-only ephemeral fields (see the
-        // transaction form modal); they are not collection columns, so read them
-        // off the raw change set and forward to the server (ADR-0035 §6).
+        // Transfer-fee inputs ride along as write-only ephemeral fields (see
+        // the transaction form modal); they are not collection columns, so
+        // read them off the raw change set and forward to the server
+        // (PER-247, generalized from ADR-0035 §6's fxFee* fields).
         const feeFields = payload as Record<string, unknown>
-        const fxFeeAmount = feeFields.fxFeeAmount as Money | null | undefined
+        const feeAmount = feeFields.feeAmount as Money | null | undefined
         // PER-196 / ADR-0048 §1: valuation-linked transfer value override —
         // also a write-only ephemeral field, not a collection column (see
         // the transaction form modal's NewValuationValueField).
@@ -188,11 +190,16 @@ export const transactionCollection = createCollection(
             destinationCurrency:
               (payload.destinationCurrency as string | null | undefined) ??
               null,
-            fxFeeAmount: fxFeeAmount ? encodeMoney(fxFeeAmount) : null,
-            fxFeeAccountId:
-              (feeFields.fxFeeAccountId as string | null | undefined) ?? null,
-            fxFeeCategoryId:
-              (feeFields.fxFeeCategoryId as string | null | undefined) ?? null,
+            feeAmount: feeAmount ? encodeMoney(feeAmount) : null,
+            feeAccountId:
+              (feeFields.feeAccountId as string | null | undefined) ?? null,
+            feeCategoryId:
+              (feeFields.feeCategoryId as string | null | undefined) ?? null,
+            transferPurpose:
+              (feeFields.transferPurpose as
+                | TransferPurpose
+                | null
+                | undefined) ?? null,
             newValuationValue: newValuationValue ?? undefined,
             attachmentUrl:
               (payload.attachmentUrl as string | null | undefined) ?? null,
@@ -209,6 +216,12 @@ export const transactionCollection = createCollection(
     onUpdate: async ({ transaction }) => {
       try {
         const payload = transaction.mutations[0].modified
+
+        // PER-247: transfer fee + purpose are write-only ephemeral fields
+        // (not collection columns) — forward them like onInsert does so an
+        // edit can change/clear a transfer's fee and purpose.
+        const ephemeral = payload as Record<string, unknown>
+        const feeAmount = ephemeral.feeAmount as Money | null | undefined
 
         await updateTransactionFn({
           data: {
@@ -227,6 +240,16 @@ export const transactionCollection = createCollection(
             merchantId: payload.merchantId as string | null,
             date: payload.date as Date,
             notes: payload.notes as string | null,
+            feeAmount: feeAmount ? encodeMoney(feeAmount) : null,
+            feeAccountId:
+              (ephemeral.feeAccountId as string | null | undefined) ?? null,
+            feeCategoryId:
+              (ephemeral.feeCategoryId as string | null | undefined) ?? null,
+            transferPurpose:
+              (ephemeral.transferPurpose as
+                | TransferPurpose
+                | null
+                | undefined) ?? null,
             // Split Transaction Engine: kirim ke server (re-encode each entry)
             isSplit: (payload.isSplit as boolean | undefined) ?? false,
             splitEntries: (

@@ -1,4 +1,5 @@
 import { toDisplayNumber } from "./money"
+import { moneyMovementLabel } from "./money-movement"
 import { type CurrencyCode } from "@/lib/data/currencies"
 
 // =============================================================================
@@ -30,6 +31,11 @@ export interface AnalyticsTxn {
   createdAt?: Date | string
   amount: bigint // absolute magnitude (sign lives in `type`)
   type: string // "income" | "expense" | "transfer"
+  // PER-247: the transaction kind (funds_movement / cc_payment / loan_payment /
+  // liability_draw / …) and the funds_movement purpose. Together they give a
+  // transfer its contextual bucket label instead of a lump "Transfer".
+  kind?: string | null
+  transferPurpose?: string | null
   accountId: string
   toAccountId?: string | null
   category?: { name: string; color?: string | null } | null
@@ -83,13 +89,34 @@ function localIsoDay(date: Date): string {
   return `${y}-${m}-${d}`
 }
 
-function chronological(a: AnalyticsTxn, b: AnalyticsTxn): number {
+function chronological(
+  a: Pick<AnalyticsTxn, "date" | "createdAt">,
+  b: Pick<AnalyticsTxn, "date" | "createdAt">
+): number {
   const ta = new Date(a.date).getTime()
   const tb = new Date(b.date).getTime()
   if (ta !== tb) return ta - tb
   const ca = a.createdAt ? new Date(a.createdAt).getTime() : 0
   const cb = b.createdAt ? new Date(b.createdAt).getTime() : 0
   return ca - cb
+}
+
+/**
+ * Order statement rows for display: newest DATE first, and within the same date
+ * the most-recently-CREATED first. A per-account `useLiveQuery(from(...))` has
+ * NO intrinsic order — TanStack DB's differential dataflow is explicitly
+ * non-deterministic without an `orderBy` (see db-core/live-queries skill) — so
+ * the account statement must sort explicitly, exactly like the /transactions
+ * ledger does. The createdAt tiebreak surfaces a just-added BACKDATED entry at
+ * the top of its day, which is what reconciling against a bank statement needs
+ * (record today, date it to the posting day, still see it immediately). Pure +
+ * unit-tested; the route only calls it.
+ */
+export function orderStatementRows<
+  T extends Pick<AnalyticsTxn, "date" | "createdAt">,
+>(rows: ReadonlyArray<T>): T[] {
+  // chronological() is ascending (date asc, createdAt asc); negate for desc.
+  return [...rows].sort((a, b) => -chronological(a, b))
 }
 
 export interface BalancePoint {
@@ -184,9 +211,13 @@ export function summarizeCategories(
     const isOut = delta < 0n
     if (direction === "out" && !isOut) continue
     if (direction === "in" && isOut) continue
+    // PER-247: a transfer is bucketed by its CONTEXTUAL money-movement label
+    // (Invest / Withdraw / Top-up / Pay credit card / Pay loan / Borrow / …),
+    // not lumped under one meaningless "Transfer". One source of truth shared
+    // with the ledger list and the per-account statement rows.
     const name =
       t.type === "transfer"
-        ? "Transfer"
+        ? moneyMovementLabel({ kind: t.kind, purpose: t.transferPurpose })
         : (t.category?.name ??
           t.merchant?.name ??
           (t.isSplit ? "Split" : "Uncategorized"))

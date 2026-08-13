@@ -1260,6 +1260,16 @@ export async function recordTradeForFamily({
         trackedAccount: investmentAccount,
         direction,
         kind,
+        // PER-247: a Buy IS an investment contribution (Sell a withdrawal) —
+        // label the canonical Transfer so per-account rendering is
+        // contextual. Only on funds_movement (a liability-funded trade keeps
+        // its liability_draw meaning; purpose is forbidden there).
+        purpose:
+          kind === "funds_movement"
+            ? isBuy
+              ? "investment_contribution"
+              : "investment_withdrawal"
+            : null,
         leg,
         familyId,
         user,
