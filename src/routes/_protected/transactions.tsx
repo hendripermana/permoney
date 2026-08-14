@@ -1,15 +1,8 @@
 import * as React from "react"
 import {
   IconArrowDownRight,
-  IconArrowRight,
-  IconArrowsExchange,
   IconArrowUpRight,
-  IconChevronRight,
-  IconEdit,
-  IconPaperclip,
-  IconScissors,
   IconSearch,
-  IconTrash,
 } from "@tabler/icons-react"
 import { format } from "date-fns"
 import { useLiveQuery } from "@tanstack/react-db"
@@ -46,13 +39,21 @@ import {
   getTransactionFormData,
 } from "@/server/transactions"
 import { formatCurrency } from "@/lib/currency"
-import { decodeMoney, ZERO_MONEY, type Money } from "@/lib/money"
-import { moneyMovementLabel } from "@/lib/money-movement"
+import { ZERO_MONEY, type Money } from "@/lib/money"
 import {
   applyFilters,
   applySearch,
   transactionSearchSchema,
 } from "@/lib/transaction-filters"
+import {
+  TransactionListRow,
+  type TransactionEditData,
+} from "@/components/blocks/transaction-list-row"
+import {
+  TransactionDensityToggle,
+  useTransactionDensity,
+} from "@/components/blocks/transaction-density-toggle"
+import { dailyNet, ROW_ESTIMATE } from "@/lib/transaction-list"
 import { useMountEffect } from "@/hooks/use-mount-effect"
 import { createUuidV7 } from "@/lib/uuid-v7"
 
@@ -67,7 +68,7 @@ type TransactionData = TransactionRecord
 
 // Tipe untuk flat virtual rows array (date header + transaction)
 type VirtualRow =
-  | { kind: "header"; dateKey: string }
+  | { kind: "header"; dateKey: string; subtotal: Money }
   | { kind: "transaction"; trx: TransactionData }
 
 // Tipe helper untuk pengelompokan tanggal (diletakkan di module level agar tidak di-redeclare setiap render)
@@ -156,9 +157,11 @@ function TransactionsPage() {
   const navigate = Route.useNavigate()
 
   // === THE SINGLETON EDIT STATE ===
-  const [editingTrx, setEditingTrx] = React.useState<NonNullable<
-    React.ComponentProps<typeof TransactionFormModal>["editData"]
-  > | null>(null)
+  const [editingTrx, setEditingTrx] =
+    React.useState<TransactionEditData | null>(null)
+
+  // === ROW DENSITY (persisted; compact ↔ comfortable) ===
+  const [density, setDensity] = useTransactionDensity()
 
   // Fetch reference data for FAB Dropdowns
   const { data: formData } = useQuery({
@@ -405,7 +408,13 @@ function TransactionsPage() {
           new Date(dateB).getTime() - new Date(dateA).getTime()
       )
       .forEach(([dateKey, trxs]) => {
-        rows.push({ kind: "header", dateKey })
+        // Daily subtotal from the whole-book perspective (income − expense;
+        // internal transfers net out). PER-241.
+        rows.push({
+          kind: "header",
+          dateKey,
+          subtotal: dailyNet(trxs, { kind: "global" }),
+        })
         for (const trx of trxs) {
           rows.push({ kind: "transaction", trx })
         }
@@ -424,9 +433,12 @@ function TransactionsPage() {
     count: flatVirtualRows.length,
     getScrollElement: () => tableContainerRef.current,
     estimateSize: (index) =>
-      flatVirtualRows[index].kind === "header" ? 36 : 62,
+      flatVirtualRows[index].kind === "header"
+        ? ROW_ESTIMATE[density].header
+        : ROW_ESTIMATE[density].row,
     overscan: 10,
-    measureElement: (el) => el?.getBoundingClientRect().height ?? 62,
+    measureElement: (el) =>
+      el?.getBoundingClientRect().height ?? ROW_ESTIMATE[density].row,
   })
 
   // === 10. FILTER APPLY HANDLER ===
@@ -564,7 +576,13 @@ function TransactionsPage() {
                   onApply={handleFilterApply}
                 />
               </div>
-              <TransactionFormModal />
+              <div className="flex items-center gap-2">
+                <TransactionDensityToggle
+                  density={density}
+                  onChange={setDensity}
+                />
+                <TransactionFormModal />
+              </div>
             </div>
 
             {/* ═══════════════════════════════════════════════════════════
@@ -658,20 +676,27 @@ function TransactionsPage() {
                           }}
                         >
                           {row.kind === "header" ? (
-                            <DateGroupHeader dateKey={row.dateKey} />
+                            <DateGroupHeader
+                              dateKey={row.dateKey}
+                              subtotal={row.subtotal}
+                            />
                           ) : (
-                            <TransactionRow
+                            <TransactionListRow
+                              variant="ledger"
+                              density={density}
                               trx={row.trx}
                               onEdit={setEditingTrx}
                               onDelete={handleInlineDelete}
                               viewedAccountIds={filters.accounts}
-                              isSelected={
-                                table.getRow(row.trx.id)?.getIsSelected() ??
-                                false
-                              }
-                              onSelect={(value) =>
-                                table.getRow(row.trx.id)?.toggleSelected(value)
-                              }
+                              selection={{
+                                isSelected:
+                                  table.getRow(row.trx.id)?.getIsSelected() ??
+                                  false,
+                                onSelect: (value) =>
+                                  table
+                                    .getRow(row.trx.id)
+                                    ?.toggleSelected(value),
+                              }}
                             />
                           )}
                         </div>
@@ -732,412 +757,34 @@ function TransactionsPage() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// DATE GROUP HEADER — Sticky separator row between date groups
+// DATE GROUP HEADER — separator row between date groups, with a
+// daily net subtotal (income − expense; internal transfers net out).
 // ═══════════════════════════════════════════════════════════════
-function DateGroupHeader({ dateKey }: { dateKey: string }) {
+function DateGroupHeader({
+  dateKey,
+  subtotal,
+}: {
+  dateKey: string
+  subtotal: Money
+}) {
   return (
-    <div className="border-b border-zinc-100 bg-zinc-100/60 px-4 py-2 dark:border-zinc-800/50 dark:bg-zinc-900/40">
+    <div className="flex items-center justify-between gap-2 border-b border-zinc-100 bg-zinc-100/60 px-4 py-2 dark:border-zinc-800/50 dark:bg-zinc-900/40">
       <span className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
         {format(new Date(dateKey), "EEE • MMM dd, yyyy")}
       </span>
-    </div>
-  )
-}
-
-// ═══════════════════════════════════════════════════════════════
-// STATUS BADGE CONFIG
-// Maps lifecycle status → display props.
-// CLEARED is the default/silent state — no badge rendered for it.
-// ═══════════════════════════════════════════════════════════════
-const STATUS_BADGE: Record<string, { label: string; cls: string } | undefined> =
-  {
-    PENDING: {
-      label: "Pending",
-      cls: "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-400",
-    },
-    RECONCILED: {
-      label: "Reconciled",
-      cls: "bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-400",
-    },
-  }
-
-// ═══════════════════════════════════════════════════════════════
-// TRANSACTION ROW — Core display unit of the ledger.
-// Converted from <TableRow> to flex-div layout to support
-// @tanstack/react-virtual's absolute-positioning model.
-// Supports: split expansion, status badge, attachment indicator,
-// multi-currency display, inline edit/delete.
-// ═══════════════════════════════════════════════════════════════
-function TransactionRow({
-  trx,
-  onEdit,
-  onDelete,
-  isSelected,
-  onSelect,
-  viewedAccountIds,
-}: {
-  trx: TransactionData
-  onEdit: (
-    t: NonNullable<
-      React.ComponentProps<typeof TransactionFormModal>["editData"]
-    >
-  ) => void
-  onDelete: (id: string) => void
-  isSelected: boolean
-  onSelect: (value: boolean) => void
-  // The active account filter (URL `accounts` search param), if any. Used to
-  // decide a transfer's direction FROM the viewed account's perspective.
-  viewedAccountIds?: ReadonlyArray<string>
-}) {
-  const [isExpanded, setIsExpanded] = React.useState(false)
-  const hasSplits = trx.isSplit && (trx.splitEntries?.length ?? 0) > 0
-  const statusBadge = STATUS_BADGE[trx.status]
-
-  // PER-202: a transfer is persisted as a single outflow leg (`accountId` =
-  // source, `toAccountId` = destination). When the ledger is filtered to the
-  // DESTINATION account, that leg surfaces via `toAccountId`, and from that
-  // account's side the money is INCOMING — so flip the sign/label/colour to
-  // read as a credit ("Transfer from <source> +Rp…") instead of a neutral
-  // "Transfer". The global (unfiltered) list passes no `viewedAccountIds`, so
-  // its rendering is unchanged. Source-side matches (`accountId` in the
-  // filter) keep the neutral transfer rendering. `amount` is an absolute
-  // magnitude here (sign lives in `type`), so we only steer the prefix/colour.
-  const isIncomingTransfer =
-    trx.type === "transfer" &&
-    viewedAccountIds != null &&
-    viewedAccountIds.length > 0 &&
-    trx.toAccountId != null &&
-    viewedAccountIds.includes(trx.toAccountId) &&
-    !viewedAccountIds.includes(trx.accountId)
-
-  return (
-    <div
-      className={cn(
-        "border-b border-zinc-100 transition-colors dark:border-zinc-800/50",
-        isSelected && "bg-zinc-50/80 dark:bg-zinc-900/40",
-        // PENDING transactions render in italic to signal "gantung" state
-        trx.status === "PENDING" && "opacity-80"
-      )}
-    >
-      {/* ── Main Row ── */}
-      <div className="flex w-full items-start py-3">
-        {/* Checkbox column */}
-        <div className="flex w-12 shrink-0 justify-center pt-0.5">
-          <Checkbox
-            checked={isSelected}
-            onCheckedChange={(val) => onSelect(!!val)}
-            aria-label="Select row"
-          />
-        </div>
-
-        {/* Description + time + badges column */}
-        <div
-          className={cn(
-            "min-w-0 flex-1 px-4",
-            trx.status === "PENDING" && "italic"
-          )}
-        >
-          <div className="flex flex-wrap items-center gap-1.5">
-            {/* Expand/collapse toggle for split transactions */}
-            {hasSplits ? (
-              <button
-                type="button"
-                onClick={() => setIsExpanded((prev) => !prev)}
-                className="text-muted-foreground transition-colors hover:text-foreground"
-                aria-label={
-                  isExpanded ? "Collapse split entries" : "Expand split entries"
-                }
-              >
-                <IconChevronRight
-                  className={cn(
-                    "size-4 transition-transform duration-150",
-                    isExpanded && "rotate-90"
-                  )}
-                />
-              </button>
-            ) : (
-              /* Spacer keeps description text aligned with non-split rows */
-              <div className="w-5" aria-hidden />
-            )}
-
-            <p className="leading-tight font-semibold">{trx.description}</p>
-
-            {/* Split badge */}
-            {trx.isSplit && (
-              <span className="flex items-center gap-0.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-amber-700 uppercase dark:bg-amber-950/60 dark:text-amber-400">
-                <IconScissors className="size-3" />
-                Split
-              </span>
-            )}
-
-            {/* Lifecycle status badge — only PENDING and RECONCILED shown */}
-            {statusBadge && (
-              <span
-                className={cn(
-                  "rounded px-1.5 py-0.5 text-[10px] font-semibold",
-                  statusBadge.cls
-                )}
-              >
-                {statusBadge.label}
-              </span>
-            )}
-
-            {/* Attachment indicator — links to receipt/proof of purchase */}
-            {trx.attachmentUrl && (
-              <a
-                href={trx.attachmentUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-muted-foreground transition-colors hover:text-zinc-700 dark:hover:text-zinc-300"
-                title="View Receipt"
-                onClick={(e) => e.stopPropagation()}
-                aria-label="View attached receipt"
-              >
-                <IconPaperclip className="size-3.5" />
-              </a>
-            )}
-          </div>
-
-          {/* Timestamp — positioned under description, aligned past the chevron */}
-          <p className="mt-0.5 pl-6.5 text-xs text-muted-foreground">
-            {format(new Date(trx.date), "h:mm a")}
-          </p>
-        </div>
-
-        {/* Merchant column (hidden on mobile) */}
-        <div className="hidden w-44 shrink-0 px-4 pt-0.5 md:block">
-          {trx.merchant ? (
-            <span className="text-sm font-medium">{trx.merchant.name}</span>
-          ) : (
-            <span className="text-sm text-muted-foreground italic">-</span>
-          )}
-        </div>
-
-        {/* Category column (hidden on tablet) */}
-        <div className="hidden w-44 shrink-0 px-4 pt-0.5 lg:block">
-          {trx.type === "transfer" ? (
-            <span
-              className={cn(
-                "flex items-center gap-1 text-sm font-medium",
-                isIncomingTransfer
-                  ? "text-emerald-600 dark:text-emerald-400"
-                  : "text-blue-600 dark:text-blue-400"
-              )}
-            >
-              <IconArrowsExchange size={15} />
-              {isIncomingTransfer
-                ? `${moneyMovementLabel({ kind: trx.kind, purpose: trx.transferPurpose })} from ${trx.account.name}`
-                : moneyMovementLabel({
-                    kind: trx.kind,
-                    purpose: trx.transferPurpose,
-                  })}
-            </span>
-          ) : trx.isSplit ? (
-            <span className="flex items-center gap-1 text-sm font-medium text-amber-600 dark:text-amber-400">
-              <IconScissors size={13} />
-              Multiple
-            </span>
-          ) : (
-            <span className="flex items-center gap-1 text-sm text-muted-foreground">
-              <span
-                className="size-2 shrink-0 rounded-full"
-                style={{
-                  backgroundColor: trx.category?.color ?? "#999",
-                }}
-              />
-              {trx.category?.name ?? "Uncategorized"}
-            </span>
-          )}
-        </div>
-
-        {/* Account column (hidden until xl) */}
-        <div className="hidden w-52 shrink-0 px-4 pt-0.5 xl:block">
-          <div className="flex flex-wrap items-center gap-1">
-            {/* PER-247: orient the source → dest chips by money flow. A
-                valuation-linked redemption RECEIVES into `account` (its cash
-                leg is the inflow), so the true source is `toAccount` — render
-                "Hasil Jualan → Bank Jago", not the reversed "Bank Jago → Hasil
-                Jualan". The stored data (accountId=cash, toAccountId=tracked)
-                is correct; only the display direction needed the flip. */}
-            <span className="rounded-md border bg-zinc-100 px-2 py-0.5 text-xs dark:bg-zinc-800">
-              {trx.type === "transfer" && trx.transferIncoming && trx.toAccount
-                ? trx.toAccount.name
-                : trx.account.name}
-            </span>
-            {trx.type === "transfer" && trx.toAccount && (
-              <>
-                <IconArrowRight size={12} className="text-muted-foreground" />
-                <span className="rounded-md border bg-zinc-100 px-2 py-0.5 text-xs dark:bg-zinc-800">
-                  {trx.transferIncoming ? trx.account.name : trx.toAccount.name}
-                </span>
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* Amount column — signed + color-coded by type */}
-        <div
-          className={cn(
-            "w-36 shrink-0 px-4 pt-0.5 text-right font-bold",
-            trx.type === "expense"
+      <span
+        className={cn(
+          "text-xs font-semibold tabular-nums",
+          subtotal > 0n
+            ? "text-emerald-600 dark:text-emerald-400"
+            : subtotal < 0n
               ? "text-red-600 dark:text-red-400"
-              : trx.type === "income" || isIncomingTransfer
-                ? "text-emerald-600 dark:text-emerald-400"
-                : "text-blue-600 dark:text-blue-400"
-          )}
-        >
-          <span>
-            {trx.type === "expense"
-              ? "−"
-              : trx.type === "income" || isIncomingTransfer
-                ? "+"
-                : ""}
-            {formatCurrency(trx.amount, trx.currency)}
-          </span>
-
-          {/* Cross-currency destination amount (Implied Rate Architecture) */}
-          {trx.destinationAmount != null &&
-            trx.destinationCurrency != null &&
-            trx.destinationCurrency !== trx.currency && (
-              <div className="mt-0.5 text-[10px] font-normal text-muted-foreground">
-                →{" "}
-                {formatCurrency(trx.destinationAmount, trx.destinationCurrency)}
-              </div>
-            )}
-
-          {/* PER-247: fee carried by this transfer (e.g. an e-wallet top-up
-              charge). A muted annotation — the fee is also its own expense
-              row, this just makes the movement self-explanatory in context. */}
-          {trx.transferFee != null && (
-            <div className="mt-0.5 text-[10px] font-normal text-muted-foreground">
-              +
-              {formatCurrency(
-                decodeMoney(trx.transferFee.amount),
-                trx.transferFee.currency
-              )}{" "}
-              fee
-            </div>
-          )}
-        </div>
-
-        {/* Actions column */}
-        <div className="flex w-20 shrink-0 items-start justify-center gap-1 pt-0.5">
-          <button
-            type="button"
-            onClick={() =>
-              onEdit({
-                id: trx.id,
-                type: trx.type as "expense" | "income" | "transfer",
-                // Money (bigint minor units) → display number for the form.
-                // The form modal converts back to Money at submission via
-                // toMinorUnits + the source account's currency.
-                amount: trx.amount,
-                description: trx.description,
-                accountId: trx.accountId,
-                categoryId: trx.categoryId ?? undefined,
-                toAccountId: trx.toAccountId ?? undefined,
-                merchantId: trx.merchantId ?? undefined,
-                date: new Date(trx.date),
-                notes: trx.notes ?? undefined,
-                status:
-                  (trx.status as "PENDING" | "CLEARED" | "RECONCILED") ??
-                  "CLEARED",
-                isSplit: trx.isSplit,
-                splitEntries:
-                  trx.splitEntries?.map((e) => ({
-                    id: e.id,
-                    description: e.description,
-                    amount: e.amount,
-                    categoryId: e.categoryId ?? undefined,
-                    merchantId: e.merchantId ?? undefined,
-                  })) ?? [],
-              })
-            }
-            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-zinc-200 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-            title="Edit Transaction"
-          >
-            <IconEdit size={15} />
-          </button>
-          <button
-            type="button"
-            onClick={() => onDelete(trx.id)}
-            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/40 dark:hover:text-red-400"
-            title="Delete Transaction"
-          >
-            <IconTrash size={15} />
-          </button>
-        </div>
-      </div>
-
-      {/* ── Split Entry Children (expandable, variable height) ──
-           Since measureElement is on the parent div, the virtualizer
-           automatically re-measures when these rows appear/disappear. ── */}
-      {hasSplits &&
-        isExpanded &&
-        (trx.splitEntries ?? []).map((entry, index: number) => {
-          const isLast = index === (trx.splitEntries?.length ?? 0) - 1
-          return (
-            <div
-              key={entry.id}
-              className={cn(
-                "flex w-full items-center border-l-2 border-l-amber-400 bg-muted/5 py-2 pl-13 dark:border-l-amber-600 dark:bg-muted/5",
-                !isLast && "border-b border-b-zinc-50 dark:border-b-zinc-900/50"
-              )}
-            >
-              {/* Split description */}
-              <div className="min-w-0 flex-1 px-4">
-                <span className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <span
-                    className="shrink-0 text-zinc-300 dark:text-zinc-700"
-                    aria-hidden
-                  >
-                    ↳
-                  </span>
-                  <span className="truncate">{entry.description}</span>
-                </span>
-              </div>
-
-              {/* Split merchant */}
-              <div className="hidden w-44 shrink-0 px-4 md:block">
-                {entry.merchant ? (
-                  <span className="text-sm text-foreground">
-                    {entry.merchant.name}
-                  </span>
-                ) : (
-                  <span className="text-sm text-muted-foreground italic">
-                    -
-                  </span>
-                )}
-              </div>
-
-              {/* Split category */}
-              <div className="hidden w-44 shrink-0 px-4 lg:block">
-                <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                  <span
-                    className="size-2 shrink-0 rounded-full"
-                    style={{
-                      backgroundColor: entry.category?.color ?? "#999",
-                    }}
-                  />
-                  {entry.category?.name ?? "Uncategorized"}
-                </span>
-              </div>
-
-              {/* Split account (always blank, inherits from parent) */}
-              <div className="hidden w-52 shrink-0 px-4 xl:block">
-                <span className="text-sm text-muted-foreground italic">-</span>
-              </div>
-
-              {/* Split amount */}
-              <div className="w-36 shrink-0 px-4 text-right font-medium text-muted-foreground">
-                {formatCurrency(entry.amount, trx.currency)}
-              </div>
-
-              {/* Empty actions cell */}
-              <div className="w-20 shrink-0" />
-            </div>
-          )
-        })}
+              : "text-muted-foreground"
+        )}
+      >
+        {subtotal > 0n ? "+" : subtotal < 0n ? "−" : ""}
+        {formatCurrency(subtotal < 0n ? ((0n - subtotal) as Money) : subtotal)}
+      </span>
     </div>
   )
 }

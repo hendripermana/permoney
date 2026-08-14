@@ -2,6 +2,8 @@ import * as React from "react"
 import { createFileRoute, Link } from "@tanstack/react-router"
 import { useLiveQuery } from "@tanstack/react-db"
 import { useQuery } from "@tanstack/react-query"
+import { useVirtualizer } from "@tanstack/react-virtual"
+import { format } from "date-fns"
 import {
   ArrowLeft,
   Download,
@@ -56,7 +58,10 @@ import {
   balanceDriftCollection,
   type AccountRecord,
 } from "@/lib/account-collections"
-import { transactionCollection } from "@/lib/collections"
+import {
+  transactionCollection,
+  type TransactionRecord,
+} from "@/lib/collections"
 import { applyFilters } from "@/lib/transaction-filters"
 import {
   AccountHealthPanel,
@@ -100,11 +105,25 @@ import {
 } from "@/lib/account-analytics"
 import { ACCOUNT_TYPE_LABEL } from "./-account-card"
 import { formatCurrency } from "@/lib/currency"
-import { decodeMoney, toMoney, ZERO_MONEY, type Money } from "@/lib/money"
-import { moneyMovementLabel } from "@/lib/money-movement"
+import { toMoney, ZERO_MONEY, type Money } from "@/lib/money"
+import {
+  TransactionListRow,
+  type TransactionEditData,
+} from "@/components/blocks/transaction-list-row"
+import {
+  TransactionDensityToggle,
+  useTransactionDensity,
+} from "@/components/blocks/transaction-density-toggle"
+import { dailyNet, ROW_ESTIMATE } from "@/lib/transaction-list"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
+
+// Flat virtual rows for the per-account statement (date header + transaction),
+// mirroring the /transactions ledger so the two lists render identically.
+type AccountStatementRow =
+  | { kind: "header"; dateKey: string; subtotal: Money }
+  | { kind: "transaction"; trx: TransactionRecord }
 
 export const Route = createFileRoute("/_protected/accounts/$accountId")({
   // TanStack DB collections are client-only; SSR would hang (CLAUDE.md §5B).
@@ -151,6 +170,12 @@ function AccountDetailPage() {
   const [tradeDialog, setTradeDialog] = React.useState<TradeDialogState | null>(
     null
   )
+  // PER-241 — the per-account statement now shares the /transactions row, so it
+  // gets the same singleton edit modal + inline delete.
+  const [editingTrx, setEditingTrx] =
+    React.useState<TransactionEditData | null>(null)
+  // PER-241 — persisted compact ↔ comfortable density, shared with the ledger.
+  const [density, setDensity] = useTransactionDensity()
 
   const { data: accounts } = useLiveQuery((q) =>
     q.from({ a: accountCollection })
@@ -421,6 +446,61 @@ function AccountDetailPage() {
     [rangedLedger, query, types]
   )
 
+  // PER-241 — collapse the ordered statement into flat virtual rows (date
+  // header + transactions), mirroring /transactions. `statement` is already
+  // ordered newest-first, so a single pass preserves day grouping and order.
+  const statementRows = React.useMemo<Array<AccountStatementRow>>(() => {
+    const groups: Array<{ day: string; txns: Array<TransactionRecord> }> = []
+    for (const trx of statement) {
+      const day = format(new Date(trx.date), "yyyy-MM-dd")
+      const last = groups[groups.length - 1]
+      if (last && last.day === day) last.txns.push(trx)
+      else groups.push({ day, txns: [trx] })
+    }
+    const rows: Array<AccountStatementRow> = []
+    for (const g of groups) {
+      rows.push({
+        kind: "header",
+        dateKey: g.day,
+        subtotal: dailyNet(g.txns, { kind: "account", accountId }),
+      })
+      for (const trx of g.txns) rows.push({ kind: "transaction", trx })
+    }
+    return rows
+  }, [statement, accountId])
+
+  const statementScrollRef = React.useRef<HTMLDivElement>(null)
+  // Virtualize the statement so a 3,000-row account stays smooth — same
+  // windowing model as /transactions (measured heights re-measure on density
+  // change + split expansion).
+  const statementVirtualizer = useVirtualizer({
+    count: statementRows.length,
+    getScrollElement: () => statementScrollRef.current,
+    estimateSize: (index) =>
+      statementRows[index].kind === "header"
+        ? ROW_ESTIMATE[density].header
+        : ROW_ESTIMATE[density].row,
+    overscan: 10,
+    measureElement: (el) =>
+      el?.getBoundingClientRect().height ?? ROW_ESTIMATE[density].row,
+  })
+
+  // Inline delete reuses the optimistic collection path (server delete + resync
+  // of BOTH the ledger and account balances), so the hero updates in place.
+  async function handleStatementDelete(id: string) {
+    const confirmed = confirm(
+      "Are you sure you want to delete this transaction?"
+    )
+    if (!confirmed) return
+    try {
+      transactionCollection.delete(id)
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to delete transaction"
+      )
+    }
+  }
+
   // PER-224 — account health: fold runway + reserve buffer + balance-drift into
   // one transparent score. Cash-like only (the signals don't apply to tracked
   // assets / term liabilities).
@@ -639,14 +719,20 @@ function AccountDetailPage() {
               <h2 className="text-sm font-medium text-muted-foreground">
                 Transactions ({statement.length})
               </h2>
-              <div className="relative">
-                <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search this account…"
-                  className="h-9 w-56 pl-8"
-                  aria-label="Search transactions"
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Search this account…"
+                    className="h-9 w-56 pl-8"
+                    aria-label="Search transactions"
+                  />
+                </div>
+                <TransactionDensityToggle
+                  density={density}
+                  onChange={setDensity}
                 />
               </div>
             </div>
@@ -676,74 +762,55 @@ function AccountDetailPage() {
                 </p>
               </div>
             ) : (
-              <ul className="divide-y rounded-2xl border">
-                {statement.map((trx) => {
-                  const dir =
-                    signedDeltaForAccount(trx, accountId) >= 0n ? 1 : -1
-                  // PER-247: contextual money-movement label — a nabung/invest
-                  // reads "Invest to Bibit", a withdrawal "Withdraw from Bibit",
-                  // an e-wallet top-up "Top-up to GoPay" — instead of a bare
-                  // "Transfer" — with the fee (if any) annotated inline.
-                  const transferNoun = moneyMovementLabel({
-                    kind: trx.kind,
-                    purpose: trx.transferPurpose,
-                  })
-                  const feeSuffix =
-                    trx.transferFee != null
-                      ? ` · ${formatCurrency(
-                          decodeMoney(trx.transferFee.amount),
-                          trx.transferFee.currency
-                        )} fee`
-                      : ""
-                  // The counterparty is always the OTHER account, never the one
-                  // being viewed — never assume accountId is the source. A
-                  // valuation-linked reksadana redemption stores the cash leg
-                  // as accountId=BankJago (dest), toAccountId=HasilJualan
-                  // (source); reading `dir` (money direction from the viewed
-                  // account) picks "from"/"to" and this picks the counterparty,
-                  // so it reads "Withdraw from Hasil Jualan" — not the reversed
-                  // "Withdraw from Bank Jago".
-                  const counterpartyName =
-                    (trx.accountId === accountId
-                      ? trx.toAccount?.name
-                      : trx.account?.name) ?? "account"
-                  const secondary =
-                    trx.type === "transfer"
-                      ? dir === 1
-                        ? `${transferNoun} from ${counterpartyName}${feeSuffix}`
-                        : `${transferNoun} to ${counterpartyName}${feeSuffix}`
-                      : (trx.category?.name ??
-                        trx.merchant?.name ??
-                        (trx.isSplit ? "Split" : "Uncategorized"))
-                  return (
-                    <li
-                      key={trx.id}
-                      className="flex items-center justify-between gap-3 px-4 py-3"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">
-                          {trx.description}
-                        </p>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {new Date(trx.date).toLocaleDateString()} ·{" "}
-                          {secondary}
-                        </p>
-                      </div>
-                      <p
-                        className={cn(
-                          "shrink-0 text-sm font-semibold tabular-nums",
-                          dir === 1
-                            ? "text-emerald-600 dark:text-emerald-400"
-                            : "text-foreground"
-                        )}
+              // Virtualized statement — same row design + windowing as
+              // /transactions, in the denser "statement" variant (PER-241).
+              <div
+                ref={statementScrollRef}
+                className="overflow-auto rounded-2xl border"
+                style={{ height: "min(60vh, 720px)", minHeight: "320px" }}
+              >
+                <div
+                  style={{
+                    height: `${statementVirtualizer.getTotalSize()}px`,
+                    position: "relative",
+                  }}
+                >
+                  {statementVirtualizer.getVirtualItems().map((virtualItem) => {
+                    const row = statementRows[virtualItem.index]
+                    return (
+                      <div
+                        key={virtualItem.key}
+                        data-index={virtualItem.index}
+                        ref={statementVirtualizer.measureElement}
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          transform: `translateY(${virtualItem.start}px)`,
+                        }}
                       >
-                        {dir === 1 ? "+" : "−"}
-                        {formatCurrency(trx.amount, trx.currency)}
-                      </p>
-                    </li>
-                  )
-                })}
-              </ul>
+                        {row.kind === "header" ? (
+                          <StatementDateHeader
+                            dateKey={row.dateKey}
+                            subtotal={row.subtotal}
+                            currency={currency}
+                          />
+                        ) : (
+                          <TransactionListRow
+                            variant="statement"
+                            density={density}
+                            trx={row.trx}
+                            viewedAccountIds={[accountId]}
+                            onEdit={setEditingTrx}
+                            onDelete={handleStatementDelete}
+                          />
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
             )}
           </div>
         </div>
@@ -811,7 +878,53 @@ function AccountDetailPage() {
           }}
         />
       ) : null}
+
+      {/* PER-241 — singleton edit modal for the statement rows. The modal's
+          optimistic update resyncs BOTH the ledger and account balances (via
+          collections.onUpdate), so the hero + KPIs update in place. `key`
+          resets the form's internal state per edited transaction. */}
+      {editingTrx ? (
+        <TransactionFormModal
+          key={`edit-txn-${editingTrx.id}`}
+          editData={editingTrx}
+          onClose={() => setEditingTrx(null)}
+          customTrigger={<span className="hidden" />}
+        />
+      ) : null}
     </AppShell>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════
+// STATEMENT DATE HEADER — day separator with the account-perspective net.
+// ═══════════════════════════════════════════════════════════════
+function StatementDateHeader({
+  dateKey,
+  subtotal,
+  currency,
+}: Readonly<{ dateKey: string; subtotal: Money; currency: string }>) {
+  return (
+    <div className="flex items-center justify-between gap-2 border-b bg-muted/40 px-4 py-2">
+      <span className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
+        {format(new Date(dateKey), "EEE • MMM dd, yyyy")}
+      </span>
+      <span
+        className={cn(
+          "text-xs font-semibold tabular-nums",
+          subtotal > 0n
+            ? "text-emerald-600 dark:text-emerald-400"
+            : subtotal < 0n
+              ? "text-foreground"
+              : "text-muted-foreground"
+        )}
+      >
+        {subtotal > 0n ? "+" : subtotal < 0n ? "−" : ""}
+        {formatCurrency(
+          subtotal < 0n ? ((0n - subtotal) as Money) : subtotal,
+          currency
+        )}
+      </span>
+    </div>
   )
 }
 

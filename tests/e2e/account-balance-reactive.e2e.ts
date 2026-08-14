@@ -48,6 +48,12 @@ test.describe("account balance reactivity (PER-247)", () => {
     await page
       .getByRole("option", { name: `Create category "${categoryName}"` })
       .click()
+    // Wait for the quick-created category to actually register in the form
+    // before submitting — otherwise Save can fire before the category id
+    // resolves and the insert is rejected (the modal stays open). Mirrors
+    // transaction-quick-create.e2e. The heavier per-account render (PER-241
+    // virtualized statement) makes this race deterministic without the wait.
+    await expect(page.getByLabel("Category *")).toContainText(categoryName)
     await page.getByRole("button", { name: "Save Transaction" }).click()
     await expect(page.getByRole("dialog")).toHaveCount(0)
 
