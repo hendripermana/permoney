@@ -26,35 +26,11 @@ ALTER TABLE "MarketInstrument"
     OR "provider" IN ('logam_mulia', 'reksadana_id', 'yahoo', 'alpaca', 'twelvedata')
   );
 
--- ============================================================================
--- Cross-tenant linkage discovery for the GLOBAL ingest (Financial Ingestion
--- Service, ADR-0052 §3).
---
--- The ingestion router prices only the instruments actually HELD (bounded work,
--- not the whole catalog). "Held" lives on the tenant-scoped holdings `Instrument`
--- table, which is `FORCE ROW LEVEL SECURITY` (20260804120000_holdings_core). The
--- global ingest runs with NO family scope (it writes only the family-neutral
--- market tables, never the ledger — ADR-0050 §6), so under RLS it would see zero
--- linkages and price nothing.
---
--- This `SECURITY DEFINER` function is the explicit, minimal boundary crossing:
--- it returns ONLY the set of GLOBAL `MarketInstrument` ids that at least one
--- holding links — never a tenant row, `familyId`, quantity, cost, or value. No
--- tenant-private data leaves the boundary; the function merely tells the global
--- pricing job which public price series are in use. Tenant isolation is intact;
--- the global job stays bounded. `SET search_path` hardens the definer function
--- against search-path hijacking. Owned by the (privileged) migration role, so it
--- bypasses the holdings-table RLS to compute the DISTINCT set; EXECUTE is left to
--- the PUBLIC default so the app runtime role can call it.
--- ============================================================================
-CREATE OR REPLACE FUNCTION market_instrument_ids_linked_to_holdings()
-  RETURNS SETOF text
-  LANGUAGE sql
-  STABLE
-  SECURITY DEFINER
-  SET search_path = public
-AS $$
-  SELECT DISTINCT "marketInstrumentId"
-  FROM "Instrument"
-  WHERE "marketInstrumentId" IS NOT NULL
-$$;
+-- NOTE (ADR-0052 §3): the ingestion router discovers what to price by reading the
+-- GLOBAL, family-neutral `MarketInstrument` catalog directly (a row exists only
+-- because a holding linked it or a prior ingest created it — so the catalog IS
+-- the in-use set, bounded, with NO tenant-RLS dependency). It deliberately does
+-- NOT read the tenant-scoped, FORCE-RLS holdings `Instrument` table: a
+-- no-family-scope global job cannot see those rows under a NOBYPASSRLS role
+-- (prod's `permoney_app`/`permoney_migrator`), and a `SECURITY DEFINER`
+-- cross-tenant read is banned. No new object is needed here.

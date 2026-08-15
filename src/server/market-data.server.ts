@@ -236,11 +236,7 @@ function serializeObservation(
 /** The Prisma surface the pipeline needs — a full client (has `$transaction`). */
 export type MarketDataDb = Pick<
   PrismaClient,
-  | "marketInstrument"
-  | "marketQuote"
-  | "rawMarketDataFetch"
-  | "$transaction"
-  | "$queryRaw"
+  "marketInstrument" | "marketQuote" | "rawMarketDataFetch" | "$transaction"
 >
 
 export interface IngestSummary {
@@ -852,18 +848,17 @@ export interface IngestAllOptions {
   registry?: ProviderRegistry
   /** Gold passthrough used only when building the DEFAULT registry. */
   gold?: DefaultRegistryGoldOptions
-  /**
-   * Instrument ids to price REGARDLESS of holding links (the on-demand baseline).
-   * `syncMarketPricesOnce` passes the ensured BSI-gold id so gold still refreshes
-   * on an install that has not linked a gold holding yet (unchanged behaviour).
-   */
-  baselineInstrumentIds?: readonly string[]
 }
 
 /**
- * Ingest EVERY instrument this install can price, routed per adapter (ADR-0052
- * §3). Bounded work: only instruments LINKED to at least one holding (plus any
- * explicit `baselineInstrumentIds`) — never the whole catalog.
+ * Ingest EVERY instrument in the catalog, routed per adapter (ADR-0052 §3).
+ *
+ * DISCOVERY (no tenant-RLS dependency): reads the GLOBAL, family-neutral
+ * `MarketInstrument` catalog directly. A row exists there ONLY because a holding
+ * linked it (`applyMarketLinkWithinTx`) or a prior ingest created it, so the
+ * catalog IS the in-use set — bounded, and readable by a NOBYPASSRLS role with no
+ * family scope. It deliberately never reads the tenant-scoped, FORCE-RLS holdings
+ * `Instrument` table (a `SECURITY DEFINER` cross-tenant read is banned).
  *
  * Per-adapter FAILURE ISOLATION: each group runs in its own try/catch. An adapter
  * that is unreachable / misconfigured / throws on construction degrades to
@@ -875,17 +870,14 @@ export interface IngestAllOptions {
  * GLOBAL ingest ONLY — writes exclusively the three global market tables, NEVER
  * the ledger, so it runs OUTSIDE any family RLS transaction (ADR-0050 §6).
  */
-export async function ingestAllLinkedInstrumentsOnce(
+export async function ingestAllInstrumentsOnce(
   options?: IngestAllOptions
 ): Promise<IngestAllSummary> {
   const db = options?.db ?? prisma
   const registry =
     options?.registry ?? createDefaultProviderRegistry({ gold: options?.gold })
 
-  const instruments = await loadRoutableInstruments(
-    db,
-    options?.baselineInstrumentIds ?? []
-  )
+  const instruments = await loadRoutableInstruments(db)
 
   // 1. Group by routed adapter; collect structured skips as we go.
   const groups = new Map<ProviderId, RoutableInstrument[]>()
@@ -956,32 +948,17 @@ export async function ingestAllLinkedInstrumentsOnce(
 }
 
 /**
- * Load the instruments the router should price: those LINKED to at least one
- * holding (discovered cross-tenant via the `SECURITY DEFINER`
- * `market_instrument_ids_linked_to_holdings()` — see the migration; the global
- * ingest has no family scope, so it cannot read the RLS-forced holdings
- * `Instrument` table directly), plus any explicit baseline ids, de-duplicated.
+ * Load the instruments the router should price: the whole `MarketInstrument`
+ * catalog. `MarketInstrument` is a GLOBAL, family-neutral table with NO
+ * row-level security — a row exists there only because a holding linked it or a
+ * prior ingest created it, so the catalog IS the bounded in-use set. Reading it
+ * needs no family scope and no BYPASSRLS, so the global ingest (which runs with
+ * neither) discovers exactly what to price without ever touching tenant data.
  */
 async function loadRoutableInstruments(
-  db: MarketDataDb,
-  baselineInstrumentIds: readonly string[]
+  db: MarketDataDb
 ): Promise<RoutableInstrument[]> {
-  const linkedIdRows = await db.$queryRaw<{ id: string }[]>`
-    SELECT ids::text AS id
-    FROM market_instrument_ids_linked_to_holdings() AS ids
-  `
-
-  const ids = new Set<string>()
-  for (const row of linkedIdRows) ids.add(row.id)
-  for (const id of baselineInstrumentIds) ids.add(id)
-  if (ids.size === 0) return []
-
-  // MarketInstrument is a global, family-neutral table (no RLS), so this read is
-  // safe outside any family scope.
-  return await db.marketInstrument.findMany({
-    where: { id: { in: [...ids] } },
-    select: ROUTABLE_SELECT,
-  })
+  return await db.marketInstrument.findMany({ select: ROUTABLE_SELECT })
 }
 
 /** Build the pipeline request for one instrument (fx pair vs spot instrument). */
@@ -1012,10 +989,10 @@ function toInstrumentRequest(
 // -----------------------------------------------------------------------------
 // On-demand price sync trigger — the graceful boundary the UI/serverFn call
 // (PER-235b), now backed by the router (PER-257). It ENSURES the BSI-gold
-// instrument (so gold stays linkable + refreshes even before any holding links
-// it — unchanged behaviour), then runs the Financial Ingestion Service over
-// every linked instrument PLUS the gold baseline. Gold now flows THROUGH the
-// registry instead of a hardcoded call. NEVER throws: a MISSING config
+// instrument (so gold's row exists in the catalog + stays linkable on the very
+// first run — unchanged behaviour), then runs the Financial Ingestion Service
+// over the whole `MarketInstrument` catalog. Gold now flows THROUGH the registry
+// instead of a hardcoded call. NEVER throws: a MISSING config
 // (`LOGAM_MULIA_API_URL` unset → the gold factory throws inside its group), an
 // unreachable worker, or a non-2xx / `success:false` payload all degrade to
 // `{ ingested: 0, error }`, and the last-good quote is always kept. This performs
@@ -1043,10 +1020,11 @@ export async function syncMarketPricesOnce(
 ): Promise<SyncMarketPricesResult> {
   const db = options?.db ?? prisma
   try {
-    // Keep gold linkable + baseline-priced even with zero linked holdings.
-    const goldInstrumentId = await ensureBsiGoldInstrument(db)
+    // Ensure the BSI-gold row exists in the catalog (linkable + priced) even on
+    // an install's first run, before any holding has linked it.
+    await ensureBsiGoldInstrument(db)
 
-    const summary = await ingestAllLinkedInstrumentsOnce({
+    const summary = await ingestAllInstrumentsOnce({
       db,
       gold: {
         baseUrl: options?.baseUrl,
@@ -1054,7 +1032,6 @@ export async function syncMarketPricesOnce(
         priceField: options?.priceField,
         now: options?.now,
       },
-      baselineInstrumentIds: [goldInstrumentId],
     })
 
     if (summary.totalIngested > 0) {

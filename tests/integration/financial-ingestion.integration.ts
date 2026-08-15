@@ -12,7 +12,7 @@ import { createAccountForFamily } from "@/server/accounts"
 import { upsertHoldingForFamily } from "@/server/holdings"
 import {
   ensureBsiGoldInstrument,
-  ingestAllLinkedInstrumentsOnce,
+  ingestAllInstrumentsOnce,
   MarketFixtureProvider,
   syncMarketPricesOnce,
   type FetchLike,
@@ -34,11 +34,14 @@ import {
 // PER-257 / ADR-0052 — Financial Ingestion Service (provider routing engine),
 // real Postgres, NO live network. Every adapter is injected as a FIXTURE (a
 // recorded gold payload for `logam_mulia`, or a `MarketFixtureProvider`), so the
-// full router (load linked instruments -> route -> group -> ingest per adapter)
-// runs against the real DB with zero network. Covers: mixed-kind routing through
-// the registry, PER-ADAPTER failure isolation (one bad group does not break the
-// others), idempotent replay, the unrouted/unregistered SKIP bucket, and the
-// migrated gold path still working through the router.
+// full router (read the MarketInstrument catalog -> route -> group -> ingest per
+// adapter) runs against the real DB with zero network. Covers: mixed-kind routing
+// through the registry, PER-ADAPTER failure isolation (one bad group does not
+// break the others), idempotent replay, the unrouted/unregistered SKIP bucket,
+// the migrated gold path, and — critically — that discovery works under a
+// NOBYPASSRLS role with NO family scope (a regression guard against a
+// cross-tenant SECURITY DEFINER read; all tests already run on `harness.prisma`,
+// the non-privileged runtime role).
 // =============================================================================
 
 const GOLD_BASE_URL = "http://gold.test"
@@ -226,7 +229,7 @@ describe("Financial Ingestion Service (PER-257 — router + registry, fixture-in
       ])
     )
 
-    const summary = await ingestAllLinkedInstrumentsOnce({
+    const summary = await ingestAllInstrumentsOnce({
       db: harness.prisma,
       registry,
     })
@@ -292,7 +295,7 @@ describe("Financial Ingestion Service (PER-257 — router + registry, fixture-in
       ])
     )
 
-    const summary = await ingestAllLinkedInstrumentsOnce({
+    const summary = await ingestAllInstrumentsOnce({
       db: harness.prisma,
       registry,
     })
@@ -352,7 +355,7 @@ describe("Financial Ingestion Service (PER-257 — router + registry, fixture-in
           ]),
       ],
     ])
-    await ingestAllLinkedInstrumentsOnce({
+    await ingestAllInstrumentsOnce({
       db: harness.prisma,
       registry: goodRegistry,
     })
@@ -364,7 +367,7 @@ describe("Financial Ingestion Service (PER-257 — router + registry, fixture-in
         () => fixtureProvider("reksadana_id", [], "upstream 503"),
       ],
     ])
-    const summary = await ingestAllLinkedInstrumentsOnce({
+    const summary = await ingestAllInstrumentsOnce({
       db: harness.prisma,
       registry: failingRegistry,
     })
@@ -416,7 +419,7 @@ describe("Financial Ingestion Service (PER-257 — router + registry, fixture-in
       ],
     ])
 
-    const summary = await ingestAllLinkedInstrumentsOnce({
+    const summary = await ingestAllInstrumentsOnce({
       db: harness.prisma,
       registry,
     })
@@ -462,11 +465,11 @@ describe("Financial Ingestion Service (PER-257 — router + registry, fixture-in
       ],
     ])
 
-    const first = await ingestAllLinkedInstrumentsOnce({
+    const first = await ingestAllInstrumentsOnce({
       db: harness.prisma,
       registry,
     })
-    const second = await ingestAllLinkedInstrumentsOnce({
+    const second = await ingestAllInstrumentsOnce({
       db: harness.prisma,
       registry,
     })
@@ -498,5 +501,77 @@ describe("Financial Ingestion Service (PER-257 — router + registry, fixture-in
       where: { marketInstrumentId: gold.id },
     })
     expect(quote.source).toBe("bankbsi")
+  })
+
+  // ---------------------------------------------------------------------------
+  // 6. REGRESSION GUARD (PER-257 review): discovery must NOT depend on BYPASSRLS.
+  //
+  // The earlier design discovered "held" instruments by reading the tenant-scoped,
+  // FORCE-RLS holdings `Instrument` table through a `SECURITY DEFINER` function —
+  // which silently returns ZERO rows in prod, where the migration/app roles are
+  // NOSUPERUSER/NOBYPASSRLS (deploy/provision-postgres-roles.sql). The fix reads
+  // the GLOBAL, non-RLS `MarketInstrument` catalog directly. This test proves the
+  // fix: it runs the ingest through `harness.prisma` — the harness's non-privileged
+  // runtime role, asserted NOSUPERUSER/NOBYPASSRLS by `assertRuntimeRoleEnforcesRls`
+  // — with NO `app.family_id` set, and asserts a linked instrument is still priced.
+  // ---------------------------------------------------------------------------
+  test("discovery works under a NOBYPASSRLS role with no family scope (no SECURITY DEFINER)", async () => {
+    // The role this test (and the whole suite) runs as genuinely cannot bypass RLS.
+    const roleFlags = await harness.prisma.$queryRaw<
+      { rolsuper: boolean; rolbypassrls: boolean }[]
+    >`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`
+    expect(roleFlags[0]?.rolsuper).toBe(false)
+    expect(roleFlags[0]?.rolbypassrls).toBe(false)
+
+    // A holding links a reksadana instrument (the tenant `Instrument` row is
+    // written under family scope + FORCE RLS — invisible to a no-scope reader).
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const account = await investmentAccount(owner)
+    const fundId = await makeInstrument({
+      kind: "security",
+      symbol: "RD-NOBYPASS",
+      quoteCurrency: "IDR",
+      provider: "reksadana_id",
+    })
+    await linkHolding(owner, account.id, fundId, {
+      kind: "mutual_fund",
+      name: "RD NoBypass",
+      symbol: "RD-NOBYPASS",
+    })
+
+    // Sanity: as this NOBYPASSRLS role with no `app.family_id`, the tenant
+    // holdings `Instrument` table is INVISIBLE — proving discovery cannot lean on
+    // reading it, and MUST use the global catalog instead.
+    expect(await harness.prisma.instrument.count()).toBe(0)
+
+    const registry: ProviderRegistry = new Map([
+      [
+        "reksadana_id" as ProviderId,
+        () =>
+          fixtureProvider("reksadana_id", [
+            {
+              kind: "security",
+              symbol: "RD-NOBYPASS",
+              quoteCurrency: "IDR",
+              priceDecimal: "1750.5",
+            },
+          ]),
+      ],
+    ])
+
+    const summary = await ingestAllInstrumentsOnce({
+      db: harness.prisma,
+      registry,
+    })
+
+    // The linked instrument was discovered (via the global catalog) and priced,
+    // even though the tenant `Instrument` row was unreadable to this role.
+    expect(summary.totalIngested).toBe(1)
+    expect(summary.skipped).toEqual([])
+    expect(
+      await harness.prisma.marketQuote.count({
+        where: { marketInstrumentId: fundId },
+      })
+    ).toBe(1)
   })
 })
