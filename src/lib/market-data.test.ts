@@ -14,6 +14,7 @@ import {
   marketQuoteToHoldingPriceMinor,
   normalizeObservations,
   parseLogamMuliaGoldResponse,
+  parseReksadanaNavResponse,
   priceScaleForKind,
   PROVIDER_IDS,
   resolveProviderId,
@@ -657,5 +658,123 @@ describe("resolveProviderId — structured skip (never throws)", () => {
     if (result.status === "skipped") {
       expect(result.reason).toContain("commodity")
     }
+  })
+})
+
+describe("parseReksadanaNavResponse (PER-250 Slice B / ADR-0053)", () => {
+  const WORKER_PAYLOAD = {
+    fundCode: "RD-SUCOR-MMF",
+    currency: "IDR",
+    latest: { nav: 1643.45, asOf: "2026-08-14" },
+    quotes: [
+      { date: "2026-08-13", nav: 1643.19 },
+      { date: "2026-08-14", nav: 1643.45 },
+    ],
+  }
+
+  test("maps each dated quote to a security observation (IDR, per-unit NAV)", () => {
+    const result = parseReksadanaNavResponse(WORKER_PAYLOAD, {
+      fundCode: "RD-SUCOR-MMF",
+    })
+    expect(result.status).toBe("ok")
+    expect(result.observations).toHaveLength(2)
+    const [first, second] = result.observations
+    expect(first).toMatchObject({
+      kind: "security",
+      symbol: "RD-SUCOR-MMF",
+      quoteCurrency: "IDR",
+      priceDecimal: "1643.19",
+      providerRef: "reksadana_id",
+    })
+    expect(first?.asOf.toISOString()).toBe("2026-08-13T00:00:00.000Z")
+    expect(second?.priceDecimal).toBe("1643.45")
+    // The observation symbol is the REQUESTED fund code (identity stability),
+    // even if the payload echoed a different formatting.
+    expect(second?.symbol).toBe("RD-SUCOR-MMF")
+  })
+
+  test("uses the requested fundCode even when the payload echoes another", () => {
+    const result = parseReksadanaNavResponse(
+      { ...WORKER_PAYLOAD, fundCode: "SOMETHING-ELSE" },
+      { fundCode: "RD-REQUESTED" }
+    )
+    expect(result.observations.every((o) => o.symbol === "RD-REQUESTED")).toBe(
+      true
+    )
+  })
+
+  test("falls back to the single latest point when quotes is empty", () => {
+    const result = parseReksadanaNavResponse(
+      { ...WORKER_PAYLOAD, quotes: [] },
+      { fundCode: "RD-SUCOR-MMF" }
+    )
+    expect(result.observations).toHaveLength(1)
+    expect(result.observations[0]?.priceDecimal).toBe("1643.45")
+    expect(result.observations[0]?.asOf.toISOString()).toBe(
+      "2026-08-14T00:00:00.000Z"
+    )
+  })
+
+  test("the encoded price round-trips through the spot scale", () => {
+    const result = parseReksadanaNavResponse(WORKER_PAYLOAD, {
+      fundCode: "RD-SUCOR-MMF",
+    })
+    const encoded = encodeSpotPrice(result.observations[1]!.priceDecimal)
+    expect(decodeSpotPrice(encoded)).toBe("1643.45")
+  })
+
+  test("weekend flat repeat is NOT an error (dedup happens downstream)", () => {
+    const flat = {
+      fundCode: "RD",
+      currency: "IDR",
+      latest: { nav: 1643.45, asOf: "2026-08-14" },
+      quotes: [
+        { date: "2026-08-14", nav: 1643.45 },
+        { date: "2026-08-14", nav: 1643.45 },
+      ],
+    }
+    const result = parseReksadanaNavResponse(flat, { fundCode: "RD" })
+    expect(result.status).toBe("ok")
+    // The parser emits both; normalizeObservations dedups (identity, asOf).
+    const normalized = normalizeObservations(result.observations)
+    expect(normalized.quotes).toHaveLength(1)
+  })
+
+  test("drops a row with a non-positive / unparseable NAV, keeps the good ones", () => {
+    const mixed = {
+      fundCode: "RD",
+      currency: "IDR",
+      latest: null,
+      quotes: [
+        { date: "2026-08-13", nav: 0 },
+        { date: "bad-date", nav: 1643.19 },
+        { date: "2026-08-14", nav: 1643.45 },
+      ],
+    }
+    const result = parseReksadanaNavResponse(mixed, { fundCode: "RD" })
+    expect(result.status).toBe("ok")
+    expect(result.observations).toHaveLength(1)
+    expect(result.observations[0]?.priceDecimal).toBe("1643.45")
+  })
+
+  test("structurally unusable payloads error gracefully (no throw)", () => {
+    expect(parseReksadanaNavResponse(null, { fundCode: "RD" }).status).toBe(
+      "error"
+    )
+    expect(
+      parseReksadanaNavResponse(
+        { currency: "IDR", latest: null, quotes: [] },
+        { fundCode: "RD" }
+      ).status
+    ).toBe("error")
+    expect(
+      parseReksadanaNavResponse(
+        { currency: "", latest: { nav: 1, asOf: "2026-08-14" }, quotes: [] },
+        { fundCode: "RD" }
+      ).status
+    ).toBe("error")
+    expect(
+      parseReksadanaNavResponse(WORKER_PAYLOAD, { fundCode: "  " }).status
+    ).toBe("error")
   })
 })

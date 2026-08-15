@@ -67,6 +67,11 @@ services:
       # adapter reads it at call time and fails gracefully when unset, so the app
       # still boots without it. See docs/adr/0050-market-data-ingestion.md.
       LOGAM_MULIA_API_URL: ${LOGAM_MULIA_API_URL:-}
+      # PER-250 market-data: base URL of the self-hosted reksadana-nav worker
+      # (workers/reksadana-nav, a Cloudflare Worker). Optional — the reksadana
+      # ReksadanaNavProvider adapter reads it at call time and fails gracefully
+      # when unset, so the app still boots without it. See ADR-0053.
+      REKSADANA_API_URL: ${REKSADANA_API_URL:-}
     ports:
       - "127.0.0.1:3005:3005"
     networks:

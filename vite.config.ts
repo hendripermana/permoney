@@ -48,7 +48,16 @@ const config = defineConfig({
       "tests/e2e/**",
       "tests/integration/**",
     ],
-    include: ["scripts/**/*.test.mjs", "src/**/*.test.ts", "src/**/*.test.tsx"],
+    include: [
+      "scripts/**/*.test.mjs",
+      "src/**/*.test.ts",
+      "src/**/*.test.tsx",
+      // PER-250 Slice B — the reksadana-nav worker's PURE normalizer unit tests.
+      // The worker package is otherwise isolated (own tsconfig, excluded from the
+      // app typecheck); only its CF-free `*.test.ts` + the module it imports run
+      // here, fixture-driven with no live network.
+      "workers/**/*.test.ts",
+    ],
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary", "lcov"],
@@ -107,6 +116,10 @@ const config = defineConfig({
       // inference produces false positives on Object.entries destructures.
       // Script is idempotent and not part of the runtime bundle.
       "scripts/**",
+      // PER-250 — the reksadana-nav worker is an ISOLATED package (own tsconfig +
+      // CF-runtime types not in the app tsconfig); it self-lints/typechecks. The
+      // app's type-aware lint would error on its Cloudflare types, so ignore it.
+      "workers/**",
     ],
     // =========================================================
   },
