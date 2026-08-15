@@ -2,32 +2,49 @@
  * reksadana-nav — Cloudflare Worker entry (the thin IO SHELL).
  * =============================================================================
  *
- * ADR-0053. All the fragile logic (per-source normalization, fallback ordering,
- * the weekend rule, the target contract) lives in the PURE, CF-free `normalize.ts`
- * — unit-tested with `vp test`. This file only does what a shell must: parse the
- * request, fetch each upstream (browser-like headers), read/write the D1 stale
- * cache, and serialize the ADR-0053 §2 payload. It NEVER 500s on an upstream
- * outage — it degrades to the stale cache, then to a structured error.
+ * ADR-0053. All the fragile logic (per-source normalization, the token-bootstrap
+ * string parsing, fallback ordering, the weekend rule, the target contract) lives
+ * in the PURE, CF-free `normalize.ts` — unit-tested with `vp test`. This file only
+ * does what a shell must: parse the request, run the two-step Bareksa bootstrap
+ * (product page → `ba_session` + `x-ajax-token` → ajax NAV), scrape the HTML as a
+ * fallback, read/write the D1 stale cache, and serialize the ADR-0053 §2 payload.
+ * It NEVER 500s on an upstream outage — it degrades to the stale cache, then to a
+ * structured error.
+ *
+ * THE REAL BAREKSA UPSTREAM (verified by live probe — PER-258)
+ * -----------------------------------------------------------
+ *   1. GET https://www.bareksa.com/id/data/reksadana/<PID>/  (browser-like UA)
+ *        → 302 to the canonical product page; response sets `Set-Cookie:
+ *          ba_session=…` (+ `clang=id`), and the HTML embeds, inline,
+ *          `$.ajaxSetup({ headers: { "X-Ajax-Token": '…' } })`.
+ *   2. GET https://www.bareksa.com/ajax/mutualfund/nav/product1/?id=<PID>&cperiod=…
+ *        with `x-ajax-token`, `x-requested-with: XMLHttpRequest`,
+ *        `cookie: ba_session=…; clang=id`, and a product-page `referer`.
+ *        → CLEAN JSON: `{ status, data: { unitY, datas:[{ nav:[{date,value}] }] } }`.
+ *
+ * The worker's `fund` query param IS the Bareksa numeric product id (`<PID>`);
+ * Permoney sets a reksadana instrument's `symbol` to that pid.
  *
  * Routes:
- *   GET /nav?fund=<code>                         → latest quote (+ short tail)
- *   GET /nav/history?fund=<code>&from=YYYY-MM-DD  → dated series for a backfill
+ *   GET /nav?fund=<PID>                          → latest quote (+ short tail)
+ *   GET /nav/history?fund=<PID>&from=YYYY-MM-DD   → dated series for a backfill
  *
  * Bindings (wrangler.jsonc):
  *   NAV_CACHE (D1)          — last-known-good payload per fund (LKGP).
- *   Vars/secrets (optional) — BAREKSA_JSON_URL, BAREKSA_HTML_URL templates with
- *     `{fund}` / `{from}` placeholders. Defaults target Bareksa; CONFIRM + adjust
- *     against the live upstream on first deploy (see README — the exact public
- *     JSON endpoint must be recorded during deploy; the primary may be token-gated,
- *     in which case the HTML fallback + LKGP carry the worker).
+ *   Vars/secrets (optional) — BAREKSA_PRODUCT_URL (a `{fund}` product-page
+ *     template) + BAREKSA_AJAX_BASE (the ajax endpoint base). Defaults target the
+ *     verified Bareksa endpoints.
  */
 
 import {
   buildPayload,
+  extractAjaxToken,
+  extractCookie,
   normalizeBareksaHtml,
   normalizeBareksaJson,
   normalizeStaleCache,
   resolveSeries,
+  toBareksaDate,
   type NavPayload,
   type NormalizedSeries,
   type SourceAttempt,
@@ -36,22 +53,18 @@ import {
 export interface Env {
   /** D1 database holding the per-fund last-known-good payload (LKGP). */
   NAV_CACHE: D1Database
-  /** Primary clean-JSON URL template (`{fund}`). */
-  BAREKSA_JSON_URL?: string
-  /** Fallback product-page URL template (`{fund}`). */
-  BAREKSA_HTML_URL?: string
+  /** Product-page URL template (`{fund}` = the Bareksa numeric pid). */
+  BAREKSA_PRODUCT_URL?: string
+  /** Ajax NAV endpoint base (query is built by the worker). */
+  BAREKSA_AJAX_BASE?: string
 }
 
-const DEFAULT_JSON_URL =
-  "https://api.bareksa.com/v22/products/mutualfund/{fund}/nav"
-const DEFAULT_HTML_URL = "https://www.bareksa.com/reksadana/{fund}"
+const DEFAULT_PRODUCT_URL = "https://www.bareksa.com/id/data/reksadana/{fund}/"
+const DEFAULT_AJAX_BASE =
+  "https://www.bareksa.com/ajax/mutualfund/nav/product1/"
 
-const BROWSER_HEADERS: Record<string, string> = {
-  "user-agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-  accept: "application/json, text/plain, */*",
-  referer: "https://www.bareksa.com/",
-}
+const USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -67,44 +80,126 @@ function fillTemplate(template: string, fund: string): string {
   return template.replaceAll("{fund}", encodeURIComponent(fund))
 }
 
-/** Fetch the primary clean-JSON source; null on any non-2xx / non-JSON / drift. */
+/** Join a response's Set-Cookie header(s) into one string `extractCookie` reads. */
+function readSetCookie(response: Response): string | null {
+  const headers = response.headers as Headers & {
+    getSetCookie?: () => string[]
+  }
+  if (typeof headers.getSetCookie === "function") {
+    const all = headers.getSetCookie()
+    if (all.length > 0) return all.join("\n")
+  }
+  return response.headers.get("set-cookie")
+}
+
+interface ProductPage {
+  html: string | null
+  cookie: string | null
+  token: string | null
+  error?: string
+}
+
+/**
+ * Step 1 of the bootstrap: fetch the product page (following its 302) to obtain a
+ * fresh `ba_session` cookie AND the `x-ajax-token` embedded in the HTML. The HTML
+ * is also returned so the fallback scraper can reuse it without a second fetch.
+ */
+async function fetchProductPage(env: Env, fund: string): Promise<ProductPage> {
+  const url = fillTemplate(env.BAREKSA_PRODUCT_URL ?? DEFAULT_PRODUCT_URL, fund)
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "user-agent": USER_AGENT,
+        accept: "text/html,application/xhtml+xml",
+        "accept-language": "id,en;q=0.9",
+      },
+      redirect: "follow",
+    })
+    const cookie = extractCookie(readSetCookie(res))
+    const html = res.ok ? await res.text() : null
+    return {
+      html,
+      cookie,
+      token: extractAjaxToken(html),
+      error: res.ok ? undefined : `product page HTTP ${res.status}`,
+    }
+  } catch (error) {
+    return {
+      html: null,
+      cookie: null,
+      token: null,
+      error: error instanceof Error ? error.message : "product fetch failed",
+    }
+  }
+}
+
+/** Build the ajax NAV URL for a mode (`1m` window for latest; a dated range). */
+function buildAjaxUrl(
+  base: string,
+  fund: string,
+  mode: "latest" | "history",
+  from: string | undefined
+): string {
+  const params = new URLSearchParams()
+  params.set("id", fund)
+  params.set("requested_page", "profile.graph")
+  if (mode === "history") {
+    params.set("cperiod", "all")
+    const start = from ? toBareksaDate(from) : null
+    if (start) params.set("startdate", start)
+    const end = toBareksaDate(new Date().toISOString().slice(0, 10))
+    if (end) params.set("enddate", end)
+  } else {
+    params.set("cperiod", "1m")
+  }
+  return `${base}?${params.toString()}`
+}
+
+/**
+ * Step 2 of the bootstrap: call the ajax NAV endpoint with the bootstrapped token
+ * + cookie + referer. Returns null (never throws) when the token/cookie is absent,
+ * the request is non-2xx / non-JSON, or the envelope reports a failed attempt — so
+ * the chain falls through to the HTML scrape, then D1 LKGP.
+ */
 async function fetchBareksaJson(
   env: Env,
-  fund: string
+  fund: string,
+  page: ProductPage,
+  mode: "latest" | "history",
+  from: string | undefined
 ): Promise<{ series: NormalizedSeries | null; error?: string }> {
-  const url = fillTemplate(env.BAREKSA_JSON_URL ?? DEFAULT_JSON_URL, fund)
+  if (!page.token || !page.cookie) {
+    return { series: null, error: page.error ?? "ajax token bootstrap failed" }
+  }
+  const base = env.BAREKSA_AJAX_BASE ?? DEFAULT_AJAX_BASE
+  const url = buildAjaxUrl(base, fund, mode, from)
+  const referer = fillTemplate(
+    env.BAREKSA_PRODUCT_URL ?? DEFAULT_PRODUCT_URL,
+    fund
+  )
   try {
-    const res = await fetch(url, { headers: BROWSER_HEADERS })
-    if (!res.ok) return { series: null, error: `json HTTP ${res.status}` }
+    const res = await fetch(url, {
+      headers: {
+        "user-agent": USER_AGENT,
+        accept: "application/json, text/javascript, */*; q=0.01",
+        "x-ajax-token": page.token,
+        "x-requested-with": "XMLHttpRequest",
+        cookie: `ba_session=${page.cookie}; clang=id`,
+        referer,
+      },
+    })
+    if (!res.ok) return { series: null, error: `ajax HTTP ${res.status}` }
     const contentType = res.headers.get("content-type") ?? ""
-    if (!contentType.includes("json")) {
-      return { series: null, error: "json endpoint returned non-JSON" }
+    if (!contentType.includes("json") && !contentType.includes("javascript")) {
+      const body = await res.json().catch(() => null)
+      return { series: normalizeBareksaJson(body) }
     }
     const body = await res.json()
     return { series: normalizeBareksaJson(body) }
   } catch (error) {
     return {
       series: null,
-      error: error instanceof Error ? error.message : "fetch failed",
-    }
-  }
-}
-
-/** Fetch the product-page HTML and scrape its embedded __NEXT_DATA__. */
-async function fetchBareksaHtml(
-  env: Env,
-  fund: string
-): Promise<{ series: NormalizedSeries | null; error?: string }> {
-  const url = fillTemplate(env.BAREKSA_HTML_URL ?? DEFAULT_HTML_URL, fund)
-  try {
-    const res = await fetch(url, { headers: BROWSER_HEADERS })
-    if (!res.ok) return { series: null, error: `html HTTP ${res.status}` }
-    const html = await res.text()
-    return { series: normalizeBareksaHtml(html) }
-  } catch (error) {
-    return {
-      series: null,
-      error: error instanceof Error ? error.message : "fetch failed",
+      error: error instanceof Error ? error.message : "ajax fetch failed",
     }
   }
 }
@@ -155,11 +250,17 @@ async function handleNav(
   mode: "latest" | "history",
   from: string | undefined
 ): Promise<Response> {
-  const [json_, html, stale] = await Promise.all([
-    fetchBareksaJson(env, fund),
-    fetchBareksaHtml(env, fund),
+  // One product-page fetch powers BOTH the token-gated ajax primary and the HTML
+  // scrape fallback (no double fetch).
+  const page = await fetchProductPage(env, fund)
+  const [json_, stale] = await Promise.all([
+    fetchBareksaJson(env, fund, page, mode, from),
     readStaleCache(env, fund),
   ])
+  const html: { series: NormalizedSeries | null; error?: string } = {
+    series: normalizeBareksaHtml(page.html),
+    error: page.html ? "no NAV in product HTML" : page.error,
+  }
 
   const attempts: SourceAttempt[] = [
     { source: "bareksa_json", series: json_.series, error: json_.error },
@@ -196,7 +297,7 @@ export default {
       return json({ error: "method not allowed" }, 405)
     }
     const fund = url.searchParams.get("fund")?.trim()
-    if (!fund) return json({ error: "missing ?fund=<code>" }, 400)
+    if (!fund) return json({ error: "missing ?fund=<pid>" }, 400)
 
     if (url.pathname === "/nav") {
       return handleNav(env, fund, "latest", undefined)

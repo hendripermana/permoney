@@ -19,10 +19,13 @@
       "database_id": "REPLACE_WITH_D1_DATABASE_ID",
     },
   ],
-  // Optional upstream overrides (defaults target Bareksa; confirm on deploy).
-  // `{fund}` is substituted with the URL-encoded fund code.
+  // Optional upstream overrides (defaults target the VERIFIED Bareksa endpoints;
+  // PER-258). `{fund}` is substituted with the URL-encoded fund code, which is the
+  // Bareksa numeric product id (pid). BAREKSA_PRODUCT_URL is the product page the
+  // token/cookie bootstrap reads; BAREKSA_AJAX_BASE is the ajax NAV endpoint base
+  // (the worker builds the query: id, cperiod, startdate/enddate, requested_page).
   "vars": {
-    // "BAREKSA_JSON_URL": "https://api.bareksa.com/v22/products/mutualfund/{fund}/nav",
-    // "BAREKSA_HTML_URL": "https://www.bareksa.com/reksadana/{fund}"
+    // "BAREKSA_PRODUCT_URL": "https://www.bareksa.com/id/data/reksadana/{fund}/",
+    // "BAREKSA_AJAX_BASE": "https://www.bareksa.com/ajax/mutualfund/nav/product1/"
   },
 }

@@ -5,29 +5,51 @@
  * This module is the FRAGILE part the ADR singles out for review + unit tests,
  * and it is deliberately factored to contain ZERO Cloudflare-runtime dependencies
  * (no `fetch`, no D1, no `Request`/`Response`). The worker entry (`index.ts`) is a
- * thin shell that does the IO (fetch each upstream, read/write D1) and hands the
- * raw bytes to the pure functions here; `vp test` unit-tests this module directly
- * against recorded fixtures with no live network.
+ * thin shell that does the IO (the two-step Bareksa token bootstrap, the ajax NAV
+ * fetch, read/write D1) and hands the raw bytes to the pure functions here;
+ * `vp test` unit-tests this module directly against recorded fixtures with no live
+ * network.
+ *
+ * THE REAL BAREKSA UPSTREAM (verified by live probe, ADR-0053 §Context/§1)
+ * -----------------------------------------------------------------------
+ * Bareksa's NAV lives behind an ajax endpoint gated by an anti-CSRF token +
+ * session cookie that are BOOTSTRAPPED from the product page:
+ *
+ *   1. GET https://www.bareksa.com/id/data/reksadana/<PID>/  (browser-like)
+ *        → 302 to the canonical product page; the response sets
+ *          `Set-Cookie: ba_session=…` (+ `clang=id`) and the HTML embeds, in an
+ *          inline `<script>`, `$.ajaxSetup({ headers: { "X-Ajax-Token": '…' } })`.
+ *   2. GET https://www.bareksa.com/ajax/mutualfund/nav/product1/?id=<PID>&…
+ *        with `x-ajax-token`, `x-requested-with: XMLHttpRequest`,
+ *        `cookie: ba_session=…; clang=id`, and a `referer` of the product page.
+ *        → CLEAN JSON (no AES), the `{ status, data: { unitY, datas:[{pid,pname,
+ *          nav:[{date,value}] }] } }` envelope `normalizeBareksaJson` parses.
  *
  * Responsibilities:
  *   1. Per-source NORMALIZERS — turn each upstream's raw shape into the internal
  *      `NormalizedSeries` (`{ currency, points: [{date, nav}] }`):
- *        - `normalizeBareksaJson`  — Bareksa/Pasardana clean JSON (primary).
- *        - `normalizeBareksaHtml`  — the product page's embedded `__NEXT_DATA__`
- *          JSON (fallback scraper; Bareksa is a Next.js app).
- *        - `normalizeStaleCache`   — a previously-served payload from D1 (LKGP).
+ *        - `normalizeBareksaJson`  — the real Bareksa ajax NAV envelope (primary).
+ *        - `normalizeBareksaHtml`  — a best-effort scrape of any NAV JSON embedded
+ *          in the product-page HTML (fallback when the token bootstrap fails).
+ *        - `normalizeStaleCache`   — a previously-served payload from D1 (LKGP);
+ *          this is the worker's OWN `{ currency, quotes, latest }` contract shape.
  *      Each is SHAPE-TOLERANT (probes known keys, then a bounded deep search) so a
  *      minor upstream drift degrades to the next source rather than crashing.
- *   2. FALLBACK ORDERING — `resolveSeries` tries attempts in priority order and
+ *   2. TOKEN BOOTSTRAP PARSERS — `extractAjaxToken` (pull the `X-Ajax-Token` out of
+ *      the product-page HTML) and `extractCookie` (pull `ba_session` out of a
+ *      `Set-Cookie` header). Pure string parsing, unit-tested against a fixture.
+ *   3. FALLBACK ORDERING — `resolveSeries` tries attempts in priority order and
  *      returns the FIRST that yields a usable series, recording the degradation.
- *   3. The ADR-0053 §2 target CONTRACT — `buildPayload` emits
+ *   4. The ADR-0053 §2 target CONTRACT — `buildPayload` emits
  *      `{ fundCode, currency, latest, quotes, stale }` for both `/nav` (latest)
  *      and `/nav/history` (backfill) modes.
  *
  * WEEKEND / MARKET-HOLIDAY INVARIANT (ADR-0053 §3): KSEI/IDX publish no new NAV on
- * Sat–Sun/holidays; the freshest quote simply carries Friday's value. Nothing here
- * treats a flat/repeated (or absent-today) NAV as an error — `latest` is always
- * the freshest AVAILABLE point, and a weekend backfill simply lacks Sat/Sun rows.
+ * Sat–Sun/holidays; Bareksa's `nav[]` is TRADING-DAYS-ONLY (weekend/holiday rows
+ * are simply absent), so on a weekend the LAST element already carries Friday's
+ * value — the invariant holds by construction, no flat-fill. Nothing here treats a
+ * flat/repeated (or absent-today) NAV as an error — `latest` is always the freshest
+ * AVAILABLE point.
  */
 
 /** The upstream sources, in the ADR-0053 §1 priority order. */
@@ -104,8 +126,8 @@ const DATE_KEYS = [
   "x",
 ] as const
 const NAV_KEYS = [
-  "nav",
   "value",
+  "nav",
   "navPerUnit",
   "nav_per_unit",
   "price",
@@ -154,7 +176,7 @@ function arrayToPoints(value: unknown): NavPoint[] | null {
  * `depth` caps the walk so a pathological payload can never spin.
  */
 function deepFindLongestSeries(node: unknown, depth = 0): NavPoint[] | null {
-  if (depth > 6 || node === null || typeof node !== "object") return null
+  if (depth > 8 || node === null || typeof node !== "object") return null
   const direct = arrayToPoints(node)
   if (direct) return direct
   let best: NavPoint[] | null = null
@@ -169,7 +191,7 @@ function deepFindLongestSeries(node: unknown, depth = 0): NavPoint[] | null {
 /** Find a currency string anywhere shallow in the object, else the default. */
 function findCurrency(node: unknown, depth = 0): string {
   if (depth > 4 || !isRecord(node)) return DEFAULT_CURRENCY
-  for (const key of ["currency", "ccy", "curr"]) {
+  for (const key of ["unitY", "currency", "ccy", "curr"]) {
     const value = node[key]
     if (typeof value === "string" && /^[A-Za-z]{3}$/.test(value.trim())) {
       return value.trim().toUpperCase()
@@ -192,91 +214,194 @@ export function cleanSeries(points: readonly NavPoint[]): NavPoint[] {
 }
 
 /**
- * Normalize a Bareksa/Pasardana clean-JSON payload into a series. Handles the
- * documented shapes (a `data.nav` latest + `data.nav_history` array; a top-level
- * or `data` array of rows; a single `nav` object) and falls back to a bounded
- * deep search. Returns null when nothing NAV-shaped is found (→ try next source).
+ * Normalize the REAL Bareksa ajax NAV envelope into a series (ADR-0053 §1). The
+ * verified shape is:
+ *
+ *   { status: true,
+ *     data: { auth: true, unitY: "IDR",
+ *             datas: [ { pid: "3035", pname: "…",
+ *                        nav: [ { id, date: "YYYY-MM-DD", value: "1485.7881" } ] } ] } }
+ *
+ * `status: false` (or `data.auth: false`) is a FAILED attempt (unauthenticated /
+ * token rejected) → returns null so the chain falls through to the HTML scrape,
+ * then D1 LKGP. When the strict `data.datas[0].nav` path is absent (a minor
+ * upstream drift) a bounded deep search still salvages the longest NAV array.
+ * Returns null when nothing NAV-shaped is found.
  */
 export function normalizeBareksaJson(raw: unknown): NormalizedSeries | null {
-  if (!isRecord(raw) && !Array.isArray(raw)) return null
+  if (!isRecord(raw)) return null
 
-  const collected: NavPoint[] = []
+  // A failed ajax attempt must fall through, never be deep-searched for a hit.
+  if (raw.status === false) return null
+  const data = isRecord(raw.data) ? raw.data : null
+  if (data && data.auth === false) return null
 
-  // Known array containers first (cheap, precise).
-  const containers: unknown[] = []
-  if (isRecord(raw)) {
-    containers.push(
-      raw.nav_history,
-      raw.navHistory,
-      raw.history,
-      raw.quotes,
-      raw.data,
-      isRecord(raw.data) ? raw.data.nav_history : undefined,
-      isRecord(raw.data) ? raw.data.navHistory : undefined,
-      isRecord(raw.data) ? raw.data.history : undefined,
-      isRecord(raw.data) ? raw.data.data : undefined
-    )
-  } else {
-    containers.push(raw)
-  }
-  for (const container of containers) {
-    const points = arrayToPoints(container)
-    if (points) collected.push(...points)
-  }
+  let currency = DEFAULT_CURRENCY
+  let points: NavPoint[] | null = null
 
-  // A single "latest" nav object (`{nav|data.nav: {date,value}}`).
-  if (isRecord(raw)) {
-    for (const candidate of [
-      raw.nav,
-      raw.latest,
-      isRecord(raw.data) ? raw.data.nav : undefined,
-      isRecord(raw.data) ? raw.data.latest : undefined,
-    ]) {
-      if (isRecord(candidate)) {
-        const point = pointFromRow(candidate)
-        if (point) collected.push(point)
-      }
+  if (data) {
+    if (
+      typeof data.unitY === "string" &&
+      /^[A-Za-z]{3}$/.test(data.unitY.trim())
+    ) {
+      currency = data.unitY.trim().toUpperCase()
+    }
+    const datas = data.datas
+    if (Array.isArray(datas) && datas.length > 0 && isRecord(datas[0])) {
+      points = arrayToPoints(datas[0].nav)
     }
   }
 
-  // Last-resort deep search when the known keys found nothing.
+  // Tolerance: a nested / renamed container still normalizes via deep search.
+  if (!points) {
+    points = deepFindLongestSeries(raw)
+    if (points && currency === DEFAULT_CURRENCY) currency = findCurrency(raw)
+  }
+
+  if (!points || points.length === 0) return null
+  return { currency, points: cleanSeries(points) }
+}
+
+/**
+ * Fallback scraper: when the token bootstrap fails, salvage any NAV JSON embedded
+ * in the product-page HTML. Bareksa loads its chart via ajax, so this is a
+ * best-effort net (it returns null on a page with no inline series) — the real
+ * safety after it is the D1 LKGP. Scans embedded JSON blobs (a `<script
+ * type="application/json">` payload or a legacy `__NEXT_DATA__` blob) and reuses
+ * the JSON normalizer's deep search. Returns null when no parseable NAV is found.
+ */
+export function normalizeBareksaHtml(html: unknown): NormalizedSeries | null {
+  if (typeof html !== "string" || html.length === 0) return null
+  for (const blob of embeddedJsonBlobs(html)) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(blob)
+    } catch {
+      continue
+    }
+    const series = normalizeBareksaJson(parsed)
+    if (series) return series
+    // The blob may not be the ajax envelope (no `datas`); deep-search it directly.
+    const points = deepFindLongestSeries(parsed)
+    if (points && points.length > 0) {
+      return { currency: findCurrency(parsed), points: cleanSeries(points) }
+    }
+  }
+  return null
+}
+
+/** All `<script>`-embedded JSON blobs worth probing for NAV data. */
+function embeddedJsonBlobs(html: string): string[] {
+  const blobs: string[] = []
+  const scriptRe =
+    /<script[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/gi
+  let match: RegExpExecArray | null
+  while ((match = scriptRe.exec(html)) !== null) {
+    if (match[1]) blobs.push(match[1].trim())
+  }
+  const nextData = html.match(
+    /<script[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i
+  )
+  if (nextData?.[1]) blobs.push(nextData[1].trim())
+  return blobs
+}
+
+/**
+ * Normalize a payload previously served by THIS worker and cached in D1 (LKGP).
+ * The cached value is the worker's OWN ADR-0053 §2 contract (`{ currency,
+ * quotes:[{date,nav}], latest:{nav,asOf} }`), NOT a raw Bareksa envelope — so this
+ * reads that shape directly (with a bounded deep-search tolerance). Returns null
+ * when no usable point survives.
+ */
+export function normalizeStaleCache(raw: unknown): NormalizedSeries | null {
+  if (!isRecord(raw)) return null
+
+  let currency = DEFAULT_CURRENCY
+  if (
+    typeof raw.currency === "string" &&
+    /^[A-Za-z]{3}$/.test(raw.currency.trim())
+  ) {
+    currency = raw.currency.trim().toUpperCase()
+  }
+
+  const collected: NavPoint[] = []
+  const quotes = arrayToPoints(raw.quotes)
+  if (quotes) collected.push(...quotes)
+  if (isRecord(raw.latest)) {
+    const latest = pointFromRow(raw.latest)
+    if (latest) collected.push(latest)
+  }
+
+  // Tolerance: a differently-shaped cached blob still salvages via deep search.
   if (collected.length === 0) {
     const deep = deepFindLongestSeries(raw)
     if (deep) collected.push(...deep)
   }
 
   if (collected.length === 0) return null
-  return { currency: findCurrency(raw), points: cleanSeries(collected) }
+  if (currency === DEFAULT_CURRENCY) currency = findCurrency(raw)
+  return { currency, points: cleanSeries(collected) }
 }
 
+// =============================================================================
+// Token bootstrap parsers (pure) — the fragile string extraction the shell needs
+// =============================================================================
+
 /**
- * Fallback scraper: Bareksa's product page is a Next.js app that embeds its server
- * props (including NAV) in a `<script id="__NEXT_DATA__" type="application/json">`
- * blob. Extract + JSON.parse it, then reuse the JSON normalizer's deep search.
- * Returns null when no parseable NAV data is present.
+ * Extract the anti-CSRF `X-Ajax-Token` from the Bareksa product-page HTML. The
+ * verified embedding is an inline script:
+ *
+ *   $.ajaxSetup({ headers: { "X-Ajax-Token": '<token>' } });
+ *
+ * We probe that exact shape first, then a couple of tolerant fallbacks (a bare
+ * `x-ajax-token` / `ajaxToken` assignment, a `<meta>` tag) so a minor markup drift
+ * still bootstraps. Returns null when no token is present (→ the shell falls
+ * through to the HTML scrape, then D1 LKGP).
  */
-export function normalizeBareksaHtml(html: unknown): NormalizedSeries | null {
+export function extractAjaxToken(html: unknown): string | null {
   if (typeof html !== "string" || html.length === 0) return null
-  const match = html.match(
-    /<script[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i
-  )
-  if (!match || match[1] === undefined) return null
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(match[1])
-  } catch {
-    return null
+  const patterns: RegExp[] = [
+    /["']X-Ajax-Token["']\s*:\s*["']([^"']+)["']/i,
+    /["']?x[-_]ajax[-_]token["']?\s*[:=]\s*["']([^"']+)["']/i,
+    /ajaxToken\s*[:=]\s*["']([^"']+)["']/i,
+    /<meta[^>]+name=["']x?[-_]?ajax[-_]token["'][^>]+content=["']([^"']+)["']/i,
+  ]
+  for (const re of patterns) {
+    const match = html.match(re)
+    if (match?.[1] && match[1].trim().length > 0) return match[1].trim()
   }
-  return normalizeBareksaJson(parsed)
+  return null
 }
 
 /**
- * Normalize a payload previously served by THIS worker and cached in D1 (LKGP).
- * It is already in (or close to) the ADR-0053 §2 contract, so this accepts the
- * `{ currency, quotes|latest }` shape as well as the generic normalizer's shapes.
+ * Extract a named cookie value (default `ba_session`) from a `Set-Cookie` header
+ * string. Cloudflare's `Headers.getSetCookie()` yields multiple values; join them
+ * with newlines (or commas) before calling this. Returns the LAST occurrence (the
+ * freshest issued value) or null.
  */
-export function normalizeStaleCache(raw: unknown): NormalizedSeries | null {
-  return normalizeBareksaJson(raw)
+export function extractCookie(
+  setCookie: string | null | undefined,
+  name = "ba_session"
+): string | null {
+  if (typeof setCookie !== "string" || setCookie.length === 0) return null
+  const re = new RegExp(`(?:^|[,;\\n]\\s*)${name}=([^;,\\s]+)`, "gi")
+  let value: string | null = null
+  let match: RegExpExecArray | null
+  while ((match = re.exec(setCookie)) !== null) {
+    if (match[1] && match[1].length > 0) value = match[1]
+  }
+  return value
+}
+
+/**
+ * Convert a `YYYY-MM-DD` (or ISO) date into the `DD-MM-YYYY` form Bareksa's ajax
+ * `startdate`/`enddate` params expect. Returns null on an unparseable input.
+ */
+export function toBareksaDate(value: unknown): string | null {
+  const iso = normalizeDate(value)
+  if (iso === null) return null
+  const [year, month, day] = iso.split("-")
+  return `${day}-${month}-${year}`
 }
 
 /** One source attempt handed to `resolveSeries`, in priority order. */
