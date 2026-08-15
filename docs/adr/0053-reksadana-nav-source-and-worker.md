@@ -24,18 +24,23 @@ worker. This ADR locks it.
   _statistics_ portal (APERD registry, aggregate NAB statistics), **not** a
   daily/historical per-fund NAV feed. Wrong tool; do not use it as the price
   source.
-- **Bibit internal (`api.bibit.id/products/list`) — REJECTED as primary.** Its
-  payload is **AES-CBC encrypted** and reverse-engineered; the only community
-  reference (`risan/bibit-reksadana`) is unmaintained since 2021 and returns a
-  paginated product _list_, not a clean per-fund NAV lookup. Fragile,
-  ToS-gray, and the cipher can change without notice.
-- **Bareksa internal public JSON / Pasardana — CHOSEN (primary).** Bareksa
-  exposes a **clean, un-encrypted JSON** endpoint keyed by its numeric product
-  id (`https://www.bareksa.com/api/v1/reksadana/product/<code>/nav`); Pasardana
-  offers an equivalent clean-JSON feed. Either returns NAV + date directly with
-  no decryption step — the durable, low-friction primary. (Community clean-JSON
-  mirrors such as Piramida exist as further cross-references but are not part of
-  the locked chain.)
+- **Bibit (`api.bibit.id/products/<code>/related`) — REJECTED, and dropped from
+  the chain entirely (PER-258).** It exposes **no per-fund NAV JSON** — the
+  `related` path returns _related products_ only. (The earlier community
+  reference `risan/bibit-reksadana` reads an AES-CBC-encrypted product _list_,
+  unmaintained since 2021 — fragile, ToS-gray, and not a NAV lookup.) There is no
+  Bibit path in the worker.
+- **Bareksa ajax NAV — CHOSEN (primary).** Bareksa serves clean, **un-encrypted
+  JSON** from `https://www.bareksa.com/ajax/mutualfund/nav/product1/?id=<pid>&…`
+  keyed by its numeric product id. **It is not unauthenticated** (the original
+  guess): the endpoint is gated by an anti-CSRF `x-ajax-token` **and** a
+  `ba_session` cookie, both of which are **bootstrapped from the product page**
+  (`/id/data/reksadana/<pid>/` sets `Set-Cookie: ba_session=…` and embeds
+  `$.ajaxSetup({ headers: { "X-Ajax-Token": '…' } })` inline). Once authed the
+  response is clean JSON with **no decryption step** — the durable, low-friction
+  primary. Verified live in PER-258 (a plain server-side `fetch` with a browser
+  `user-agent` reached both the product page and the ajax JSON — a CF Worker can
+  reach it, no headless browser needed).
 
 ## Decision
 
@@ -43,12 +48,22 @@ worker. This ADR locks it.
 
 Mirror the gold worker's graceful-degradation chain (ADR-0050 §4 / PER-235c):
 
-1. **Primary — Bareksa/Pasardana JSON API.** Clean JSON → normalized directly.
-2. **Fallback — Bareksa HTML scraper.** When the JSON API is unavailable / shape
-   drifts, parse the public product page for the NAV + date.
+1. **Primary — Bareksa ajax NAV JSON (two-step token bootstrap).** Step 1: `GET`
+   the product page (`/id/data/reksadana/<pid>/`) to obtain a fresh `ba_session`
+   cookie and extract the inline `x-ajax-token`. Step 2: `GET` the ajax endpoint
+   (`/ajax/mutualfund/nav/product1/?id=<pid>&cperiod=…`) with that token, the
+   cookie, `x-requested-with: XMLHttpRequest`, and a product-page `referer` →
+   clean JSON (`data.datas[0].nav[]`, `unitY`), normalized directly.
+   `status:false` / `data.auth:false` is a failed attempt → fall through.
+2. **Fallback — Bareksa product-page HTML scrape.** When the bootstrap can't
+   yield a token, salvage any NAV JSON embedded in the product HTML already
+   fetched in step 1.
 3. **Last resort — D1 stale cache (LKGP, "Last Known Good Price").** Serve the
    most recent cached quote, flagged stale, so a total upstream outage degrades
    to last-good rather than an error.
+
+The worker's `fund` param is the Bareksa numeric product id (`pid`); Permoney
+sets a reksadana instrument's `symbol` to that pid.
 
 Each step is tried in order; the first success wins. A step failing is recorded,
 never fatal — the worker always returns _something usable or an explicit,
