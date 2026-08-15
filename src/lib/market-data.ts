@@ -76,6 +76,106 @@ export function priceScaleForKind(kind: MarketInstrumentKind): number {
   return kind === "fx" ? FX_PRICE_DECIMALS : SPOT_PRICE_DECIMALS
 }
 
+// =============================================================================
+// Provider routing (ADR-0052 / PER-257) — the PURE routing table
+// =============================================================================
+//
+// The Financial Ingestion Service selects a source ADAPTER per instrument, then
+// batches per adapter and ingests each batch through the unchanged
+// `ingestMarketDataOnce` pipeline. This is the pure, DB-free, network-free core
+// of that router: given the routing-relevant fields of a `MarketInstrument`, it
+// decides WHICH adapter should price it. The registry (which adapters actually
+// exist) and the batching/ingest live in `market-data.server.ts`.
+
+/**
+ * The known source-adapter ids (the `provider` CHECK domain in the migration).
+ * An instrument's `provider` column, when set, names ONE of these; the router
+ * reads it first and only derives from `(kind, mic, symbol)` when it is NULL.
+ */
+export const PROVIDER_IDS = [
+  "logam_mulia",
+  "reksadana_id",
+  "yahoo",
+  "alpaca",
+  "twelvedata",
+] as const
+
+/** A source-adapter id — the key a `ProviderRegistry` maps to a factory. */
+export type ProviderId = (typeof PROVIDER_IDS)[number]
+
+export function isProviderId(value: string): value is ProviderId {
+  return (PROVIDER_IDS as readonly string[]).includes(value)
+}
+
+/**
+ * The routing-relevant projection of a `MarketInstrument`. Deliberately a small
+ * plain shape (NOT the Prisma model) so this module stays DB-free and reusable:
+ *   - `provider` — the explicit source declaration; wins when non-null.
+ *   - `kind` / `mic` / `symbol` — the fallback derivation inputs.
+ */
+export interface ProviderRoutingInput {
+  kind: MarketInstrumentKind
+  symbol: string
+  mic: string | null
+  provider: string | null
+}
+
+/**
+ * The outcome of routing ONE instrument: either it routes to a known adapter id,
+ * or it is a structured SKIP (never a throw — an unroutable instrument must not
+ * kill a mixed batch). Whether the routed adapter is actually REGISTERED is the
+ * service's concern (an unregistered id degrades to a skip there).
+ */
+export type ProviderRouteResult =
+  | { status: "routed"; providerId: ProviderId }
+  | { status: "skipped"; reason: string }
+
+/**
+ * Decide which source adapter prices an instrument (ADR-0052 §2).
+ *
+ *   explicit `provider` (non-null) ─► that id (or a skip if it is not a known id)
+ *   else derive from `kind`:
+ *     metal                        ─► logam_mulia
+ *     security (IDX `.JK`/mic OR global) ─► yahoo
+ *     crypto                       ─► yahoo
+ *     fx                           ─► yahoo
+ *
+ * `mic`/`symbol` do not change the Slice-A outcome (IDX and global equities share
+ * the one `yahoo` adapter), but are part of the contract so a later slice can
+ * split them without a signature change. A runtime-invalid kind or an unknown
+ * explicit provider yields a structured skip, NEVER a throw.
+ *
+ * Pure: no DB, no network, no secrets.
+ */
+export function resolveProviderId(
+  instrument: ProviderRoutingInput
+): ProviderRouteResult {
+  const explicit = instrument.provider?.trim()
+  if (explicit !== undefined && explicit.length > 0) {
+    return isProviderId(explicit)
+      ? { status: "routed", providerId: explicit }
+      : { status: "skipped", reason: `unknown provider id "${explicit}"` }
+  }
+
+  if (!isMarketInstrumentKind(instrument.kind)) {
+    // Defense-in-depth: the DB CHECK constrains kind, but an untyped caller could
+    // still hand over a bad value — degrade to a skip rather than mis-route.
+    return {
+      status: "skipped",
+      reason: `unroutable kind "${String(instrument.kind)}"`,
+    }
+  }
+
+  switch (instrument.kind) {
+    case "metal":
+      return { status: "routed", providerId: "logam_mulia" }
+    case "security":
+    case "crypto":
+    case "fx":
+      return { status: "routed", providerId: "yahoo" }
+  }
+}
+
 /**
  * Divide `numerator / denominator` with round-half-to-even. `denominator` MUST
  * be positive; sign is carried by `numerator`. Mirrors `@/lib/fx` and

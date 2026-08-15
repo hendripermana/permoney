@@ -9,15 +9,20 @@ import {
   FX_PRICE_DECIMALS,
   goldPerGramMajorToPerOunceDecimal,
   isMarketInstrumentKind,
+  isProviderId,
   MARKET_INSTRUMENT_KINDS,
   marketQuoteToHoldingPriceMinor,
   normalizeObservations,
   parseLogamMuliaGoldResponse,
   priceScaleForKind,
+  PROVIDER_IDS,
+  resolveProviderId,
   SPOT_PRICE_DECIMALS,
   SPOT_PRICE_SCALE,
   spotPriceScaledPerGram,
+  type MarketInstrumentKind,
   type MarketObservation,
+  type ProviderRoutingInput,
 } from "./market-data"
 
 const AS_OF = new Date("2026-08-07T00:00:00.000Z")
@@ -509,5 +514,148 @@ describe("parseLogamMuliaGoldResponse", () => {
       data: [{ ...GOLD_PAYLOAD.data[0], buybackPrice: 0 }],
     })
     expect(result.status).toBe("error")
+  })
+})
+
+// =============================================================================
+// Provider routing (ADR-0052 / PER-257) — resolveProviderId, every branch
+// =============================================================================
+
+describe("provider id domain guard", () => {
+  test("PROVIDER_IDS holds the five known adapter ids", () => {
+    expect([...PROVIDER_IDS]).toEqual([
+      "logam_mulia",
+      "reksadana_id",
+      "yahoo",
+      "alpaca",
+      "twelvedata",
+    ])
+  })
+
+  test("isProviderId accepts known ids and rejects everything else", () => {
+    for (const id of PROVIDER_IDS) expect(isProviderId(id)).toBe(true)
+    expect(isProviderId("bankbsi")).toBe(false)
+    expect(isProviderId("")).toBe(false)
+    expect(isProviderId("YAHOO")).toBe(false)
+  })
+})
+
+describe("resolveProviderId — kind/mic derivation (provider column NULL)", () => {
+  const route = (
+    over: Partial<ProviderRoutingInput> & { kind: MarketInstrumentKind }
+  ): ProviderRoutingInput => ({
+    symbol: over.symbol ?? "SYM",
+    mic: over.mic ?? null,
+    provider: over.provider ?? null,
+    kind: over.kind,
+  })
+
+  test("metal derives to logam_mulia (the gold baseline route)", () => {
+    expect(
+      resolveProviderId(route({ kind: "metal", symbol: "XAU-BSI" }))
+    ).toEqual({ status: "routed", providerId: "logam_mulia" })
+  })
+
+  test("security IDX (mic set) derives to yahoo", () => {
+    expect(
+      resolveProviderId(
+        route({ kind: "security", symbol: "BBCA", mic: "XIDX" })
+      )
+    ).toEqual({ status: "routed", providerId: "yahoo" })
+  })
+
+  test("security IDX (.JK suffix, no mic) derives to yahoo", () => {
+    expect(
+      resolveProviderId(route({ kind: "security", symbol: "BBCA.JK" }))
+    ).toEqual({ status: "routed", providerId: "yahoo" })
+  })
+
+  test("security global/other derives to yahoo", () => {
+    expect(
+      resolveProviderId(route({ kind: "security", symbol: "AAPL" }))
+    ).toEqual({ status: "routed", providerId: "yahoo" })
+  })
+
+  test("crypto derives to yahoo", () => {
+    expect(resolveProviderId(route({ kind: "crypto", symbol: "BTC" }))).toEqual(
+      {
+        status: "routed",
+        providerId: "yahoo",
+      }
+    )
+  })
+
+  test("fx derives to yahoo", () => {
+    expect(resolveProviderId(route({ kind: "fx", symbol: "USD/IDR" }))).toEqual(
+      {
+        status: "routed",
+        providerId: "yahoo",
+      }
+    )
+  })
+})
+
+describe("resolveProviderId — explicit provider wins", () => {
+  test("a set provider overrides the kind derivation", () => {
+    // A security that would derive to yahoo is pinned to reksadana_id.
+    expect(
+      resolveProviderId({
+        kind: "security",
+        symbol: "RD-SCHRODER",
+        mic: null,
+        provider: "reksadana_id",
+      })
+    ).toEqual({ status: "routed", providerId: "reksadana_id" })
+  })
+
+  test("an explicit provider is honoured even against a mismatched kind", () => {
+    expect(
+      resolveProviderId({
+        kind: "metal",
+        symbol: "XAU-BSI",
+        mic: null,
+        provider: "yahoo",
+      })
+    ).toEqual({ status: "routed", providerId: "yahoo" })
+  })
+
+  test("whitespace-only provider falls through to derivation", () => {
+    expect(
+      resolveProviderId({
+        kind: "metal",
+        symbol: "XAU-BSI",
+        mic: null,
+        provider: "   ",
+      })
+    ).toEqual({ status: "routed", providerId: "logam_mulia" })
+  })
+})
+
+describe("resolveProviderId — structured skip (never throws)", () => {
+  test("an unknown explicit provider id is skipped, not thrown", () => {
+    const result = resolveProviderId({
+      kind: "security",
+      symbol: "AAPL",
+      mic: null,
+      provider: "bloomberg",
+    })
+    expect(result.status).toBe("skipped")
+    if (result.status === "skipped") {
+      expect(result.reason).toContain("bloomberg")
+    }
+  })
+
+  test("an unroutable (runtime-invalid) kind is skipped, not thrown", () => {
+    // A value the DB CHECK forbids but an untyped caller could still pass.
+    const result = resolveProviderId({
+      kind: "commodity" as MarketInstrumentKind,
+      symbol: "WTI",
+      mic: null,
+      provider: null,
+    })
+    expect(result.status).toBe("skipped")
+    if (result.status === "skipped") {
+      expect(result.reason).toContain("commodity")
+    }
   })
 })
