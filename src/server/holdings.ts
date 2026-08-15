@@ -1573,6 +1573,82 @@ export const listMarketInstrumentsFn = createServerFn({ method: "GET" })
   })
 
 // -----------------------------------------------------------------------------
+// POST — register a reksadana (Indonesian mutual-fund) NAV price series so it is
+// LINKABLE from the holding form (PER-250 Slice B / ADR-0053).
+// -----------------------------------------------------------------------------
+//
+// Reksadana funds have no exchange listing, so — unlike gold — Permoney cannot
+// pre-seed the universe. The creator registers their specific Bibit/Bareksa fund
+// by its code; this ensures the GLOBAL `MarketInstrument`
+// (kind="security", provider="reksadana_id", symbol=<code>, quoteCurrency="IDR",
+// mic=NULL), after which it appears in the same-currency "Live price source"
+// dropdown and the router prices it under the `reksadana_id` adapter on the next
+// "Refresh prices". Writes ONLY the global reference row (no ledger data, no RLS
+// dependency); capability-gated (`ledger:write`) to keep the trigger authorized.
+
+export const ensureReksadanaInstrumentInputSchema = z.object({
+  // Bareksa/KSEI stable fund code (the worker's `?fund=` key). Alphanumeric with
+  // dashes/dots/underscores; the exact string is used as the instrument symbol.
+  code: z
+    .string()
+    .trim()
+    .min(2)
+    .max(48)
+    .regex(
+      /^[A-Za-z0-9][A-Za-z0-9._-]*$/,
+      "Fund code must be alphanumeric (dashes, dots, underscores allowed)"
+    ),
+  name: z.string().trim().max(120).optional(),
+})
+
+export async function ensureReksadanaInstrumentForFamily({
+  data,
+  familyId,
+  userId,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  data: z.infer<typeof ensureReksadanaInstrumentInputSchema>
+  familyId: string
+  userId: string
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<SerializedMarketInstrument> {
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
+    // DYNAMIC import keeps the `.server` hard-fence module out of the client graph.
+    const { ensureReksadanaInstrument } = await import("./market-data.server")
+    const id = await ensureReksadanaInstrument(
+      { symbol: data.code, name: data.name },
+      tx
+    )
+    return await tx.marketInstrument.findUniqueOrThrow({
+      where: { id },
+      select: {
+        id: true,
+        kind: true,
+        symbol: true,
+        name: true,
+        quoteCurrency: true,
+        baseCurrency: true,
+        mic: true,
+      },
+    })
+  })
+}
+
+export const ensureReksadanaInstrumentFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("ledger:write")])
+  .inputValidator(
+    (data: z.input<typeof ensureReksadanaInstrumentInputSchema>) =>
+      ensureReksadanaInstrumentInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await ensureReksadanaInstrumentForFamily({
+      data,
+      familyId: context.familyId,
+      userId: context.user.id,
+    })
+  })
+
+// -----------------------------------------------------------------------------
 // POST — trigger ONE on-demand market-price sync (PER-235b).
 // -----------------------------------------------------------------------------
 //

@@ -843,3 +843,159 @@ export function parseLogamMuliaGoldResponse(
     ],
   }
 }
+
+// =============================================================================
+// Reksadana (Indonesian mutual-fund) NAV feed — worker-payload parsing
+// (PER-250 Slice B / ADR-0053)
+// =============================================================================
+//
+// Symmetric to the gold section above, but for the reksadana source: the FRAGILE
+// scrape (Bareksa/Pasardana → the ADR-0053 §2 contract) lives entirely inside the
+// self-hosted Cloudflare Worker (`workers/reksadana-nav/`). Permoney consumes ONLY
+// the worker's clean, already-normalized JSON, so THIS parser's job is the small,
+// stable one: turn the worker's `{ fundCode, currency, latest, quotes }` payload
+// into canonical `security` `MarketObservation`s. Pure — no DB, no network, no
+// secrets — so it is fully unit-testable; the network adapter (`ReksadanaNavProvider`,
+// which reads `REKSADANA_API_URL`) lives in `market-data.server.ts`.
+//
+// A reksadana instrument's identity (ADR-0052 §1 / ADR-0053 §4):
+//   kind="security", provider="reksadana_id", symbol=<fund code>,
+//   quoteCurrency="IDR", mic=NULL. NAV is a normal PER-UNIT spot price (scale 1e8);
+//   a linked holding revalues at units × NAV, anchor-safe via PER-238.
+//
+// WEEKEND / MARKET-HOLIDAY INVARIANT (ADR-0053 §3): KSEI/IDX publish no new NAV on
+// Sat–Sun/holidays, so the freshest quote simply carries Friday's value. This
+// parser NEVER treats a flat/repeated `asOf`+`nav` (or an absent new-today price)
+// as a failure — the canonical UNIQUE (instrumentId, asOf, source) dedupes a
+// repeat into a no-op. It fails ONLY on a structurally unusable payload (not an
+// object, no currency, or zero parseable positive-priced quotes).
+
+/** The source-adapter id + quote `source`/provenance label for reksadana NAV. */
+export const REKSADANA_PROVIDER_ID = "reksadana_id" as const
+
+/** Reksadana NAV is always quoted per unit in Indonesian rupiah. */
+export const REKSADANA_QUOTE_CURRENCY = "IDR"
+
+/** One dated NAV point in the worker payload (ADR-0053 §2). */
+export interface ReksadanaNavQuote {
+  date: string
+  nav: number
+}
+
+/**
+ * The worker's normalized NAV payload (ADR-0053 §2 — the ONE shape the worker
+ * emits regardless of which upstream/fallback it used). `latest` is the freshest
+ * quote (`/nav`); `quotes` is the dated series (`/nav/history`, or a short tail on
+ * `/nav`). `stale` flags a last-known-good (D1 cache) degradation.
+ */
+export interface ReksadanaWorkerPayload {
+  fundCode: string
+  currency: string
+  latest: { nav: number; asOf: string } | null
+  quotes: ReksadanaNavQuote[]
+  /** True when served from the worker's stale D1 cache (LKGP) — informational. */
+  stale?: boolean
+}
+
+/** The outcome of parsing a worker NAV payload into observations. */
+export interface ReksadanaParseResult {
+  status: "ok" | "error"
+  /** Human-readable reason when `status` is "error" (graceful skip, no throw). */
+  error?: string
+  observations: MarketObservation[]
+}
+
+/**
+ * A finite, positive NAV number → a plain decimal string `encodeSpotPrice` accepts
+ * (`^\d+(\.\d+)?$`). Rejects non-finite, non-positive, and exponent-notation
+ * numbers (a NAV that small/large is a corrupt value — fail the row, never
+ * mis-mark money). `String(1643.45)` → "1643.45"; `Number`'s shortest round-trip
+ * form is exact for the 2–4 dp NAVs KSEI publishes.
+ */
+function navNumberToDecimal(nav: unknown): string | null {
+  if (typeof nav !== "number" || !Number.isFinite(nav) || nav <= 0) return null
+  const text = String(nav)
+  if (!/^\d+(\.\d+)?$/.test(text)) return null
+  return text
+}
+
+/** A `YYYY-MM-DD` (or ISO) date string → a UTC midnight Date, or null. */
+function parseNavDate(value: unknown): Date | null {
+  if (typeof value !== "string" || value.trim().length === 0) return null
+  const trimmed = value.trim()
+  // Bare calendar date → pin to UTC midnight (the canonical NAV as-of convention,
+  // mirroring the gold feed's recordedDate handling).
+  const iso = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+    ? `${trimmed}T00:00:00.000Z`
+    : trimmed
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+/**
+ * Parse a reksadana worker NAV payload (ADR-0053 §2) into canonical `security`
+ * observations — one per dated quote (deduped downstream by (instrument, asOf,
+ * source)). `quotes` is preferred (covers both the `/nav/history` backfill and a
+ * `/nav` tail); when `quotes` is empty the single `latest` point is used. The
+ * requested `fundCode` (NOT the echoed payload one) is used as the observation
+ * symbol so identity stays stable regardless of upstream formatting.
+ *
+ * A row with a non-positive/unencodable NAV or an unparseable date is DROPPED (a
+ * flat repeat is kept — the store dedupes it), never thrown. The payload is an
+ * error ONLY when it is structurally unusable (not an object, blank currency, or
+ * zero usable rows). Pure: no DB, no network, no secrets.
+ */
+export function parseReksadanaNavResponse(
+  payload: unknown,
+  opts: { fundCode: string; sourceLabel?: string }
+): ReksadanaParseResult {
+  const err = (reason: string): ReksadanaParseResult => ({
+    status: "error",
+    error: reason,
+    observations: [],
+  })
+
+  const fundCode = opts.fundCode.trim()
+  if (fundCode.length === 0) return err("missing fundCode")
+  if (!isRecord(payload)) return err("payload is not an object")
+
+  const currency =
+    typeof payload.currency === "string" ? payload.currency.trim() : ""
+  if (currency.length === 0) return err("payload is missing a currency")
+
+  // Prefer the dated series; fall back to the single `latest` point.
+  const rawQuotes: unknown[] = Array.isArray(payload.quotes)
+    ? payload.quotes
+    : []
+  const points: { date: unknown; nav: unknown }[] = []
+  for (const row of rawQuotes) {
+    if (!isRecord(row)) continue
+    points.push({ date: row.date, nav: row.nav })
+  }
+  if (points.length === 0 && isRecord(payload.latest)) {
+    points.push({ date: payload.latest.asOf, nav: payload.latest.nav })
+  }
+  if (points.length === 0) return err("payload has no NAV quotes")
+
+  const providerRef = opts.sourceLabel ?? REKSADANA_PROVIDER_ID
+  const observations: MarketObservation[] = []
+  for (const point of points) {
+    const asOf = parseNavDate(point.date)
+    if (asOf === null) continue
+    const priceDecimal = navNumberToDecimal(point.nav)
+    if (priceDecimal === null) continue
+    observations.push({
+      kind: "security",
+      symbol: fundCode,
+      quoteCurrency: currency,
+      asOf,
+      priceDecimal,
+      providerRef,
+    })
+  }
+
+  if (observations.length === 0) {
+    return err("payload has no usable (positive-priced, dated) NAV quotes")
+  }
+  return { status: "ok", observations }
+}

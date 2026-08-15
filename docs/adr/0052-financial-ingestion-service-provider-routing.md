@@ -109,10 +109,12 @@ structured skip result, never a throw.
 
 Gold routes **through** the registry (its behaviour is unchanged but is now
 proven behind the router before fragile sources plug in). `syncMarketPricesFn`
-(PER-235b) calls `ingestAllLinkedInstrumentsOnce`; `refreshHoldingPricesFn`
+(PER-235b) calls `ingestAllInstrumentsOnce`; `refreshHoldingPricesFn`
 (PER-238) applies the fresh quotes anchor-safely — both contracts unchanged.
 
 ### 4. Reksadana NAV worker (the new source)
+
+> **Source + worker contract now locked in [ADR-0053](./0053-reksadana-nav-source-and-worker.md)**.
 
 A **self-hosted Cloudflare Worker** (creator's CF account) mirroring the gold
 worker's isolation: it fetches Indonesian reksadana NAV from a chosen upstream

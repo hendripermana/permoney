@@ -36,6 +36,9 @@ import {
   isMarketInstrumentKind,
   normalizeObservations,
   parseLogamMuliaGoldResponse,
+  parseReksadanaNavResponse,
+  REKSADANA_PROVIDER_ID,
+  REKSADANA_QUOTE_CURRENCY,
   resolveProviderId,
   type GoldPriceField,
   type MarketInstrumentIdentity,
@@ -737,6 +740,329 @@ export async function ingestGoldPricesOnce(
   })
 }
 
+// -----------------------------------------------------------------------------
+// Reksadana NAV feed adapter — self-hosted reksadana-nav worker (PER-250 Slice B
+// / ADR-0053)
+// -----------------------------------------------------------------------------
+//
+// The ONLY code that knows the reksadana vendor exists — the exact mirror of
+// `LogamMuliaGoldProvider`. It calls the self-hosted worker behind
+// `REKSADANA_API_URL` (the fragile Bareksa/Pasardana scrape + fallback chain live
+// ENTIRELY in the worker; ADR-0053 §4), and hands the pure parser
+// (`parseReksadanaNavResponse`, @/lib/market-data) the worker's clean JSON. It
+// prices `security`/IDR instruments (a fund's NAV per unit); FX/other spot are a
+// no-op empty-ok here so a mixed ingest never errors on this provider. Secrets/
+// config (`REKSADANA_API_URL`) are read ONLY here, at CALL time (never module
+// scope). Graceful degradation is total: an unreachable worker, a non-2xx, a
+// non-JSON body, or a structurally-unusable payload for a fund is recorded but
+// never throws; when EVERY requested fund fails the result is one graceful error
+// (no quote written, last-good retained).
+//
+// TWO MODES (ADR-0053 §2): the daily tick uses `latest` (`GET /nav?fund=`); an
+// initial backfill of a newly-linked fund uses `history` (`GET /nav/history?
+// fund=&from=`), which yields many dated observations → many dated MarketQuotes.
+
+/** Read the reksadana worker base URL at CALL time; a clear error if unset. */
+function requireReksadanaApiUrl(): string {
+  const raw = process.env.REKSADANA_API_URL
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    throw new Error(
+      "REKSADANA_API_URL is not set — configure the self-hosted reksadana-nav worker base URL to ingest reksadana NAV (ADR-0053 / PER-250)."
+    )
+  }
+  return raw.trim().replace(/\/+$/, "")
+}
+
+export type ReksadanaFetchMode = "latest" | "history"
+
+export interface ReksadanaNavProviderOptions {
+  /** Base URL; defaults to reading `REKSADANA_API_URL` at call time. */
+  baseUrl?: string
+  /** Injectable fetch (tests pass a fixture; prod uses the global `fetch`). */
+  fetchImpl?: FetchLike
+  /** `latest` (daily tick, default) or `history` (one-time backfill). */
+  mode?: ReksadanaFetchMode
+  /** History mode only: inclusive backfill start (`YYYY-MM-DD`). */
+  from?: string
+}
+
+/**
+ * The self-hosted reksadana-nav worker adapter. Serves reksadana `security` NAV
+ * only. The quote `source`/provenance is the stable `reksadana_id` adapter id
+ * (the worker abstracts WHICH upstream/fallback produced the number).
+ */
+export class ReksadanaNavProvider implements MarketDataProvider {
+  private readonly baseUrl: string
+  private readonly fetchImpl: FetchLike
+  private readonly mode: ReksadanaFetchMode
+  private readonly from: string | undefined
+
+  /** Provenance the ingest pipeline stamps on the raw fetch + canonical quote. */
+  get name(): string {
+    return REKSADANA_PROVIDER_ID
+  }
+
+  constructor(options?: ReksadanaNavProviderOptions) {
+    this.baseUrl = options?.baseUrl ?? requireReksadanaApiUrl()
+    this.fetchImpl = options?.fetchImpl ?? ((url, init) => fetch(url, init))
+    this.mode = options?.mode ?? "latest"
+    this.from = options?.from
+  }
+
+  fetchFxRates(): Promise<MarketFetchResult> {
+    return Promise.resolve({
+      status: "ok",
+      httpStatus: 200,
+      observations: [],
+      rawPayload: null,
+    })
+  }
+
+  fetchSpot(requests: readonly SpotRequest[]): Promise<MarketFetchResult> {
+    return this.fetchNav(requests)
+  }
+
+  fetchQuotes(
+    instruments: readonly MarketInstrumentRequest[]
+  ): Promise<MarketFetchResult> {
+    // Only reksadana `security` instruments reach this adapter (the router groups
+    // by provider id); fx pairs are ignored defensively.
+    const spot = instruments.filter(
+      (instrument): instrument is SpotRequest => instrument.kind !== "fx"
+    )
+    return this.fetchNav(spot)
+  }
+
+  /**
+   * Fetch each requested fund from the worker, parse via the pure normalizer, and
+   * aggregate into ONE staged result. A single fund failing is recorded but never
+   * fatal — the good funds still ingest. Only when EVERY fund fails does the whole
+   * result degrade to `status: "error"` (no quote written, last-good retained).
+   */
+  private async fetchNav(
+    requests: readonly SpotRequest[]
+  ): Promise<MarketFetchResult> {
+    if (requests.length === 0) {
+      return {
+        status: "ok",
+        httpStatus: 200,
+        observations: [],
+        rawPayload: null,
+      }
+    }
+
+    const observations: MarketObservation[] = []
+    const failures: string[] = []
+    const rawByFund: Record<string, unknown> = {}
+    let anyOk = false
+    let lastHttpStatus: number | undefined
+
+    for (const request of requests) {
+      const outcome = await this.fetchOneFund(request.symbol)
+      lastHttpStatus = outcome.httpStatus ?? lastHttpStatus
+      rawByFund[request.symbol] = outcome.rawPayload
+      if (outcome.status === "ok") {
+        anyOk = true
+        observations.push(...outcome.observations)
+      } else {
+        failures.push(`${request.symbol}: ${outcome.error ?? "failed"}`)
+      }
+    }
+
+    if (!anyOk) {
+      return {
+        status: "error",
+        httpStatus: lastHttpStatus,
+        error: `all reksadana funds failed — ${failures.join("; ")}`,
+        observations: [],
+        rawPayload: { errors: failures, byFund: rawByFund },
+      }
+    }
+
+    return {
+      status: "ok",
+      httpStatus: lastHttpStatus ?? 200,
+      observations,
+      rawPayload: { byFund: rawByFund, failures },
+    }
+  }
+
+  /** Fetch + parse ONE fund's NAV. Never throws; returns a per-fund result. */
+  private async fetchOneFund(symbol: string): Promise<{
+    status: "ok" | "error"
+    httpStatus?: number
+    error?: string
+    observations: MarketObservation[]
+    rawPayload: unknown
+  }> {
+    const url = this.buildUrl(symbol)
+
+    let response: Response
+    try {
+      response = await this.fetchImpl(url, {
+        headers: { accept: "application/json" },
+      })
+    } catch (error) {
+      return {
+        status: "error",
+        error:
+          error instanceof Error ? error.message : "reksadana fetch failed",
+        observations: [],
+        rawPayload: { error: String(error) },
+      }
+    }
+
+    if (!response.ok) {
+      const body = await safeReadText(response)
+      return {
+        status: "error",
+        httpStatus: response.status,
+        error: `reksadana worker HTTP ${response.status}`,
+        observations: [],
+        rawPayload: { httpStatus: response.status, body },
+      }
+    }
+
+    let json: unknown
+    try {
+      json = await response.json()
+    } catch (error) {
+      return {
+        status: "error",
+        httpStatus: response.status,
+        error: "reksadana worker returned non-JSON",
+        observations: [],
+        rawPayload: { httpStatus: response.status, parseError: String(error) },
+      }
+    }
+
+    const parsed = parseReksadanaNavResponse(json, { fundCode: symbol })
+    if (parsed.status !== "ok") {
+      return {
+        status: "error",
+        httpStatus: response.status,
+        error: parsed.error,
+        observations: [],
+        rawPayload: json,
+      }
+    }
+    return {
+      status: "ok",
+      httpStatus: response.status,
+      observations: parsed.observations,
+      rawPayload: json,
+    }
+  }
+
+  private buildUrl(symbol: string): string {
+    const fund = encodeURIComponent(symbol)
+    if (this.mode === "history") {
+      const from = this.from ? `&from=${encodeURIComponent(this.from)}` : ""
+      return `${this.baseUrl}/nav/history?fund=${fund}${from}`
+    }
+    return `${this.baseUrl}/nav?fund=${fund}`
+  }
+}
+
+/**
+ * Idempotently ensure a reksadana `MarketInstrument` exists so a holding can be
+ * LINKED to it (PER-238) and the router prices it under the `reksadana_id`
+ * adapter. Identity: kind="security", provider="reksadana_id", symbol=<fund code>,
+ * quoteCurrency="IDR", mic=NULL (ADR-0052 §1 / ADR-0053 §4). Safe to call
+ * repeatedly; recovers from the unique-index race. Returns its id.
+ *
+ * The explicit `provider` column is what routes the instrument to this adapter —
+ * WITHOUT it a bare `security` derives to `yahoo` (ADR-0052 §2). Creating it here
+ * (on link) rather than on ingest guarantees the route is correct from the start.
+ */
+export async function ensureReksadanaInstrument(
+  params: { symbol: string; name?: string },
+  db: Pick<PrismaClient, "marketInstrument"> = prisma
+): Promise<string> {
+  const symbol = params.symbol.trim()
+  if (symbol.length === 0) {
+    throw new Error("ensureReksadanaInstrument: fund code (symbol) is required")
+  }
+  const where = {
+    kind: "security",
+    symbol,
+    baseCurrency: null,
+    quoteCurrency: REKSADANA_QUOTE_CURRENCY,
+    mic: null,
+  } as const
+
+  const existing = await db.marketInstrument.findFirst({
+    where,
+    select: { id: true },
+  })
+  if (existing) return existing.id
+
+  try {
+    const created = await db.marketInstrument.create({
+      data: {
+        kind: "security",
+        symbol,
+        name: params.name?.trim() || null,
+        quoteCurrency: REKSADANA_QUOTE_CURRENCY,
+        provider: REKSADANA_PROVIDER_ID,
+      },
+      select: { id: true },
+    })
+    return created.id
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      const raced = await db.marketInstrument.findFirst({
+        where,
+        select: { id: true },
+      })
+      if (raced) return raced.id
+    }
+    throw error
+  }
+}
+
+export interface IngestReksadanaOptions {
+  /** The funds to price (each `symbol` is the fund code / instrument symbol). */
+  funds: readonly { symbol: string }[]
+  /** Base URL; defaults to reading `REKSADANA_API_URL` at call time. */
+  baseUrl?: string
+  /** Injectable fetch (tests pass a fixture; prod uses the global `fetch`). */
+  fetchImpl?: FetchLike
+  /** `latest` (default) or `history` (backfill). */
+  mode?: ReksadanaFetchMode
+  /** History mode only: inclusive backfill start (`YYYY-MM-DD`). */
+  from?: string
+  db?: MarketDataDb
+}
+
+/**
+ * Run ONE reksadana NAV ingest cycle for the given funds through the shared raw →
+ * staged → canonical pipeline. Used for the one-time HISTORY backfill of a
+ * newly-linked fund (many dated MarketQuotes) and callable directly for a targeted
+ * latest refresh; the DAILY tick for all linked funds flows through
+ * `ingestAllInstrumentsOnce` (the router). Idempotent; safe to call repeatedly.
+ */
+export async function ingestReksadanaPricesOnce(
+  options: IngestReksadanaOptions
+): Promise<IngestSummary> {
+  const db = options.db ?? prisma
+  const provider = new ReksadanaNavProvider({
+    baseUrl: options.baseUrl,
+    fetchImpl: options.fetchImpl,
+    mode: options.mode,
+    from: options.from,
+  })
+  return await ingestMarketDataOnce({
+    provider,
+    requests: options.funds.map((fund) => ({
+      kind: "security" as const,
+      symbol: fund.symbol,
+      quoteCurrency: REKSADANA_QUOTE_CURRENCY,
+    })),
+    db,
+  })
+}
+
 // =============================================================================
 // Financial Ingestion Service — provider registry + routing engine (PER-257 /
 // ADR-0052)
@@ -768,9 +1094,20 @@ export interface DefaultRegistryGoldOptions {
   now?: () => Date
 }
 
+/** Reksadana-adapter construction knobs (tests inject a fixture fetch). */
+export interface DefaultRegistryReksadanaOptions {
+  baseUrl?: string
+  fetchImpl?: FetchLike
+  /** The router's daily tick prices the LATEST NAV; history is a separate call. */
+  mode?: ReksadanaFetchMode
+  from?: string
+}
+
 export interface DefaultRegistryOptions {
   /** Passthrough for the `logam_mulia` gold adapter (see LogamMuliaGoldProvider). */
   gold?: DefaultRegistryGoldOptions
+  /** Passthrough for the `reksadana_id` NAV adapter (see ReksadanaNavProvider). */
+  reksadana?: DefaultRegistryReksadanaOptions
 }
 
 /**
@@ -792,6 +1129,19 @@ export function createDefaultProviderRegistry(
         fetchImpl: options?.gold?.fetchImpl,
         priceField: options?.gold?.priceField,
         now: options?.gold?.now,
+      })
+  )
+  // PER-250 Slice B: the reksadana NAV adapter. Lazy — it reads
+  // `REKSADANA_API_URL` only when actually constructed, so an install without the
+  // worker configured degrades ONLY the reksadana group (gold still refreshes).
+  registry.set(
+    REKSADANA_PROVIDER_ID,
+    () =>
+      new ReksadanaNavProvider({
+        baseUrl: options?.reksadana?.baseUrl,
+        fetchImpl: options?.reksadana?.fetchImpl,
+        mode: options?.reksadana?.mode,
+        from: options?.reksadana?.from,
       })
   )
   return registry
@@ -844,10 +1194,12 @@ export interface IngestAllSummary {
 
 export interface IngestAllOptions {
   db?: MarketDataDb
-  /** Adapter registry; defaults to the production registry (gold only, Slice A). */
+  /** Adapter registry; defaults to the production registry (gold + reksadana). */
   registry?: ProviderRegistry
   /** Gold passthrough used only when building the DEFAULT registry. */
   gold?: DefaultRegistryGoldOptions
+  /** Reksadana passthrough used only when building the DEFAULT registry. */
+  reksadana?: DefaultRegistryReksadanaOptions
 }
 
 /**
@@ -875,7 +1227,11 @@ export async function ingestAllInstrumentsOnce(
 ): Promise<IngestAllSummary> {
   const db = options?.db ?? prisma
   const registry =
-    options?.registry ?? createDefaultProviderRegistry({ gold: options?.gold })
+    options?.registry ??
+    createDefaultProviderRegistry({
+      gold: options?.gold,
+      reksadana: options?.reksadana,
+    })
 
   const instruments = await loadRoutableInstruments(db)
 
@@ -1015,8 +1371,13 @@ export interface SyncMarketPricesResult {
  * BSI-gold instrument is still ensured on every attempt (linkable before any
  * fetch succeeds), and the last good quote is left intact on failure.
  */
+export interface SyncMarketPricesOptions extends IngestGoldOptions {
+  /** Reksadana adapter passthrough (tests inject a fixture fetch / base URL). */
+  reksadana?: DefaultRegistryReksadanaOptions
+}
+
 export async function syncMarketPricesOnce(
-  options?: IngestGoldOptions
+  options?: SyncMarketPricesOptions
 ): Promise<SyncMarketPricesResult> {
   const db = options?.db ?? prisma
   try {
@@ -1032,6 +1393,7 @@ export async function syncMarketPricesOnce(
         priceField: options?.priceField,
         now: options?.now,
       },
+      reksadana: options?.reksadana,
     })
 
     if (summary.totalIngested > 0) {

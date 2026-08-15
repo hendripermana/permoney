@@ -30,7 +30,11 @@ import {
 import { parseMoneyInput, toDecimalString } from "@/lib/money"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import type { HoldingRecord } from "@/routes/_protected/-account-holdings"
-import { listMarketInstrumentsFn, upsertHoldingFn } from "@/server/holdings"
+import {
+  ensureReksadanaInstrumentFn,
+  listMarketInstrumentsFn,
+  upsertHoldingFn,
+} from "@/server/holdings"
 
 // Sentinel Select value for "no live price source" (manual pricing). Radix
 // Select forbids an empty-string item value, so null is modeled explicitly.
@@ -103,10 +107,51 @@ export function HoldingFormDialog({
   const [submitting, setSubmitting] = React.useState(false)
 
   // Same-currency series only (cross-currency auto-pricing is a later slice).
-  const { data: marketInstruments } = useQuery({
-    queryKey: ["market_instruments", currency],
-    queryFn: async () => await listMarketInstrumentsFn({ data: { currency } }),
-  })
+  const { data: marketInstruments, refetch: refetchMarketInstruments } =
+    useQuery({
+      queryKey: ["market_instruments", currency],
+      queryFn: async () =>
+        await listMarketInstrumentsFn({ data: { currency } }),
+    })
+
+  // PER-250 Slice B — register a reksadana (IDR mutual-fund) NAV series inline so
+  // it becomes linkable, without leaving the dialog. Reksadana is IDR-only.
+  const isIdr = currency.toUpperCase() === "IDR"
+  const [showAddFund, setShowAddFund] = React.useState(false)
+  const [fundCode, setFundCode] = React.useState("")
+  const [fundNickname, setFundNickname] = React.useState("")
+  const [addingFund, setAddingFund] = React.useState(false)
+  const [addFundError, setAddFundError] = React.useState<string | null>(null)
+
+  async function handleAddReksadanaFund() {
+    setAddFundError(null)
+    const code = fundCode.trim()
+    if (code.length < 2) {
+      setAddFundError("Enter the fund code (e.g. its Bareksa/KSEI code).")
+      return
+    }
+    setAddingFund(true)
+    try {
+      const created = await ensureReksadanaInstrumentFn({
+        data: {
+          code,
+          name: fundNickname.trim() === "" ? undefined : fundNickname.trim(),
+        },
+      })
+      await refetchMarketInstruments()
+      // Auto-select the freshly-registered series so the user can save at once.
+      setMarketInstrumentId(created.id)
+      setShowAddFund(false)
+      setFundCode("")
+      setFundNickname("")
+    } catch (caught) {
+      setAddFundError(
+        caught instanceof Error ? caught.message : "Could not add the fund."
+      )
+    } finally {
+      setAddingFund(false)
+    }
+  }
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
@@ -309,6 +354,74 @@ export function HoldingFormDialog({
               &ldquo;Refresh prices&rdquo;. Only same-currency ({currency})
               sources are shown.
             </p>
+
+            {isIdr ? (
+              showAddFund ? (
+                <div className="flex flex-col gap-2 rounded-md border border-dashed p-3">
+                  <Label htmlFor="reksadana-fund-code">
+                    Reksadana fund code
+                  </Label>
+                  <Input
+                    id="reksadana-fund-code"
+                    value={fundCode}
+                    onChange={(event) => setFundCode(event.target.value)}
+                    placeholder="e.g. sucorinvest-money-market-fund"
+                    autoComplete="off"
+                  />
+                  <Label htmlFor="reksadana-fund-nickname">
+                    Nickname (optional)
+                  </Label>
+                  <Input
+                    id="reksadana-fund-nickname"
+                    value={fundNickname}
+                    onChange={(event) => setFundNickname(event.target.value)}
+                    placeholder="e.g. Sucorinvest MMF"
+                    autoComplete="off"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Registers the fund&rsquo;s NAV series so it can be linked
+                    and auto-priced. Uses the fund&rsquo;s Bareksa/KSEI code.
+                  </p>
+                  {addFundError ? (
+                    <p className="text-sm text-destructive" role="alert">
+                      {addFundError}
+                    </p>
+                  ) : null}
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleAddReksadanaFund}
+                      disabled={addingFund}
+                    >
+                      {addingFund ? "Adding…" : "Add fund"}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setShowAddFund(false)
+                        setAddFundError(null)
+                      }}
+                      disabled={addingFund}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  variant="link"
+                  size="sm"
+                  className="h-auto self-start p-0 text-xs"
+                  onClick={() => setShowAddFund(true)}
+                >
+                  + Add a reksadana fund
+                </Button>
+              )
+            ) : null}
           </div>
 
           {error ? (
