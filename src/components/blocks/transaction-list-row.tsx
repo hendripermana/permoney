@@ -13,7 +13,7 @@ import { format } from "date-fns"
 import { cn } from "@/lib/utils"
 import { Checkbox } from "@/components/ui/checkbox"
 import { formatCurrency } from "@/lib/currency"
-import { decodeMoney } from "@/lib/money"
+import { decodeMoney, type Money } from "@/lib/money"
 import { moneyMovementLabel } from "@/lib/money-movement"
 import { signedDeltaForAccount } from "@/lib/account-analytics"
 import type { TransactionRecord } from "@/lib/collections"
@@ -21,17 +21,19 @@ import type { TransactionFormModal } from "@/components/transaction-form-modal"
 import type { TransactionRowDensity } from "@/lib/transaction-list"
 
 // ═══════════════════════════════════════════════════════════════
-// SHARED TRANSACTION ROW (PER-241)
+// SHARED TRANSACTION ROW (PER-241 + revision)
 //
-// ONE row design, two variants. `/transactions` renders the full "ledger"
-// variant (bulk-select checkbox + merchant/category/account columns); the
-// per-account statement renders the denser "statement" variant that folds the
-// context into a single secondary line ("Invest to Bibit · Rp 1,000 fee").
-// Both share the exact same primary block (chevron + description + badges),
-// amount styling, split expansion, and the PER-247 contextual movement label.
+// ONE unified ledger row, rendered identically on BOTH pages. `/transactions`
+// shows every column; the per-account statement renders the exact same row with
+// the (now redundant) account column hidden and a running-balance line under
+// the amount — the account page IS the ledger filtered to one account, the way
+// Sure / Revolut do it. Everything shared: the contextual PER-247 money-movement
+// label, split expansion, inline edit/delete, badges, and the signed + coloured
+// amount.
 //
-// Kept a deep module: the public surface is `variant` + a handful of grouped
-// props, while the per-variant layout complexity lives inside.
+// Kept a deep module: the public surface is a handful of grouped props
+// (`hideAccountColumn`, `viewedAccountIds`, `runningBalance`, `selection`,
+// `onEdit`, `onDelete`) while the per-column layout complexity lives inside.
 // ═══════════════════════════════════════════════════════════════
 
 /** The edit payload the singleton `TransactionFormModal` consumes on edit. */
@@ -84,17 +86,33 @@ const STATUS_BADGE: Record<string, { label: string; cls: string } | undefined> =
     },
   }
 
+/** Running (register) balance after this row, in the account's currency. */
+export interface RunningBalance {
+  amount: Money
+  currency: string
+}
+
 export interface TransactionListRowProps {
   trx: TransactionRecord
-  /** "ledger" = full columns + checkbox; "statement" = dense single-line. */
-  variant: "ledger" | "statement"
   density?: TransactionRowDensity
   /**
-   * Accounts being viewed, for transfer direction. The ledger passes the URL
-   * `accounts` filter (may be empty → neutral transfer rendering); the
-   * statement passes exactly the one account whose page is rendered.
+   * Accounts being viewed, for transfer direction + perspective. `/transactions`
+   * passes the URL `accounts` filter (may be empty → neutral, whole-book
+   * rendering); the per-account statement passes exactly the one account whose
+   * page is rendered.
    */
   viewedAccountIds?: ReadonlyArray<string>
+  /**
+   * Hide the account column — the per-account statement is already scoped to one
+   * account, so the chips are redundant. Also switches the amount + transfer
+   * label to that account's PERSPECTIVE (money in = +, money out = −).
+   */
+  hideAccountColumn?: boolean
+  /**
+   * Running-balance-after-this-row (the account register column). Only supplied
+   * for cash-like accounts on the statement; rendered muted under the amount.
+   */
+  runningBalance?: RunningBalance | null
   /** Bulk-select checkbox (ledger only). Omit to hide the checkbox column. */
   selection?: {
     isSelected: boolean
@@ -108,9 +126,10 @@ export interface TransactionListRowProps {
 
 export function TransactionListRow({
   trx,
-  variant,
   density = "comfortable",
   viewedAccountIds,
+  hideAccountColumn = false,
+  runningBalance,
   selection,
   onEdit,
   onDelete,
@@ -120,9 +139,29 @@ export function TransactionListRow({
   const statusBadge = STATUS_BADGE[trx.status]
   const compact = density === "compact"
 
+  // The single account this row is viewed from (statement, or a single-account
+  // ledger filter). Drives transfer direction + counterparty naming.
+  const singleAccountId =
+    viewedAccountIds && viewedAccountIds.length === 1
+      ? viewedAccountIds[0]
+      : null
+
+  // PER-241 revision — on the per-account statement, the amount is signed from
+  // that account's PERSPECTIVE (a transfer OUT reads −/red, a transfer IN reads
+  // +/green), exactly like a bank register. The whole-book ledger keeps its
+  // type-based colouring untouched (this only engages when the account column
+  // is hidden, i.e. the statement).
+  const accountPerspective = hideAccountColumn && singleAccountId != null
+  const perspectiveDir = accountPerspective
+    ? signedDeltaForAccount(trx, singleAccountId) >= 0n
+      ? 1
+      : -1
+    : 0
+
   // PER-202: from a viewed DESTINATION account, a transfer leg surfaced via
   // `toAccountId` is INCOMING — flip its sign/colour to read as a credit. The
-  // global (unfiltered) ledger passes no viewed accounts, so it stays neutral.
+  // whole-book (unfiltered) ledger passes no viewed accounts, so it stays
+  // neutral. (Used only on the non-perspective, whole-book path.)
   const isIncomingTransfer =
     trx.type === "transfer" &&
     viewedAccountIds != null &&
@@ -139,62 +178,10 @@ export function TransactionListRow({
       />
     ) : null
 
-  const primaryBlock = (
-    <PrimaryBlock
-      trx={trx}
-      hasSplits={hasSplits}
-      isExpanded={isExpanded}
-      onToggleExpand={() => setIsExpanded((prev) => !prev)}
-      statusBadge={statusBadge}
-      compact={compact}
-      // The statement variant folds the movement/counterparty into the
-      // secondary line under the description; the ledger keeps it in columns.
-      secondary={
-        variant === "statement"
-          ? statementSecondary(trx, viewedAccountIds?.[0])
-          : null
-      }
-    />
-  )
-
-  if (variant === "statement") {
-    const dir =
-      viewedAccountIds && viewedAccountIds.length > 0
-        ? signedDeltaForAccount(trx, viewedAccountIds[0]) >= 0n
-          ? 1
-          : -1
-        : trx.type === "expense"
-          ? -1
-          : 1
-    return (
-      <div
-        className={cn(
-          "group border-b border-zinc-100 transition-colors last:border-b-0 dark:border-zinc-800/50",
-          trx.status === "PENDING" && "opacity-80"
-        )}
-      >
-        <div
-          className={cn(
-            "flex w-full items-start gap-3 px-4",
-            compact ? "py-1.5" : "py-3"
-          )}
-        >
-          <div className="min-w-0 flex-1">{primaryBlock}</div>
-          <StatementAmount trx={trx} dir={dir} compact={compact} />
-          {rowActions}
-        </div>
-        {hasSplits && isExpanded ? (
-          <SplitChildren trx={trx} variant="statement" />
-        ) : null}
-      </div>
-    )
-  }
-
-  // ── Ledger variant ──────────────────────────────────────────────
   return (
     <div
       className={cn(
-        "border-b border-zinc-100 transition-colors dark:border-zinc-800/50",
+        "group border-b border-zinc-100 transition-colors dark:border-zinc-800/50",
         selection?.isSelected && "bg-zinc-50/80 dark:bg-zinc-900/40",
         trx.status === "PENDING" && "opacity-80"
       )}
@@ -202,7 +189,7 @@ export function TransactionListRow({
       <div
         className={cn("flex w-full items-start", compact ? "py-1.5" : "py-3")}
       >
-        {/* Checkbox column */}
+        {/* Checkbox column (bulk select — ledger only) */}
         <div className="flex w-12 shrink-0 justify-center pt-0.5">
           {selection ? (
             <Checkbox
@@ -220,7 +207,14 @@ export function TransactionListRow({
             trx.status === "PENDING" && "italic"
           )}
         >
-          {primaryBlock}
+          <PrimaryBlock
+            trx={trx}
+            hasSplits={hasSplits}
+            isExpanded={isExpanded}
+            onToggleExpand={() => setIsExpanded((prev) => !prev)}
+            statusBadge={statusBadge}
+            compact={compact}
+          />
         </div>
 
         {/* Merchant column (hidden on mobile) */}
@@ -237,78 +231,106 @@ export function TransactionListRow({
           {trx.type === "transfer" ? (
             <span
               className={cn(
-                "flex items-center gap-1 text-sm font-medium",
-                isIncomingTransfer
+                "flex min-w-0 items-center gap-1 text-sm font-medium",
+                perspectiveDir === 1 || isIncomingTransfer
                   ? "text-emerald-600 dark:text-emerald-400"
                   : "text-blue-600 dark:text-blue-400"
               )}
+              // Long movement labels ("Withdraw from Hasil Jualan") ellipsis in
+              // the fixed column; the title reveals the full text on hover.
+              title={transferColumnLabel(
+                trx,
+                singleAccountId,
+                isIncomingTransfer
+              )}
             >
-              <IconArrowsExchange size={15} />
-              {isIncomingTransfer
-                ? `${moneyMovementLabel({ kind: trx.kind, purpose: trx.transferPurpose })} from ${trx.account.name}`
-                : moneyMovementLabel({
-                    kind: trx.kind,
-                    purpose: trx.transferPurpose,
-                  })}
+              <IconArrowsExchange size={15} className="shrink-0" />
+              <span className="truncate">
+                {transferColumnLabel(trx, singleAccountId, isIncomingTransfer)}
+              </span>
             </span>
           ) : trx.isSplit ? (
             <span className="flex items-center gap-1 text-sm font-medium text-amber-600 dark:text-amber-400">
-              <IconScissors size={13} />
+              <IconScissors size={13} className="shrink-0" />
               Multiple
             </span>
           ) : (
-            <span className="flex items-center gap-1 text-sm text-muted-foreground">
+            <span
+              className="flex min-w-0 items-center gap-1 text-sm text-muted-foreground"
+              title={trx.category?.name ?? "Uncategorized"}
+            >
               <span
                 className="size-2 shrink-0 rounded-full"
                 style={{ backgroundColor: trx.category?.color ?? "#999" }}
               />
-              {trx.category?.name ?? "Uncategorized"}
+              <span className="truncate">
+                {trx.category?.name ?? "Uncategorized"}
+              </span>
             </span>
           )}
         </div>
 
-        {/* Account column (hidden until xl) */}
-        <div className="hidden w-52 shrink-0 px-4 pt-0.5 xl:block">
-          <div className="flex flex-wrap items-center gap-1">
-            {/* PER-247: orient chips by money flow — a valuation-linked
-                redemption RECEIVES into `account`, so the true source is
-                `toAccount`. */}
-            <span className="rounded-md border bg-zinc-100 px-2 py-0.5 text-xs dark:bg-zinc-800">
-              {trx.type === "transfer" && trx.transferIncoming && trx.toAccount
-                ? trx.toAccount.name
-                : trx.account.name}
-            </span>
-            {trx.type === "transfer" && trx.toAccount && (
-              <>
-                <IconArrowRight size={12} className="text-muted-foreground" />
-                <span className="rounded-md border bg-zinc-100 px-2 py-0.5 text-xs dark:bg-zinc-800">
-                  {trx.transferIncoming ? trx.account.name : trx.toAccount.name}
-                </span>
-              </>
-            )}
+        {/* Account column (hidden until xl; omitted entirely on the statement) */}
+        {hideAccountColumn ? null : (
+          <div className="hidden w-52 shrink-0 px-4 pt-0.5 xl:block">
+            <div className="flex flex-wrap items-center gap-1">
+              {/* PER-247: orient chips by money flow — a valuation-linked
+                  redemption RECEIVES into `account`, so the true source is
+                  `toAccount`. */}
+              <span className="rounded-md border bg-zinc-100 px-2 py-0.5 text-xs dark:bg-zinc-800">
+                {trx.type === "transfer" &&
+                trx.transferIncoming &&
+                trx.toAccount
+                  ? trx.toAccount.name
+                  : trx.account.name}
+              </span>
+              {trx.type === "transfer" && trx.toAccount && (
+                <>
+                  <IconArrowRight size={12} className="text-muted-foreground" />
+                  <span className="rounded-md border bg-zinc-100 px-2 py-0.5 text-xs dark:bg-zinc-800">
+                    {trx.transferIncoming
+                      ? trx.account.name
+                      : trx.toAccount.name}
+                  </span>
+                </>
+              )}
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* Amount column */}
+        {/* Amount column (+ running balance under it on the statement) */}
         <div
           className={cn(
             "w-36 shrink-0 px-4 pt-0.5 text-right font-bold",
-            trx.type === "expense"
-              ? "text-red-600 dark:text-red-400"
-              : trx.type === "income" || isIncomingTransfer
+            accountPerspective
+              ? perspectiveDir === 1
                 ? "text-emerald-600 dark:text-emerald-400"
-                : "text-blue-600 dark:text-blue-400"
+                : "text-red-600 dark:text-red-400"
+              : trx.type === "expense"
+                ? "text-red-600 dark:text-red-400"
+                : trx.type === "income" || isIncomingTransfer
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-blue-600 dark:text-blue-400"
           )}
         >
-          <span>
-            {trx.type === "expense"
-              ? "−"
-              : trx.type === "income" || isIncomingTransfer
+          <span className="tabular-nums">
+            {accountPerspective
+              ? perspectiveDir === 1
                 ? "+"
-                : ""}
+                : "−"
+              : trx.type === "expense"
+                ? "−"
+                : trx.type === "income" || isIncomingTransfer
+                  ? "+"
+                  : ""}
             {formatCurrency(trx.amount, trx.currency)}
           </span>
           <AmountExtras trx={trx} />
+          {runningBalance ? (
+            <div className="mt-0.5 text-[11px] font-normal text-muted-foreground tabular-nums">
+              {formatCurrency(runningBalance.amount, runningBalance.currency)}
+            </div>
+          ) : null}
         </div>
 
         {/* Actions column */}
@@ -318,13 +340,41 @@ export function TransactionListRow({
       </div>
 
       {hasSplits && isExpanded ? (
-        <SplitChildren trx={trx} variant="ledger" />
+        <SplitChildren trx={trx} hideAccountColumn={hideAccountColumn} />
       ) : null}
     </div>
   )
 }
 
-// ── Primary block: chevron + description + badges (+ optional secondary) ──
+// ── The directional, contextual transfer label for the category column ──
+// Whole-book ledger: the plain movement noun ("Invest", "Top-up", "Transfer"),
+// plus "from <source>" for a surfaced incoming (redemption) leg. Per-account
+// statement: the full directional phrase from THAT account's side — "Invest to
+// Bibit", "Withdraw from Hasil Jualan", "Transfer from GoPay".
+function transferColumnLabel(
+  trx: TransactionRecord,
+  singleAccountId: string | null,
+  isIncomingTransfer: boolean
+): string {
+  const noun = moneyMovementLabel({
+    kind: trx.kind,
+    purpose: trx.transferPurpose,
+  })
+  if (singleAccountId != null) {
+    const incoming = signedDeltaForAccount(trx, singleAccountId) >= 0n
+    const counterparty =
+      (trx.accountId === singleAccountId
+        ? trx.toAccount?.name
+        : trx.account?.name) ?? "account"
+    return incoming
+      ? `${noun} from ${counterparty}`
+      : `${noun} to ${counterparty}`
+  }
+  if (isIncomingTransfer) return `${noun} from ${trx.account.name}`
+  return noun
+}
+
+// ── Primary block: chevron + description + badges + time ──
 function PrimaryBlock({
   trx,
   hasSplits,
@@ -332,7 +382,6 @@ function PrimaryBlock({
   onToggleExpand,
   statusBadge,
   compact,
-  secondary,
 }: {
   trx: TransactionRecord
   hasSplits: boolean
@@ -340,7 +389,6 @@ function PrimaryBlock({
   onToggleExpand: () => void
   statusBadge: { label: string; cls: string } | undefined
   compact: boolean
-  secondary: React.ReactNode
 }) {
   return (
     <>
@@ -402,8 +450,6 @@ function PrimaryBlock({
         )}
       </div>
 
-      {/* Secondary line: the statement variant shows time · movement; the
-          ledger variant shows just the time (its context lives in columns). */}
       <p
         className={cn(
           "mt-0.5 pl-6.5 text-xs text-muted-foreground",
@@ -411,74 +457,12 @@ function PrimaryBlock({
         )}
       >
         {format(new Date(trx.date), "h:mm a")}
-        {secondary != null ? <> · {secondary}</> : null}
       </p>
     </>
   )
 }
 
-// ── Statement secondary label (contextual movement + counterparty + fee) ──
-function statementSecondary(
-  trx: TransactionRecord,
-  viewedAccountId: string | undefined
-): React.ReactNode {
-  if (trx.type !== "transfer") {
-    return (
-      trx.category?.name ??
-      trx.merchant?.name ??
-      (trx.isSplit ? "Split" : "Uncategorized")
-    )
-  }
-  const dir =
-    viewedAccountId != null && signedDeltaForAccount(trx, viewedAccountId) >= 0n
-      ? 1
-      : -1
-  const noun = moneyMovementLabel({
-    kind: trx.kind,
-    purpose: trx.transferPurpose,
-  })
-  // The counterparty is ALWAYS the other account, never the one being viewed.
-  const counterpartyName =
-    (trx.accountId === viewedAccountId
-      ? trx.toAccount?.name
-      : trx.account?.name) ?? "account"
-  const feeSuffix =
-    trx.transferFee != null
-      ? ` · ${formatCurrency(
-          decodeMoney(trx.transferFee.amount),
-          trx.transferFee.currency
-        )} fee`
-      : ""
-  return dir === 1
-    ? `${noun} from ${counterpartyName}${feeSuffix}`
-    : `${noun} to ${counterpartyName}${feeSuffix}`
-}
-
-// ── Statement amount (signed from the account perspective) ──
-function StatementAmount({
-  trx,
-  dir,
-  compact,
-}: {
-  trx: TransactionRecord
-  dir: 1 | -1
-  compact: boolean
-}) {
-  return (
-    <p
-      className={cn(
-        "shrink-0 text-right font-semibold tabular-nums",
-        compact ? "text-sm" : "text-sm",
-        dir === 1 ? "text-emerald-600 dark:text-emerald-400" : "text-foreground"
-      )}
-    >
-      {dir === 1 ? "+" : "−"}
-      {formatCurrency(trx.amount, trx.currency)}
-    </p>
-  )
-}
-
-// ── Cross-currency destination amount + fee note (ledger variant) ──
+// ── Cross-currency destination amount + fee note ──
 function AmountExtras({ trx }: { trx: TransactionRecord }) {
   return (
     <>
@@ -540,36 +524,12 @@ function RowActions({
 // ── Split entry children (variable height; virtualizer re-measures) ──
 function SplitChildren({
   trx,
-  variant,
+  hideAccountColumn,
 }: {
   trx: TransactionRecord
-  variant: "ledger" | "statement"
+  hideAccountColumn: boolean
 }) {
   const entries = trx.splitEntries ?? []
-  if (variant === "statement") {
-    return (
-      <div className="border-l-2 border-l-amber-400 bg-muted/5 pb-1 dark:border-l-amber-600">
-        {entries.map((entry) => (
-          <div
-            key={entry.id}
-            className="flex items-center justify-between gap-3 px-4 py-1.5 pl-13 text-sm text-muted-foreground"
-          >
-            <span className="flex min-w-0 items-center gap-2">
-              <span
-                className="size-2 shrink-0 rounded-full"
-                style={{ backgroundColor: entry.category?.color ?? "#999" }}
-              />
-              <span className="truncate">{entry.description}</span>
-            </span>
-            <span className="shrink-0 tabular-nums">
-              {formatCurrency(entry.amount, trx.currency)}
-            </span>
-          </div>
-        ))}
-      </div>
-    )
-  }
-
   return (
     <>
       {entries.map((entry, index) => {
@@ -611,9 +571,11 @@ function SplitChildren({
                 {entry.category?.name ?? "Uncategorized"}
               </span>
             </div>
-            <div className="hidden w-52 shrink-0 px-4 xl:block">
-              <span className="text-sm text-muted-foreground italic">-</span>
-            </div>
+            {hideAccountColumn ? null : (
+              <div className="hidden w-52 shrink-0 px-4 xl:block">
+                <span className="text-sm text-muted-foreground italic">-</span>
+              </div>
+            )}
             <div className="w-36 shrink-0 px-4 text-right font-medium text-muted-foreground">
               {formatCurrency(entry.amount, trx.currency)}
             </div>

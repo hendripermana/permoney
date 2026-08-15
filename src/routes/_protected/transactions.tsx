@@ -53,7 +53,13 @@ import {
   TransactionDensityToggle,
   useTransactionDensity,
 } from "@/components/blocks/transaction-density-toggle"
-import { dailyNet, ROW_ESTIMATE } from "@/lib/transaction-list"
+import {
+  dailyNet,
+  formatRelativeDay,
+  headerRowIndexes,
+  ROW_ESTIMATE,
+} from "@/lib/transaction-list"
+import { useStickyVirtualHeaders } from "@/hooks/use-sticky-virtual-headers"
 import { useMountEffect } from "@/hooks/use-mount-effect"
 import { createUuidV7 } from "@/lib/uuid-v7"
 
@@ -425,6 +431,15 @@ function TransactionsPage() {
   // === 8. SCROLL CONTAINER REF (for the virtualizer) ===
   const tableContainerRef = React.useRef<HTMLDivElement>(null)
 
+  // Sticky date headers: force the active group header to stay windowed, and
+  // pin it at the top of the scroll viewport while its group scrolls under it.
+  const headerIndexes = React.useMemo(
+    () => headerRowIndexes(flatVirtualRows),
+    [flatVirtualRows]
+  )
+  const { rangeExtractor, isActiveSticky } =
+    useStickyVirtualHeaders(headerIndexes)
+
   // === 9. ROW VIRTUALIZER — Sub-10ms DOM Rendering for 15,000+ rows ===
   // estimateSize: educated guess for each row type (header vs transaction)
   // measureElement: dynamically measures actual DOM height for expandable split rows
@@ -437,6 +452,7 @@ function TransactionsPage() {
         ? ROW_ESTIMATE[density].header
         : ROW_ESTIMATE[density].row,
     overscan: 10,
+    rangeExtractor,
     measureElement: (el) =>
       el?.getBoundingClientRect().height ?? ROW_ESTIMATE[density].row,
   })
@@ -661,19 +677,39 @@ function TransactionsPage() {
                   >
                     {rowVirtualizer.getVirtualItems().map((virtualItem) => {
                       const row = flatVirtualRows[virtualItem.index]
+                      const stickyHeader =
+                        row.kind === "header" &&
+                        isActiveSticky(virtualItem.index)
 
                       return (
                         <div
                           key={virtualItem.key}
                           data-index={virtualItem.index}
-                          ref={rowVirtualizer.measureElement}
-                          style={{
-                            position: "absolute",
-                            top: 0,
-                            left: 0,
-                            right: 0,
-                            transform: `translateY(${virtualItem.start}px)`,
-                          }}
+                          // A pinned header leaves the flow: don't let the
+                          // virtualizer re-measure it (it has no translateY),
+                          // otherwise its measured offset corrupts the layout.
+                          ref={
+                            stickyHeader
+                              ? undefined
+                              : rowVirtualizer.measureElement
+                          }
+                          style={
+                            stickyHeader
+                              ? {
+                                  position: "sticky",
+                                  top: 0,
+                                  left: 0,
+                                  right: 0,
+                                  zIndex: 1,
+                                }
+                              : {
+                                  position: "absolute",
+                                  top: 0,
+                                  left: 0,
+                                  right: 0,
+                                  transform: `translateY(${virtualItem.start}px)`,
+                                }
+                          }
                         >
                           {row.kind === "header" ? (
                             <DateGroupHeader
@@ -682,7 +718,6 @@ function TransactionsPage() {
                             />
                           ) : (
                             <TransactionListRow
-                              variant="ledger"
                               density={density}
                               trx={row.trx}
                               onEdit={setEditingTrx}
@@ -768,9 +803,9 @@ function DateGroupHeader({
   subtotal: Money
 }) {
   return (
-    <div className="flex items-center justify-between gap-2 border-b border-zinc-100 bg-zinc-100/60 px-4 py-2 dark:border-zinc-800/50 dark:bg-zinc-900/40">
+    <div className="flex items-center justify-between gap-2 border-b border-zinc-200 bg-zinc-100/95 px-4 py-2 backdrop-blur supports-[backdrop-filter]:bg-zinc-100/80 dark:border-zinc-800 dark:bg-zinc-900/95 dark:supports-[backdrop-filter]:bg-zinc-900/80">
       <span className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
-        {format(new Date(dateKey), "EEE • MMM dd, yyyy")}
+        {formatRelativeDay(dateKey)}
       </span>
       <span
         className={cn(

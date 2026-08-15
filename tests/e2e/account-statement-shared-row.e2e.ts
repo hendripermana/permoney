@@ -1,12 +1,14 @@
 import { expect, test } from "./support/fixtures"
 import { onboard, waitForHydration } from "./support/onboarding"
 
-// PER-241 — the per-account statement now renders the SAME shared row as the
-// /transactions ledger (denser "statement" variant): contextual PER-247
-// money-movement label, signed amount from the account's perspective, and
-// inline edit/delete wired to the singleton edit modal. It is also virtualized
-// with date-group headers. These specs prove the shared row on the account page
-// (contextual label + inline edit) and a many-rows smoke (render + scroll).
+// PER-241 (+ revision) — the per-account statement renders the SAME unified
+// ledger row as /transactions, just with the redundant account column hidden
+// and a running (register) balance under the amount: contextual PER-247
+// money-movement label, amount signed from the account's perspective, inline
+// edit/delete wired to the singleton edit modal, virtualized with sticky
+// relative date-group headers. These specs prove the shared row on the account
+// page (contextual label + running balance + inline edit) and a many-rows smoke
+// (render + scroll).
 
 test.describe("account statement shared row (PER-241)", () => {
   test("renders the shared row with a contextual transfer label + inline edit", async ({
@@ -56,13 +58,29 @@ test.describe("account statement shared row (PER-241)", () => {
     await page.getByRole("button", { name: `Open ${destName}` }).click()
     await page.waitForURL(/\/accounts\/[^/]+$/, { timeout: 15000 })
 
-    // The shared "statement" row: description, the contextual movement label
+    // The shared ledger row: description, the contextual movement label
     // (incoming → "Transfer from <source>"), and a credit-signed amount.
-    await expect(page.getByText(`Move ${suffix}`)).toBeVisible()
-    await expect(page.getByText(`Transfer from ${sourceName}`)).toBeVisible()
+    await expect(page.getByText(`Move ${suffix}`).first()).toBeVisible()
+    await expect(
+      page.getByText(`Transfer from ${sourceName}`).first()
+    ).toBeVisible()
     // The row amount AND the day subtotal both legitimately read +Rp 50,000.00,
     // so scope to the first match rather than asserting a single element.
     await expect(page.getByText("+Rp 50,000.00").first()).toBeVisible()
+
+    // Revision 2 — the running (register) balance shows for this cash-like
+    // account. After a single +50,000 credit onto an empty account it equals
+    // the current balance: the amount reads "+Rp 50,000.00" (signed), the muted
+    // register balance reads "Rp 50,000.00" (unsigned) under it. Scope to the
+    // statement scroller and match exactly so the signed amount/subtotal don't
+    // collide with the unsigned balance.
+    const statementScroller = page
+      .locator("div.overflow-auto")
+      .filter({ hasText: `Move ${suffix}` })
+      .first()
+    await expect(
+      statementScroller.getByText("Rp 50,000.00", { exact: true }).first()
+    ).toBeVisible()
 
     // --- Inline edit opens the singleton modal, prefilled; a round-trip
     //     rename proves the wiring (edit → save → resynced statement). ---

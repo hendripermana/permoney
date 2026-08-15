@@ -114,7 +114,14 @@ import {
   TransactionDensityToggle,
   useTransactionDensity,
 } from "@/components/blocks/transaction-density-toggle"
-import { dailyNet, ROW_ESTIMATE } from "@/lib/transaction-list"
+import {
+  computeRunningBalances,
+  dailyNet,
+  formatRelativeDay,
+  headerRowIndexes,
+  ROW_ESTIMATE,
+} from "@/lib/transaction-list"
+import { useStickyVirtualHeaders } from "@/hooks/use-sticky-virtual-headers"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
@@ -446,6 +453,24 @@ function AccountDetailPage() {
     [rangedLedger, query, types]
   )
 
+  // PER-241 revision — running (register) balance per row, cash-like accounts
+  // only (a valuation-tracked account's balance is its latest valuation, not a
+  // running sum). Computed over the FULL ordered account ledger (not the
+  // search/type/range-filtered subset) so the walk starts from the true newest
+  // row and each row's map entry is its real historical balance; a filtered
+  // view still looks its rows up by id. See computeRunningBalances.
+  const runningBalances = React.useMemo(
+    () =>
+      cashLike
+        ? computeRunningBalances(
+            orderStatementRows(ledger),
+            accountId,
+            toMoney(currentBalance)
+          )
+        : null,
+    [cashLike, ledger, accountId, currentBalance]
+  )
+
   // PER-241 — collapse the ordered statement into flat virtual rows (date
   // header + transactions), mirroring /transactions. `statement` is already
   // ordered newest-first, so a single pass preserves day grouping and order.
@@ -470,6 +495,14 @@ function AccountDetailPage() {
   }, [statement, accountId])
 
   const statementScrollRef = React.useRef<HTMLDivElement>(null)
+  // Sticky date headers — same model as /transactions.
+  const statementHeaderIndexes = React.useMemo(
+    () => headerRowIndexes(statementRows),
+    [statementRows]
+  )
+  const { rangeExtractor, isActiveSticky } = useStickyVirtualHeaders(
+    statementHeaderIndexes
+  )
   // Virtualize the statement so a 3,000-row account stays smooth — same
   // windowing model as /transactions (measured heights re-measure on density
   // change + split expansion).
@@ -481,6 +514,7 @@ function AccountDetailPage() {
         ? ROW_ESTIMATE[density].header
         : ROW_ESTIMATE[density].row,
     overscan: 10,
+    rangeExtractor,
     measureElement: (el) =>
       el?.getBoundingClientRect().height ?? ROW_ESTIMATE[density].row,
   })
@@ -777,18 +811,36 @@ function AccountDetailPage() {
                 >
                   {statementVirtualizer.getVirtualItems().map((virtualItem) => {
                     const row = statementRows[virtualItem.index]
+                    const stickyHeader =
+                      row.kind === "header" && isActiveSticky(virtualItem.index)
                     return (
                       <div
                         key={virtualItem.key}
                         data-index={virtualItem.index}
-                        ref={statementVirtualizer.measureElement}
-                        style={{
-                          position: "absolute",
-                          top: 0,
-                          left: 0,
-                          right: 0,
-                          transform: `translateY(${virtualItem.start}px)`,
-                        }}
+                        // A pinned header leaves the flow (no translateY); don't
+                        // let the virtualizer re-measure it.
+                        ref={
+                          stickyHeader
+                            ? undefined
+                            : statementVirtualizer.measureElement
+                        }
+                        style={
+                          stickyHeader
+                            ? {
+                                position: "sticky",
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                zIndex: 1,
+                              }
+                            : {
+                                position: "absolute",
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                transform: `translateY(${virtualItem.start}px)`,
+                              }
+                        }
                       >
                         {row.kind === "header" ? (
                           <StatementDateHeader
@@ -798,10 +850,20 @@ function AccountDetailPage() {
                           />
                         ) : (
                           <TransactionListRow
-                            variant="statement"
                             density={density}
                             trx={row.trx}
                             viewedAccountIds={[accountId]}
+                            hideAccountColumn
+                            runningBalance={
+                              runningBalances
+                                ? {
+                                    amount:
+                                      runningBalances.get(row.trx.id) ??
+                                      ZERO_MONEY,
+                                    currency,
+                                  }
+                                : null
+                            }
                             onEdit={setEditingTrx}
                             onDelete={handleStatementDelete}
                           />
@@ -904,9 +966,9 @@ function StatementDateHeader({
   currency,
 }: Readonly<{ dateKey: string; subtotal: Money; currency: string }>) {
   return (
-    <div className="flex items-center justify-between gap-2 border-b bg-muted/40 px-4 py-2">
+    <div className="flex items-center justify-between gap-2 border-b bg-muted/80 px-4 py-2 backdrop-blur supports-[backdrop-filter]:bg-muted/60">
       <span className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
-        {format(new Date(dateKey), "EEE • MMM dd, yyyy")}
+        {formatRelativeDay(dateKey)}
       </span>
       <span
         className={cn(
