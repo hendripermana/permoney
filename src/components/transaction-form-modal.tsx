@@ -1868,13 +1868,30 @@ function useTransactionFormModalController({
         // (liability kinds already mean something via `kind`; the server
         // rejects an override there). Recomputed here — the user may have
         // changed the destination AFTER picking a purpose.
+        // PER-241 revision — kill the "Transfer → Invest" flash. The optimistic
+        // row must carry the SAME purpose the server would derive, so it reads
+        // "Invest" / "Top-up" / "Withdraw" immediately instead of a generic
+        // "Transfer" for the ~1s until the post-mutation refetch lands. When the
+        // user leaves the purpose on "Automatic", fall back to the taxonomy
+        // derivation (identical to the server's `resolveTransferPurpose`, so the
+        // forwarded value stays idempotent — the server resolves the same thing
+        // whether we send the derived override or null).
         const transferPurposePayload: TransferPurpose | null =
           value.type === "transfer" && selectedAccount && selectedToAccount
             ? deriveTransferKindForAccounts({
                 fromAccountType: parseAccountType(selectedAccount.accountType),
                 toAccountType: parseAccountType(selectedToAccount.accountType),
               }) === "funds_movement"
-              ? (value.transferPurpose ?? null)
+              ? (value.transferPurpose ??
+                deriveTransferPurpose({
+                  fromAccountType: parseAccountType(
+                    selectedAccount.accountType
+                  ),
+                  toAccountType: parseAccountType(
+                    selectedToAccount.accountType
+                  ),
+                  toAccountSubtype: selectedToAccount.accountSubtype,
+                }))
               : null
             : null
         const accountRelation = selectedAccount
