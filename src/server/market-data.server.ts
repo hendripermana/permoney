@@ -33,12 +33,15 @@ import type { Prisma, PrismaClient } from "@prisma/client"
 import {
   BSI_GOLD_QUOTE_CURRENCY,
   BSI_GOLD_SYMBOL,
+  isMarketInstrumentKind,
   normalizeObservations,
   parseLogamMuliaGoldResponse,
+  resolveProviderId,
   type GoldPriceField,
   type MarketInstrumentIdentity,
   type MarketInstrumentKind,
   type MarketObservation,
+  type ProviderId,
 } from "@/lib/market-data"
 import { prisma } from "./db.server"
 
@@ -233,7 +236,11 @@ function serializeObservation(
 /** The Prisma surface the pipeline needs — a full client (has `$transaction`). */
 export type MarketDataDb = Pick<
   PrismaClient,
-  "marketInstrument" | "marketQuote" | "rawMarketDataFetch" | "$transaction"
+  | "marketInstrument"
+  | "marketQuote"
+  | "rawMarketDataFetch"
+  | "$transaction"
+  | "$queryRaw"
 >
 
 export interface IngestSummary {
@@ -734,16 +741,287 @@ export async function ingestGoldPricesOnce(
   })
 }
 
+// =============================================================================
+// Financial Ingestion Service — provider registry + routing engine (PER-257 /
+// ADR-0052)
+// =============================================================================
+//
+// A modular ROUTER in front of the single `ingestMarketDataOnce` seam. Given a
+// set of instruments of mixed kinds it selects the right adapter per instrument
+// (pure `resolveProviderId`), batches per adapter, and ingests each batch through
+// the unchanged raw -> staged -> canonical pipeline. Adding a vendor = one
+// adapter + one registry entry, with zero consumer change.
+//
+// The routing DECISION is pure (`@/lib/market-data`); which adapters actually
+// EXIST — and their secrets — live here, behind the `.server.ts` fence. Factories
+// are LAZY so an adapter whose env/secret is unset only throws when its own group
+// is invoked, and that throw degrades to a per-group error, never aborting the
+// other groups.
+
+/** A lazy adapter factory: constructing it may read env/secrets (call time). */
+export type ProviderFactory = () => MarketDataProvider
+
+/** The registry the router looks an adapter up in by its `ProviderId`. */
+export type ProviderRegistry = Map<ProviderId, ProviderFactory>
+
+/** Gold-adapter construction knobs (tests inject a fixture fetch / clock). */
+export interface DefaultRegistryGoldOptions {
+  baseUrl?: string
+  fetchImpl?: FetchLike
+  priceField?: GoldPriceField
+  now?: () => Date
+}
+
+export interface DefaultRegistryOptions {
+  /** Passthrough for the `logam_mulia` gold adapter (see LogamMuliaGoldProvider). */
+  gold?: DefaultRegistryGoldOptions
+}
+
+/**
+ * The production registry. Slice A registers ONLY `logam_mulia` (gold now flows
+ * THROUGH the router, proving the mechanism before fragile sources plug in).
+ * `reksadana_id` (PER-257 Slice B) and `yahoo` / `alpaca` / `twelvedata`
+ * (later slices) drop in here with no consumer change. The factory is lazy: the
+ * gold provider reads `LOGAM_MULIA_API_URL` only when actually constructed.
+ */
+export function createDefaultProviderRegistry(
+  options?: DefaultRegistryOptions
+): ProviderRegistry {
+  const registry: ProviderRegistry = new Map()
+  registry.set(
+    "logam_mulia",
+    () =>
+      new LogamMuliaGoldProvider({
+        baseUrl: options?.gold?.baseUrl,
+        fetchImpl: options?.gold?.fetchImpl,
+        priceField: options?.gold?.priceField,
+        now: options?.gold?.now,
+      })
+  )
+  return registry
+}
+
+/** The routing-relevant columns the router loads for each instrument. */
+type RoutableInstrument = {
+  id: string
+  kind: string
+  symbol: string
+  mic: string | null
+  quoteCurrency: string
+  baseCurrency: string | null
+  provider: string | null
+}
+
+const ROUTABLE_SELECT = {
+  id: true,
+  kind: true,
+  symbol: true,
+  mic: true,
+  quoteCurrency: true,
+  baseCurrency: true,
+  provider: true,
+} as const
+
+/** One adapter group's outcome in the aggregate summary. */
+export interface ProviderIngestSummary {
+  providerId: ProviderId
+  /** Instruments routed to this adapter this run. */
+  instrumentCount: number
+  /** Canonical quotes written for this group (0 on this group's failure). */
+  ingested: number
+  /** Present only when THIS group degraded (its adapter failed / is misconfigured). */
+  error?: string
+}
+
+/** An instrument the router could not send anywhere (no adapter routed/registered). */
+export interface SkippedInstrument {
+  marketInstrumentId: string
+  symbol: string
+  reason: string
+}
+
+export interface IngestAllSummary {
+  perProvider: ProviderIngestSummary[]
+  totalIngested: number
+  skipped: SkippedInstrument[]
+}
+
+export interface IngestAllOptions {
+  db?: MarketDataDb
+  /** Adapter registry; defaults to the production registry (gold only, Slice A). */
+  registry?: ProviderRegistry
+  /** Gold passthrough used only when building the DEFAULT registry. */
+  gold?: DefaultRegistryGoldOptions
+  /**
+   * Instrument ids to price REGARDLESS of holding links (the on-demand baseline).
+   * `syncMarketPricesOnce` passes the ensured BSI-gold id so gold still refreshes
+   * on an install that has not linked a gold holding yet (unchanged behaviour).
+   */
+  baselineInstrumentIds?: readonly string[]
+}
+
+/**
+ * Ingest EVERY instrument this install can price, routed per adapter (ADR-0052
+ * §3). Bounded work: only instruments LINKED to at least one holding (plus any
+ * explicit `baselineInstrumentIds`) — never the whole catalog.
+ *
+ * Per-adapter FAILURE ISOLATION: each group runs in its own try/catch. An adapter
+ * that is unreachable / misconfigured / throws on construction degrades to
+ * `{ ingested: 0, error }` for ITS instruments only; other groups still refresh,
+ * the last-good `MarketQuote` is retained, and the failed `RawMarketDataFetch` is
+ * staged by `ingestMarketDataOnce`. An instrument that routes nowhere (unroutable
+ * kind, or a routed id with no registered adapter) lands in `skipped`.
+ *
+ * GLOBAL ingest ONLY — writes exclusively the three global market tables, NEVER
+ * the ledger, so it runs OUTSIDE any family RLS transaction (ADR-0050 §6).
+ */
+export async function ingestAllLinkedInstrumentsOnce(
+  options?: IngestAllOptions
+): Promise<IngestAllSummary> {
+  const db = options?.db ?? prisma
+  const registry =
+    options?.registry ?? createDefaultProviderRegistry({ gold: options?.gold })
+
+  const instruments = await loadRoutableInstruments(
+    db,
+    options?.baselineInstrumentIds ?? []
+  )
+
+  // 1. Group by routed adapter; collect structured skips as we go.
+  const groups = new Map<ProviderId, RoutableInstrument[]>()
+  const skipped: SkippedInstrument[] = []
+  for (const instrument of instruments) {
+    const route = resolveProviderId({
+      kind: instrument.kind as MarketInstrumentKind,
+      symbol: instrument.symbol,
+      mic: instrument.mic,
+      provider: instrument.provider,
+    })
+    if (route.status === "skipped") {
+      skipped.push({
+        marketInstrumentId: instrument.id,
+        symbol: instrument.symbol,
+        reason: route.reason,
+      })
+      continue
+    }
+    if (!registry.has(route.providerId)) {
+      // Routed, but no adapter is registered for it yet (e.g. `yahoo` in Slice A).
+      skipped.push({
+        marketInstrumentId: instrument.id,
+        symbol: instrument.symbol,
+        reason: `no adapter registered for "${route.providerId}"`,
+      })
+      continue
+    }
+    const bucket = groups.get(route.providerId)
+    if (bucket) bucket.push(instrument)
+    else groups.set(route.providerId, [instrument])
+  }
+
+  // 2. Ingest each group in isolation — one flaky source can never break another.
+  const perProvider: ProviderIngestSummary[] = []
+  let totalIngested = 0
+  for (const [providerId, groupInstruments] of groups) {
+    const factory = registry.get(providerId)
+    if (!factory) continue // unreachable (has() guarded above) — defensive.
+    try {
+      const provider = factory()
+      const summary = await ingestMarketDataOnce({
+        provider,
+        requests: groupInstruments.map(toInstrumentRequest),
+        db,
+      })
+      const ingested = summary.status === "ok" ? summary.quotesUpserted : 0
+      totalIngested += ingested
+      perProvider.push({
+        providerId,
+        instrumentCount: groupInstruments.length,
+        ingested,
+        error: summary.status === "ok" ? undefined : summary.error,
+      })
+    } catch (error) {
+      // A misconfigured/throwing adapter (e.g. unset secret) degrades to a
+      // per-group error; the other groups above/below still run.
+      perProvider.push({
+        providerId,
+        instrumentCount: groupInstruments.length,
+        ingested: 0,
+        error: error instanceof Error ? error.message : "provider failed",
+      })
+    }
+  }
+
+  return { perProvider, totalIngested, skipped }
+}
+
+/**
+ * Load the instruments the router should price: those LINKED to at least one
+ * holding (discovered cross-tenant via the `SECURITY DEFINER`
+ * `market_instrument_ids_linked_to_holdings()` — see the migration; the global
+ * ingest has no family scope, so it cannot read the RLS-forced holdings
+ * `Instrument` table directly), plus any explicit baseline ids, de-duplicated.
+ */
+async function loadRoutableInstruments(
+  db: MarketDataDb,
+  baselineInstrumentIds: readonly string[]
+): Promise<RoutableInstrument[]> {
+  const linkedIdRows = await db.$queryRaw<{ id: string }[]>`
+    SELECT ids::text AS id
+    FROM market_instrument_ids_linked_to_holdings() AS ids
+  `
+
+  const ids = new Set<string>()
+  for (const row of linkedIdRows) ids.add(row.id)
+  for (const id of baselineInstrumentIds) ids.add(id)
+  if (ids.size === 0) return []
+
+  // MarketInstrument is a global, family-neutral table (no RLS), so this read is
+  // safe outside any family scope.
+  return await db.marketInstrument.findMany({
+    where: { id: { in: [...ids] } },
+    select: ROUTABLE_SELECT,
+  })
+}
+
+/** Build the pipeline request for one instrument (fx pair vs spot instrument). */
+function toInstrumentRequest(
+  instrument: RoutableInstrument
+): MarketInstrumentRequest {
+  if (instrument.kind === "fx") {
+    return {
+      kind: "fx",
+      baseCurrency: instrument.baseCurrency ?? "",
+      quoteCurrency: instrument.quoteCurrency,
+    }
+  }
+  // metal / security / crypto (validated: the caller only reaches here for a
+  // routed, non-fx instrument; a bad kind would have been skipped by the router).
+  const spotKind: Exclude<MarketInstrumentKind, "fx"> =
+    isMarketInstrumentKind(instrument.kind) && instrument.kind !== "fx"
+      ? instrument.kind
+      : "security"
+  return {
+    kind: spotKind,
+    symbol: instrument.symbol,
+    quoteCurrency: instrument.quoteCurrency,
+    mic: instrument.mic ?? undefined,
+  }
+}
+
 // -----------------------------------------------------------------------------
 // On-demand price sync trigger — the graceful boundary the UI/serverFn call
-// (PER-235b). Wraps `ingestGoldPricesOnce` so a MISSING config
-// (`LOGAM_MULIA_API_URL` unset → the provider constructor throws) or ANY other
-// unexpected throw degrades to a structured result instead of a 500. A fetch
-// that reaches the pipeline already degrades internally (a failed
-// `RawMarketDataFetch` + zero quotes), so the last-good quote is always kept.
-// This performs a GLOBAL ingest only — it writes exclusively the three global
-// market tables and NEVER the ledger, so it runs OUTSIDE any family RLS
-// transaction (its caller keeps the family-scoped holdings refresh separate).
+// (PER-235b), now backed by the router (PER-257). It ENSURES the BSI-gold
+// instrument (so gold stays linkable + refreshes even before any holding links
+// it — unchanged behaviour), then runs the Financial Ingestion Service over
+// every linked instrument PLUS the gold baseline. Gold now flows THROUGH the
+// registry instead of a hardcoded call. NEVER throws: a MISSING config
+// (`LOGAM_MULIA_API_URL` unset → the gold factory throws inside its group), an
+// unreachable worker, or a non-2xx / `success:false` payload all degrade to
+// `{ ingested: 0, error }`, and the last-good quote is always kept. This performs
+// a GLOBAL ingest only — the three global market tables, NEVER the ledger — so it
+// runs OUTSIDE any family RLS transaction (the caller keeps the family-scoped
+// holdings refresh separate).
 // -----------------------------------------------------------------------------
 
 export interface SyncMarketPricesResult {
@@ -754,27 +1032,42 @@ export interface SyncMarketPricesResult {
 }
 
 /**
- * Run one on-demand market-price sync (currently BSI gold). NEVER throws: an
- * unreachable worker, a non-2xx / `success:false` payload, or an unset
+ * Run one on-demand market-price sync through the ingestion router. NEVER throws:
+ * an unreachable worker, a non-2xx / `success:false` payload, or an unset
  * `LOGAM_MULIA_API_URL` all resolve to `{ ingested: 0, error }`. The canonical
- * instrument is still ensured on every attempt (linkable before any fetch
- * succeeds), and the last good quote is left intact on failure.
+ * BSI-gold instrument is still ensured on every attempt (linkable before any
+ * fetch succeeds), and the last good quote is left intact on failure.
  */
 export async function syncMarketPricesOnce(
   options?: IngestGoldOptions
 ): Promise<SyncMarketPricesResult> {
+  const db = options?.db ?? prisma
   try {
-    const summary = await ingestGoldPricesOnce(options)
-    if (summary.status !== "ok") {
-      return {
-        ingested: 0,
-        error: summary.error ?? "market data source unavailable",
-      }
+    // Keep gold linkable + baseline-priced even with zero linked holdings.
+    const goldInstrumentId = await ensureBsiGoldInstrument(db)
+
+    const summary = await ingestAllLinkedInstrumentsOnce({
+      db,
+      gold: {
+        baseUrl: options?.baseUrl,
+        fetchImpl: options?.fetchImpl,
+        priceField: options?.priceField,
+        now: options?.now,
+      },
+      baselineInstrumentIds: [goldInstrumentId],
+    })
+
+    if (summary.totalIngested > 0) {
+      return { ingested: summary.totalIngested }
     }
-    return { ingested: summary.quotesUpserted }
+
+    // Nothing ingested — surface the first degraded group's reason (if any) so
+    // the caller/UI can explain the failure, mirroring the old contract.
+    const failed = summary.perProvider.find((group) => group.error)
+    if (failed?.error) return { ingested: 0, error: failed.error }
+    return { ingested: 0 }
   } catch (error) {
-    // Config unset (provider constructor throws) or any other unexpected error —
-    // degrade gracefully rather than surfacing a 500 to the browser.
+    // Defense-in-depth: any unexpected throw degrades rather than 500-ing.
     return {
       ingested: 0,
       error: error instanceof Error ? error.message : "market sync failed",
