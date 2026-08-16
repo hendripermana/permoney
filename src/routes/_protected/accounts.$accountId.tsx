@@ -691,6 +691,7 @@ function AccountDetailPage() {
               onEdit={(holding) => setHoldingDialog({ mode: "edit", holding })}
               onDelete={handleDeleteHolding}
               onBuy={() => setTradeDialog({ side: "buy" })}
+              onSell={() => setTradeDialog({ side: "sell" })}
               onBuyHolding={(holding) =>
                 setTradeDialog({ side: "buy", holding })
               }
