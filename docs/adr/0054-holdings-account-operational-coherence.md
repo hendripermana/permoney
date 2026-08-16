@@ -34,6 +34,13 @@ per-holding-row, so the account header showed Buy but no Sell. The system was no
 
 ## Decision
 
+**Broker/country-agnostic principle.** Permoney serves users worldwide on any
+broker/fund app (Bibit, Ajaib, Vanguard, Fidelity, IBKR, …), any currency, any
+country. Every mechanism here is modelled on the UNIVERSAL concept (a
+"distribution", a "position move", a "trade"), never a single vendor's wording or
+behaviour. Vendor specifics (e.g. one app auto-reinvests, another pays cash) are
+just which generic option a user picks — never hardcoded.
+
 **A holdings-tracked account moves money ONLY through trades.** For an account
 that carries holdings, every money movement is a trade on the `recordTradeFn`
 family; the plain-transfer, valuation-linked-transfer, and manual "Update value"
@@ -58,9 +65,19 @@ guards that must ALL exist for the model to be coherent (not just Buy/Sell):
    position, realized gain shown. _(Slice 1 — panel Sell shipped.)_
 2. **Buy must cover first + subsequent** — create the instrument inline on the
    first buy; average-cost into an existing position on later buys. _(Exists.)_
-3. **Dividend / distribution** — income with **no units bought** (cash to the
-   funding account) OR **reinvested** (units up, no external cash). A distinct
-   trade mode; without it users mis-record income as a Buy or a plain transfer.
+3. **Dividend / distribution** — a distinct mode with TWO shapes, both universal
+   across brokers/funds (NOT Bibit-specific — see the Broker-agnostic principle):
+   - **Cash payout**: income with **no units and no position-value change** —
+     cash credited to a **user-chosen destination account** (often a DIFFERENT
+     account than the holding, e.g. a pension/cash pot), back-datable, and
+     provenance-linked to the source holding for reporting. The holdings account
+     is NOT mutated.
+   - **Reinvest**: **units up** at the reinvest price, **no external cash**; cost
+     basis increases by the reinvested amount (like an internally-funded Buy).
+     Real case (creator, BNI-AM Ardhani): 3 CASH dividends (2025-06-11 12,151 ·
+     2025-12-08 17,268 · 2026-06-08 595) auto-deposited to a _separate_ "Dana
+     Pensiun" account; units flat. So the destination is user-selectable and the
+     date is user-set — do not assume same-account or today.
 4. **Fees** — purchase / redemption / management fees reduce cash or NAV value;
    a fee that isn't modeled gets mis-booked as a mystery value drop.
 5. **Switch** (fund A → fund B) — an atomic sell-A + buy-B in one account, the
@@ -89,6 +106,13 @@ guards that must ALL exist for the model to be coherent (not just Buy/Sell):
     migration (creator's call).
 12. **Precision + idempotency** — fractional units (scaled bigint) and an
     idempotency key on every trade (retry-safe), same contract as the ledger.
+13. **Move a position between accounts (in-kind portfolio move)** — a broker lets
+    you move a fund/position from one portfolio to another WITHOUT selling (Bibit
+    "pindah portofolio", and its analogues everywhere). Model as an in-kind move:
+    the holding (units + cost basis) leaves account A and lands in account B; both
+    accounts' Σ(units × price) re-materialize; NO cash leg, NO realized gain (cost
+    basis carries over). Distinct from Sell-then-Buy (which realizes gain + moves
+    cash). Withdraw stays Sell.
 
 ### Non-goals (this ADR)
 
@@ -113,4 +137,6 @@ FIFO-vs-average election beyond the current average-cost model — later.
 - **Slice 3 — Fees** (purchase / redemption / management).
 - **Slice 4 — Switch** (atomic sell-A + buy-B).
 - **Slice 5 — Edit/correct a trade** (reverse + re-record, audited).
-- Cross-cutting: multi-currency trade + FX rides ADR-0052 Slice C/D.
+- **Slice 6 — Move a position between accounts** (in-kind, no cash, cost basis carries).
+- Cross-cutting: multi-currency trade + FX rides ADR-0052 Slice C/D; everything
+  broker/country-agnostic (Broker-agnostic principle above).

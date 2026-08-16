@@ -52,6 +52,10 @@ import {
   TradeDialog,
   type TradeDialogState,
 } from "@/components/blocks/trade-dialog"
+import {
+  DistributionDialog,
+  type DistributionDialogState,
+} from "@/components/blocks/distribution-dialog"
 import { TransactionFormModal } from "@/components/transaction-form-modal"
 import {
   accountCollection,
@@ -177,6 +181,9 @@ function AccountDetailPage() {
   const [tradeDialog, setTradeDialog] = React.useState<TradeDialogState | null>(
     null
   )
+  // PER-259 Slice 2 — dividend / distribution dialog (cash payout or reinvest).
+  const [distributionDialog, setDistributionDialog] =
+    React.useState<DistributionDialogState | null>(null)
   // PER-241 — the per-account statement now shares the /transactions row, so it
   // gets the same singleton edit modal + inline delete.
   const [editingTrx, setEditingTrx] =
@@ -718,6 +725,10 @@ function AccountDetailPage() {
               onSellHolding={(holding) =>
                 setTradeDialog({ side: "sell", holding })
               }
+              onDividend={() => setDistributionDialog({})}
+              onDividendHolding={(holding) =>
+                setDistributionDialog({ holding })
+              }
               onRefreshPrices={handleRefreshPrices}
               refreshingPrices={refreshingPrices}
             />
@@ -967,6 +978,27 @@ function AccountDetailPage() {
           onSaved={async () => {
             await refreshHoldings()
             setTradeDialog(null)
+          }}
+        />
+      ) : null}
+
+      {distributionDialog ? (
+        <DistributionDialog
+          // Remount per open so the form re-initializes cleanly.
+          key={
+            distributionDialog.holding
+              ? `distribution-${distributionDialog.holding.id}`
+              : "distribution"
+          }
+          state={distributionDialog}
+          investmentAccountId={accountId}
+          currency={currency}
+          holdings={holdingsView?.holdings ?? []}
+          destinationAccounts={fundingAccounts}
+          onClose={() => setDistributionDialog(null)}
+          onSaved={async () => {
+            await refreshHoldings()
+            setDistributionDialog(null)
           }}
         />
       ) : null}
