@@ -134,7 +134,24 @@ FIFO-vs-average election beyond the current average-cost model — later.
   hide/redirect "Add transaction" transfer + "Update value" on holdings accounts;
   server + DB invariant with an actionable "use Buy/Sell" message; real-PG + e2e.
 - **Slice 2 — Dividend / distribution** trade mode (cash-out or reinvest).
-- **Slice 3 — Fees** (purchase / redemption / management).
+- **Slice 3 — Fees** (standalone) — DONE (PER-259 Slice 3). A **standalone fee**
+  tied to an investment (platform / annual / one-off transaction / redemption fee
+  charged _separately_) is modelled as an **EXPENSE** on a **user-chosen cash
+  account** (`transaction_flow`), reducing its balance via the guarded delta (so
+  a fee can never land on a holdings/valuation account), back-datable,
+  categorised with a family **"Investment Fee"** expense category (find-or-create,
+  case-insensitive — the Slice 2 pattern), and provenance-linked to the source
+  holding/instrument (description + notes + an append-only `Fee` AuditLog row).
+  **The source holding is NOT mutated.** Server `recordFeeFn` / `recordFeeForFamily`;
+  within-tx primitive `postExpenseTransactionWithinTx` (the EXPENSE sibling of
+  Slice 2's `postIncomeTransactionWithinTx`; `createTransactionForFamily`
+  untouched). Same-currency this slice.
+  - **Out of scope — already captured, never double-counted:** a fee **embedded
+    in a Buy/Sell** (purchase / redemption load) is already in the trade —
+    `cashAmount` is authoritative, the load is part of the cash actually
+    paid/received. And **NAV-embedded management fees** (reksadana / ETF expense
+    ratios) are already inside the NAV/price, so the Σ-holdings value already
+    reflects them — NOT recorded separately. Slice 3 adds only the standalone fee.
 - **Slice 4 — Switch** (atomic sell-A + buy-B).
 - **Slice 5 — Edit/correct a trade** (reverse + re-record, audited).
 - **Slice 6 — Move a position between accounts** (in-kind, no cash, cost basis carries).

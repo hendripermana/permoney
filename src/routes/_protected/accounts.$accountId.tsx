@@ -56,6 +56,7 @@ import {
   DistributionDialog,
   type DistributionDialogState,
 } from "@/components/blocks/distribution-dialog"
+import { FeeDialog, type FeeDialogState } from "@/components/blocks/fee-dialog"
 import { TransactionFormModal } from "@/components/transaction-form-modal"
 import {
   accountCollection,
@@ -184,6 +185,7 @@ function AccountDetailPage() {
   // PER-259 Slice 2 — dividend / distribution dialog (cash payout or reinvest).
   const [distributionDialog, setDistributionDialog] =
     React.useState<DistributionDialogState | null>(null)
+  const [feeDialog, setFeeDialog] = React.useState<FeeDialogState | null>(null)
   // PER-241 — the per-account statement now shares the /transactions row, so it
   // gets the same singleton edit modal + inline delete.
   const [editingTrx, setEditingTrx] =
@@ -729,6 +731,8 @@ function AccountDetailPage() {
               onDividendHolding={(holding) =>
                 setDistributionDialog({ holding })
               }
+              onFee={() => setFeeDialog({})}
+              onFeeHolding={(holding) => setFeeDialog({ holding })}
               onRefreshPrices={handleRefreshPrices}
               refreshingPrices={refreshingPrices}
             />
@@ -999,6 +1003,23 @@ function AccountDetailPage() {
           onSaved={async () => {
             await refreshHoldings()
             setDistributionDialog(null)
+          }}
+        />
+      ) : null}
+
+      {feeDialog ? (
+        <FeeDialog
+          // Remount per open so the form re-initializes cleanly.
+          key={feeDialog.holding ? `fee-${feeDialog.holding.id}` : "fee"}
+          state={feeDialog}
+          investmentAccountId={accountId}
+          currency={currency}
+          holdings={holdingsView?.holdings ?? []}
+          sourceAccounts={fundingAccounts}
+          onClose={() => setFeeDialog(null)}
+          onSaved={async () => {
+            await refreshHoldings()
+            setFeeDialog(null)
           }}
         />
       ) : null}
