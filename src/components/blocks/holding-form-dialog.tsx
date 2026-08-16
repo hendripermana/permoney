@@ -127,7 +127,9 @@ export function HoldingFormDialog({
     setAddFundError(null)
     const code = fundCode.trim()
     if (code.length < 2) {
-      setAddFundError("Enter the fund code (e.g. its Bareksa/KSEI code).")
+      setAddFundError(
+        "Enter the fund's numeric Bareksa product id (e.g. 3035)."
+      )
       return
     }
     setAddingFund(true)
@@ -359,13 +361,14 @@ export function HoldingFormDialog({
               showAddFund ? (
                 <div className="flex flex-col gap-2 rounded-md border border-dashed p-3">
                   <Label htmlFor="reksadana-fund-code">
-                    Reksadana fund code
+                    Bareksa product id
                   </Label>
                   <Input
                     id="reksadana-fund-code"
                     value={fundCode}
                     onChange={(event) => setFundCode(event.target.value)}
-                    placeholder="e.g. sucorinvest-money-market-fund"
+                    placeholder="e.g. 3035"
+                    inputMode="numeric"
                     autoComplete="off"
                   />
                   <Label htmlFor="reksadana-fund-nickname">
@@ -380,7 +383,9 @@ export function HoldingFormDialog({
                   />
                   <p className="text-xs text-muted-foreground">
                     Registers the fund&rsquo;s NAV series so it can be linked
-                    and auto-priced. Uses the fund&rsquo;s Bareksa/KSEI code.
+                    and auto-priced. Use the numeric product id from the
+                    fund&rsquo;s Bareksa URL (&hellip;/data/reksadana/
+                    <b>&lt;id&gt;</b>/&hellip;).
                   </p>
                   {addFundError ? (
                     <p className="text-sm text-destructive" role="alert">
