@@ -35,6 +35,7 @@ import {
 import { toMinorUnits } from "@/lib/money"
 import { getFamilyBaseCurrency } from "./fx"
 import {
+  postExpenseTransactionWithinTx,
   postIncomeTransactionWithinTx,
   postValuationLinkedTransferLegs,
   type ValuationLinkedTransferLeg,
@@ -1941,6 +1942,317 @@ export const recordDistributionFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data, context }) => {
     return await recordDistributionForFamily({
+      data,
+      familyId: context.familyId,
+      user: context.user,
+    })
+  })
+
+// =============================================================================
+// FEE — standalone investment fee as an EXPENSE (PER-259 Slice 3 / ADR-0054)
+// =============================================================================
+//
+// A fee is a cost tied to an investment. Broker/country-agnostic (NOT vendor-
+// specific): a platform fee, an annual/subscription fee, a one-off transaction/
+// redemption fee charged SEPARATELY. This slice models the STANDALONE fee — the
+// common, missing case — as a normal EXPENSE `Transaction` on a USER-CHOSEN cash
+// account (balanceSource="transaction_flow"), reducing its balance via the
+// guarded delta (so a fee can NEVER land on a holdings/valuation account), back-
+// datable, categorised with the family's "Investment Fee" expense category
+// (find-or-create, case-insensitive — same pattern as Slice 2's "Investment
+// Income"), and provenance-linked to the source holding/instrument (description +
+// notes + an append-only `Fee` AuditLog row carrying holdingId/instrumentId/
+// amount). The source holding is NOT mutated (no anchor recompute).
+//
+// OUT OF SCOPE — already captured elsewhere, never double-counted here:
+//   • Fees EMBEDDED in a Buy/Sell (purchase / redemption load) — `cashAmount`
+//     is authoritative, the load is part of the cash actually paid/received
+//     (recordTradeForFamily). Nothing extra to record.
+//   • NAV-embedded management fees (reksadana / ETF expense ratios) — already
+//     inside the NAV/price, so the Σ-holdings value already reflects them. NOT
+//     recorded as a separate row.
+//
+// Full ledger mutation contract (CLAUDE.md §5A): interactive tenant transaction
+// + RLS GUC, tenant-owned reference validation, endpoint-scoped idempotency, and
+// append-only AuditLog rows in the same transaction. Same-currency this slice
+// (the source cash account shares the holding/account currency).
+
+const RECORD_FEE_ENDPOINT = "recordFeeFn"
+
+// The expense category a standalone fee is booked under. Reused (find-or-create
+// by case-insensitive name, matching the `merchant_category_name_dedup` index)
+// so a family's existing "Investment Fee" category is honored, never duplicated.
+const INVESTMENT_FEE_CATEGORY_NAME = "Investment Fee"
+
+export const recordFeeInputSchema = z.object({
+  investmentAccountId: z.string().min(1),
+  // The source holding the fee is tied to (provenance). NOT mutated.
+  holdingId: z.string().min(1),
+  // Fee amount in MINOR units (digit-string), strictly positive.
+  amount: positiveMinorDigitsSchema,
+  // The cash-like account the fee is charged to (reduces its balance).
+  sourceAccountId: z.string().min(1),
+  // Back-datable (a fee lands on a broker-set date, not necessarily "today").
+  date: z.coerce.date().optional(),
+  // Optional expense category override; defaults to the family's "Investment
+  // Fee" category (find-or-create). Validated to be expense-typed + tenant-owned.
+  categoryId: z.string().min(1).optional(),
+  idempotencyKey: uuidV7Schema,
+})
+
+type RecordFeeInput = z.infer<typeof recordFeeInputSchema>
+
+export interface RecordFeeResult {
+  investmentAccountId: string
+  holdingId: string
+  instrumentId: string
+  /** Fee amount, minor units (digit-string). */
+  amountMinor: string
+  /** The cash account the fee was charged to. */
+  sourceAccountId: string
+  /** The expense Transaction posted on the source cash account. */
+  expenseTransaction: Awaited<ReturnType<typeof postExpenseTransactionWithinTx>>
+  /** Source account balance after the fee expense, minor units. */
+  sourceBalanceAfterMinor: string
+}
+
+// Find-or-create the family's expense category for fees. Case-insensitive name
+// match (the dedup index key) so an existing "Investment Fee" is reused and never
+// duplicated; a freshly-created one is audited in the same tx.
+async function resolveFeeExpenseCategory(
+  tx: TenantTransactionClient,
+  familyId: string,
+  auditCtx: AuditContext
+): Promise<string> {
+  const existing = await tx.category.findFirst({
+    where: {
+      familyId,
+      name: { equals: INVESTMENT_FEE_CATEGORY_NAME, mode: "insensitive" },
+    },
+    select: { id: true },
+  })
+  if (existing) return existing.id
+
+  const created = await tx.category.create({
+    data: {
+      familyId,
+      name: INVESTMENT_FEE_CATEGORY_NAME,
+      type: "expense",
+      isSystem: false,
+    },
+  })
+  await auditLog(tx, auditCtx, {
+    action: "create",
+    entityType: "Category",
+    entityId: created.id,
+    after: { id: created.id, name: created.name, type: created.type },
+  })
+  return created.id
+}
+
+export async function recordFeeForFamily({
+  data: rawData,
+  familyId,
+  user,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  data: z.input<typeof recordFeeInputSchema>
+  familyId: string
+  user: ServerActor
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<RecordFeeResult> {
+  const data: RecordFeeInput = recordFeeInputSchema.parse(rawData)
+
+  const requestHash = await hashCanonicalPayload({
+    amount: data.amount,
+    categoryId: data.categoryId ?? null,
+    date: data.date?.toISOString() ?? null,
+    holdingId: data.holdingId,
+    investmentAccountId: data.investmentAccountId,
+    sourceAccountId: data.sourceAccountId,
+  })
+  const auditCtx = await createAuditContext(
+    { user: { id: user.id, familyId } },
+    data.idempotencyKey
+  )
+  const amountMinor = BigInt(data.amount)
+  const date = data.date ?? new Date()
+
+  const runOnce = async () =>
+    await runInTenantTransaction(familyId, user.id, async (tx) => {
+      const replay = await replayIdempotentEndpointResponse<RecordFeeResult>(
+        tx,
+        {
+          endpoint: RECORD_FEE_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+        }
+      )
+      if (replay) return replay
+
+      // Tenant ownership of the investment account, source account, and (when
+      // provided) the category. RLS-scoped and belt-and-braces checked.
+      await validateTenantReferences(tx, familyId, {
+        accountId: data.investmentAccountId,
+        categoryId: data.categoryId,
+      })
+      const investmentAccount = await fetchActiveAccount(
+        tx,
+        familyId,
+        data.investmentAccountId,
+        "Investment"
+      )
+      if (investmentAccount.balanceSource !== "valuation") {
+        throw new HoldingError(
+          `Investment account ${investmentAccount.id} must be a valuation-tracked account (balanceSource="valuation"); it is "${investmentAccount.balanceSource}"`
+        )
+      }
+      const currency = assertKnownCurrency(investmentAccount.currency)
+
+      // The source holding — provenance only; NOT mutated.
+      const holding = await loadHoldingWithInstrument(
+        tx,
+        familyId,
+        data.holdingId
+      )
+      if (holding.accountId !== investmentAccount.id) {
+        throw new HoldingError(
+          `Holding ${data.holdingId} does not belong to account ${data.investmentAccountId}`
+        )
+      }
+      const instrument = holding.instrument
+      const provenance = `${instrument.name}${instrument.symbol ? ` (${instrument.symbol})` : ""}`
+
+      // The cash account the fee is charged to. The guarded expense delta will
+      // ALSO reject a valuation/holdings account fail-loud (ADR-0048 §3); this
+      // check gives a clearer, earlier message for the common misuse.
+      await validateTenantReferences(tx, familyId, {
+        accountId: data.sourceAccountId,
+      })
+      const source = await fetchActiveAccount(
+        tx,
+        familyId,
+        data.sourceAccountId,
+        "Source"
+      )
+      if (source.balanceSource !== "transaction_flow") {
+        throw new HoldingError(
+          `Source account ${source.id} must be a cash-like account (balanceSource="transaction_flow"); it is "${source.balanceSource}". A fee cannot be charged to a holdings account.`
+        )
+      }
+      if (source.currency !== currency) {
+        throw new HoldingError(
+          `Cross-currency fees are not supported this slice (holding ${currency}, source ${source.currency})`
+        )
+      }
+
+      // Reuse the family's "Investment Fee" category (or an explicit expense
+      // category the caller chose, validated to be expense-typed).
+      let categoryId: string
+      if (data.categoryId) {
+        const category = await tx.category.findFirst({
+          where: { id: data.categoryId, familyId },
+          select: { id: true, type: true },
+        })
+        if (!category) {
+          throw new HoldingError(
+            `Category ${data.categoryId} not found for this family`
+          )
+        }
+        if (category.type !== "expense") {
+          throw new HoldingError(
+            `Category ${data.categoryId} must be an expense category for a fee`
+          )
+        }
+        categoryId = category.id
+      } else {
+        categoryId = await resolveFeeExpenseCategory(tx, familyId, auditCtx)
+      }
+
+      const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
+      const expenseTransaction = await postExpenseTransactionWithinTx(tx, {
+        account: source,
+        amount: amountMinor,
+        date,
+        description: `Fee — ${instrument.name}`,
+        notes: `Investment fee for ${provenance} · holding ${holding.id} in ${investmentAccount.name}`,
+        categoryId,
+        familyId,
+        user,
+        auditCtx,
+        baseCurrency,
+        idempotencyKey: data.idempotencyKey,
+        status: "CLEARED",
+      })
+
+      // Explicit provenance audit row — the durable, queryable link from the fee
+      // expense back to the source holding/instrument (no schema FK migration
+      // this slice; description + notes + this row carry it). Mirrors Slice 2's
+      // "Distribution" provenance row.
+      await auditLog(tx, auditCtx, {
+        action: "create",
+        entityType: "Fee",
+        entityId: expenseTransaction.id,
+        after: {
+          amountMinor: amountMinor.toString(),
+          investmentAccountId: investmentAccount.id,
+          holdingId: holding.id,
+          instrumentId: instrument.id,
+          instrumentName: instrument.name,
+          sourceAccountId: source.id,
+          transactionId: expenseTransaction.id,
+        },
+      })
+
+      const sourceAfter = await tx.account.findUniqueOrThrow({
+        where: { id: source.id },
+        select: { balance: true },
+      })
+
+      const response: RecordFeeResult = {
+        investmentAccountId: investmentAccount.id,
+        holdingId: holding.id,
+        instrumentId: instrument.id,
+        amountMinor: amountMinor.toString(),
+        sourceAccountId: source.id,
+        expenseTransaction,
+        sourceBalanceAfterMinor: sourceAfter.balance.toString(),
+      }
+      await persistIdempotentEndpointResponse(tx, {
+        endpoint: RECORD_FEE_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+        response,
+      })
+      return response
+    })
+
+  try {
+    return await runOnce()
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error
+    const replay = await scopedTenantTransaction(familyId, user.id, (tx) =>
+      replayIdempotentEndpointResponse<RecordFeeResult>(tx, {
+        endpoint: RECORD_FEE_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+      })
+    )
+    if (replay) return replay
+    throw error
+  }
+}
+
+export const recordFeeFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("ledger:write")])
+  .inputValidator((data: z.input<typeof recordFeeInputSchema>) =>
+    recordFeeInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await recordFeeForFamily({
       data,
       familyId: context.familyId,
       user: context.user,
