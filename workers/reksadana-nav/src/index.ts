@@ -44,7 +44,6 @@ import {
   normalizeBareksaJson,
   normalizeStaleCache,
   resolveSeries,
-  toBareksaDate,
   type NavPayload,
   type NormalizedSeries,
   type SourceAttempt,
@@ -133,25 +132,28 @@ async function fetchProductPage(env: Env, fund: string): Promise<ProductPage> {
   }
 }
 
-/** Build the ajax NAV URL for a mode (`1m` window for latest; a dated range). */
+/**
+ * Build the ajax NAV URL for a mode (`1m` window for latest; `5y` for history).
+ *
+ * Use a `cperiod` PRESET with empty startdate/enddate — the exact shape the live
+ * capture proved works. `buildPayload` filters history to `from` client-side, so
+ * the upstream only needs to return enough trailing history; it does not need the
+ * date range. (An earlier `cperiod=all` + startdate/enddate made Bareksa reject
+ * the request, degrading `/nav/history` to the stale cache.)
+ */
 function buildAjaxUrl(
   base: string,
   fund: string,
-  mode: "latest" | "history",
-  from: string | undefined
+  mode: "latest" | "history"
 ): string {
   const params = new URLSearchParams()
   params.set("id", fund)
   params.set("requested_page", "profile.graph")
-  if (mode === "history") {
-    params.set("cperiod", "all")
-    const start = from ? toBareksaDate(from) : null
-    if (start) params.set("startdate", start)
-    const end = toBareksaDate(new Date().toISOString().slice(0, 10))
-    if (end) params.set("enddate", end)
-  } else {
-    params.set("cperiod", "1m")
-  }
+  // `1y` is the exact window the live capture proved works for an anonymous
+  // session; longer windows (`5y`/`all`) appear gated behind a Bareksa login and
+  // fail for the anonymous bootstrap, degrading history to the stale cache. One
+  // year is ample for a holding's NAV-value backfill (cost basis is user-entered).
+  params.set("cperiod", mode === "history" ? "1y" : "1m")
   return `${base}?${params.toString()}`
 }
 
@@ -165,14 +167,13 @@ async function fetchBareksaJson(
   env: Env,
   fund: string,
   page: ProductPage,
-  mode: "latest" | "history",
-  from: string | undefined
+  mode: "latest" | "history"
 ): Promise<{ series: NormalizedSeries | null; error?: string }> {
   if (!page.token || !page.cookie) {
     return { series: null, error: page.error ?? "ajax token bootstrap failed" }
   }
   const base = env.BAREKSA_AJAX_BASE ?? DEFAULT_AJAX_BASE
-  const url = buildAjaxUrl(base, fund, mode, from)
+  const url = buildAjaxUrl(base, fund, mode)
   const referer = fillTemplate(
     env.BAREKSA_PRODUCT_URL ?? DEFAULT_PRODUCT_URL,
     fund
@@ -254,7 +255,7 @@ async function handleNav(
   // scrape fallback (no double fetch).
   const page = await fetchProductPage(env, fund)
   const [json_, stale] = await Promise.all([
-    fetchBareksaJson(env, fund, page, mode, from),
+    fetchBareksaJson(env, fund, page, mode),
     readStaleCache(env, fund),
   ])
   const html: { series: NormalizedSeries | null; error?: string } = {

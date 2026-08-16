@@ -16,7 +16,7 @@
     {
       "binding": "NAV_CACHE",
       "database_name": "reksadana-nav-cache",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "database_id": "49744818-bb82-4c4f-aa0c-38f8c3253622",
     },
   ],
   // Optional upstream overrides (defaults target the VERIFIED Bareksa endpoints;
