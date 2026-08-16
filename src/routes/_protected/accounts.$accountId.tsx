@@ -361,13 +361,22 @@ function AccountDetailPage() {
   // value → unrealized gain/loss + return %. Reuses the proven ledger lens.
   const performance = React.useMemo(() => {
     if (!tracked || !openingData) return null
+    // When this account tracks holdings, their summed position cost is the
+    // authoritative basis (matches the per-holding Performance + the fund app),
+    // so it overrides the ledger-contribution heuristic — otherwise the account
+    // header and the holdings panel show two conflicting gain figures.
+    const holdingsCostBasis =
+      holdingsView && holdingsView.holdings.length > 0
+        ? BigInt(holdingsView.totalCostMinor)
+        : null
     return computeAccountPerformance(
       ledger,
       openingData.openingValue ? BigInt(openingData.openingValue) : 0n,
       currentBalance,
-      accountId
+      accountId,
+      holdingsCostBasis
     )
-  }, [tracked, openingData, ledger, currentBalance, accountId])
+  }, [tracked, openingData, ledger, currentBalance, accountId, holdingsView])
 
   // Time-scoped subset (range drives KPI + breakdown + statement).
   const rangedLedger = React.useMemo(() => {

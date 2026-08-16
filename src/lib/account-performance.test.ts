@@ -98,4 +98,28 @@ describe("computeAccountPerformance", () => {
     expect(p.hasBasis).toBe(false)
     expect(p.returnPct).toBeNull()
   })
+
+  test("holdings cost basis OVERRIDES the ledger heuristic when passed", () => {
+    // The ledger heuristic would give cost = opening 207,792 (+ no contributions),
+    // but the account tracks a holding whose real position cost is 209,210.64.
+    // The holdings basis wins, so the header matches the per-holding Performance.
+    // (Real Majoris case: 142.4345 units, value 211,627.76, +1.16%.)
+    const p = computeAccountPerformance(
+      [],
+      20_779_200n, // ledger opening = pre-holdings balance anchor (would mislead)
+      21_162_776n, // current market value (units × NAV)
+      ACC,
+      20_921_064n // Σ holdings cost — authoritative
+    )
+    expect(p.costBasisMinor).toBe(20_921_064n)
+    expect(p.gainMinor).toBe(241_712n)
+    expect(p.hasBasis).toBe(true)
+    expect(p.returnPct).toBeCloseTo(0.0116, 4)
+  })
+
+  test("null holdings basis falls back to the ledger heuristic (no holdings)", () => {
+    const p = computeAccountPerformance([], 20_000_000n, 25_000_000n, ACC, null)
+    expect(p.costBasisMinor).toBe(20_000_000n)
+    expect(p.gainMinor).toBe(5_000_000n)
+  })
 })

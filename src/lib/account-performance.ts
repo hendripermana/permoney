@@ -42,13 +42,23 @@ export function computeAccountPerformance(
   txns: ReadonlyArray<AnalyticsTxn>,
   openingValueMinor: bigint,
   currentValueMinor: bigint,
-  accountId: string
+  accountId: string,
+  // When the account tracks explicit holdings (PER-232), the summed position
+  // cost (Σ units × avg cost) is the AUTHORITATIVE basis — it matches the
+  // per-holding Performance and the broker/fund app. Pass it here to OVERRIDE the
+  // ledger-contribution heuristic below, which only estimates net deposits and
+  // legitimately drifts from real lot cost (e.g. a pre-holdings balance anchor).
+  // Pass null (no holdings) to fall back to opening + net contributions (v1).
+  holdingsCostBasisMinor?: bigint | null
 ): AccountPerformance {
   const contributions = txns.reduce(
     (sum, t) => sum + signedDeltaForAccount(t, accountId),
     0n
   )
-  const costBasis = openingValueMinor + contributions
+  const costBasis =
+    holdingsCostBasisMinor != null
+      ? holdingsCostBasisMinor
+      : openingValueMinor + contributions
   const gain = currentValueMinor - costBasis
   const hasBasis = costBasis > 0n
   const returnPct = hasBasis ? Number(gain) / Number(costBasis) : null
