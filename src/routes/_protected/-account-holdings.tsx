@@ -2,6 +2,7 @@ import {
   ArrowDownLeft,
   ArrowUpRight,
   Coins,
+  Gift,
   PiggyBank,
   Plus,
   RefreshCw,
@@ -89,6 +90,8 @@ export function HoldingsPanel({
   onSell,
   onBuyHolding,
   onSellHolding,
+  onDividend,
+  onDividendHolding,
   onRefreshPrices,
   refreshingPrices,
 }: Readonly<{
@@ -102,6 +105,8 @@ export function HoldingsPanel({
   onSell: () => void
   onBuyHolding: (holding: HoldingRecord) => void
   onSellHolding: (holding: HoldingRecord) => void
+  onDividend: () => void
+  onDividendHolding: (holding: HoldingRecord) => void
   onRefreshPrices: () => void
   refreshingPrices: boolean
 }>) {
@@ -141,6 +146,12 @@ export function HoldingsPanel({
             <Button size="sm" variant="outline" onClick={onSell}>
               <ArrowUpRight className="size-4" />
               Sell
+            </Button>
+          ) : null}
+          {holdings.length > 0 ? (
+            <Button size="sm" variant="outline" onClick={onDividend}>
+              <Gift className="size-4" />
+              Dividend
             </Button>
           ) : null}
           <Button size="sm" variant="outline" onClick={onAdd}>
@@ -222,6 +233,16 @@ export function HoldingsPanel({
                     >
                       <ArrowUpRight className="size-3.5" />
                       Sell
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => onDividendHolding(holding)}
+                    >
+                      <Gift className="size-3.5" />
+                      Dividend
                     </Button>
                     <Button
                       type="button"

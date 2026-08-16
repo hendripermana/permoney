@@ -23,6 +23,7 @@ import {
   holdingGainMinor,
   holdingReturnPct,
   holdingValueMinor,
+  QUANTITY_SCALE,
   quantityToScaled,
   scaledToQuantityString,
   sumHoldingValuesMinor,
@@ -34,6 +35,7 @@ import {
 import { toMinorUnits } from "@/lib/money"
 import { getFamilyBaseCurrency } from "./fx"
 import {
+  postIncomeTransactionWithinTx,
   postValuationLinkedTransferLegs,
   type ValuationLinkedTransferLeg,
 } from "./transactions"
@@ -1461,6 +1463,484 @@ export const recordTradeFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data, context }) => {
     return await recordTradeForFamily({
+      data,
+      familyId: context.familyId,
+      user: context.user,
+    })
+  })
+
+// =============================================================================
+// DIVIDEND / DISTRIBUTION — cash payout OR reinvest (PER-259 Slice 2 / ADR-0054)
+// =============================================================================
+//
+// A distribution is money paid out BY a holding. Broker/country-agnostic (NOT
+// vendor-specific): a fund/stock/metal pays a distribution and the user picks
+// one of TWO universal shapes:
+//
+//   CASH PAYOUT — income, with NO change to the source holding's units or
+//     position value. Cash lands on a USER-CHOSEN destination cash account
+//     (often a DIFFERENT account than the holding — a pension/cash pot). Modeled
+//     as a normal INCOME `Transaction` on that destination (reusing the family's
+//     "Investment Income" income category), back-datable, provenance-linked to
+//     the source holding/instrument in the description, notes and audit payload.
+//     The holdings account is NOT mutated (no anchor recompute).
+//
+//   REINVEST — units UP on the source holding at the reinvest price (units =
+//     amount ÷ unitPrice, or user-entered units), cost basis += amount, and NO
+//     external cash. Structurally BUY minus the funding-account cash leg: the
+//     Σ-holdings anchor re-materializes via the source="holdings" path (the ONLY
+//     value-write the PER-259 guard allows on a holdings account).
+//
+// Both modes run the full ledger mutation contract (CLAUDE.md §5A): interactive
+// tenant transaction + RLS GUC, tenant-owned reference validation, endpoint-
+// scoped idempotency, and append-only AuditLog rows in the same transaction.
+// Same-currency this slice (destination/holding share the account currency).
+
+const RECORD_DISTRIBUTION_ENDPOINT = "recordDistributionFn"
+
+// The income category a CASH payout is booked under. Reused (find-or-create by
+// case-insensitive name, matching the `merchant_category_name_dedup` index) so a
+// family's existing "Investment Income" category is honored, never duplicated.
+const INVESTMENT_INCOME_CATEGORY_NAME = "Investment Income"
+
+const distributionModeSchema = z.enum(["cash", "reinvest"])
+
+export const recordDistributionInputSchema = z
+  .object({
+    investmentAccountId: z.string().min(1),
+    // The source holding paying the distribution.
+    holdingId: z.string().min(1),
+    mode: distributionModeSchema,
+    // Distribution amount in MINOR units (digit-string), strictly positive.
+    amount: positiveMinorDigitsSchema,
+    // Back-datable (real dividends land on a broker-set date, not "today").
+    date: z.coerce.date().optional(),
+    // CASH mode — the cash-like account the payout is deposited into (may differ
+    // from the holding's account). REQUIRED for cash, forbidden for reinvest.
+    destinationAccountId: z.string().min(1).optional(),
+    // CASH mode — optional income category override; defaults to the family's
+    // "Investment Income" category (find-or-create).
+    categoryId: z.string().min(1).optional(),
+    // REINVEST mode — the reinvest price per unit (minor units) used to derive
+    // the units credited, OR an explicit unit quantity. At least one required.
+    unitPrice: positiveMinorDigitsSchema.optional(),
+    quantity: decimalStringSchema.optional(),
+    idempotencyKey: uuidV7Schema,
+  })
+  .superRefine((data, ctx) => {
+    if (data.mode === "cash") {
+      if (!data.destinationAccountId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["destinationAccountId"],
+          message: "A cash payout requires a destination account",
+        })
+      }
+    } else {
+      if (!data.unitPrice && !data.quantity) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["unitPrice"],
+          message: "Reinvest requires a unit price or an explicit quantity",
+        })
+      }
+      if (data.destinationAccountId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["destinationAccountId"],
+          message:
+            "Reinvest does not move external cash (no destination account)",
+        })
+      }
+    }
+  })
+
+type RecordDistributionInput = z.infer<typeof recordDistributionInputSchema>
+
+export interface RecordDistributionResult {
+  mode: "cash" | "reinvest"
+  investmentAccountId: string
+  holdingId: string
+  instrumentId: string
+  /** Distribution amount, minor units (digit-string). */
+  amountMinor: string
+  // ---- CASH payout ----
+  /** Destination cash account the income landed on (cash mode), else null. */
+  destinationAccountId: string | null
+  /** The income Transaction posted on the destination (cash mode), else null. */
+  incomeTransaction: Awaited<
+    ReturnType<typeof postIncomeTransactionWithinTx>
+  > | null
+  /** Destination account balance after the income (cash mode), else null. */
+  destinationBalanceAfterMinor: string | null
+  // ---- REINVEST ----
+  /** Resulting position after reinvest (reinvest mode), else null. */
+  holding: SerializedHolding | null
+  /** Cost basis added to the source holding (reinvest mode), else null. */
+  costBasisDeltaMinor: string | null
+  /** Investment account value after re-materializing Σ holdings (reinvest), else null. */
+  investmentValueAfterMinor: string | null
+}
+
+// Find-or-create the family's income category for distributions. Case-insensitive
+// name match (the dedup index key) so an existing "Investment Income" is reused
+// and never duplicated; a freshly-created one is audited in the same tx.
+async function resolveDistributionIncomeCategory(
+  tx: TenantTransactionClient,
+  familyId: string,
+  auditCtx: AuditContext
+): Promise<string> {
+  const existing = await tx.category.findFirst({
+    where: {
+      familyId,
+      name: { equals: INVESTMENT_INCOME_CATEGORY_NAME, mode: "insensitive" },
+    },
+    select: { id: true },
+  })
+  if (existing) return existing.id
+
+  const created = await tx.category.create({
+    data: {
+      familyId,
+      name: INVESTMENT_INCOME_CATEGORY_NAME,
+      type: "income",
+      isSystem: false,
+    },
+  })
+  await auditLog(tx, auditCtx, {
+    action: "create",
+    entityType: "Category",
+    entityId: created.id,
+    after: { id: created.id, name: created.name, type: created.type },
+  })
+  return created.id
+}
+
+export async function recordDistributionForFamily({
+  data: rawData,
+  familyId,
+  user,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  data: z.input<typeof recordDistributionInputSchema>
+  familyId: string
+  user: ServerActor
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<RecordDistributionResult> {
+  const data: RecordDistributionInput =
+    recordDistributionInputSchema.parse(rawData)
+
+  const requestHash = await hashCanonicalPayload({
+    amount: data.amount,
+    categoryId: data.categoryId ?? null,
+    date: data.date?.toISOString() ?? null,
+    destinationAccountId: data.destinationAccountId ?? null,
+    holdingId: data.holdingId,
+    investmentAccountId: data.investmentAccountId,
+    mode: data.mode,
+    quantity: data.quantity ?? null,
+    unitPrice: data.unitPrice ?? null,
+  })
+  const auditCtx = await createAuditContext(
+    { user: { id: user.id, familyId } },
+    data.idempotencyKey
+  )
+  const amountMinor = BigInt(data.amount)
+  const date = data.date ?? new Date()
+
+  const runOnce = async () =>
+    await runInTenantTransaction(familyId, user.id, async (tx) => {
+      const replay =
+        await replayIdempotentEndpointResponse<RecordDistributionResult>(tx, {
+          endpoint: RECORD_DISTRIBUTION_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+        })
+      if (replay) return replay
+
+      // The investment (holdings) account + the source holding are common to
+      // both modes. Tenant ownership is RLS-scoped and belt-and-braces checked.
+      await validateTenantReferences(tx, familyId, {
+        accountId: data.investmentAccountId,
+      })
+      const investmentAccount = await fetchActiveAccount(
+        tx,
+        familyId,
+        data.investmentAccountId,
+        "Investment"
+      )
+      if (investmentAccount.balanceSource !== "valuation") {
+        throw new HoldingError(
+          `Investment account ${investmentAccount.id} must be a valuation-tracked account (balanceSource="valuation"); it is "${investmentAccount.balanceSource}"`
+        )
+      }
+      const currency = assertKnownCurrency(investmentAccount.currency)
+
+      const holding = await loadHoldingWithInstrument(
+        tx,
+        familyId,
+        data.holdingId
+      )
+      if (holding.accountId !== investmentAccount.id) {
+        throw new HoldingError(
+          `Holding ${data.holdingId} does not belong to account ${data.investmentAccountId}`
+        )
+      }
+      const instrument = holding.instrument
+      const provenance = `${instrument.name}${instrument.symbol ? ` (${instrument.symbol})` : ""}`
+
+      let response: RecordDistributionResult
+
+      if (data.mode === "cash") {
+        // CASH PAYOUT — income on a user-chosen destination cash account; the
+        // source holding is NOT touched (units + position value unchanged).
+        const destinationAccountId = data.destinationAccountId
+        if (!destinationAccountId) {
+          // Unreachable (schema superRefine), keeps types honest.
+          throw new HoldingError("A cash payout requires a destination account")
+        }
+        await validateTenantReferences(tx, familyId, {
+          accountId: destinationAccountId,
+          categoryId: data.categoryId,
+        })
+        const destination = await fetchActiveAccount(
+          tx,
+          familyId,
+          destinationAccountId,
+          "Destination"
+        )
+        if (destination.balanceSource !== "transaction_flow") {
+          throw new HoldingError(
+            `Destination account ${destination.id} must be a cash-like account (balanceSource="transaction_flow"); it is "${destination.balanceSource}"`
+          )
+        }
+        if (destination.currency !== currency) {
+          throw new HoldingError(
+            `Cross-currency distributions are not supported this slice (holding ${currency}, destination ${destination.currency})`
+          )
+        }
+
+        // Reuse the family's "Investment Income" category (or an explicit
+        // income category the caller chose, validated to be income-typed).
+        let categoryId: string
+        if (data.categoryId) {
+          const category = await tx.category.findFirst({
+            where: { id: data.categoryId, familyId },
+            select: { id: true, type: true },
+          })
+          if (!category) {
+            throw new HoldingError(
+              `Category ${data.categoryId} not found for this family`
+            )
+          }
+          if (category.type !== "income") {
+            throw new HoldingError(
+              `Category ${data.categoryId} must be an income category for a cash distribution`
+            )
+          }
+          categoryId = category.id
+        } else {
+          categoryId = await resolveDistributionIncomeCategory(
+            tx,
+            familyId,
+            auditCtx
+          )
+        }
+
+        const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
+        const incomeTransaction = await postIncomeTransactionWithinTx(tx, {
+          account: destination,
+          amount: amountMinor,
+          date,
+          description: `Dividend — ${instrument.name}`,
+          notes: `Distribution from ${provenance} · holding ${holding.id} in ${investmentAccount.name}`,
+          categoryId,
+          familyId,
+          user,
+          auditCtx,
+          baseCurrency,
+          idempotencyKey: data.idempotencyKey,
+          status: "CLEARED",
+        })
+
+        // Explicit provenance audit row — the durable, queryable link from the
+        // income transaction back to the source holding/instrument (no schema
+        // FK migration this slice; description + notes + this row carry it).
+        await auditLog(tx, auditCtx, {
+          action: "create",
+          entityType: "Distribution",
+          entityId: incomeTransaction.id,
+          after: {
+            mode: "cash",
+            amountMinor: amountMinor.toString(),
+            investmentAccountId: investmentAccount.id,
+            holdingId: holding.id,
+            instrumentId: instrument.id,
+            instrumentName: instrument.name,
+            destinationAccountId: destination.id,
+            transactionId: incomeTransaction.id,
+          },
+        })
+
+        const destinationAfter = await tx.account.findUniqueOrThrow({
+          where: { id: destination.id },
+          select: { balance: true },
+        })
+
+        response = {
+          mode: "cash",
+          investmentAccountId: investmentAccount.id,
+          holdingId: holding.id,
+          instrumentId: instrument.id,
+          amountMinor: amountMinor.toString(),
+          destinationAccountId: destination.id,
+          incomeTransaction,
+          destinationBalanceAfterMinor: destinationAfter.balance.toString(),
+          holding: null,
+          costBasisDeltaMinor: null,
+          investmentValueAfterMinor: null,
+        }
+      } else {
+        // REINVEST — units up + cost basis up on the SOURCE holding, no external
+        // cash. Structurally BUY minus the funding cash leg: the reinvested
+        // `amount` is authoritative for cost; the units come from an explicit
+        // `quantity`, else derived from `unitPrice` (round-half-up).
+        let addedUnitsScaled: bigint
+        if (data.quantity) {
+          try {
+            addedUnitsScaled = quantityToScaled(data.quantity)
+          } catch (error) {
+            throw new HoldingError(
+              `quantity is not a valid amount: ${error instanceof Error ? error.message : String(error)}`
+            )
+          }
+        } else {
+          // data.unitPrice is guaranteed present here (schema superRefine).
+          const unitPrice = BigInt(data.unitPrice ?? "0")
+          if (unitPrice <= 0n) {
+            throw new HoldingError(
+              "Reinvest unit price must be greater than zero"
+            )
+          }
+          // units = amount / unitPrice; scaled = amount × SCALE / unitPrice.
+          addedUnitsScaled =
+            (amountMinor * QUANTITY_SCALE + unitPrice / 2n) / unitPrice
+        }
+        if (addedUnitsScaled <= 0n) {
+          throw new HoldingError(
+            "Reinvest results in zero units; increase the amount or lower the unit price"
+          )
+        }
+
+        const oldUnitsScaled = quantityToScaled(holding.quantity.toFixed(8))
+        const oldCost = holdingCostMinor(
+          oldUnitsScaled,
+          holding.avgUnitCostMinor
+        )
+        const newUnitsScaled = oldUnitsScaled + addedUnitsScaled
+        const newAvg = averageUnitCostMinor(
+          oldCost + amountMinor,
+          newUnitsScaled
+        )
+        const updated = await tx.holding.update({
+          where: { id: holding.id },
+          data: {
+            quantity: scaledToQuantityString(newUnitsScaled),
+            avgUnitCostMinor: newAvg,
+          },
+          include: { instrument: true },
+        })
+        await auditLog(tx, auditCtx, {
+          action: "update",
+          entityType: "Holding",
+          entityId: updated.id,
+          before: serializeHolding(holding),
+          after: serializeHolding(updated),
+        })
+        await auditLog(tx, auditCtx, {
+          action: "create",
+          entityType: "Distribution",
+          entityId: updated.id,
+          after: {
+            mode: "reinvest",
+            amountMinor: amountMinor.toString(),
+            investmentAccountId: investmentAccount.id,
+            holdingId: holding.id,
+            instrumentId: instrument.id,
+            instrumentName: instrument.name,
+            unitsAddedScaled: addedUnitsScaled.toString(),
+          },
+        })
+
+        // Re-materialize the Σ-holdings anchor (source="holdings" — the only
+        // value-write the PER-259 guard allows on a holdings account).
+        await recomputeAccountValueAnchorWithinTx(
+          tx,
+          familyId,
+          investmentAccount.id,
+          investmentAccount.currency,
+          user,
+          auditCtx
+        )
+
+        const finalHolding = serializeHolding(
+          await loadHoldingWithInstrument(tx, familyId, updated.id)
+        )
+        const investmentAfter = await tx.account.findUniqueOrThrow({
+          where: { id: investmentAccount.id },
+          select: { balance: true },
+        })
+
+        response = {
+          mode: "reinvest",
+          investmentAccountId: investmentAccount.id,
+          holdingId: holding.id,
+          instrumentId: instrument.id,
+          amountMinor: amountMinor.toString(),
+          destinationAccountId: null,
+          incomeTransaction: null,
+          destinationBalanceAfterMinor: null,
+          holding: finalHolding,
+          costBasisDeltaMinor: amountMinor.toString(),
+          investmentValueAfterMinor: investmentAfter.balance.toString(),
+        }
+      }
+
+      await persistIdempotentEndpointResponse(tx, {
+        endpoint: RECORD_DISTRIBUTION_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+        response,
+      })
+      return response
+    })
+
+  try {
+    return await runOnce()
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error
+    const replay = await scopedTenantTransaction(familyId, user.id, (tx) =>
+      replayIdempotentEndpointResponse<RecordDistributionResult>(tx, {
+        endpoint: RECORD_DISTRIBUTION_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+      })
+    )
+    if (replay) return replay
+    throw error
+  }
+}
+
+export const recordDistributionFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("ledger:write")])
+  .inputValidator((data: z.input<typeof recordDistributionInputSchema>) =>
+    recordDistributionInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await recordDistributionForFamily({
       data,
       familyId: context.familyId,
       user: context.user,

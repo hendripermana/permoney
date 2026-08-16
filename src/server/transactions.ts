@@ -2131,6 +2131,105 @@ export async function postValuationLinkedTransferLegs(
   })
 }
 
+// PER-259 / ADR-0054 — a within-transaction primitive that posts ONE standard
+// INCOME `Transaction` on a cash-like account, guarded + base-projected +
+// audited, and returns it serialized. Factored out of `createTransactionForFamily`'s
+// standard income branch so a non-transfer caller (a holdings dividend CASH
+// payout — cash lands on a user-chosen destination account, the source holding
+// untouched) can post the exact same canonical income row without re-opening a
+// transaction or duplicating the balance/projection/audit contract. The +amount
+// delta rides the guarded `applyAccountBalanceDelta` path, so a destination that
+// is itself a valuation/holdings account is rejected fail-loud (ADR-0048 §3 /
+// ADR-0054) — a cash dividend cannot land on a holdings account. Currency is
+// derived from the account, never the caller (PER-147). The caller owns
+// idempotency (endpoint-scoped) and any provenance audit.
+export async function postIncomeTransactionWithinTx(
+  tx: TenantTransactionClient,
+  {
+    account,
+    amount,
+    date,
+    description,
+    notes = null,
+    categoryId = null,
+    familyId,
+    user,
+    auditCtx,
+    baseCurrency,
+    idempotencyKey,
+    status,
+  }: {
+    account: Account
+    amount: bigint
+    date: Date
+    description: string
+    notes?: string | null
+    categoryId?: string | null
+    familyId: string
+    user: { id: string }
+    auditCtx: AuditContext
+    baseCurrency: string
+    idempotencyKey: string
+    status: string
+  }
+) {
+  const inflow = absMoney(amount)
+
+  const [oldAccount, accountMutation] =
+    await runTenantTransactionQueriesInOrder([
+      () => tx.account.findUniqueOrThrow({ where: { id: account.id } }),
+      () =>
+        applyAccountBalanceDelta(tx, {
+          accountId: account.id,
+          delta: inflow,
+          familyId,
+          notFoundMessage: "Destination account not found or access denied!",
+        }),
+    ] as const)
+  const accountBalanceAfter = accountMutation.after.balance
+
+  const projection = await computeBaseProjectionForAmount(tx, familyId, {
+    amount: inflow,
+    currency: account.currency,
+    date,
+    baseCurrency,
+  })
+
+  const created = await tx.transaction.create({
+    data: {
+      type: "income",
+      kind: "standard",
+      amount: inflow,
+      currency: account.currency,
+      description,
+      date,
+      notes: notes || null,
+      accountId: account.id,
+      categoryId: categoryId || null,
+      userId: user.id,
+      familyId,
+      status,
+      baseAmount: projection.baseAmount,
+      baseCurrency: projection.baseCurrency,
+      fxRateScaled: projection.fxRateScaled,
+      fxRateSnapshotId: projection.fxRateSnapshotId,
+      accountBalanceAfter,
+      idempotencyKey,
+    },
+  })
+
+  const newAccount = await tx.account.findUniqueOrThrow({
+    where: { id: account.id },
+  })
+
+  await auditLogs(tx, auditCtx, [
+    ...accountBalanceAuditEntries([oldAccount], [newAccount]),
+    ...createdAuditEntries("Transaction", [created]),
+  ])
+
+  return serializeTransaction({ ...created, amount: absMoney(created.amount) })
+}
+
 async function createValuationLinkedTransferWithinTx(
   tx: TenantTransactionClient,
   {
