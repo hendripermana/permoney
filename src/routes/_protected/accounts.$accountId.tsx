@@ -57,6 +57,10 @@ import {
   type DistributionDialogState,
 } from "@/components/blocks/distribution-dialog"
 import { FeeDialog, type FeeDialogState } from "@/components/blocks/fee-dialog"
+import {
+  SwitchDialog,
+  type SwitchDialogState,
+} from "@/components/blocks/switch-dialog"
 import { TransactionFormModal } from "@/components/transaction-form-modal"
 import {
   accountCollection,
@@ -186,6 +190,9 @@ function AccountDetailPage() {
   const [distributionDialog, setDistributionDialog] =
     React.useState<DistributionDialogState | null>(null)
   const [feeDialog, setFeeDialog] = React.useState<FeeDialogState | null>(null)
+  // PER-259 Slice 4 — switch dialog (atomic sell-A + buy-B, one account).
+  const [switchDialog, setSwitchDialog] =
+    React.useState<SwitchDialogState | null>(null)
   // PER-241 — the per-account statement now shares the /transactions row, so it
   // gets the same singleton edit modal + inline delete.
   const [editingTrx, setEditingTrx] =
@@ -733,6 +740,8 @@ function AccountDetailPage() {
               }
               onFee={() => setFeeDialog({})}
               onFeeHolding={(holding) => setFeeDialog({ holding })}
+              onSwitch={() => setSwitchDialog({})}
+              onSwitchHolding={(holding) => setSwitchDialog({ holding })}
               onRefreshPrices={handleRefreshPrices}
               refreshingPrices={refreshingPrices}
             />
@@ -1020,6 +1029,26 @@ function AccountDetailPage() {
           onSaved={async () => {
             await refreshHoldings()
             setFeeDialog(null)
+          }}
+        />
+      ) : null}
+
+      {switchDialog ? (
+        <SwitchDialog
+          // Remount per open so the form re-initializes cleanly.
+          key={
+            switchDialog.holding
+              ? `switch-${switchDialog.holding.id}`
+              : "switch"
+          }
+          state={switchDialog}
+          investmentAccountId={accountId}
+          currency={currency}
+          holdings={holdingsView?.holdings ?? []}
+          onClose={() => setSwitchDialog(null)}
+          onSaved={async () => {
+            await refreshHoldings()
+            setSwitchDialog(null)
           }}
         />
       ) : null}

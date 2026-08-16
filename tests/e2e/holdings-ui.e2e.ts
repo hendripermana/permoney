@@ -34,7 +34,10 @@ test.describe("holdings UI (PER-232)", () => {
     await page.waitForURL(/\/accounts\/[^/]+$/, { timeout: 15000 })
 
     // Holdings panel renders with its empty state for a fresh tracked account.
-    await expect(page.getByText("Holdings")).toBeVisible()
+    // Scoped to the heading role — plain getByText("Holdings") case-insensitively
+    // substring-matches the empty-state copy too ("No holdings yet…"), which is
+    // a strict-mode violation once both are on screen together.
+    await expect(page.getByRole("heading", { name: "Holdings" })).toBeVisible()
     await expect(page.getByText(/No holdings yet/i)).toBeVisible()
 
     // --- Add a holding ---

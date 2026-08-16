@@ -1,5 +1,6 @@
 import {
   ArrowDownLeft,
+  ArrowRightLeft,
   ArrowUpRight,
   Coins,
   Gift,
@@ -95,6 +96,8 @@ export function HoldingsPanel({
   onDividendHolding,
   onFee,
   onFeeHolding,
+  onSwitch,
+  onSwitchHolding,
   onRefreshPrices,
   refreshingPrices,
 }: Readonly<{
@@ -112,6 +115,8 @@ export function HoldingsPanel({
   onDividendHolding: (holding: HoldingRecord) => void
   onFee: () => void
   onFeeHolding: (holding: HoldingRecord) => void
+  onSwitch: () => void
+  onSwitchHolding: (holding: HoldingRecord) => void
   onRefreshPrices: () => void
   refreshingPrices: boolean
 }>) {
@@ -123,12 +128,12 @@ export function HoldingsPanel({
 
   return (
     <div className="rounded-2xl border p-4">
-      <div className="mb-3 flex items-center justify-between gap-2">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
           <PiggyBank className="size-3.5" aria-hidden />
           Holdings
         </h2>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {hasLinkedHolding ? (
             <Button
               size="sm"
@@ -163,6 +168,12 @@ export function HoldingsPanel({
             <Button size="sm" variant="outline" onClick={onFee}>
               <Receipt className="size-4" />
               Fee
+            </Button>
+          ) : null}
+          {holdings.length > 0 ? (
+            <Button size="sm" variant="outline" onClick={onSwitch}>
+              <ArrowRightLeft className="size-4" />
+              Switch
             </Button>
           ) : null}
           <Button size="sm" variant="outline" onClick={onAdd}>
@@ -264,6 +275,16 @@ export function HoldingsPanel({
                     >
                       <Receipt className="size-3.5" />
                       Fee
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => onSwitchHolding(holding)}
+                    >
+                      <ArrowRightLeft className="size-3.5" />
+                      Switch
                     </Button>
                     <Button
                       type="button"

@@ -2260,6 +2260,470 @@ export const recordFeeFn = createServerFn({ method: "POST" })
   })
 
 // =============================================================================
+// SWITCH — atomic sell-A + buy-B in ONE holdings account (PER-259 Slice 4 / ADR-0054)
+// =============================================================================
+//
+// A switch is the single most common reksadana action after buy/sell: within ONE
+// holdings account, atomically SELL fund A and BUY fund B with the proceeds.
+// Broker/country-agnostic (NOT vendor-specific): Bibit "pindah/switch",
+// Vanguard/Fidelity "exchange", the universal "switch". Economically it is a
+// sell-A-then-buy-B collapsed into one indivisible ledger action — NO external
+// cash, NO funding account touched:
+//
+//   SELL side (A) — reduce A's units by the switched quantity; PROCEEDS = units ×
+//     A's current price (`fromUnitPrice`, authoritative for the internal value
+//     moved); REALIZED gain/loss = proceeds − (units × A's average unit cost);
+//     A's cost basis drops by that removed cost (average unit cost of the
+//     remaining units is unchanged). Switching ALL of A closes (deletes) the A
+//     position, mirroring a sell-to-zero.
+//   BUY side (B) — B receives the PROCEEDS as its buy amount: B units +=
+//     proceeds ÷ `toUnitPrice`; B cost basis += proceeds (average-cost blend). B
+//     may be an EXISTING holding in the same account (average-cost in) or a NEW
+//     instrument created inline (like a first Buy, honest cost basis, no
+//     fabricated market price).
+//
+// Both A and B are holdings in the SAME investment account; the account's
+// Σ-holdings anchor re-materializes ONCE via the source="holdings" path (the ONLY
+// value-write the PER-259 guard allows). There is no external cash leg, so net
+// account value changes only by the market price difference A↔B at execution —
+// exactly the realized gain when A carried no market last-price. Realized gain is
+// DERIVED and RETURNED, not posted as income (parity with SELL, Slice 1).
+//
+// This reuses the SAME pure trade math the Buy/Sell path uses (holdingCostMinor,
+// averageUnitCostMinor, holdingValueMinor from src/lib/holdings.ts, the units-
+// from-amount fold shared with reinvest); `recordTradeForFamily` is UNCHANGED.
+//
+// IN SCOPE: A→B (DIFFERENT funds), same account, same currency. OUT OF SCOPE:
+// moving the SAME fund A to a DIFFERENT account with no sell (an in-kind position
+// move — Slice 6), and a separately-charged SWITCH FEE (record it via Slice 3
+// Fee). Full ledger mutation contract (CLAUDE.md §5A): interactive tenant
+// transaction + RLS GUC, tenant-owned reference validation, endpoint-scoped
+// idempotency, and append-only AuditLog rows in the same transaction.
+
+const RECORD_SWITCH_ENDPOINT = "recordSwitchFn"
+
+export const recordSwitchInputSchema = z
+  .object({
+    investmentAccountId: z.string().min(1),
+    // The source holding (fund A) being switched OUT of. Must live in the account.
+    fromHoldingId: z.string().min(1),
+    // Destination instrument (fund B): an EXISTING tenant instrument OR an inline
+    // one to create. Exactly one — and it must differ from A.
+    toInstrumentId: z.string().min(1).optional(),
+    toInstrument: inlineInstrumentSchema.optional(),
+    // How much of A to switch: EITHER a quantity of A units OR the proceeds
+    // amount (minor units) to move. Exactly one — the other is derived.
+    quantity: decimalStringSchema.optional(),
+    amount: positiveMinorDigitsSchema.optional(),
+    // A's current price per unit (minor units) — authoritative for the proceeds.
+    fromUnitPrice: positiveMinorDigitsSchema,
+    // B's price per unit (minor units) — derives the B units the proceeds buy.
+    toUnitPrice: positiveMinorDigitsSchema,
+    // Back-datable (a switch executes on a broker-set date, not necessarily now).
+    date: z.coerce.date().optional(),
+    idempotencyKey: uuidV7Schema,
+  })
+  .superRefine((data, ctx) => {
+    if ((data.quantity !== undefined) === (data.amount !== undefined)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["quantity"],
+        message:
+          "Provide exactly one of quantity (of A) or amount (proceeds to switch)",
+      })
+    }
+    if (Boolean(data.toInstrumentId) === Boolean(data.toInstrument)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["toInstrumentId"],
+        message:
+          "Provide exactly one of an existing toInstrumentId or an inline toInstrument to create",
+      })
+    }
+  })
+
+type RecordSwitchInput = z.infer<typeof recordSwitchInputSchema>
+
+export interface RecordSwitchResult {
+  investmentAccountId: string
+  // ---- SELL side (fund A) ----
+  fromHoldingId: string
+  fromInstrumentId: string
+  /** Resulting A position, or null when the switch closed it to zero. */
+  fromHolding: SerializedHolding | null
+  /** Units of A switched out, decimal string. */
+  fromQuantity: string
+  /** Proceeds = units switched × A's current price, minor units (digit-string). */
+  proceedsMinor: string
+  /** Realized gain/loss on the switched A units vs average cost, minor units, signed. */
+  realizedGainMinor: string
+  /** Cost basis removed from A by this switch, minor units. */
+  fromCostRemovedMinor: string
+  // ---- BUY side (fund B) ----
+  toHoldingId: string
+  toInstrumentId: string
+  /** Resulting B position after the switch (always present — B is bought). */
+  toHolding: SerializedHolding
+  /** Units of B acquired with the proceeds, decimal string. */
+  toQuantity: string
+  /** Cost basis added to B (== proceeds), minor units. */
+  toCostAddedMinor: string
+  /** Investment account value after re-materializing Σ holdings, minor units. */
+  investmentValueAfterMinor: string
+}
+
+// units = amount / unitPrice, scaled, round-half-up — the SAME fold the reinvest
+// and amount→quantity paths use (amount × SCALE / unitPrice). Both operands are
+// positive here (schema + guards), so the +unitPrice/2 numerator is exact half-up.
+function unitsFromAmountScaled(
+  amountMinor: bigint,
+  unitPriceMinor: bigint
+): bigint {
+  return (amountMinor * QUANTITY_SCALE + unitPriceMinor / 2n) / unitPriceMinor
+}
+
+export async function recordSwitchForFamily({
+  data: rawData,
+  familyId,
+  user,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  data: z.input<typeof recordSwitchInputSchema>
+  familyId: string
+  user: ServerActor
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<RecordSwitchResult> {
+  const data: RecordSwitchInput = recordSwitchInputSchema.parse(rawData)
+
+  const requestHash = await hashCanonicalPayload({
+    amount: data.amount ?? null,
+    date: data.date?.toISOString() ?? null,
+    fromHoldingId: data.fromHoldingId,
+    fromUnitPrice: data.fromUnitPrice,
+    investmentAccountId: data.investmentAccountId,
+    quantity: data.quantity ?? null,
+    toInstrument: data.toInstrument ?? null,
+    toInstrumentId: data.toInstrumentId ?? null,
+    toUnitPrice: data.toUnitPrice,
+  })
+  const auditCtx = await createAuditContext(
+    { user: { id: user.id, familyId } },
+    data.idempotencyKey
+  )
+  const date = data.date ?? new Date()
+  const fromUnitPrice = BigInt(data.fromUnitPrice)
+  const toUnitPrice = BigInt(data.toUnitPrice)
+
+  const runOnce = async () =>
+    await runInTenantTransaction(familyId, user.id, async (tx) => {
+      const replay = await replayIdempotentEndpointResponse<RecordSwitchResult>(
+        tx,
+        {
+          endpoint: RECORD_SWITCH_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+        }
+      )
+      if (replay) return replay
+
+      // Tenant ownership + eligibility of the holdings account (RLS-scoped,
+      // belt-and-braces). A switch never touches a cash/funding account.
+      await validateTenantReferences(tx, familyId, {
+        accountId: data.investmentAccountId,
+      })
+      const investmentAccount = await fetchActiveAccount(
+        tx,
+        familyId,
+        data.investmentAccountId,
+        "Investment"
+      )
+      if (investmentAccount.balanceSource !== "valuation") {
+        throw new HoldingError(
+          `Investment account ${investmentAccount.id} must be a valuation-tracked account (balanceSource="valuation"); it is "${investmentAccount.balanceSource}"`
+        )
+      }
+      assertKnownCurrency(investmentAccount.currency)
+
+      // Fund A — the source holding, must belong to this account.
+      const fromHolding = await loadHoldingWithInstrument(
+        tx,
+        familyId,
+        data.fromHoldingId
+      )
+      if (fromHolding.accountId !== investmentAccount.id) {
+        throw new HoldingError(
+          `Holding ${data.fromHoldingId} does not belong to account ${data.investmentAccountId}`
+        )
+      }
+
+      // Fund B — resolve/create the destination instrument (same-currency,
+      // market-priced; reuses the shared resolver the Buy path uses). Must be a
+      // DIFFERENT instrument than A: a switch is A→B, not a same-position edit.
+      const toInstrument = await resolveInstrument(
+        tx,
+        familyId,
+        investmentAccount.currency,
+        { instrumentId: data.toInstrumentId, instrument: data.toInstrument },
+        auditCtx
+      )
+      if (toInstrument.id === fromHolding.instrumentId) {
+        throw new HoldingError(
+          "A switch moves into a DIFFERENT fund (A and B cannot be the same instrument); use Buy/Sell to change a single position"
+        )
+      }
+
+      // Derive the switched A units + proceeds. Proceeds are authoritative for
+      // the internal value moved and for B's cost basis (no external cash).
+      let fromUnitsScaled: bigint
+      let proceedsMinor: bigint
+      if (data.quantity !== undefined) {
+        try {
+          fromUnitsScaled = quantityToScaled(data.quantity)
+        } catch (error) {
+          throw new HoldingError(
+            `quantity is not a valid amount: ${error instanceof Error ? error.message : String(error)}`
+          )
+        }
+        proceedsMinor = holdingValueMinor(fromUnitsScaled, fromUnitPrice)
+      } else {
+        // amount given (schema guarantees exactly one of quantity/amount).
+        proceedsMinor = BigInt(data.amount ?? "0")
+        fromUnitsScaled = unitsFromAmountScaled(proceedsMinor, fromUnitPrice)
+      }
+      if (fromUnitsScaled <= 0n) {
+        throw new HoldingError("Switch quantity must be greater than zero")
+      }
+      if (proceedsMinor <= 0n) {
+        throw new HoldingError("Switch proceeds must be greater than zero")
+      }
+
+      const oldFromUnitsScaled = quantityToScaled(
+        fromHolding.quantity.toFixed(8)
+      )
+      if (fromUnitsScaled > oldFromUnitsScaled) {
+        throw new HoldingError(
+          `Cannot switch ${scaledToQuantityString(fromUnitsScaled)} units; only ${fromHolding.quantity.toFixed(8)} held`
+        )
+      }
+
+      // ---- SELL side (A): average-cost method, realized gain vs average cost ----
+      const costRemoved = holdingCostMinor(
+        fromUnitsScaled,
+        fromHolding.avgUnitCostMinor
+      )
+      const realizedGainMinor = proceedsMinor - costRemoved
+      const remainingFromUnitsScaled = oldFromUnitsScaled - fromUnitsScaled
+
+      let fromHoldingId: string | null
+      if (remainingFromUnitsScaled === 0n) {
+        // Switched everything out of A — close (delete) the position, mirroring
+        // a sell-to-zero.
+        await tx.holding.delete({ where: { id: fromHolding.id } })
+        await auditLog(tx, auditCtx, {
+          action: "delete",
+          entityType: "Holding",
+          entityId: fromHolding.id,
+          before: serializeHolding(fromHolding),
+          after: null,
+        })
+        fromHoldingId = null
+      } else {
+        const updatedFrom = await tx.holding.update({
+          where: { id: fromHolding.id },
+          data: { quantity: scaledToQuantityString(remainingFromUnitsScaled) },
+          include: { instrument: true },
+        })
+        await auditLog(tx, auditCtx, {
+          action: "update",
+          entityType: "Holding",
+          entityId: updatedFrom.id,
+          before: serializeHolding(fromHolding),
+          after: serializeHolding(updatedFrom),
+        })
+        fromHoldingId = updatedFrom.id
+      }
+
+      // ---- BUY side (B): the proceeds buy B units, cost basis += proceeds ----
+      const addedToUnitsScaled = unitsFromAmountScaled(
+        proceedsMinor,
+        toUnitPrice
+      )
+      if (addedToUnitsScaled <= 0n) {
+        throw new HoldingError(
+          "Switch buys zero units of the destination fund; raise the amount or lower the destination unit price"
+        )
+      }
+
+      const existingTo = await tx.holding.findFirst({
+        where: {
+          familyId,
+          accountId: investmentAccount.id,
+          instrumentId: toInstrument.id,
+        },
+        include: { instrument: true },
+      })
+
+      let toHoldingId: string
+      if (existingTo) {
+        const oldToUnitsScaled = quantityToScaled(
+          existingTo.quantity.toFixed(8)
+        )
+        const oldToCost = holdingCostMinor(
+          oldToUnitsScaled,
+          existingTo.avgUnitCostMinor
+        )
+        const newToUnitsScaled = oldToUnitsScaled + addedToUnitsScaled
+        const newToAvg = averageUnitCostMinor(
+          oldToCost + proceedsMinor,
+          newToUnitsScaled
+        )
+        const updatedTo = await tx.holding.update({
+          where: { id: existingTo.id },
+          data: {
+            quantity: scaledToQuantityString(newToUnitsScaled),
+            avgUnitCostMinor: newToAvg,
+          },
+          include: { instrument: true },
+        })
+        await auditLog(tx, auditCtx, {
+          action: "update",
+          entityType: "Holding",
+          entityId: updatedTo.id,
+          before: serializeHolding(existingTo),
+          after: serializeHolding(updatedTo),
+        })
+        toHoldingId = updatedTo.id
+      } else {
+        const newToAvg = averageUnitCostMinor(proceedsMinor, addedToUnitsScaled)
+        const createdTo = await tx.holding.create({
+          data: {
+            familyId,
+            accountId: investmentAccount.id,
+            instrumentId: toInstrument.id,
+            quantity: scaledToQuantityString(addedToUnitsScaled),
+            avgUnitCostMinor: newToAvg,
+            lastPriceMinor: null,
+          },
+          include: { instrument: true },
+        })
+        await auditLog(tx, auditCtx, {
+          action: "create",
+          entityType: "Holding",
+          entityId: createdTo.id,
+          after: serializeHolding(createdTo),
+        })
+        toHoldingId = createdTo.id
+      }
+
+      // Provenance audit row — the durable, queryable record of the switch
+      // linking both sides + proceeds + realized gain (mirrors Slice 2/3's
+      // Distribution/Fee provenance rows). Anchored on the source holding id.
+      await auditLog(tx, auditCtx, {
+        action: "create",
+        entityType: "Switch",
+        entityId: fromHolding.id,
+        after: {
+          date: date.toISOString(),
+          investmentAccountId: investmentAccount.id,
+          fromHoldingId: fromHolding.id,
+          fromInstrumentId: fromHolding.instrumentId,
+          fromInstrumentName: fromHolding.instrument.name,
+          fromUnitsScaled: fromUnitsScaled.toString(),
+          fromUnitPriceMinor: fromUnitPrice.toString(),
+          toHoldingId,
+          toInstrumentId: toInstrument.id,
+          toInstrumentName: toInstrument.name,
+          toUnitsScaled: addedToUnitsScaled.toString(),
+          toUnitPriceMinor: toUnitPrice.toString(),
+          proceedsMinor: proceedsMinor.toString(),
+          costRemovedMinor: costRemoved.toString(),
+          realizedGainMinor: realizedGainMinor.toString(),
+        },
+      })
+
+      // Re-materialize the Σ-holdings anchor ONCE (source="holdings" — the only
+      // value-write the PER-259 guard allows on a holdings account).
+      await recomputeAccountValueAnchorWithinTx(
+        tx,
+        familyId,
+        investmentAccount.id,
+        investmentAccount.currency,
+        user,
+        auditCtx
+      )
+
+      const finalFrom =
+        fromHoldingId === null
+          ? null
+          : serializeHolding(
+              await loadHoldingWithInstrument(tx, familyId, fromHoldingId)
+            )
+      const finalTo = serializeHolding(
+        await loadHoldingWithInstrument(tx, familyId, toHoldingId)
+      )
+      const investmentAfter = await tx.account.findUniqueOrThrow({
+        where: { id: investmentAccount.id },
+        select: { balance: true },
+      })
+
+      const response: RecordSwitchResult = {
+        investmentAccountId: investmentAccount.id,
+        fromHoldingId: fromHolding.id,
+        fromInstrumentId: fromHolding.instrumentId,
+        fromHolding: finalFrom,
+        fromQuantity: scaledToQuantityString(fromUnitsScaled),
+        proceedsMinor: proceedsMinor.toString(),
+        realizedGainMinor: realizedGainMinor.toString(),
+        fromCostRemovedMinor: costRemoved.toString(),
+        toHoldingId,
+        toInstrumentId: toInstrument.id,
+        toHolding: finalTo,
+        toQuantity: scaledToQuantityString(addedToUnitsScaled),
+        toCostAddedMinor: proceedsMinor.toString(),
+        investmentValueAfterMinor: investmentAfter.balance.toString(),
+      }
+      await persistIdempotentEndpointResponse(tx, {
+        endpoint: RECORD_SWITCH_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+        response,
+      })
+      return response
+    })
+
+  try {
+    return await runOnce()
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error
+    const replay = await scopedTenantTransaction(familyId, user.id, (tx) =>
+      replayIdempotentEndpointResponse<RecordSwitchResult>(tx, {
+        endpoint: RECORD_SWITCH_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+      })
+    )
+    if (replay) return replay
+    throw error
+  }
+}
+
+export const recordSwitchFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("ledger:write")])
+  .inputValidator((data: z.input<typeof recordSwitchInputSchema>) =>
+    recordSwitchInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await recordSwitchForFamily({
+      data,
+      familyId: context.familyId,
+      user: context.user,
+    })
+  })
+
+// =============================================================================
 // MARKET-DATA PRICE LINK + AUTO-REVALUATION (PER-238 / ADR-0050 + ADR-0051)
 // =============================================================================
 //
