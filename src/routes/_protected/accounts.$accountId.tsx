@@ -256,6 +256,15 @@ function AccountDetailPage() {
     enabled: tracked,
   })
 
+  // PER-259 / ADR-0054 — a tracked account that carries ≥1 holding moves money
+  // ONLY through trades (Buy/Sell in the HoldingsPanel). Its value is always
+  // Σ(units × price); the generic "Add transaction" transfer and "Update value"
+  // entry points would silently desync the position, so they are hidden here —
+  // and rejected server-side (the server is the law; UI hiding is coherence
+  // only). A tracked account with NO holdings yet keeps both paths (it may use
+  // Update value / a valuation-linked transfer, or add a holding).
+  const hasHoldings = tracked && (holdingsView?.holdings.length ?? 0) > 0
+
   // After any holding mutation the account balance changes (the holdings anchor
   // re-materialized it), so resync BOTH the holdings query and the account
   // collections the hero/KPIs read from.
@@ -615,15 +624,24 @@ function AccountDetailPage() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <BackLink />
         <div className="flex flex-wrap items-center gap-2">
-          <TransactionFormModal
-            defaultAccountId={accountId}
-            customTrigger={
-              <Button size="sm">
-                <Plus className="size-4" />
-                Add transaction
-              </Button>
-            }
-          />
+          {/* PER-259 / ADR-0054 — a holdings account moves money via Buy/Sell
+              only (HoldingsPanel), so the generic transfer + value-set entry
+              points are hidden; a one-line hint points to the trade actions. */}
+          {hasHoldings ? (
+            <span className="text-xs text-muted-foreground">
+              Move money with Buy / Sell below
+            </span>
+          ) : (
+            <TransactionFormModal
+              defaultAccountId={accountId}
+              customTrigger={
+                <Button size="sm">
+                  <Plus className="size-4" />
+                  Add transaction
+                </Button>
+              }
+            />
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -632,14 +650,16 @@ function AccountDetailPage() {
             <Pencil className="size-4" />
             Edit
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setDetailDialog("valuation")}
-          >
-            <Scale className="size-4" />
-            {cashLike ? "Reconcile" : "Update value"}
-          </Button>
+          {hasHoldings ? null : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setDetailDialog("valuation")}
+            >
+              <Scale className="size-4" />
+              {cashLike ? "Reconcile" : "Update value"}
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
