@@ -86,6 +86,7 @@ export function HoldingsPanel({
   onEdit,
   onDelete,
   onBuy,
+  onSell,
   onBuyHolding,
   onSellHolding,
   onRefreshPrices,
@@ -98,6 +99,7 @@ export function HoldingsPanel({
   onEdit: (holding: HoldingRecord) => void
   onDelete: (holding: HoldingRecord) => void
   onBuy: () => void
+  onSell: () => void
   onBuyHolding: (holding: HoldingRecord) => void
   onSellHolding: (holding: HoldingRecord) => void
   onRefreshPrices: () => void
@@ -135,6 +137,12 @@ export function HoldingsPanel({
             <ArrowDownLeft className="size-4" />
             Buy
           </Button>
+          {holdings.length > 0 ? (
+            <Button size="sm" variant="outline" onClick={onSell}>
+              <ArrowUpRight className="size-4" />
+              Sell
+            </Button>
+          ) : null}
           <Button size="sm" variant="outline" onClick={onAdd}>
             <Plus className="size-4" />
             Add holding
