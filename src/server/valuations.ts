@@ -104,6 +104,43 @@ export class ValuationError extends Error {
   }
 }
 
+// PER-259 / ADR-0054 — a holdings-tracked account moves money ONLY through
+// trades (Buy/Sell). Its value is always Σ(units × price), written back as the
+// holdings anchor (source === HOLDINGS_VALUATION_SOURCE). Any OTHER value-set
+// path — a plain/valuation-linked transfer leg, or a manual "Update value" —
+// sets a value WITHOUT moving units, desyncing units × price from the stored
+// balance. Those paths are rejected fail-loud with an actionable message; the
+// trade path (source="holdings") is unaffected. This extends the ADR-0048
+// balance-write guard: ValuationAccountLedgerError blocks the incremental
+// delta path, and a holdings account IS a valuation account so that path is
+// already blocked — this covers the remaining VALUE-SET paths.
+export class HoldingsAccountLedgerError extends Error {
+  override readonly name = "HoldingsAccountLedgerError"
+  readonly statusCode = 422
+  constructor(accountId: string) {
+    super(
+      `Account ${accountId} carries holdings (ADR-0054): move money with a ` +
+        `Buy/Sell trade, not a transfer or a manual value edit. Its value is ` +
+        `always Σ(units × price) and follows your trades automatically.`
+    )
+  }
+}
+
+// PER-259 / ADR-0054 — does this account carry ≥1 holdings position? Tenant-
+// scoped (familyId + RLS). The single predicate the holdings-account value-set
+// guards key off; a `true` result means "money moves via trades only".
+export async function accountHasHoldings(
+  tx: TenantTransactionClient,
+  accountId: string,
+  familyId: string
+): Promise<boolean> {
+  const holding = await tx.holding.findFirst({
+    where: { accountId, familyId },
+    select: { id: true },
+  })
+  return holding !== null
+}
+
 const currencySchema = z
   .string()
   .trim()
@@ -518,6 +555,23 @@ export async function createValuationWithinTx(
   const account = await fetchAccountFacts(tx, familyId, data.accountId)
   if (!account) {
     throw new ValuationError(`Account ${data.accountId} not found`)
+  }
+
+  // PER-259 / ADR-0054 — the single choke point for EVERY valuation write, so
+  // gating it here covers the single, bulk, import, and future bank-sync paths
+  // at once. A holdings-tracked account's value is Σ(units × price), written
+  // ONLY by the holdings anchor (source === HOLDINGS_VALUATION_SOURCE); the
+  // trade path and holdings CRUD both use that source and pass through. Any
+  // other source — a manual "Update value" (source="manual") or a valuation-
+  // linked transfer's tracked-side valuation (source="transfer") — would set a
+  // value without moving units and is rejected fail-loud. Grandfathering holds:
+  // rebuild recomputes from existing rows via setAccountBalanceTo, never this
+  // path, so legacy transfer/income rows are never re-rejected.
+  if (
+    data.source !== HOLDINGS_VALUATION_SOURCE &&
+    (await accountHasHoldings(tx, account.id, familyId))
+  ) {
+    throw new HoldingsAccountLedgerError(account.id)
   }
 
   const currency = data.currency ?? account.currency

@@ -54,9 +54,11 @@ import {
   type RunInTenantTransaction,
 } from "./mutation-kit"
 import {
+  accountHasHoldings,
   createValuationWithinTx,
   fetchAccountFacts,
   HOLDINGS_VALUATION_SOURCE,
+  HoldingsAccountLedgerError,
   latestValuation,
   rebuildWithinTx,
   valueMagnitudeSchema,
@@ -2157,6 +2159,19 @@ async function createValuationLinkedTransferWithinTx(
     purpose?: TransferPurpose | null
   }
 ) {
+  // PER-259 / ADR-0054 — a holdings-tracked account moves money ONLY through
+  // trades (Buy/Sell), which post via `postValuationLinkedTransferLegs`
+  // directly (bypassing this function). A plain or valuation-linked transfer
+  // whose tracked leg carries holdings would set a value without moving units,
+  // desyncing units × price. Reject fail-loud BEFORE the cash leg posts so the
+  // user gets an actionable "use Buy/Sell" message (createValuationWithinTx is
+  // the backstop law for any other value-set path). This never fires for a
+  // holdings-free valuation account (property, manual asset), so ADR-0048 is
+  // unchanged.
+  if (await accountHasHoldings(tx, trackedAccount.id, familyId)) {
+    throw new HoldingsAccountLedgerError(trackedAccount.id)
+  }
+
   return postValuationLinkedTransferLegs(tx, {
     cashAccount,
     trackedAccount,
