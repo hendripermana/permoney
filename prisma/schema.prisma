@@ -1021,6 +1021,18 @@ model Holding {
   // enters a price (value then falls back to cost basis, gain 0). CHECK null or >= 0.
   lastPriceMinor BigInt?
 
+  // PER-259 Slice 5 / ADR-0054 — the "latest quantity-mutating event" IDENTITY
+  // marker: the idempotencyKey of whichever operation last changed quantity /
+  // avgUnitCostMinor on this row (a Buy/Sell trade, a Switch leg, or a
+  // Dividend reinvest — see src/server/holdings.ts). A trade-correction/delete
+  // is only permitted when this equals the target trade's own idempotencyKey
+  // — an IDENTITY comparison, never a value diff (two trades can coincidentally
+  // produce the same quantity/cost). NULL means "never touched by a tracked
+  // mutation" (a freshly-created holding) OR "manually raw-edited since"
+  // (upsertHoldingForFamily's update branch clears it — a manual edit
+  // invalidates any earlier trade's claim to being "still latest").
+  lastMutationIdempotencyKey String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 

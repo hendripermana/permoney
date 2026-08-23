@@ -35,11 +35,15 @@ import {
 import { toMinorUnits } from "@/lib/money"
 import { getFamilyBaseCurrency } from "./fx"
 import {
+  findTransactionAuditGraph,
   postExpenseTransactionWithinTx,
   postIncomeTransactionWithinTx,
   postValuationLinkedTransferLegs,
+  softDeleteValuationLinkedTransferWithinTx,
+  TransactionGoneError,
   type ValuationLinkedTransferLeg,
 } from "./transactions"
+import { createUuidV7 } from "@/lib/uuid-v7"
 import {
   auditLog,
   createAuditContext,
@@ -219,6 +223,14 @@ export interface SerializedHolding {
   /** Unrealized return as a fraction, or null when cost is 0. */
   returnPct: number | null
   /**
+   * PER-259 Slice 5 / ADR-0054 — identity marker: the idempotencyKey of
+   * whichever operation last changed `quantity`/`avgUnitCostMinor` on this
+   * row (a trade, a Switch leg, or a Dividend reinvest), or null when never
+   * touched by a tracked mutation / cleared by a manual raw edit. Part of the
+   * "before" snapshot a trade-correction restores verbatim — never recomputed.
+   */
+  lastMutationIdempotencyKey: string | null
+  /**
    * PER-238 — as-of of the latest MarketQuote for the linked MarketInstrument
    * (ISO string), or null when the holding is not linked / has no quote yet.
    * Populated by the read view (getAccountHoldingsForFamily); a bare
@@ -284,6 +296,7 @@ function serializeHolding(holding: HoldingWithInstrument): SerializedHolding {
     costMinor: cost.toString(),
     gainMinor: gain.toString(),
     returnPct: holdingReturnPct(value, cost),
+    lastMutationIdempotencyKey: holding.lastMutationIdempotencyKey,
     latestMarketQuoteAsOf: null,
     createdAt: holding.createdAt.toISOString(),
     updatedAt: holding.updatedAt.toISOString(),
@@ -642,6 +655,12 @@ export async function upsertHoldingForFamily({
             quantity: data.quantity,
             avgUnitCostMinor,
             lastPriceMinor,
+            // PER-259 Slice 5 — a manual raw edit is NOT a tracked mutation
+            // (trade / switch leg / reinvest); clear the "latest" identity
+            // marker so a stale trade can never be mistaken for still being
+            // latest after this out-of-band edit. See the marker's doc
+            // comment on `SerializedHolding` / the migration header.
+            lastMutationIdempotencyKey: null,
           },
           include: { instrument: true },
         })
@@ -1103,6 +1122,329 @@ async function fetchActiveAccount(
   return account
 }
 
+// PER-259 Slice 5 / ADR-0054 — the within-transaction CORE of a Buy/Sell trade,
+// extracted verbatim (zero behavior change) from `recordTradeForFamily` so a
+// second caller can compose it: the trade-CORRECTION path (`correctTradeForFamily`
+// below) reverses the old trade, then calls this SAME core to reapply the
+// corrected params as a brand-new trade in the SAME transaction — reusing the
+// exact math (average cost, realized gain, the "latest" marker stamp) instead
+// of duplicating it. Mirrors `postIncomeTransactionWithinTx` /
+// `postExpenseTransactionWithinTx`'s shape: this does NOT replay-check or
+// persist an IdempotencyRecord — the caller owns that (its own endpoint for
+// `recordTradeForFamily`, or the correction endpoint's for the reapply).
+async function recordTradeWithinTx(
+  tx: TenantTransactionClient,
+  {
+    data,
+    familyId,
+    user,
+    auditCtx,
+  }: {
+    data: RecordTradeInput
+    familyId: string
+    user: ServerActor
+    auditCtx: AuditContext
+  }
+): Promise<RecordTradeResult> {
+  const isBuy = data.side === "buy"
+
+  // Tenant ownership of BOTH accounts (RLS-scoped, composite-FK backed).
+  await validateTenantReferences(tx, familyId, {
+    accountId: data.fundingAccountId,
+    toAccountId: data.investmentAccountId,
+  })
+
+  const fundingAccount = await fetchActiveAccount(
+    tx,
+    familyId,
+    data.fundingAccountId,
+    "Funding"
+  )
+  if (fundingAccount.balanceSource !== "transaction_flow") {
+    throw new HoldingError(
+      `Funding account ${fundingAccount.id} must be a cash-like account (balanceSource="transaction_flow"); it is "${fundingAccount.balanceSource}"`
+    )
+  }
+
+  const investmentAccount = await fetchActiveAccount(
+    tx,
+    familyId,
+    data.investmentAccountId,
+    "Investment"
+  )
+  if (investmentAccount.balanceSource !== "valuation") {
+    throw new HoldingError(
+      `Investment account ${investmentAccount.id} must be a valuation-tracked account (balanceSource="valuation"); it is "${investmentAccount.balanceSource}"`
+    )
+  }
+
+  // Single-currency slice: the cash leg and the position share one currency.
+  if (fundingAccount.currency !== investmentAccount.currency) {
+    throw new HoldingError(
+      `Cross-currency trades are not supported this slice (funding ${fundingAccount.currency}, investment ${investmentAccount.currency})`
+    )
+  }
+  // Validate the currency is one we support (throws a typed HoldingError).
+  assertKnownCurrency(investmentAccount.currency)
+
+  const cashAmount = BigInt(data.cashAmount)
+  let quantityScaled: bigint
+  try {
+    quantityScaled = quantityToScaled(data.quantity)
+  } catch (error) {
+    throw new HoldingError(
+      `quantity is not a valid amount: ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+  if (quantityScaled <= 0n) {
+    throw new HoldingError("quantity must be greater than zero")
+  }
+
+  // Resolve the instrument. A BUY may create one inline; a SELL must name an
+  // existing instrument (you cannot sell a position you do not hold).
+  if (!isBuy && (data.instrument || !data.instrumentId)) {
+    throw new HoldingError(
+      "A sell must reference an existing instrumentId (you can only sell a position you hold)"
+    )
+  }
+  const instrument = await resolveInstrument(
+    tx,
+    familyId,
+    investmentAccount.currency,
+    { instrumentId: data.instrumentId, instrument: data.instrument },
+    auditCtx
+  )
+
+  // Side-channel outputs captured from the position mutation (which runs
+  // inside resolveValuation, after the cash leg posts). An object (not bare
+  // primitives) so closure assignments keep their declared union type.
+  const tradeOut: {
+    holdingId: string | null
+    realizedGainMinor: bigint | null
+    costBasisDeltaMinor: bigint
+  } = { holdingId: null, realizedGainMinor: null, costBasisDeltaMinor: 0n }
+
+  const existing = await tx.holding.findFirst({
+    where: {
+      familyId,
+      accountId: investmentAccount.id,
+      instrumentId: instrument.id,
+    },
+    include: { instrument: true },
+  })
+
+  // Direction + kind mirror the DB trigger exactly (source→destination):
+  //   BUY  = contribution (funding → investment)
+  //   SELL = redemption   (investment → funding)
+  const direction = isBuy ? "contribution" : "redemption"
+  const kind = isBuy
+    ? deriveTransferKindForAccounts({
+        fromAccountType: parseAccountType(fundingAccount.accountType),
+        toAccountType: parseAccountType(investmentAccount.accountType),
+      })
+    : deriveTransferKindForAccounts({
+        fromAccountType: parseAccountType(investmentAccount.accountType),
+        toAccountType: parseAccountType(fundingAccount.accountType),
+      })
+
+  const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
+  const tradeDate = data.tradeDate ?? new Date()
+  const description = `${isBuy ? "Buy" : "Sell"} ${instrument.name}`
+
+  const leg: ValuationLinkedTransferLeg = {
+    amount: cashAmount,
+    date: tradeDate,
+    description,
+    notes: null,
+    status: "CLEARED",
+    idempotencyKey: data.idempotencyKey,
+  }
+
+  const serializedTransaction = await postValuationLinkedTransferLegs(tx, {
+    cashAccount: fundingAccount,
+    trackedAccount: investmentAccount,
+    direction,
+    kind,
+    // PER-247: a Buy IS an investment contribution (Sell a withdrawal) —
+    // label the canonical Transfer so per-account rendering is
+    // contextual. Only on funds_movement (a liability-funded trade keeps
+    // its liability_draw meaning; purpose is forbidden there).
+    purpose:
+      kind === "funds_movement"
+        ? isBuy
+          ? "investment_contribution"
+          : "investment_withdrawal"
+        : null,
+    leg,
+    familyId,
+    user,
+    auditCtx,
+    baseCurrency,
+    resolveValuation: async (t) => {
+      if (isBuy) {
+        if (existing) {
+          const oldUnitsScaled = quantityToScaled(existing.quantity.toFixed(8))
+          const oldCost = holdingCostMinor(
+            oldUnitsScaled,
+            existing.avgUnitCostMinor
+          )
+          const newUnitsScaled = oldUnitsScaled + quantityScaled
+          const newAvg = averageUnitCostMinor(
+            oldCost + cashAmount,
+            newUnitsScaled
+          )
+          const updated = await t.holding.update({
+            where: { id: existing.id },
+            data: {
+              quantity: scaledToQuantityString(newUnitsScaled),
+              avgUnitCostMinor: newAvg,
+              // PER-259 Slice 5 — stamp the "latest" identity marker with
+              // THIS trade's own idempotencyKey (see marker doc comment).
+              lastMutationIdempotencyKey: data.idempotencyKey,
+            },
+            include: { instrument: true },
+          })
+          await auditLog(t, auditCtx, {
+            action: "update",
+            entityType: "Holding",
+            entityId: updated.id,
+            before: serializeHolding(existing),
+            after: serializeHolding(updated),
+          })
+          tradeOut.holdingId = updated.id
+        } else {
+          const newAvg = averageUnitCostMinor(cashAmount, quantityScaled)
+          const created = await t.holding.create({
+            data: {
+              familyId,
+              accountId: investmentAccount.id,
+              instrumentId: instrument.id,
+              quantity: scaledToQuantityString(quantityScaled),
+              avgUnitCostMinor: newAvg,
+              lastPriceMinor: null,
+              // PER-259 Slice 5 — this trade is the FIRST mutation ever
+              // on this position; stamp it immediately.
+              lastMutationIdempotencyKey: data.idempotencyKey,
+            },
+            include: { instrument: true },
+          })
+          await auditLog(t, auditCtx, {
+            action: "create",
+            entityType: "Holding",
+            entityId: created.id,
+            after: serializeHolding(created),
+          })
+          tradeOut.holdingId = created.id
+        }
+        tradeOut.costBasisDeltaMinor = cashAmount
+      } else {
+        // SELL — must have an existing position with enough units.
+        if (!existing) {
+          throw new HoldingError(
+            `No ${instrument.name} position to sell in this account`
+          )
+        }
+        const oldUnitsScaled = quantityToScaled(existing.quantity.toFixed(8))
+        if (quantityScaled > oldUnitsScaled) {
+          throw new HoldingError(
+            `Cannot sell ${data.quantity} units; only ${existing.quantity.toFixed(8)} held`
+          )
+        }
+        // Average-cost method: cost removed = units sold × average unit cost;
+        // the average unit cost of the remaining units is unchanged.
+        const costRemoved = holdingCostMinor(
+          quantityScaled,
+          existing.avgUnitCostMinor
+        )
+        tradeOut.costBasisDeltaMinor = costRemoved
+        tradeOut.realizedGainMinor = cashAmount - costRemoved
+        const newUnitsScaled = oldUnitsScaled - quantityScaled
+        if (newUnitsScaled === 0n) {
+          // Sold to zero — close (delete) the position, mirroring
+          // deleteHoldingForFamily's hard delete of the position row.
+          await t.holding.delete({ where: { id: existing.id } })
+          await auditLog(t, auditCtx, {
+            action: "delete",
+            entityType: "Holding",
+            entityId: existing.id,
+            before: serializeHolding(existing),
+            after: null,
+          })
+          tradeOut.holdingId = null
+        } else {
+          const updated = await t.holding.update({
+            where: { id: existing.id },
+            data: {
+              quantity: scaledToQuantityString(newUnitsScaled),
+              // PER-259 Slice 5 — stamp the "latest" identity marker.
+              lastMutationIdempotencyKey: data.idempotencyKey,
+            },
+            include: { instrument: true },
+          })
+          await auditLog(t, auditCtx, {
+            action: "update",
+            entityType: "Holding",
+            entityId: updated.id,
+            before: serializeHolding(existing),
+            after: serializeHolding(updated),
+          })
+          tradeOut.holdingId = updated.id
+        }
+      }
+
+      // Re-materialize the investment account value = Σ holdings, written as
+      // the valuation anchor that pairs with the cash leg under one Transfer.
+      const valuation = await recomputeAccountValueAnchorWithinTx(
+        t,
+        familyId,
+        investmentAccount.id,
+        investmentAccount.currency,
+        user,
+        auditCtx
+      )
+      return { valuation }
+    },
+  })
+
+  const finalHolding =
+    tradeOut.holdingId === null
+      ? null
+      : serializeHolding(
+          await loadHoldingWithInstrument(tx, familyId, tradeOut.holdingId)
+        )
+
+  const [fundingAfter, investmentAfter] = await Promise.all([
+    tx.account.findUniqueOrThrow({
+      where: { id: fundingAccount.id },
+      select: { balance: true },
+    }),
+    tx.account.findUniqueOrThrow({
+      where: { id: investmentAccount.id },
+      select: { balance: true },
+    }),
+  ])
+
+  const response: RecordTradeResult = {
+    side: data.side,
+    investmentAccountId: investmentAccount.id,
+    fundingAccountId: fundingAccount.id,
+    transaction: serializedTransaction,
+    holding: finalHolding,
+    realizedGainMinor:
+      tradeOut.realizedGainMinor === null
+        ? null
+        : tradeOut.realizedGainMinor.toString(),
+    costBasisDeltaMinor: tradeOut.costBasisDeltaMinor.toString(),
+    fundingBalanceAfterMinor: fundingAfter.balance.toString(),
+    investmentValueAfterMinor: investmentAfter.balance.toString(),
+  }
+  return response
+}
+
+// The public endpoint. A THIN wrapper around `recordTradeWithinTx`: parse +
+// hash + replay-check + persist — a PURE extraction, zero behavior change
+// from before Slice 5 (verified by re-running the full Buy/Sell integration
+// suite before and after this refactor — see PER-259 Slice 5 report).
 export async function recordTradeForFamily({
   data: rawData,
   familyId,
@@ -1115,7 +1457,6 @@ export async function recordTradeForFamily({
   runInTenantTransaction?: RunInTenantTransaction
 }): Promise<RecordTradeResult> {
   const data: RecordTradeInput = recordTradeInputSchema.parse(rawData)
-  const isBuy = data.side === "buy"
 
   const requestHash = await hashCanonicalPayload({
     cashAmount: data.cashAmount,
@@ -1146,290 +1487,13 @@ export async function recordTradeForFamily({
       )
       if (replay) return replay
 
-      // Tenant ownership of BOTH accounts (RLS-scoped, composite-FK backed).
-      await validateTenantReferences(tx, familyId, {
-        accountId: data.fundingAccountId,
-        toAccountId: data.investmentAccountId,
-      })
-
-      const fundingAccount = await fetchActiveAccount(
-        tx,
-        familyId,
-        data.fundingAccountId,
-        "Funding"
-      )
-      if (fundingAccount.balanceSource !== "transaction_flow") {
-        throw new HoldingError(
-          `Funding account ${fundingAccount.id} must be a cash-like account (balanceSource="transaction_flow"); it is "${fundingAccount.balanceSource}"`
-        )
-      }
-
-      const investmentAccount = await fetchActiveAccount(
-        tx,
-        familyId,
-        data.investmentAccountId,
-        "Investment"
-      )
-      if (investmentAccount.balanceSource !== "valuation") {
-        throw new HoldingError(
-          `Investment account ${investmentAccount.id} must be a valuation-tracked account (balanceSource="valuation"); it is "${investmentAccount.balanceSource}"`
-        )
-      }
-
-      // Single-currency slice: the cash leg and the position share one currency.
-      if (fundingAccount.currency !== investmentAccount.currency) {
-        throw new HoldingError(
-          `Cross-currency trades are not supported this slice (funding ${fundingAccount.currency}, investment ${investmentAccount.currency})`
-        )
-      }
-      // Validate the currency is one we support (throws a typed HoldingError).
-      assertKnownCurrency(investmentAccount.currency)
-
-      const cashAmount = BigInt(data.cashAmount)
-      let quantityScaled: bigint
-      try {
-        quantityScaled = quantityToScaled(data.quantity)
-      } catch (error) {
-        throw new HoldingError(
-          `quantity is not a valid amount: ${error instanceof Error ? error.message : String(error)}`
-        )
-      }
-      if (quantityScaled <= 0n) {
-        throw new HoldingError("quantity must be greater than zero")
-      }
-
-      // Resolve the instrument. A BUY may create one inline; a SELL must name an
-      // existing instrument (you cannot sell a position you do not hold).
-      if (!isBuy && (data.instrument || !data.instrumentId)) {
-        throw new HoldingError(
-          "A sell must reference an existing instrumentId (you can only sell a position you hold)"
-        )
-      }
-      const instrument = await resolveInstrument(
-        tx,
-        familyId,
-        investmentAccount.currency,
-        { instrumentId: data.instrumentId, instrument: data.instrument },
-        auditCtx
-      )
-
-      // Side-channel outputs captured from the position mutation (which runs
-      // inside resolveValuation, after the cash leg posts). An object (not bare
-      // primitives) so closure assignments keep their declared union type.
-      const tradeOut: {
-        holdingId: string | null
-        realizedGainMinor: bigint | null
-        costBasisDeltaMinor: bigint
-      } = { holdingId: null, realizedGainMinor: null, costBasisDeltaMinor: 0n }
-
-      const existing = await tx.holding.findFirst({
-        where: {
-          familyId,
-          accountId: investmentAccount.id,
-          instrumentId: instrument.id,
-        },
-        include: { instrument: true },
-      })
-
-      // Direction + kind mirror the DB trigger exactly (source→destination):
-      //   BUY  = contribution (funding → investment)
-      //   SELL = redemption   (investment → funding)
-      const direction = isBuy ? "contribution" : "redemption"
-      const kind = isBuy
-        ? deriveTransferKindForAccounts({
-            fromAccountType: parseAccountType(fundingAccount.accountType),
-            toAccountType: parseAccountType(investmentAccount.accountType),
-          })
-        : deriveTransferKindForAccounts({
-            fromAccountType: parseAccountType(investmentAccount.accountType),
-            toAccountType: parseAccountType(fundingAccount.accountType),
-          })
-
-      const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
-      const tradeDate = data.tradeDate ?? new Date()
-      const description = `${isBuy ? "Buy" : "Sell"} ${instrument.name}`
-
-      const leg: ValuationLinkedTransferLeg = {
-        amount: cashAmount,
-        date: tradeDate,
-        description,
-        notes: null,
-        status: "CLEARED",
-        idempotencyKey: data.idempotencyKey,
-      }
-
-      const serializedTransaction = await postValuationLinkedTransferLegs(tx, {
-        cashAccount: fundingAccount,
-        trackedAccount: investmentAccount,
-        direction,
-        kind,
-        // PER-247: a Buy IS an investment contribution (Sell a withdrawal) —
-        // label the canonical Transfer so per-account rendering is
-        // contextual. Only on funds_movement (a liability-funded trade keeps
-        // its liability_draw meaning; purpose is forbidden there).
-        purpose:
-          kind === "funds_movement"
-            ? isBuy
-              ? "investment_contribution"
-              : "investment_withdrawal"
-            : null,
-        leg,
+      const response = await recordTradeWithinTx(tx, {
+        data,
         familyId,
         user,
         auditCtx,
-        baseCurrency,
-        resolveValuation: async (t) => {
-          if (isBuy) {
-            if (existing) {
-              const oldUnitsScaled = quantityToScaled(
-                existing.quantity.toFixed(8)
-              )
-              const oldCost = holdingCostMinor(
-                oldUnitsScaled,
-                existing.avgUnitCostMinor
-              )
-              const newUnitsScaled = oldUnitsScaled + quantityScaled
-              const newAvg = averageUnitCostMinor(
-                oldCost + cashAmount,
-                newUnitsScaled
-              )
-              const updated = await t.holding.update({
-                where: { id: existing.id },
-                data: {
-                  quantity: scaledToQuantityString(newUnitsScaled),
-                  avgUnitCostMinor: newAvg,
-                },
-                include: { instrument: true },
-              })
-              await auditLog(t, auditCtx, {
-                action: "update",
-                entityType: "Holding",
-                entityId: updated.id,
-                before: serializeHolding(existing),
-                after: serializeHolding(updated),
-              })
-              tradeOut.holdingId = updated.id
-            } else {
-              const newAvg = averageUnitCostMinor(cashAmount, quantityScaled)
-              const created = await t.holding.create({
-                data: {
-                  familyId,
-                  accountId: investmentAccount.id,
-                  instrumentId: instrument.id,
-                  quantity: scaledToQuantityString(quantityScaled),
-                  avgUnitCostMinor: newAvg,
-                  lastPriceMinor: null,
-                },
-                include: { instrument: true },
-              })
-              await auditLog(t, auditCtx, {
-                action: "create",
-                entityType: "Holding",
-                entityId: created.id,
-                after: serializeHolding(created),
-              })
-              tradeOut.holdingId = created.id
-            }
-            tradeOut.costBasisDeltaMinor = cashAmount
-          } else {
-            // SELL — must have an existing position with enough units.
-            if (!existing) {
-              throw new HoldingError(
-                `No ${instrument.name} position to sell in this account`
-              )
-            }
-            const oldUnitsScaled = quantityToScaled(
-              existing.quantity.toFixed(8)
-            )
-            if (quantityScaled > oldUnitsScaled) {
-              throw new HoldingError(
-                `Cannot sell ${data.quantity} units; only ${existing.quantity.toFixed(8)} held`
-              )
-            }
-            // Average-cost method: cost removed = units sold × average unit cost;
-            // the average unit cost of the remaining units is unchanged.
-            const costRemoved = holdingCostMinor(
-              quantityScaled,
-              existing.avgUnitCostMinor
-            )
-            tradeOut.costBasisDeltaMinor = costRemoved
-            tradeOut.realizedGainMinor = cashAmount - costRemoved
-            const newUnitsScaled = oldUnitsScaled - quantityScaled
-            if (newUnitsScaled === 0n) {
-              // Sold to zero — close (delete) the position, mirroring
-              // deleteHoldingForFamily's hard delete of the position row.
-              await t.holding.delete({ where: { id: existing.id } })
-              await auditLog(t, auditCtx, {
-                action: "delete",
-                entityType: "Holding",
-                entityId: existing.id,
-                before: serializeHolding(existing),
-                after: null,
-              })
-              tradeOut.holdingId = null
-            } else {
-              const updated = await t.holding.update({
-                where: { id: existing.id },
-                data: { quantity: scaledToQuantityString(newUnitsScaled) },
-                include: { instrument: true },
-              })
-              await auditLog(t, auditCtx, {
-                action: "update",
-                entityType: "Holding",
-                entityId: updated.id,
-                before: serializeHolding(existing),
-                after: serializeHolding(updated),
-              })
-              tradeOut.holdingId = updated.id
-            }
-          }
-
-          // Re-materialize the investment account value = Σ holdings, written as
-          // the valuation anchor that pairs with the cash leg under one Transfer.
-          const valuation = await recomputeAccountValueAnchorWithinTx(
-            t,
-            familyId,
-            investmentAccount.id,
-            investmentAccount.currency,
-            user,
-            auditCtx
-          )
-          return { valuation }
-        },
       })
 
-      const finalHolding =
-        tradeOut.holdingId === null
-          ? null
-          : serializeHolding(
-              await loadHoldingWithInstrument(tx, familyId, tradeOut.holdingId)
-            )
-
-      const [fundingAfter, investmentAfter] = await Promise.all([
-        tx.account.findUniqueOrThrow({
-          where: { id: fundingAccount.id },
-          select: { balance: true },
-        }),
-        tx.account.findUniqueOrThrow({
-          where: { id: investmentAccount.id },
-          select: { balance: true },
-        }),
-      ])
-
-      const response: RecordTradeResult = {
-        side: data.side,
-        investmentAccountId: investmentAccount.id,
-        fundingAccountId: fundingAccount.id,
-        transaction: serializedTransaction,
-        holding: finalHolding,
-        realizedGainMinor:
-          tradeOut.realizedGainMinor === null
-            ? null
-            : tradeOut.realizedGainMinor.toString(),
-        costBasisDeltaMinor: tradeOut.costBasisDeltaMinor.toString(),
-        fundingBalanceAfterMinor: fundingAfter.balance.toString(),
-        investmentValueAfterMinor: investmentAfter.balance.toString(),
-      }
       await persistIdempotentEndpointResponse(tx, {
         endpoint: RECORD_TRADE_ENDPOINT,
         familyId,
@@ -1467,6 +1531,763 @@ export const recordTradeFn = createServerFn({ method: "POST" })
       data,
       familyId: context.familyId,
       user: context.user,
+    })
+  })
+
+// =============================================================================
+// EDIT / DELETE / CORRECT A TRADE (PER-259 Slice 5 / ADR-0054)
+// =============================================================================
+//
+// A mis-entered Buy/Sell must be correctable — the last hole in ADR-0054's
+// "on a holdings account, you trade" model (Slice 8 in the ADR's cascade).
+// SCOPE (locked, grilled with the creator — see ADR-0054 "Slice 5"): a trade
+// is editable/deletable ONLY when it is still the LATEST quantity-mutating
+// event on its (account, instrument) position — no other Buy/Sell/Switch/
+// Dividend-reinvest has touched that same Holding since. This is NOT a full
+// historical-replay engine; attempting to correct a non-latest trade fails
+// loud with an actionable message, never silently produces wrong numbers.
+//
+// "Latest" is an IDENTITY check (the `Holding.lastMutationIdempotencyKey`
+// marker — see the migration + `SerializedHolding` doc comments), never a
+// value diff: a later Sell-then-rebuy-at-the-same-price could coincidentally
+// reproduce the original quantity/cost and falsely look "unchanged".
+//
+// DELETE reuses the EXISTING valuation-linked-transfer delete path
+// (`softDeleteValuationLinkedTransferWithinTx`, transactions.ts) via its new
+// `onHoldingsTradeReversal` hook — the SAME cash-leg/valuation/transfer
+// reversal every other valuation-linked delete uses, plus the hook restoring
+// the paired Holding from its captured AuditLog before/after snapshot (never
+// recomputing an inverse via math) and re-materializing the Σ-holdings anchor.
+//
+// EDIT is reversal-and-replace, ONE atomic transaction: reverse the OLD trade
+// exactly like DELETE, then REAPPLY the corrected params as a brand-new trade
+// via `recordTradeWithinTx` (the SAME core `recordTradeForFamily` uses — no
+// duplicated math). The old Transaction/Transfer/Valuation are tombstoned
+// (never hard-deleted); the corrected trade gets a NEW transaction id — the
+// exact "reversal-and-replace" pattern `replaceTransactionWithinTenantTransaction`
+// already uses for classic transfer edits (CLAUDE.md §5A).
+//
+// SIDE FLIP (buy→sell or vice versa) is supported with NO special-casing: the
+// reversal restores the position to its exact pre-trade state, and the
+// reapply re-runs `recordTradeWithinTx`'s OWN validation against that
+// restored state — a flip that doesn't make sense (e.g. selling a position
+// the reversal just deleted) fails with the SAME actionable error
+// `recordTradeForFamily` already gives ("No <fund> position to sell"), never
+// silent misbehavior.
+
+const DELETE_TRADE_ENDPOINT = "deleteTradeFn"
+const CORRECT_TRADE_ENDPOINT = "correctTradeFn"
+
+// The raw row fields a trade-correction needs to restore a Holding EXACTLY
+// (never recomputed via math) — a strict subset of `serializeHolding`'s full
+// output (which also carries derived/display-only fields like `valueMinor`).
+// `.passthrough()` so the full serialized snapshot in AuditLog parses fine.
+const holdingSnapshotSchema = z
+  .object({
+    id: z.string(),
+    accountId: z.string(),
+    instrumentId: z.string(),
+    familyId: z.string(),
+    quantity: z.string(),
+    avgUnitCostMinor: z.string(),
+    lastPriceMinor: z.string().nullable(),
+    lastMutationIdempotencyKey: z.string().nullable(),
+  })
+  .passthrough()
+
+type HoldingSnapshot = z.infer<typeof holdingSnapshotSchema>
+
+// AuditLog's `beforeJson`/`afterJson` are stored as SQL NULL (via `Prisma.DbNull`
+// on `undefined`, or plain JS `null` on an explicit `null`) for a "create" /
+// "delete" action's missing half — both read back as JS `null`. Anything else
+// is validated (never trusted blindly) against the shape above.
+function parseHoldingSnapshot(json: unknown): HoldingSnapshot | null {
+  if (json === null || json === undefined) return null
+  return holdingSnapshotSchema.parse(json)
+}
+
+interface ResolvedTradeForCorrection {
+  cashTx: NonNullable<Awaited<ReturnType<typeof findTransactionAuditGraph>>>
+  investmentAccount: Awaited<ReturnType<typeof fetchActiveAccount>>
+  tradeKey: string
+  holdingId: string
+  holdingBefore: HoldingSnapshot | null
+  holdingAfter: HoldingSnapshot | null
+}
+
+// Resolve a trade's full identity from the ONE thing the UI actually has: the
+// cash-leg Transaction id shown on the per-account statement. Fails loud (a
+// typed HoldingError / TransactionGoneError) for anything that is not a
+// still-alive Buy/Sell trade — never guesses.
+async function resolveTradeForCorrection(
+  tx: TenantTransactionClient,
+  familyId: string,
+  transactionId: string
+): Promise<ResolvedTradeForCorrection> {
+  const cashTx = await findTransactionAuditGraph(tx, transactionId)
+  if (!cashTx || cashTx.familyId !== familyId) {
+    throw new HoldingError(
+      `Transaction ${transactionId} not found for this family`
+    )
+  }
+  if (cashTx.deletedAt !== null) {
+    throw new TransactionGoneError()
+  }
+  if (cashTx.type !== "transfer") {
+    throw new HoldingError("This transaction is not a Buy/Sell trade")
+  }
+  const transfer = cashTx.transferOut ?? cashTx.transferIn
+  if (!transfer || transfer.valuationId === null) {
+    throw new HoldingError("This transaction is not a Buy/Sell trade")
+  }
+  if (transfer.deletedAt !== null) {
+    throw new TransactionGoneError()
+  }
+  const valuation = await tx.valuation.findUniqueOrThrow({
+    where: { id: transfer.valuationId },
+  })
+  if (valuation.source !== HOLDINGS_VALUATION_SOURCE) {
+    throw new HoldingError("This transaction is not a Buy/Sell trade")
+  }
+  const tradeKey = cashTx.idempotencyKey
+  if (!tradeKey) {
+    throw new HoldingError(
+      "This trade has no recorded idempotency key and cannot be corrected"
+    )
+  }
+
+  const investmentAccount = await fetchActiveAccount(
+    tx,
+    familyId,
+    valuation.accountId,
+    "Investment"
+  )
+  if (investmentAccount.balanceSource !== "valuation") {
+    // Defensive — a holdings anchor can only ever target such an account.
+    throw new HoldingError(
+      `Investment account ${investmentAccount.id} is not valuation-tracked`
+    )
+  }
+
+  // Every trade mutates EXACTLY one Holding under its own idempotencyKey (a
+  // Switch/Dividend never creates a Transaction, so no cross-endpoint
+  // collision is possible here — see the section header).
+  const holdingRows = await tx.auditLog.findMany({
+    where: { familyId, entityType: "Holding", idempotencyKey: tradeKey },
+  })
+  if (holdingRows.length !== 1) {
+    throw new HoldingError(
+      `Could not uniquely resolve the position change for this trade (found ${holdingRows.length} matching audit rows); it cannot be corrected automatically.`
+    )
+  }
+  const holdingRow = holdingRows[0]!
+  const holdingBefore = parseHoldingSnapshot(holdingRow.beforeJson)
+  const holdingAfter = parseHoldingSnapshot(holdingRow.afterJson)
+  if (!holdingBefore && !holdingAfter) {
+    throw new Error(
+      `Holding audit row ${holdingRow.id} has neither a before nor an after snapshot`
+    )
+  }
+
+  return {
+    cashTx,
+    investmentAccount,
+    tradeKey,
+    holdingId: holdingRow.entityId,
+    holdingBefore,
+    holdingAfter,
+  }
+}
+
+// The "latest quantity-mutating event" guard (ADR-0054 Slice 5 scope). See the
+// section header for the identity-vs-value-diff rationale and the one
+// documented residual gap (reopen-then-reclose after a sell-to-zero).
+async function assertTradeIsLatest(
+  tx: TenantTransactionClient,
+  familyId: string,
+  resolved: ResolvedTradeForCorrection
+): Promise<void> {
+  const current = await tx.holding.findFirst({
+    where: { id: resolved.holdingId, familyId },
+  })
+  if (current) {
+    if (current.lastMutationIdempotencyKey !== resolved.tradeKey) {
+      throw new HoldingError(
+        "This trade has activity after it (a later Buy/Sell, Switch, or Dividend reinvest touched this position) — record a correcting trade instead of editing this one."
+      )
+    }
+    return
+  }
+  // The Holding row no longer exists. The common, expected case: THIS trade
+  // itself was a SELL that closed the position to zero (a hard delete, same
+  // as `recordTradeForFamily`'s close-to-zero branch) — safe to correct as
+  // long as nothing has REOPENED the same (account, instrument) position
+  // since (a fresh Holding row would exist if a later Buy/Switch did so).
+  //
+  // KNOWN LIMITATION (ADR-0054 — explicitly "not a full historical-replay
+  // engine"): a reopen-THEN-reclose cascade, or an unrelated manual
+  // `deleteHoldingForFamily` call, both leave no CURRENT Holding row either,
+  // and are not distinguishable from "still latest" by this fallback alone.
+  // This is the one documented residual gap in the Slice 5 guard.
+  const identity = resolved.holdingBefore ?? resolved.holdingAfter
+  if (!identity) {
+    throw new Error("Cannot determine the position identity for this trade")
+  }
+  const reopened = await tx.holding.findFirst({
+    where: {
+      familyId,
+      accountId: identity.accountId,
+      instrumentId: identity.instrumentId,
+    },
+  })
+  if (reopened) {
+    throw new HoldingError(
+      "This trade has activity after it (the position was reopened since) — record a correcting trade instead of editing this one."
+    )
+  }
+}
+
+// The `onHoldingsTradeReversal` hook body: restore the Holding EXACTLY to its
+// captured "before" snapshot (delete it if "before" was null — this trade
+// created it from scratch), then re-materialize the Σ-holdings anchor. Never
+// recomputes an inverse via math — item 4 of the locked Slice 5 design.
+async function reverseHoldingForTrade(
+  tx: TenantTransactionClient,
+  {
+    familyId,
+    holdingId,
+    holdingBefore,
+    account,
+    user,
+    auditCtx,
+  }: {
+    familyId: string
+    holdingId: string
+    holdingBefore: HoldingSnapshot | null
+    account: { id: string; currency: string }
+    user: ServerActor
+    auditCtx: AuditContext
+  }
+): Promise<void> {
+  const current = await tx.holding.findFirst({
+    where: { id: holdingId, familyId },
+    include: { instrument: true },
+  })
+
+  if (holdingBefore === null) {
+    // This trade created the Holding from scratch — reversing it deletes it.
+    if (current) {
+      await tx.holding.delete({ where: { id: current.id } })
+      await auditLog(tx, auditCtx, {
+        action: "delete",
+        entityType: "Holding",
+        entityId: current.id,
+        before: serializeHolding(current),
+        after: null,
+      })
+    }
+  } else if (current) {
+    const updated = await tx.holding.update({
+      where: { id: current.id },
+      data: {
+        quantity: holdingBefore.quantity,
+        avgUnitCostMinor: BigInt(holdingBefore.avgUnitCostMinor),
+        lastPriceMinor:
+          holdingBefore.lastPriceMinor === null
+            ? null
+            : BigInt(holdingBefore.lastPriceMinor),
+        lastMutationIdempotencyKey: holdingBefore.lastMutationIdempotencyKey,
+      },
+      include: { instrument: true },
+    })
+    await auditLog(tx, auditCtx, {
+      action: "update",
+      entityType: "Holding",
+      entityId: updated.id,
+      before: serializeHolding(current),
+      after: serializeHolding(updated),
+    })
+  } else {
+    // The trade closed the position to zero (a SELL-to-zero) — recreate it
+    // EXACTLY at its "before" snapshot, preserving the original row id so
+    // historical references (e.g. prior Distribution/Fee audit rows) still
+    // resolve.
+    const created = await tx.holding.create({
+      data: {
+        id: holdingBefore.id,
+        familyId,
+        accountId: holdingBefore.accountId,
+        instrumentId: holdingBefore.instrumentId,
+        quantity: holdingBefore.quantity,
+        avgUnitCostMinor: BigInt(holdingBefore.avgUnitCostMinor),
+        lastPriceMinor:
+          holdingBefore.lastPriceMinor === null
+            ? null
+            : BigInt(holdingBefore.lastPriceMinor),
+        lastMutationIdempotencyKey: holdingBefore.lastMutationIdempotencyKey,
+      },
+      include: { instrument: true },
+    })
+    await auditLog(tx, auditCtx, {
+      action: "create",
+      entityType: "Holding",
+      entityId: created.id,
+      after: serializeHolding(created),
+    })
+  }
+
+  // Re-materialize the Σ-holdings anchor AFTER the surgical reversal. This
+  // becomes the account's new latest valuation (fresh valuationDate = now),
+  // correctly reflecting the reversed position alongside any OTHER holding's
+  // untouched, possibly-later activity in the same account — NEVER picking
+  // "whatever anchor is now latest" (which is what the generic
+  // `rebuildWithinTx` step this hook replaces would have done).
+  await recomputeAccountValueAnchorWithinTx(
+    tx,
+    familyId,
+    account.id,
+    account.currency,
+    user,
+    auditCtx
+  )
+}
+
+// -----------------------------------------------------------------------------
+// DELETE — reversal only. Built and verified FIRST (simpler, provable) before
+// EDIT, which composes this same reversal with a reapply.
+// -----------------------------------------------------------------------------
+
+export const deleteTradeInputSchema = z.object({
+  transactionId: z.string().min(1),
+  idempotencyKey: uuidV7Schema,
+})
+
+type DeleteTradeInput = z.infer<typeof deleteTradeInputSchema>
+
+export interface DeleteTradeResult {
+  transactionId: string
+  reversed: true
+}
+
+export async function deleteTradeForFamily({
+  data: rawData,
+  familyId,
+  user,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  data: z.input<typeof deleteTradeInputSchema>
+  familyId: string
+  user: ServerActor
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<DeleteTradeResult> {
+  const data: DeleteTradeInput = deleteTradeInputSchema.parse(rawData)
+  const requestHash = await hashCanonicalPayload({
+    transactionId: data.transactionId,
+  })
+  const auditCtx = await createAuditContext(
+    { user: { id: user.id, familyId } },
+    data.idempotencyKey
+  )
+
+  const runOnce = async () =>
+    await runInTenantTransaction(familyId, user.id, async (tx) => {
+      const replay = await replayIdempotentEndpointResponse<DeleteTradeResult>(
+        tx,
+        {
+          endpoint: DELETE_TRADE_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+        }
+      )
+      if (replay) return replay
+
+      const resolved = await resolveTradeForCorrection(
+        tx,
+        familyId,
+        data.transactionId
+      )
+      await assertTradeIsLatest(tx, familyId, resolved)
+
+      await softDeleteValuationLinkedTransferWithinTx(tx, {
+        auditCtx,
+        familyId,
+        cashTx: resolved.cashTx,
+        onHoldingsTradeReversal: async (tx2, hookArgs) => {
+          await reverseHoldingForTrade(tx2, {
+            familyId: hookArgs.familyId,
+            holdingId: resolved.holdingId,
+            holdingBefore: resolved.holdingBefore,
+            account: resolved.investmentAccount,
+            user,
+            auditCtx: hookArgs.auditCtx,
+          })
+        },
+      })
+
+      await auditLog(tx, auditCtx, {
+        action: "delete",
+        entityType: "TradeCorrection",
+        entityId: resolved.cashTx.id,
+        before: {
+          transactionId: resolved.cashTx.id,
+          fundingAccountId: resolved.cashTx.accountId,
+          amountMinor: resolved.cashTx.amount,
+          date: resolved.cashTx.date,
+          holdingBefore: resolved.holdingBefore,
+          holdingAfter: resolved.holdingAfter,
+        },
+        after: null,
+      })
+
+      const response: DeleteTradeResult = {
+        transactionId: data.transactionId,
+        reversed: true,
+      }
+      await persistIdempotentEndpointResponse(tx, {
+        endpoint: DELETE_TRADE_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+        response,
+      })
+      return response
+    })
+
+  try {
+    return await runOnce()
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error
+    const replay = await scopedTenantTransaction(familyId, user.id, (tx) =>
+      replayIdempotentEndpointResponse<DeleteTradeResult>(tx, {
+        endpoint: DELETE_TRADE_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+      })
+    )
+    if (replay) return replay
+    throw error
+  }
+}
+
+export const deleteTradeFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("ledger:write")])
+  .inputValidator((data: z.input<typeof deleteTradeInputSchema>) =>
+    deleteTradeInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await deleteTradeForFamily({
+      data,
+      familyId: context.familyId,
+      user: context.user,
+    })
+  })
+
+// -----------------------------------------------------------------------------
+// EDIT / CORRECT — reversal + reapply, ONE atomic transaction.
+// -----------------------------------------------------------------------------
+
+export const correctTradeInputSchema = z.object({
+  transactionId: z.string().min(1),
+  fundingAccountId: z.string().min(1),
+  side: tradeSideSchema,
+  cashAmount: positiveMinorDigitsSchema,
+  quantity: decimalStringSchema,
+  unitPrice: positiveMinorDigitsSchema.optional(),
+  tradeDate: z.coerce.date().optional(),
+  idempotencyKey: uuidV7Schema,
+})
+
+type CorrectTradeInput = z.infer<typeof correctTradeInputSchema>
+
+export interface CorrectTradeResult {
+  oldTransactionId: string
+  trade: RecordTradeResult
+}
+
+export async function correctTradeForFamily({
+  data: rawData,
+  familyId,
+  user,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  data: z.input<typeof correctTradeInputSchema>
+  familyId: string
+  user: ServerActor
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<CorrectTradeResult> {
+  const data: CorrectTradeInput = correctTradeInputSchema.parse(rawData)
+  const requestHash = await hashCanonicalPayload({
+    cashAmount: data.cashAmount,
+    fundingAccountId: data.fundingAccountId,
+    quantity: data.quantity,
+    side: data.side,
+    tradeDate: data.tradeDate?.toISOString() ?? null,
+    transactionId: data.transactionId,
+    unitPrice: data.unitPrice ?? null,
+  })
+  const auditCtx = await createAuditContext(
+    { user: { id: user.id, familyId } },
+    data.idempotencyKey
+  )
+
+  const runOnce = async () =>
+    await runInTenantTransaction(familyId, user.id, async (tx) => {
+      const replay = await replayIdempotentEndpointResponse<CorrectTradeResult>(
+        tx,
+        {
+          endpoint: CORRECT_TRADE_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+        }
+      )
+      if (replay) return replay
+
+      const resolved = await resolveTradeForCorrection(
+        tx,
+        familyId,
+        data.transactionId
+      )
+      await assertTradeIsLatest(tx, familyId, resolved)
+
+      // Tenant ownership of the (possibly changed) funding account.
+      await validateTenantReferences(tx, familyId, {
+        accountId: data.fundingAccountId,
+      })
+
+      // The instrument is FIXED (resolved from history), never editable here —
+      // moving a position to a different instrument/account is out of this
+      // slice's scope (Slice 6 territory). At least one of before/after is
+      // guaranteed by `resolveTradeForCorrection`.
+      const instrumentId = (resolved.holdingBefore ?? resolved.holdingAfter)!
+        .instrumentId
+
+      // 1. Reverse the OLD trade (cash + valuation + Holding), in this SAME tx.
+      await softDeleteValuationLinkedTransferWithinTx(tx, {
+        auditCtx,
+        familyId,
+        cashTx: resolved.cashTx,
+        onHoldingsTradeReversal: async (tx2, hookArgs) => {
+          await reverseHoldingForTrade(tx2, {
+            familyId: hookArgs.familyId,
+            holdingId: resolved.holdingId,
+            holdingBefore: resolved.holdingBefore,
+            account: resolved.investmentAccount,
+            user,
+            auditCtx: hookArgs.auditCtx,
+          })
+        },
+      })
+
+      // 2. Reapply the CORRECTED params as a brand-new trade, in the SAME tx,
+      // via the exact core `recordTradeForFamily` uses (no duplicated math). A
+      // fresh, server-minted internal key — never the edit's own key (which
+      // would collide across corrections of the SAME trade) and never the old
+      // trade's key (already consumed by the tombstoned Transaction — the
+      // family-unique `tx_family_idempotency` index does not exempt deleted
+      // rows). The corrected trade gets a NEW transaction id; the old one
+      // stays tombstoned, never hard-deleted.
+      const reapplyKey = createUuidV7()
+      const reapplyAuditCtx = await createAuditContext(
+        { user: { id: user.id, familyId } },
+        reapplyKey
+      )
+      const newTradeData: RecordTradeInput = recordTradeInputSchema.parse({
+        cashAmount: data.cashAmount,
+        fundingAccountId: data.fundingAccountId,
+        idempotencyKey: reapplyKey,
+        instrumentId,
+        investmentAccountId: resolved.investmentAccount.id,
+        quantity: data.quantity,
+        side: data.side,
+        tradeDate: data.tradeDate,
+        unitPrice: data.unitPrice,
+      })
+      const trade = await recordTradeWithinTx(tx, {
+        data: newTradeData,
+        familyId,
+        user,
+        auditCtx: reapplyAuditCtx,
+      })
+
+      // Provenance: document the correction old → new (mirrors Slice 2-4's
+      // Distribution/Fee/Switch audit rows) under the EDIT operation's OWN key.
+      await auditLog(tx, auditCtx, {
+        action: "update",
+        entityType: "TradeCorrection",
+        entityId: resolved.cashTx.id,
+        before: {
+          transactionId: resolved.cashTx.id,
+          fundingAccountId: resolved.cashTx.accountId,
+          amountMinor: resolved.cashTx.amount,
+          date: resolved.cashTx.date,
+          holdingBefore: resolved.holdingBefore,
+          holdingAfter: resolved.holdingAfter,
+        },
+        after: {
+          cashAmount: data.cashAmount,
+          fundingAccountId: data.fundingAccountId,
+          quantity: data.quantity,
+          side: data.side,
+          tradeDate: (data.tradeDate ?? new Date()).toISOString(),
+          transactionId: trade.transaction.id,
+          unitPrice: data.unitPrice ?? null,
+        },
+      })
+
+      const response: CorrectTradeResult = {
+        oldTransactionId: resolved.cashTx.id,
+        trade,
+      }
+      await persistIdempotentEndpointResponse(tx, {
+        endpoint: CORRECT_TRADE_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+        response,
+      })
+      return response
+    })
+
+  try {
+    return await runOnce()
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error
+    const replay = await scopedTenantTransaction(familyId, user.id, (tx) =>
+      replayIdempotentEndpointResponse<CorrectTradeResult>(tx, {
+        endpoint: CORRECT_TRADE_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+      })
+    )
+    if (replay) return replay
+    throw error
+  }
+}
+
+export const correctTradeFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("ledger:write")])
+  .inputValidator((data: z.input<typeof correctTradeInputSchema>) =>
+    correctTradeInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await correctTradeForFamily({
+      data,
+      familyId: context.familyId,
+      user: context.user,
+    })
+  })
+
+// -----------------------------------------------------------------------------
+// READ — prefill data for the trade-correction dialog. A `Transaction` id is
+// the only thing the per-account statement's row actually has; this resolves
+// it to the trade's editable fields (side/quantity/cashAmount/fundingAccount/
+// date), reusing the SAME `resolveTradeForCorrection` the mutation endpoints
+// use so the two can never disagree. Called ONLY when a user opens the edit
+// dialog for a row the client already suspects is a trade (never proactively
+// for every statement row this slice — see the section header).
+// -----------------------------------------------------------------------------
+
+export const getTradeForCorrectionInputSchema = z.object({
+  transactionId: z.string().min(1),
+})
+
+export interface TradeForCorrectionView {
+  transactionId: string
+  side: "buy" | "sell"
+  fundingAccountId: string
+  investmentAccountId: string
+  instrumentId: string
+  instrumentName: string
+  currency: string
+  /** Cash amount that moved, minor units (digit-string, always positive). */
+  cashAmountMinor: string
+  /** This trade's own quantity delta, decimal string (always positive). */
+  quantity: string
+  tradeDate: string
+  /** Non-null when this trade is NOT the latest event on its position — the
+   * SAME message `deleteTradeFn`/`correctTradeFn` would reject with. Shown
+   * inline immediately rather than only on submit; the mutation endpoints
+   * remain the authoritative check either way. */
+  notLatestReason: string | null
+}
+
+export async function getTradeForCorrectionForFamily({
+  data,
+  familyId,
+  userId,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  data: z.infer<typeof getTradeForCorrectionInputSchema>
+  familyId: string
+  userId: string
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<TradeForCorrectionView> {
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
+    const resolved = await resolveTradeForCorrection(
+      tx,
+      familyId,
+      data.transactionId
+    )
+
+    let notLatestReason: string | null = null
+    try {
+      await assertTradeIsLatest(tx, familyId, resolved)
+    } catch (error) {
+      notLatestReason = error instanceof Error ? error.message : String(error)
+    }
+
+    // BUY debits the funding (cash) account — cashTx.amount is negative
+    // (mirrors `direction = isBuy ? "contribution" : "redemption"` exactly).
+    const isBuy = resolved.cashTx.amount < 0n
+    const beforeScaled = resolved.holdingBefore
+      ? quantityToScaled(resolved.holdingBefore.quantity)
+      : 0n
+    const afterScaled = resolved.holdingAfter
+      ? quantityToScaled(resolved.holdingAfter.quantity)
+      : 0n
+    const deltaScaled = isBuy
+      ? afterScaled - beforeScaled
+      : beforeScaled - afterScaled
+
+    const instrumentId = (resolved.holdingBefore ?? resolved.holdingAfter)!
+      .instrumentId
+    const instrument = await tx.instrument.findUniqueOrThrow({
+      where: { id: instrumentId },
+    })
+
+    return {
+      transactionId: resolved.cashTx.id,
+      side: isBuy ? "buy" : "sell",
+      fundingAccountId: resolved.cashTx.accountId,
+      investmentAccountId: resolved.investmentAccount.id,
+      instrumentId: instrument.id,
+      instrumentName: instrument.name,
+      currency: resolved.investmentAccount.currency,
+      cashAmountMinor: (resolved.cashTx.amount < 0n
+        ? -resolved.cashTx.amount
+        : resolved.cashTx.amount
+      ).toString(),
+      quantity: scaledToQuantityString(deltaScaled),
+      tradeDate: resolved.cashTx.date.toISOString(),
+      notLatestReason,
+    }
+  })
+}
+
+export const getTradeForCorrectionFn = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .inputValidator((data: z.infer<typeof getTradeForCorrectionInputSchema>) =>
+    getTradeForCorrectionInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await getTradeForCorrectionForFamily({
+      data,
+      familyId: context.familyId,
+      userId: context.user.id,
     })
   })
 
@@ -1849,6 +2670,9 @@ export async function recordDistributionForFamily({
           data: {
             quantity: scaledToQuantityString(newUnitsScaled),
             avgUnitCostMinor: newAvg,
+            // PER-259 Slice 5 — stamp the "latest" identity marker with THIS
+            // reinvest's own idempotencyKey (see marker doc comment).
+            lastMutationIdempotencyKey: data.idempotencyKey,
           },
           include: { instrument: true },
         })
@@ -2531,7 +3355,11 @@ export async function recordSwitchForFamily({
       } else {
         const updatedFrom = await tx.holding.update({
           where: { id: fromHolding.id },
-          data: { quantity: scaledToQuantityString(remainingFromUnitsScaled) },
+          data: {
+            quantity: scaledToQuantityString(remainingFromUnitsScaled),
+            // PER-259 Slice 5 — stamp the "latest" identity marker (sell side).
+            lastMutationIdempotencyKey: data.idempotencyKey,
+          },
           include: { instrument: true },
         })
         await auditLog(tx, auditCtx, {
@@ -2583,6 +3411,8 @@ export async function recordSwitchForFamily({
           data: {
             quantity: scaledToQuantityString(newToUnitsScaled),
             avgUnitCostMinor: newToAvg,
+            // PER-259 Slice 5 — stamp the "latest" identity marker (buy side).
+            lastMutationIdempotencyKey: data.idempotencyKey,
           },
           include: { instrument: true },
         })
@@ -2604,6 +3434,9 @@ export async function recordSwitchForFamily({
             quantity: scaledToQuantityString(addedToUnitsScaled),
             avgUnitCostMinor: newToAvg,
             lastPriceMinor: null,
+            // PER-259 Slice 5 — this switch is the FIRST mutation ever on the
+            // destination position; stamp it immediately.
+            lastMutationIdempotencyKey: data.idempotencyKey,
           },
           include: { instrument: true },
         })

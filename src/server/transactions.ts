@@ -313,7 +313,7 @@ async function findOptionalTransactionWithSplitEntries(
   return { ...transaction, splitEntries }
 }
 
-async function findTransactionAuditGraph(
+export async function findTransactionAuditGraph(
   tx: TenantTransactionClient,
   id: string
 ) {
@@ -2893,16 +2893,40 @@ export const createTransactionFn = createServerFn({ method: "POST" })
 // Transfer row itself. Every step is idempotent at the call-site level via
 // deleteTransactionForFamily's IdempotencyRecord and the `deletedAt: null`
 // guard on each updateMany below (a replayed delete cannot double-reverse).
-async function softDeleteValuationLinkedTransferWithinTx(
+// PER-259 Slice 5 / ADR-0054 — the escape hatch `softDeleteValuationLinkedTransferWithinTx`
+// takes when the tracked-side leg IS a holdings anchor (source === HOLDINGS_VALUATION_SOURCE).
+// The DEFAULT behavior (no hook supplied) is UNCHANGED from PER-198/ADR-0051: throw
+// `HoldingsTradeDeleteUnsupportedError` before any write, exactly as before — this keeps
+// every existing caller (the generic `deleteTransactionFn` path, bulk delete, etc.) fail-safe.
+// ONLY the new Slice 5 trade-correction path (`src/server/holdings.ts`) supplies this hook,
+// which must reverse the paired `Holding` row (from its captured AuditLog before/after
+// snapshot — never recompute an inverse via math) and re-materialize the investment
+// account's Σ-holdings anchor (`recomputeAccountValueAnchorWithinTx`) in the SAME
+// transaction, in place of the generic `rebuildWithinTx` step below (which would pick
+// "whatever valuation is now latest" — WRONG when a different holding in the same account
+// had activity after this trade; see the call site for the full rationale).
+export type HoldingsTradeReversalHook = (
+  tx: TenantTransactionClient,
+  args: {
+    familyId: string
+    auditCtx: AuditContext
+    valuation: Valuation
+    cashTx: NonNullable<Awaited<ReturnType<typeof findTransactionAuditGraph>>>
+  }
+) => Promise<void>
+
+export async function softDeleteValuationLinkedTransferWithinTx(
   tx: TenantTransactionClient,
   {
     auditCtx,
     familyId,
     cashTx,
+    onHoldingsTradeReversal,
   }: {
     auditCtx: AuditContext
     familyId: string
     cashTx: NonNullable<Awaited<ReturnType<typeof findTransactionAuditGraph>>>
+    onHoldingsTradeReversal?: HoldingsTradeReversalHook
   }
 ): Promise<void> {
   const transfer = cashTx.transferOut ?? cashTx.transferIn
@@ -2924,8 +2948,13 @@ async function softDeleteValuationLinkedTransferWithinTx(
   // transfer graph and would NOT be reversed here, silently drifting the account
   // off Σ holdings. Block the delete before mutating anything (the surrounding
   // transaction rolls back, so no balance/tombstone is written). A plain
-  // valuation-linked transfer (source !== "holdings") is unaffected.
-  if (oldValuation.source === HOLDINGS_VALUATION_SOURCE) {
+  // valuation-linked transfer (source !== "holdings") is unaffected. PER-259
+  // Slice 5: a caller MAY supply `onHoldingsTradeReversal` to lift this guard —
+  // every OTHER caller (no hook) keeps today's exact fail-safe behavior.
+  if (
+    oldValuation.source === HOLDINGS_VALUATION_SOURCE &&
+    !onHoldingsTradeReversal
+  ) {
     throw new HoldingsTradeDeleteUnsupportedError()
   }
 
@@ -2967,10 +2996,27 @@ async function softDeleteValuationLinkedTransferWithinTx(
   })
   if (valuationUpdate.count !== 1) throw new TransactionGoneError()
 
-  // 4. Re-materialize the tracked account from whatever Valuation is now the
-  // latest non-deleted one (rebuildWithinTx writes its own Account audit
-  // entry when the balance actually changes).
-  await rebuildWithinTx(tx, familyId, trackedAccountFacts, auditCtx)
+  // 4. Re-materialize the tracked account. PLAIN valuation-linked transfer
+  // (no hook): whatever Valuation is now the latest non-deleted one
+  // (rebuildWithinTx writes its own Account audit entry when the balance
+  // actually changes) — unchanged from before Slice 5. HOLDINGS trade (hook
+  // supplied): the hook reverses the paired Holding from its captured
+  // before/after snapshot and re-materializes the Σ-holdings anchor itself —
+  // NEVER rebuildWithinTx here, which would pick "whatever valuation is now
+  // latest" and could silently pick up a LATER anchor written by a
+  // DIFFERENT holding's subsequent trade in the same account, clobbering
+  // that unrelated activity instead of reflecting the surgical, per-holding
+  // reversal this trade's correction/delete actually performed.
+  if (onHoldingsTradeReversal) {
+    await onHoldingsTradeReversal(tx, {
+      familyId,
+      auditCtx,
+      valuation: oldValuation,
+      cashTx,
+    })
+  } else {
+    await rebuildWithinTx(tx, familyId, trackedAccountFacts, auditCtx)
+  }
 
   // 5. Tombstone the Transfer row itself.
   const transferUpdate = await tx.transfer.updateMany({

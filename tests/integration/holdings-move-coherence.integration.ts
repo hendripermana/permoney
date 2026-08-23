@@ -42,7 +42,14 @@ import {
 // Legacy rows that predate holdings are grandfathered: rebuild/drift never
 // re-reject them.
 
-const TEST_DATE = new Date("2026-08-16T00:00:00.000Z")
+// Always "tomorrow" relative to whenever the suite actually runs — never a
+// hardcoded calendar literal. A fixed past literal here rots: once wall-clock
+// "now" passes it, an account's opening-balance anchor (valuationDate = now,
+// see `createAccountForFamily`) legitimately outranks it under PER-201's
+// createdAt-aware canonical-balance rule (latest by date OR createdAt), so a
+// test valuation/transfer dated here would silently fail to become canonical
+// — not a product bug, a stale test fixture.
+const TEST_DATE = new Date(Date.now() + 24 * 60 * 60 * 1000)
 
 describe("PER-259 / ADR-0054 — holdings-account money-movement coherence", () => {
   let harness: IntegrationHarness
