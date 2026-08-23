@@ -1591,7 +1591,14 @@ const holdingSnapshotSchema = z
     quantity: z.string(),
     avgUnitCostMinor: z.string(),
     lastPriceMinor: z.string().nullable(),
-    lastMutationIdempotencyKey: z.string().nullable(),
+    // PRODUCTION BUG (found 2026-08-24): `.nullable()` alone rejects a
+    // MISSING key with `invalid_type` — every Holding audit snapshot
+    // captured before this column existed (any trade recorded before this
+    // migration deployed) has no `lastMutationIdempotencyKey` key in its
+    // JSON at all, not even `null`. `.optional()` treats a missing key the
+    // same as an explicit `null`, which is exactly the semantics we want:
+    // "not known to be the result of a still-latest tracked mutation."
+    lastMutationIdempotencyKey: z.string().nullable().optional(),
   })
   .passthrough()
 

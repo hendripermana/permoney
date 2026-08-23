@@ -42,6 +42,15 @@ import { recordTradeFn } from "@/server/holdings"
 // Sentinel option value for "create a new instrument" (BUY only).
 const NEW_INSTRUMENT = "__new__"
 
+// Was missing entirely until a real creator report (2026-08-24): a trade
+// recorded a few days after it actually happened had no way to be dated
+// correctly — every other money-movement dialog (Switch, Dividend, Fee, and
+// even the trade-CORRECTION dialog) already has a Date field; this was the
+// one gap. Defaults to today, exactly like the others.
+function toDateInputValue(date: Date): string {
+  return date.toISOString().slice(0, 10)
+}
+
 export interface TradeFundingAccount {
   id: string
   name: string
@@ -84,6 +93,7 @@ export function TradeDialog({
   const [newKind, setNewKind] = React.useState<InstrumentKind>("mutual_fund")
   const [quantity, setQuantity] = React.useState<string>("")
   const [unitPrice, setUnitPrice] = React.useState<string>("")
+  const [date, setDate] = React.useState<string>(toDateInputValue(new Date()))
   const [error, setError] = React.useState<string | null>(null)
   const [submitting, setSubmitting] = React.useState(false)
 
@@ -134,6 +144,7 @@ export function TradeDialog({
         cashAmount: cashPreview.minor.toString(),
         quantity: quantity.trim(),
         unitPrice: price.toString(),
+        tradeDate: date,
         idempotencyKey: createUuidV7(),
       }
       if (!isBuy) {
@@ -322,6 +333,17 @@ export function TradeDialog({
                 required
               />
             </div>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="trade-date">Date</Label>
+            <Input
+              id="trade-date"
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              required
+            />
           </div>
 
           <div
