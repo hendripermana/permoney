@@ -153,62 +153,52 @@ FIFO-vs-average election beyond the current average-cost model — later.
     ratios) are already inside the NAV/price, so the Σ-holdings value already
     reflects them — NOT recorded separately. Slice 3 adds only the standalone fee.
 - **Slice 4 — Switch** (atomic sell-A + buy-B).
-- **Slice 5 — Edit/correct a trade** (reverse + re-record, audited). **Scope
-  decision (creator, 2026-08-16):** a Buy/Sell trade is editable/deletable
-  **only when it is still the LATEST quantity-mutating event on that
-  (account, instrument) position** — no other Buy/Sell/Switch has touched the
-  same holding since. Rationale: `Holding.avgUnitCostMinor` is blended
-  CURRENT STATE, not a per-lot ledger; reversing a non-latest trade would
-  require replaying the full subsequent trade history to stay exact, which is
-  explicitly OUT OF SCOPE here (flagged as a possible future extension, not
-  built). Attempting to correct a non-latest trade fails loud with an
-  actionable message (record a correcting trade instead) — it must never
-  silently produce a wrong average cost.
-  - **"Latest" is an explicit identity invariant, not a value diff.** Add a
-    durable marker on `Holding` naming the idempotency key of whichever
-    operation (Buy/Sell in `recordTradeForFamily`, either leg of
-    `recordSwitchForFamily`, reinvest in `recordDistributionForFamily`) last
-    changed its quantity/avgUnitCostMinor. Comparing CURRENT vs. a snapshot's
-    raw field values is insufficient — a later Sell-then-rebuy-at-the-same-
-    price could coincidentally match the original values and falsely appear
-    "still latest." Every holdings-quantity-mutating write path must set this
-    marker consistently (an additive migration + a small touch to each
-    existing write path — do not let any of them fall out of sync).
-  - **Reversal reuses the existing valuation-linked-transfer delete path.**
-    `softDeleteValuationLinkedTransferWithinTx` (transactions.ts) already
-    reverses a trade's cash leg + tombstones the Valuation/Transfer/Transaction
-    correctly, but today deliberately REFUSES (`HoldingsTradeDeleteUnsupportedError`)
-    when `Valuation.source === "holdings"`, because it has no way to also
-    reverse the paired Holding — see the guard's own comment (PER-198/ADR-0051)
-    for why that refusal exists and must stay the default for every OTHER
-    caller. Extend it (e.g. an optional holdings-reversal hook) so the new
-    Slice 5 code path can supply the Holding-side reversal atomically in the
-    same transaction, while every other caller keeps getting the existing
-    hard refusal unchanged.
-  - **Holding reversal uses the trade's own captured AuditLog snapshot**
-    (`before`/`after` on the `entityType: "Holding"` row keyed by the trade's
-    idempotencyKey — the same mechanism Slice 2-4's provenance rows already
-    use), not a recomputed inverse — exact by construction, no re-derived
-    rounding.
-  - **Edit = reversal + reapply, one atomic transaction.** Reapply must reuse
-    `recordTradeForFamily`'s own Buy/Sell math rather than duplicate it — this
-    requires extracting its existing body into a `*_WithinTx` core (the same
-    shape as `postIncomeTransactionWithinTx`/`postExpenseTransactionWithinTx`)
-    callable from both the public entry point (opens its own transaction, ZERO
-    behavior change — prove it with the full existing Buy/Sell integration
-    suite before/after) and the new correction path (composes reversal +
-    reapply in one transaction). The corrected trade gets a NEW transaction id
-    (reversal-and-replace, the same pattern `replaceTransactionWithinTenantTransaction`
-    already uses for classic transfers) — the old rows are tombstoned
-    (`deletedAt`), never hard-deleted (no ledger history is erased).
-  - **Delete = reversal only**, same guard, same reversal primitive, no reapply.
-  - Build DELETE first (simpler, fully provable), verify completely, THEN add
-    EDIT on top of the same reversal primitive.
-  - UI: the per-account statement's Edit/Delete on a Buy/Sell row route here
-    (not the generic transaction-edit modal) when the row is a holdings
-    trade; on rejection, surface the server's actionable message rather than
-    proactively graying out the buttons (no extra "is this editable" query
-    this slice — acceptable v1 UX, note as a possible follow-up polish).
+- **Slice 5 — Edit/correct a trade** — DONE (PER-259 Slice 5). A mis-entered
+  Buy/Sell can now be **corrected or deleted**, not just created. Scope
+  (locked with the creator): a trade is editable/deletable ONLY when it is
+  still the **latest quantity-mutating event** on its (account, instrument)
+  position — no other Buy/Sell, Switch leg, or Dividend reinvest has touched
+  that same Holding since. No full historical-replay engine; attempting to
+  correct a non-latest trade fails loud with an actionable message ("record a
+  correcting trade instead of editing this one"), never silently produces wrong
+  numbers.
+  - **"Latest" is an IDENTITY check** (`Holding.lastMutationIdempotencyKey`
+    marker — PER-259 migration `20260816130000_holding_last_mutation_key`) vs
+    the trade's own idempotencyKey, never a value diff: a later Sell-then-
+    rebuy-at-the-same-price could coincidentally reproduce the original
+    quantity/cost and falsely look "unchanged".
+  - **DELETE** reuses the EXISTING valuation-linked-transfer delete path
+    (`softDeleteValuationLinkedTransferWithinTx`, transactions.ts) via its new
+    `onHoldingsTradeReversal` hook — the SAME cash-leg/valuation/transfer
+    reversal every other valuation-linked delete uses, plus the hook restoring
+    the paired Holding from its captured AuditLog before/after snapshot (never
+    recomputing an inverse via math) and re-materializing the Σ-holdings anchor.
+  - **EDIT** is reversal-and-replace, ONE atomic transaction: reverse the OLD
+    trade exactly like DELETE, then REAPPLY the corrected params as a brand-new
+    trade via `recordTradeWithinTx` (the SAME core `recordTradeForFamily` uses
+    — no duplicated math). The old Transaction/Transfer/Valuation are
+    tombstoned (never hard-deleted); the corrected trade gets a NEW transaction
+    id — the exact "reversal-and-replace" pattern
+    `replaceTransactionWithinTenantTransaction` already uses for classic
+    transfer edits (CLAUDE.md §5A).
+  - **SIDE FLIP** (buy→sell or vice versa) is supported with NO special-casing:
+    the reversal restores the position to its exact pre-trade state, and the
+    reapply re-runs `recordTradeWithinTx`'s OWN validation against that
+    restored state — a flip that doesn't make sense (e.g. selling a position
+    the reversal just deleted) fails with the SAME actionable error
+    `recordTradeForFamily` already gives ("No <fund> position to sell"), never
+    silent misbehavior.
+  - **Known limitation** (explicitly "not a full historical-replay engine"): a
+    reopen-THEN-reclose cascade, or an unrelated manual `deleteHoldingForFamily`
+    call, both leave no CURRENT Holding row and are not distinguishable from
+    "still latest" by the fallback check alone — the one documented residual
+    gap in the Slice 5 guard.
+  - Server `deleteTradeForFamily` / `deleteTradeFn`, `correctTradeForFamily` /
+    `correctTradeFn`, `getTradeForCorrectionForFamily` /
+    `getTradeForCorrectionFn`; UI `trade-correction-dialog.tsx`; real-PG
+    integration suite `tests/integration/trade-corrections.integration.ts` +
+    e2e `tests/e2e/trade-correction.e2e.ts`. Full §5A contract (tenant
+    transaction, RLS, idempotency, audit).
 - **Slice 6 — Move a position between accounts** (in-kind, no cash, cost basis carries).
 - Cross-cutting: multi-currency trade + FX rides ADR-0052 Slice C/D; everything
   broker/country-agnostic (Broker-agnostic principle above).

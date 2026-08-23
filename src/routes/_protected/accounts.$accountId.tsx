@@ -61,6 +61,7 @@ import {
   SwitchDialog,
   type SwitchDialogState,
 } from "@/components/blocks/switch-dialog"
+import { TradeCorrectionDialog } from "@/components/blocks/trade-correction-dialog"
 import { TransactionFormModal } from "@/components/transaction-form-modal"
 import {
   accountCollection,
@@ -95,6 +96,7 @@ import { enableHoldingsTrackingFn } from "@/server/accounts"
 import { canEnableHoldingsTracking } from "@/lib/accounts"
 import {
   deleteHoldingFn,
+  deleteTradeFn,
   getAccountHoldingsFn,
   refreshHoldingPricesFn,
   syncMarketPricesFn,
@@ -197,6 +199,10 @@ function AccountDetailPage() {
   // gets the same singleton edit modal + inline delete.
   const [editingTrx, setEditingTrx] =
     React.useState<TransactionEditData | null>(null)
+  // PER-259 Slice 5 — Buy/Sell trade correction dialog (reversal + reapply).
+  const [tradeCorrectionDialog, setTradeCorrectionDialog] = React.useState<{
+    transactionId: string
+  } | null>(null)
   // PER-241 — persisted compact ↔ comfortable density, shared with the ledger.
   const [density, setDensity] = useTransactionDensity()
 
@@ -569,6 +575,58 @@ function AccountDetailPage() {
     }
   }
 
+  // PER-259 Slice 5 / ADR-0054 — a Buy/Sell trade's cash leg is a `transfer`
+  // Transaction whose canonical Transfer purpose is auto-labeled "Invest" /
+  // "Withdraw" (PER-247's `resolveTransferPurpose`) — a cheap, ALREADY-loaded
+  // client-side signal for "this row is LIKELY a holdings trade", so Edit/
+  // Delete can route to the dedicated trade-correction flow instead of the
+  // generic transaction modal. This is a heuristic, not the source of truth:
+  // a non-holdings valuation account's plain valuation-linked transfer gets
+  // the SAME purpose label, and a liability-funded trade (rare) would NOT
+  // match it. Either way the SERVER is the law — `deleteTradeFn`/
+  // `correctTradeFn` reject anything that is not actually a Buy/Sell trade
+  // with an actionable message, which the dialog/toast surfaces verbatim; no
+  // proactive per-row "is this editable" query runs for the other rows.
+  function isTradeRow(trx: TransactionRecord): boolean {
+    return (
+      trx.type === "transfer" &&
+      (trx.transferPurpose === "investment_contribution" ||
+        trx.transferPurpose === "investment_withdrawal")
+    )
+  }
+
+  function handleRowEdit(
+    trx: TransactionRecord,
+    editData: TransactionEditData
+  ) {
+    if (isTradeRow(trx)) {
+      setTradeCorrectionDialog({ transactionId: trx.id })
+      return
+    }
+    setEditingTrx(editData)
+  }
+
+  async function handleRowDelete(trx: TransactionRecord) {
+    if (!isTradeRow(trx)) {
+      await handleStatementDelete(trx.id)
+      return
+    }
+    const confirmed = confirm(
+      "Delete this trade? Its cash and position are reversed, and the change stays in your history."
+    )
+    if (!confirmed) return
+    try {
+      await deleteTradeFn({
+        data: { transactionId: trx.id, idempotencyKey: createUuidV7() },
+      })
+      await refreshHoldings()
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to delete trade"
+      )
+    }
+  }
+
   // PER-224 — account health: fold runway + reserve buffer + balance-drift into
   // one transparent score. Cash-like only (the signals don't apply to tracked
   // assets / term liabilities).
@@ -918,8 +976,10 @@ function AccountDetailPage() {
                                   }
                                 : null
                             }
-                            onEdit={setEditingTrx}
-                            onDelete={handleStatementDelete}
+                            onEdit={(editData) =>
+                              handleRowEdit(row.trx, editData)
+                            }
+                            onDelete={() => handleRowDelete(row.trx)}
                           />
                         )}
                       </div>
@@ -1049,6 +1109,21 @@ function AccountDetailPage() {
           onSaved={async () => {
             await refreshHoldings()
             setSwitchDialog(null)
+          }}
+        />
+      ) : null}
+
+      {tradeCorrectionDialog ? (
+        <TradeCorrectionDialog
+          // Remount per trade so the form re-initializes from freshly-loaded
+          // correction details (the singleton edit pattern, §5C).
+          key={`trade-correction-${tradeCorrectionDialog.transactionId}`}
+          transactionId={tradeCorrectionDialog.transactionId}
+          fundingAccounts={fundingAccounts}
+          onClose={() => setTradeCorrectionDialog(null)}
+          onSaved={async () => {
+            await refreshHoldings()
+            setTradeCorrectionDialog(null)
           }}
         />
       ) : null}
