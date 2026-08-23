@@ -4,7 +4,16 @@ import { type AnalyticsTxn } from "./account-analytics"
 
 const ACC = "inv-1"
 
-/** A transfer INTO the account (a buy / contribution). */
+// The REAL shape `postValuationLinkedTransferLegs` produces: the Transaction
+// row is always owned by the CASH account (`accountId`), never the tracked
+// account, regardless of direction — a contribution debits the cash account
+// (transferIncoming: false), a redemption credits it (transferIncoming: true).
+// `signedDeltaForAccount` needs `transferIncoming`, not `toAccountId`, to
+// derive the correct sign for this shape (see its doc comment) — a fixture
+// with `accountId: ACC` directly (the account under test OWNING the row)
+// would silently test the WRONG structural shape and miss regressions.
+
+/** A transfer INTO the account (a buy / contribution): cash pays out. */
 function buy(amount: bigint): AnalyticsTxn {
   return {
     date: "2026-01-01",
@@ -12,16 +21,18 @@ function buy(amount: bigint): AnalyticsTxn {
     type: "transfer",
     accountId: "bank",
     toAccountId: ACC,
+    transferIncoming: false,
   }
 }
-/** A transfer OUT of the account (a sell / withdrawal). */
+/** A transfer OUT of the account (a sell / withdrawal): cash is credited. */
 function sell(amount: bigint): AnalyticsTxn {
   return {
     date: "2026-02-01",
     amount,
     type: "transfer",
-    accountId: ACC,
-    toAccountId: "bank",
+    accountId: "bank",
+    toAccountId: ACC,
+    transferIncoming: true,
   }
 }
 

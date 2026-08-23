@@ -33,7 +33,12 @@ export type LedgerPerspective =
  * currency. Pure — the date grouping happens at the call site.
  */
 export function dailyNet(
-  txns: ReadonlyArray<Pick<AnalyticsTxn, "type" | "amount" | "toAccountId">>,
+  txns: ReadonlyArray<
+    Pick<
+      AnalyticsTxn,
+      "type" | "amount" | "accountId" | "toAccountId" | "transferIncoming"
+    >
+  >,
   perspective: LedgerPerspective
 ): Money {
   let net: bigint = ZERO_MONEY
@@ -129,7 +134,7 @@ export function formatRelativeDay(
 /** A row carrying the identity + signed-delta inputs the register walk needs. */
 type RunningBalanceRow = { id: string } & Pick<
   AnalyticsTxn,
-  "type" | "amount" | "toAccountId"
+  "type" | "amount" | "accountId" | "toAccountId" | "transferIncoming"
 >
 
 /**

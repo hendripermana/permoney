@@ -248,13 +248,22 @@ function TradeCorrectionForm({
           </Select>
         </div>
         <div className="flex flex-col gap-2">
-          <Label>Funding account</Label>
+          {/* A Buy PAYS from this account; a Sell RECEIVES proceeds into it —
+              "Funding account" reads backwards for a Sell (see the same fix
+              in trade-dialog.tsx). */}
+          <Label>
+            {side === "buy" ? "Funding account" : "Destination account"}
+          </Label>
           <Select
             value={fundingAccountId}
             onValueChange={setFundingAccountId}
             disabled={details.notLatestReason !== null}
           >
-            <SelectTrigger aria-label="Funding account">
+            <SelectTrigger
+              aria-label={
+                side === "buy" ? "Funding account" : "Destination account"
+              }
+            >
               <SelectValue placeholder="Choose account" />
             </SelectTrigger>
             <SelectContent>

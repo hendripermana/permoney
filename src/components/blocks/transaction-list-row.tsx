@@ -162,13 +162,21 @@ export function TransactionListRow({
   // `toAccountId` is INCOMING — flip its sign/colour to read as a credit. The
   // whole-book (unfiltered) ledger passes no viewed accounts, so it stays
   // neutral. (Used only on the non-perspective, whole-book path.)
+  //
+  // `signedDeltaForAccount(trx, viewedId) >= 0n` is the general, correct test
+  // (it accounts for `isAccountCredit`, not just `toAccountId`, see its doc
+  // comment — a valuation-linked Sell's cash leg is owned by the account that
+  // GAINS money, which `toAccountId` alone can't tell you). Multi-account
+  // filters are rare in practice, so checking each viewed id individually
+  // here is fine.
   const isIncomingTransfer =
     trx.type === "transfer" &&
     viewedAccountIds != null &&
     viewedAccountIds.length > 0 &&
-    trx.toAccountId != null &&
-    viewedAccountIds.includes(trx.toAccountId) &&
-    !viewedAccountIds.includes(trx.accountId)
+    !viewedAccountIds.includes(trx.accountId) &&
+    viewedAccountIds.some(
+      (id) => trx.toAccountId === id && signedDeltaForAccount(trx, id) >= 0n
+    )
 
   const rowActions =
     onEdit || onDelete ? (
