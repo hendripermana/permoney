@@ -26,26 +26,58 @@ function txn(partial: Partial<AnalyticsTxn>): AnalyticsTxn {
 
 describe("signedDeltaForAccount", () => {
   it("income is positive, expense negative", () => {
-    expect(signedDeltaForAccount({ type: "income", amount: 100n }, ID)).toBe(
-      100n
-    )
-    expect(signedDeltaForAccount({ type: "expense", amount: 100n }, ID)).toBe(
-      -100n
-    )
-  })
-  it("transfer is + when this account is the destination, − when source", () => {
     expect(
-      signedDeltaForAccount(
-        { type: "transfer", amount: 100n, toAccountId: ID },
-        ID
-      )
+      signedDeltaForAccount({ type: "income", amount: 100n, accountId: ID }, ID)
     ).toBe(100n)
     expect(
       signedDeltaForAccount(
-        { type: "transfer", amount: 100n, toAccountId: "other" },
+        { type: "expense", amount: 100n, accountId: ID },
         ID
       )
     ).toBe(-100n)
+  })
+
+  it("plain funds_movement transfer: + for the destination, − for the source", () => {
+    // A plain transfer's one visible row is owned by the PAYING account
+    // (transferIncoming: false) — this is the shape createTransactionForFamily
+    // produces for a normal Jago → GoPay top-up.
+    const outflowRow = {
+      type: "transfer",
+      amount: 100n,
+      accountId: "source",
+      toAccountId: "dest",
+      transferIncoming: false,
+    }
+    expect(signedDeltaForAccount(outflowRow, "source")).toBe(-100n)
+    expect(signedDeltaForAccount(outflowRow, "dest")).toBe(100n)
+  })
+
+  it("valuation-linked SELL/redemption: the CASH account is credited, not debited (regression — a Sell's proceeds showed as a negative 'Withdraw' on the receiving cash account in production)", () => {
+    // postValuationLinkedTransferLegs always owns the row on the CASH
+    // account regardless of direction — accountId=Bank Jago, toAccountId=the
+    // investment account, EVEN THOUGH this leg is an inflow for Jago. Only
+    // `transferIncoming` (not `toAccountId === accountId`) tells us that.
+    const sellCashLeg = {
+      type: "transfer",
+      amount: 180_000n,
+      accountId: "bank-jago",
+      toAccountId: "hasil-jualan",
+      transferIncoming: true,
+    }
+    expect(signedDeltaForAccount(sellCashLeg, "bank-jago")).toBe(180_000n)
+    expect(signedDeltaForAccount(sellCashLeg, "hasil-jualan")).toBe(-180_000n)
+  })
+
+  it("valuation-linked BUY/contribution: the CASH account is debited", () => {
+    const buyCashLeg = {
+      type: "transfer",
+      amount: 180_000n,
+      accountId: "bank-jago",
+      toAccountId: "hasil-jualan",
+      transferIncoming: false,
+    }
+    expect(signedDeltaForAccount(buyCashLeg, "bank-jago")).toBe(-180_000n)
+    expect(signedDeltaForAccount(buyCashLeg, "hasil-jualan")).toBe(180_000n)
   })
 })
 
@@ -71,6 +103,10 @@ describe("buildBalanceSeries", () => {
       date: "2026-03-20",
       type: "transfer",
       amount: 50_000n,
+      // A transfer INTO ID: owned by the OTHER account (a self-referencing
+      // accountId === toAccountId would be nonsensical — `txn()` defaults
+      // accountId to ID, so this must be overridden for an inflow fixture).
+      accountId: "other",
       toAccountId: ID,
     }),
   ]

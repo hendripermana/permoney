@@ -3312,7 +3312,11 @@ export const getTransactionsFn = createServerFn({ method: "GET" })
 
         // The MAP logic: Ubah array yang didapat dari DB.
         // Amounts are stored signed (negative for expense) but the UI consumes
-        // them as positive magnitudes; sign is communicated via `type`.
+        // them as positive magnitudes; sign is communicated via `type` for
+        // income/expense, and via the already-computed `transferIncoming`
+        // (above) for a transfer — see `signedDeltaForAccount`'s doc comment
+        // for why `toAccountId === accountId` alone is NOT a reliable sign for
+        // a valuation-linked trade/redemption's cash leg.
         // Wire-encode bigint → string at this boundary; client revives via
         // TanStack DB collection `select` callback (see src/lib/collections.ts).
         return transactions.map((tx) =>

@@ -29,7 +29,7 @@ export const ACCOUNT_RANGES: ReadonlyArray<{
 export interface AnalyticsTxn {
   date: Date | string
   createdAt?: Date | string
-  amount: bigint // absolute magnitude (sign lives in `type`)
+  amount: bigint // absolute magnitude (sign lives in `type`, or `transferIncoming` for a transfer)
   type: string // "income" | "expense" | "transfer"
   // PER-247: the transaction kind (funds_movement / cc_payment / loan_payment /
   // liability_draw / …) and the funds_movement purpose. Together they give a
@@ -38,6 +38,15 @@ export interface AnalyticsTxn {
   transferPurpose?: string | null
   accountId: string
   toAccountId?: string | null
+  // PER-247: does this row's OWN `accountId` RECEIVE money (toAccount →
+  // account), rather than send it out? Server-computed from the authoritative
+  // `Transfer.inflowTransactionId` pairing (see server/transactions.ts) — a
+  // plain funds_movement transfer's one visible row is always the outflow
+  // (false), but a valuation-linked trade/redemption cash leg
+  // (postValuationLinkedTransferLegs) sits in the inflow slot for a
+  // Sell/redemption despite `accountId` being the CASH account either way.
+  // false/undefined for income/expense (their sign lives in `type` alone).
+  transferIncoming?: boolean | null
   category?: { name: string; color?: string | null } | null
   merchant?: { name: string } | null
   isSplit?: boolean
@@ -45,17 +54,41 @@ export interface AnalyticsTxn {
 
 /**
  * Signed movement of a transaction FROM this account's perspective.
- * income → +, expense → −, transfer → + when this account is the destination
- * leg, − when it is the source. Exactly one leg touches the account, so summing
- * this over the ledger never double-counts (mirrors PER-202).
+ * income → +, expense → −.
+ *
+ * A transfer's sign is NOT reliably inferable from `toAccountId === accountId`
+ * alone: that holds for a plain funds_movement transfer (its one visible row
+ * is always owned by the PAYING account — `accountId` = source, `toAccountId`
+ * = destination), but NOT for a valuation-linked trade/redemption cash leg
+ * (`postValuationLinkedTransferLegs`), whose row is always owned by the CASH
+ * account regardless of direction — a Buy/contribution debits it, a
+ * Sell/redemption CREDITS it. Using `toAccountId === accountId` there would
+ * wrongly read a Sell's cash-in leg as an outflow (confirmed in production:
+ * a Sell's proceeds showed as a negative "Withdraw to <fund>" on the
+ * receiving cash account's own statement, when the underlying ledger amount
+ * was correctly positive).
+ *
+ * The correct, general rule: `transferIncoming` (the SAME authoritative,
+ * DB-backed signal PER-247 already computes to orient the account-column
+ * arrow — see transaction-list-row.tsx) tells us whether the row's OWNER
+ * (`trx.accountId`) gained or lost funds — that's true regardless of which
+ * account structurally happens to be `accountId` vs `toAccountId`. Viewing
+ * from the owner's own account uses that delta directly; viewing from the
+ * counterparty (surfaced via `toAccountId`) flips it. Exactly one leg touches
+ * a given account's statement, so summing this over the ledger never
+ * double-counts (mirrors PER-202).
  */
 export function signedDeltaForAccount(
-  trx: Pick<AnalyticsTxn, "type" | "amount" | "toAccountId">,
+  trx: Pick<
+    AnalyticsTxn,
+    "type" | "amount" | "accountId" | "toAccountId" | "transferIncoming"
+  >,
   accountId: string
 ): bigint {
   if (trx.type === "income") return trx.amount
   if (trx.type === "expense") return -trx.amount
-  return trx.toAccountId === accountId ? trx.amount : -trx.amount
+  const ownerDelta = trx.transferIncoming ? trx.amount : -trx.amount
+  return trx.accountId === accountId ? ownerDelta : -ownerDelta
 }
 
 /** Start-of-window cutoff for a range, or null for "ALL". */

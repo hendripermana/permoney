@@ -10,15 +10,38 @@ import { toMoney } from "./money"
 type Txn = {
   type: string
   amount: bigint
+  accountId: string
   toAccountId?: string | null
+  transferIncoming?: boolean | null
 }
 
-const income = (amount: bigint): Txn => ({ type: "income", amount })
-const expense = (amount: bigint): Txn => ({ type: "expense", amount })
-const transferTo = (amount: bigint, toAccountId: string): Txn => ({
+// Income/expense never read `accountId` in signedDeltaForAccount (sign lives
+// in `type` alone), but the real shape always carries one — this placeholder
+// keeps the fixture type-honest without being semantically meaningful here.
+const income = (amount: bigint): Txn => ({
+  type: "income",
+  amount,
+  accountId: "any",
+})
+const expense = (amount: bigint): Txn => ({
+  type: "expense",
+  amount,
+  accountId: "any",
+})
+// Models a plain funds_movement transfer's one visible row: always owned by
+// the PAYING account (transferIncoming: false — see signedDeltaForAccount's
+// doc comment for why this matters for a valuation-linked leg, which this
+// helper does NOT model).
+const transferTo = (
+  amount: bigint,
+  accountId: string,
+  toAccountId: string
+): Txn => ({
   type: "transfer",
   amount,
+  accountId,
   toAccountId,
+  transferIncoming: false,
 })
 
 describe("dailyNet — global perspective", () => {
@@ -28,7 +51,7 @@ describe("dailyNet — global perspective", () => {
   })
 
   it("excludes transfers (internal moves are a wash across the whole book)", () => {
-    const rows = [income(10_000n), transferTo(4_000n, "acc-x")]
+    const rows = [income(10_000n), transferTo(4_000n, "acc-y", "acc-x")]
     expect(dailyNet(rows, { kind: "global" })).toBe(10_000n)
   })
 
@@ -46,12 +69,12 @@ describe("dailyNet — account perspective", () => {
   })
 
   it("counts a transfer INTO the account as positive", () => {
-    const rows = [transferTo(6_000n, A)]
+    const rows = [transferTo(6_000n, "other", A)]
     expect(dailyNet(rows, { kind: "account", accountId: A })).toBe(6_000n)
   })
 
   it("counts a transfer OUT of the account (destination is elsewhere) as negative", () => {
-    const rows = [transferTo(6_000n, "acc-other")]
+    const rows = [transferTo(6_000n, A, "acc-other")]
     expect(dailyNet(rows, { kind: "account", accountId: A })).toBe(-6_000n)
   })
 
@@ -59,8 +82,8 @@ describe("dailyNet — account perspective", () => {
     const rows = [
       income(10_000n),
       expense(1_000n),
-      transferTo(3_000n, A), // +3,000 into A
-      transferTo(2_000n, "acc-other"), // −2,000 out of A
+      transferTo(3_000n, "other", A), // +3,000 into A
+      transferTo(2_000n, A, "acc-other"), // −2,000 out of A
     ]
     expect(dailyNet(rows, { kind: "account", accountId: A })).toBe(10_000n)
   })
@@ -77,7 +100,7 @@ describe("computeRunningBalances", () => {
     const rows: IdTxn[] = [
       row("r1", income(3_000n)), // newest: +3,000 into A
       row("r2", expense(2_000n)), // −2,000 from A
-      row("r3", transferTo(1_000n, A)), // oldest: +1,000 into A
+      row("r3", transferTo(1_000n, "other", A)), // oldest: +1,000 into A
     ]
     const balances = computeRunningBalances(rows, A, toMoney(10_000n))
     // after r1 = current
@@ -92,7 +115,7 @@ describe("computeRunningBalances", () => {
     const rows: IdTxn[] = [
       row("r1", income(3_000n)),
       row("r2", expense(2_000n)),
-      row("r3", transferTo(1_000n, A)),
+      row("r3", transferTo(1_000n, "other", A)),
     ]
     const current = 10_000n
     const balances = computeRunningBalances(rows, A, toMoney(current))
@@ -106,7 +129,7 @@ describe("computeRunningBalances", () => {
   })
 
   it("treats a transfer OUT (destination elsewhere) as a debit", () => {
-    const rows: IdTxn[] = [row("r1", transferTo(4_000n, "acc-other"))]
+    const rows: IdTxn[] = [row("r1", transferTo(4_000n, A, "acc-other"))]
     const balances = computeRunningBalances(rows, A, toMoney(6_000n))
     // The only row moved 4,000 OUT of A, so before it the balance was 10,000.
     expect(balances.get("r1")).toBe(6_000n)

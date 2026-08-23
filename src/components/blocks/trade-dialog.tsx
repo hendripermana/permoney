@@ -186,7 +186,7 @@ export function TradeDialog({
             <DialogDescription>
               {isBuy
                 ? "Move cash into this account and grow a position. Net worth stays the same."
-                : "Sell a position; cash returns to your funding account. Realized gain is shown after."}
+                : "Sell a position; cash lands in the account you choose below. Realized gain is shown after."}
             </DialogDescription>
           </DialogHeader>
 
@@ -207,12 +207,20 @@ export function TradeDialog({
               </Select>
             </div>
             <div className="flex flex-col gap-2">
-              <Label>Funding account</Label>
+              {/* A Buy PAYS from this account; a Sell RECEIVES proceeds into
+                  it — same field, opposite direction of money. Labeling it
+                  "Funding account" for a Sell reads backwards (a user
+                  reported exactly this confusion after a real Sell — the
+                  cash correctly landed here, but the label implied it was
+                  the source, not the destination). */}
+              <Label>{isBuy ? "Funding account" : "Destination account"}</Label>
               <Select
                 value={fundingAccountId}
                 onValueChange={setFundingAccountId}
               >
-                <SelectTrigger aria-label="Funding account">
+                <SelectTrigger
+                  aria-label={isBuy ? "Funding account" : "Destination account"}
+                >
                   <SelectValue placeholder="Choose account" />
                 </SelectTrigger>
                 <SelectContent>
