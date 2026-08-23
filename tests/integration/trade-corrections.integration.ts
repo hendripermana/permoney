@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 import {
   afterAll,
   beforeAll,
@@ -1025,5 +1027,211 @@ describe("trade corrections — delete & edit (PER-259 Slice 5 / ADR-0054)", () 
       userId: owner.user.id,
     })
     expect(stale.notLatestReason).toMatch(/activity after it/)
+  })
+
+  // ==========================================================================
+  // LEGACY DATA — a trade recorded BEFORE `lastMutationIdempotencyKey`
+  // existed (migration 20260816130000) or before its backfill
+  // (20260823121700).
+  //
+  // PRODUCTION BUG (found 2026-08-24 via a real trade dated 2026-08-17, six
+  // days before Slice 5 deployed): `holdingSnapshotSchema` rejected a
+  // Holding audit snapshot with `lastMutationIdempotencyKey` MISSING
+  // entirely (not even `null`) as a Zod `invalid_type` error — "Can't edit
+  // this trade" with no actionable message. Separately, even once that
+  // parses, the CURRENT Holding row's marker is NULL for any position
+  // untouched since the column existed, which `assertTradeIsLatest`'s fast
+  // path reads as "something else touched it" — permanently blocking
+  // correction of a trade that is, in fact, still the latest thing that
+  // happened to the position. The backfill migration fixes the data; these
+  // tests prove the parse fix AND the backfill together restore full
+  // functionality, including correctly SKIPPING a price-only touch (which
+  // never mutates quantity/avgUnitCostMinor) when hunting for the real last
+  // quantity-mutating event. Reuses the SAME harness/factories/helpers
+  // above — a second `createIntegrationHarness()` in this file raced the
+  // first on test-role provisioning.
+  // ==========================================================================
+
+  const backfillMigrationSql = readFileSync(
+    join(
+      __dirname,
+      "../../prisma/migrations/20260823121700_backfill_holding_last_mutation_key/migration.sql"
+    ),
+    "utf-8"
+  )
+
+  // The observable production symptom, reproduced via an ALLOWED operation:
+  // null the LIVE Holding's own marker directly. `AuditLog` is genuinely
+  // append-only (no UPDATE/DELETE grant for the app role — verified: an
+  // attempt to strip the marker key from an existing audit row's JSON to
+  // simulate the exact historical shape fails with "permission denied for
+  // table AuditLog"), so this test targets `assertTradeIsLatest`'s NULL-marker
+  // fallback and the backfill directly rather than fabricating the original
+  // pre-migration JSON shape (a schema-level `.nullable().optional()` fix,
+  // independently confirmed against the real production AuditLog rows that
+  // triggered this — see [[sell-redemption-sign-bug]]-adjacent session notes).
+  const nullTheMarker = (
+    owner: AuthenticatedOnboardedUser,
+    holdingId: string
+  ) =>
+    harness.withFamily(owner.family.id, async (tx) =>
+      tx.holding.update({
+        where: { id: holdingId },
+        data: { lastMutationIdempotencyKey: null },
+      })
+    )
+
+  test("BEFORE backfill: a trade whose Holding marker is NULL is wrongly rejected as 'not latest'; AFTER backfill: it corrects successfully", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const investment = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(owner)
+    const cashBefore = await balanceOf(owner, cash.id)
+    const key = factories.createIdempotencyKey()
+    const buy = await recordTradeForFamily({
+      data: {
+        investmentAccountId: investment.id,
+        fundingAccountId: cash.id,
+        instrument: { kind: "mutual_fund", name: "Fund A" },
+        side: "buy",
+        cashAmount: "1000000",
+        quantity: "100",
+        unitPrice: "10000",
+        idempotencyKey: key,
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+    await nullTheMarker(owner, buy.holding!.id)
+
+    // BEFORE: reproduces the exact production bug — genuinely still the
+    // latest event, but wrongly rejected because the marker was never
+    // stamped for this legacy position.
+    await expect(
+      deleteTradeForFamily({
+        data: {
+          transactionId: buy.transaction.id,
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+    ).rejects.toThrow(HoldingError)
+
+    // Run the REAL migration file's SQL (not a re-implementation) directly.
+    await harness.withFamily(owner.family.id, async (tx) => {
+      await tx.$executeRawUnsafe(backfillMigrationSql)
+    })
+
+    const backfilled = await harness.withFamily(owner.family.id, async (tx) =>
+      tx.holding.findUniqueOrThrow({ where: { id: buy.holding!.id } })
+    )
+    expect(backfilled.lastMutationIdempotencyKey).toBe(key)
+
+    // AFTER: the SAME trade now corrects successfully.
+    const corrected = await correctTradeForFamily({
+      data: {
+        transactionId: buy.transaction.id,
+        fundingAccountId: cash.id,
+        side: "buy",
+        cashAmount: "1200000",
+        quantity: "100",
+        unitPrice: "12000",
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+    expect(corrected.trade.holding?.quantity).toBe("100.00000000")
+    expect(await balanceOf(owner, cash.id)).toBe(cashBefore - 1_200_000n)
+  })
+
+  test("the backfill SKIPS a price-only touch and finds the real last quantity-mutating event", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const investment = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(owner)
+    const key = factories.createIdempotencyKey()
+    const buy = await recordTradeForFamily({
+      data: {
+        investmentAccountId: investment.id,
+        fundingAccountId: cash.id,
+        instrument: { kind: "mutual_fund", name: "Fund A" },
+        side: "buy",
+        cashAmount: "1000000",
+        quantity: "100",
+        unitPrice: "10000",
+        idempotencyKey: key,
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+    await nullTheMarker(owner, buy.holding!.id)
+
+    // Simulate a LATER price-only refresh (refreshHoldingPricesForFamily's
+    // real shape: same quantity/avgUnitCostMinor, different lastPriceMinor,
+    // its own idempotencyKey, and it never touches the marker column either).
+    const priceRefreshKey = factories.createIdempotencyKey()
+    await harness.withFamily(owner.family.id, async (tx) => {
+      const holding = await tx.holding.findUniqueOrThrow({
+        where: { id: buy.holding!.id },
+      })
+      const snapshot = (lastPriceMinor: string | null) => ({
+        id: holding.id,
+        familyId: holding.familyId,
+        accountId: holding.accountId,
+        instrumentId: holding.instrumentId,
+        quantity: holding.quantity.toFixed(8),
+        avgUnitCostMinor: holding.avgUnitCostMinor.toString(),
+        lastMutationIdempotencyKey: holding.lastMutationIdempotencyKey,
+        lastPriceMinor,
+        createdAt: holding.createdAt.toISOString(),
+        updatedAt: holding.updatedAt.toISOString(),
+      })
+      const before = snapshot(null)
+      await tx.holding.update({
+        where: { id: holding.id },
+        data: { lastPriceMinor: 11_000n },
+      })
+      const after = snapshot("11000")
+      await tx.auditLog.create({
+        data: {
+          familyId: owner.family.id,
+          userId: owner.user.id,
+          action: "update",
+          entityType: "Holding",
+          entityId: holding.id,
+          beforeJson: before,
+          afterJson: after,
+          requestId: factories.createIdempotencyKey(),
+          idempotencyKey: priceRefreshKey,
+        },
+      })
+    })
+
+    await harness.withFamily(owner.family.id, async (tx) => {
+      await tx.$executeRawUnsafe(backfillMigrationSql)
+    })
+
+    const backfilled = await harness.withFamily(owner.family.id, async (tx) =>
+      tx.holding.findUniqueOrThrow({ where: { id: buy.holding!.id } })
+    )
+    // The marker must point at the ORIGINAL trade, not the price refresh —
+    // a price-only change never mutated quantity/avgUnitCostMinor.
+    expect(backfilled.lastMutationIdempotencyKey).toBe(key)
+    expect(backfilled.lastMutationIdempotencyKey).not.toBe(priceRefreshKey)
+
+    const corrected = await correctTradeForFamily({
+      data: {
+        transactionId: buy.transaction.id,
+        fundingAccountId: cash.id,
+        side: "buy",
+        cashAmount: "1300000",
+        quantity: "100",
+        unitPrice: "13000",
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+    expect(corrected.trade.holding?.quantity).toBe("100.00000000")
   })
 })
