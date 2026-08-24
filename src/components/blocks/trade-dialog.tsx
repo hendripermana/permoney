@@ -22,7 +22,12 @@ import {
 import { MoneyInput } from "@/components/blocks/money-input"
 import { formatCurrency } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
-import { holdingCostMinor, quantityToScaled } from "@/lib/holdings"
+import {
+  holdingCostMinor,
+  quantityToScaled,
+  scaledToQuantityString,
+  unitsFromAmountScaled,
+} from "@/lib/holdings"
 import { INSTRUMENT_KIND_OPTIONS, type InstrumentKind } from "@/lib/instruments"
 import { parseMoneyInput } from "@/lib/money"
 import { cn } from "@/lib/utils"
@@ -35,12 +40,21 @@ import { recordTradeFn } from "@/server/holdings"
 // this valuation-tracked investment account while updating the position. The
 // heavy lifting (double-entry, cost-basis blend, valuation anchor, audit) is
 // SERVER-side (`recordTradeFn`); this dialog only collects the inputs and shows
-// the cash total live. Money math on the client is limited to deriving the
-// total from quantity × unit price via the SAME pure helper the server uses, so
-// the previewed total is exactly what will move.
+// the cash total live. Money math on the client is limited to folding between
+// quantity and cash amount (in whichever direction the chosen basis implies)
+// via the SAME pure helpers the server uses, so the previewed numbers are
+// exactly what will move.
 
 // Sentinel option value for "create a new instrument" (BUY only).
 const NEW_INSTRUMENT = "__new__"
+
+// Amount-driven entry (2026-08-24, real creator report): a reksadana purchase
+// is normally "invest Rp 500,000 into this fund", not "buy 41.66666667 units at
+// Rp 12,000/unit". Forcing quantity-first made the form read like a broker
+// terminal. Same two-basis toggle `switch-dialog.tsx` already uses for its own
+// leg — SAME interaction, SAME derivation fold (`unitsFromAmountScaled`), so
+// the two dialogs cannot drift apart.
+type Basis = "quantity" | "amount"
 
 // Was missing entirely until a real creator report (2026-08-24): a trade
 // recorded a few days after it actually happened had no way to be dated
@@ -91,7 +105,9 @@ export function TradeDialog({
   )
   const [newName, setNewName] = React.useState<string>("")
   const [newKind, setNewKind] = React.useState<InstrumentKind>("mutual_fund")
+  const [basis, setBasis] = React.useState<Basis>("quantity")
   const [quantity, setQuantity] = React.useState<string>("")
+  const [amount, setAmount] = React.useState<string>("")
   const [unitPrice, setUnitPrice] = React.useState<string>("")
   const [date, setDate] = React.useState<string>(toDateInputValue(new Date()))
   const [error, setError] = React.useState<string | null>(null)
@@ -99,40 +115,121 @@ export function TradeDialog({
 
   const isBuy = side === "buy"
   const creatingInstrument = isBuy && instrumentChoice === NEW_INSTRUMENT
-
-  // Live cash total = quantity × unit price, via the SAME pure helper the server
-  // uses for cost basis — pure derivation, no effect.
-  const cashPreview = React.useMemo<
-    { kind: "empty" } | { kind: "invalid" } | { kind: "valid"; minor: bigint }
-  >(() => {
-    if (quantity.trim() === "" || unitPrice.trim() === "") {
-      return { kind: "empty" }
-    }
-    const price = parseMoneyInput(unitPrice, currencyCode)
-    if (price === null || price <= 0n) return { kind: "invalid" }
-    try {
-      const scaled = quantityToScaled(quantity.trim())
-      if (scaled <= 0n) return { kind: "invalid" }
-      return { kind: "valid", minor: holdingCostMinor(scaled, price) }
-    } catch {
-      return { kind: "invalid" }
-    }
-  }, [quantity, unitPrice, currencyCode])
+  const isQuantityBasis = basis === "quantity"
 
   // A SELL needs an existing position; the instrument options are then just the
   // holdings. A BUY can additionally create a new instrument.
   const sellablePositions = holdings
 
+  // The position being sold, when there is one — drives the oversell guard.
+  const selectedHolding =
+    holdings.find((holding) => holding.instrument.id === instrumentChoice) ??
+    null
+
+  const unitPriceMinor = React.useMemo<bigint | null>(() => {
+    if (unitPrice.trim() === "") return null
+    const parsed = parseMoneyInput(unitPrice, currencyCode)
+    return parsed !== null && parsed > 0n ? parsed : null
+  }, [unitPrice, currencyCode])
+
+  const amountMinor = React.useMemo<bigint | null>(() => {
+    if (amount.trim() === "") return null
+    const parsed = parseMoneyInput(amount, currencyCode)
+    return parsed !== null && parsed > 0n ? parsed : null
+  }, [amount, currencyCode])
+
+  // Live preview of the trade — whichever of {quantity, amount} the user did
+  // NOT type is derived here, via the SAME pure helpers the server uses, so the
+  // previewed numbers are exactly what posts. Pure derivation, no effect.
+  //
+  // Direction of the fold depends on the basis, and only ONE of the two is ever
+  // authoritative for money:
+  //   quantity basis — cash  = holdingCostMinor(quantityScaled, unitPrice)
+  //   amount   basis — units = unitsFromAmountScaled(amountMinor, unitPrice),
+  //                    and the typed AMOUNT stays the authoritative cash (see
+  //                    `unitsFromAmountScaled`'s docstring: never re-derive the
+  //                    cash from the rounded quantity, or "Rp 500,000" would
+  //                    post as Rp 499,999.99).
+  const preview = React.useMemo<
+    | { kind: "empty" }
+    | { kind: "invalid"; reason: string }
+    | { kind: "valid"; cashMinor: bigint; quantityScaled: bigint }
+  >(() => {
+    if (unitPriceMinor === null) return { kind: "empty" }
+
+    let quantityScaled: bigint
+    let cashMinor: bigint
+    if (isQuantityBasis) {
+      if (quantity.trim() === "") return { kind: "empty" }
+      try {
+        quantityScaled = quantityToScaled(quantity.trim())
+      } catch {
+        return { kind: "invalid", reason: "Enter a valid quantity." }
+      }
+      if (quantityScaled <= 0n) {
+        return {
+          kind: "invalid",
+          reason: "Quantity must be greater than zero.",
+        }
+      }
+      cashMinor = holdingCostMinor(quantityScaled, unitPriceMinor)
+    } else {
+      if (amountMinor === null) return { kind: "empty" }
+      cashMinor = amountMinor
+      quantityScaled = unitsFromAmountScaled(amountMinor, unitPriceMinor)
+      if (quantityScaled <= 0n) {
+        return {
+          kind: "invalid",
+          reason: `Amount is too small to ${isBuy ? "buy" : "sell"} any units.`,
+        }
+      }
+    }
+
+    // The server rejects a zero cash leg (`positiveMinorDigitsSchema`); catch it
+    // here so the user sees why instead of a round-trip error.
+    if (cashMinor <= 0n) {
+      return {
+        kind: "invalid",
+        reason: "This trade moves no cash — check the quantity and unit price.",
+      }
+    }
+
+    // Oversell guard — the server enforces this too, but blocking it here keeps
+    // an amount-driven Sell (whose units are DERIVED, so the user never sees the
+    // number they are about to exceed) from failing only after submit.
+    if (!isBuy && selectedHolding !== null) {
+      const heldScaled = quantityToScaled(selectedHolding.quantity)
+      if (quantityScaled > heldScaled) {
+        return {
+          kind: "invalid",
+          reason: `Only ${selectedHolding.quantity} ${selectedHolding.instrument.name} held.`,
+        }
+      }
+    }
+
+    return { kind: "valid", cashMinor, quantityScaled }
+  }, [
+    isQuantityBasis,
+    quantity,
+    amountMinor,
+    unitPriceMinor,
+    isBuy,
+    selectedHolding,
+  ])
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
     setError(null)
-    if (cashPreview.kind !== "valid") {
-      setError("Enter a valid quantity and unit price.")
+    if (unitPriceMinor === null) {
+      setError("Enter a valid unit price.")
       return
     }
-    const price = parseMoneyInput(unitPrice, currencyCode)
-    if (price === null) {
-      setError("Enter a valid unit price.")
+    if (preview.kind !== "valid") {
+      setError(
+        preview.kind === "invalid"
+          ? preview.reason
+          : `Enter a valid ${isQuantityBasis ? "quantity" : "amount"} and unit price.`
+      )
       return
     }
     setSubmitting(true)
@@ -141,9 +238,14 @@ export function TradeDialog({
         investmentAccountId,
         fundingAccountId,
         side,
-        cashAmount: cashPreview.minor.toString(),
-        quantity: quantity.trim(),
-        unitPrice: price.toString(),
+        cashAmount: preview.cashMinor.toString(),
+        // Quantity basis sends exactly what the user typed (unchanged wire
+        // behavior); amount basis sends the derived units at the column's own
+        // fixed 8-dp scale, so nothing is lost or re-rounded server-side.
+        quantity: isQuantityBasis
+          ? quantity.trim()
+          : scaledToQuantityString(preview.quantityScaled),
+        unitPrice: unitPriceMinor.toString(),
         tradeDate: date,
         idempotencyKey: createUuidV7(),
       }
@@ -175,9 +277,8 @@ export function TradeDialog({
   const submitDisabled =
     submitting ||
     fundingAccountId === "" ||
-    quantity.trim() === "" ||
-    unitPrice.trim() === "" ||
-    cashPreview.kind !== "valid" ||
+    unitPriceMinor === null ||
+    preview.kind !== "valid" ||
     (creatingInstrument && newName.trim() === "") ||
     (!isBuy && sellablePositions.length === 0)
 
@@ -310,18 +411,50 @@ export function TradeDialog({
             </div>
           ) : null}
 
+          <div className="flex flex-col gap-2">
+            <Label>Enter by</Label>
+            <Select
+              value={basis}
+              onValueChange={(value) => setBasis(value as Basis)}
+            >
+              <SelectTrigger aria-label="Trade entry basis">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="quantity">Quantity (units)</SelectItem>
+                <SelectItem value="amount">
+                  {isBuy ? "Amount (cash to invest)" : "Amount (cash proceeds)"}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="trade-quantity">Quantity</Label>
-              <Input
-                id="trade-quantity"
-                inputMode="decimal"
-                value={quantity}
-                onChange={(e) => setQuantity(e.target.value)}
-                placeholder="e.g. 2.018"
-                required
-              />
-            </div>
+            {isQuantityBasis ? (
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="trade-quantity">Quantity</Label>
+                <Input
+                  id="trade-quantity"
+                  inputMode="decimal"
+                  value={quantity}
+                  onChange={(e) => setQuantity(e.target.value)}
+                  placeholder="e.g. 2.018"
+                  required
+                />
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="trade-amount">Amount ({currency})</Label>
+                <MoneyInput
+                  id="trade-amount"
+                  currency={currencyCode}
+                  value={amount}
+                  onChange={setAmount}
+                  placeholder="0"
+                  required
+                />
+              </div>
+            )}
             <div className="flex flex-col gap-2">
               <Label htmlFor="trade-unit-price">Unit price ({currency})</Label>
               <MoneyInput
@@ -348,21 +481,49 @@ export function TradeDialog({
 
           <div
             className={cn(
-              "flex items-center justify-between rounded-md border p-3 text-sm",
-              cashPreview.kind === "valid"
-                ? "bg-muted/50"
-                : "text-muted-foreground"
+              "flex flex-col gap-1.5 rounded-md border p-3 text-sm",
+              preview.kind === "valid" ? "bg-muted/50" : "text-muted-foreground"
             )}
           >
-            <span className="text-muted-foreground">
-              {isBuy ? "Cash out" : "Cash in"}
-            </span>
-            <span className="font-semibold tabular-nums">
-              {cashPreview.kind === "valid"
-                ? formatCurrency(cashPreview.minor.toString(), currency)
-                : "—"}
-            </span>
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">
+                {isBuy ? "Cash out" : "Cash in"}
+              </span>
+              {/* Test id: the MoneyInput above echoes the very same formatted
+                  figure, so an e2e assertion on the text alone could not tell
+                  the two apart — and "the summary equals the typed amount" is
+                  precisely what has to be proven for amount-driven entry. */}
+              <span
+                className="font-semibold tabular-nums"
+                data-testid="trade-cash-total"
+              >
+                {preview.kind === "valid"
+                  ? formatCurrency(preview.cashMinor.toString(), currency)
+                  : "—"}
+              </span>
+            </div>
+            {/* The derived side of whichever basis is active. Shown always (not
+                only in amount basis) so the two modes preview the same shape. */}
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">
+                {isBuy ? "Units bought" : "Units sold"}
+              </span>
+              <span
+                className="font-semibold tabular-nums"
+                data-testid="trade-units-total"
+              >
+                {preview.kind === "valid"
+                  ? scaledToQuantityString(preview.quantityScaled)
+                  : "—"}
+              </span>
+            </div>
           </div>
+
+          {preview.kind === "invalid" ? (
+            <p className="text-sm text-destructive" role="alert">
+              {preview.reason}
+            </p>
+          ) : null}
 
           {error ? (
             <p className="text-sm text-destructive" role="alert">

@@ -191,6 +191,54 @@ export function holdingCostMinor(
   return divideScaledHalfUp(quantityScaled * avgUnitCostMinor)
 }
 
+/**
+ * Units implied by spending/receiving a cash AMOUNT at a given unit price — the
+ * exact inverse of `holdingValueMinor` / `holdingCostMinor`:
+ *
+ *   unitsScaled = round_half_up(amountMinor × QUANTITY_SCALE / unitPriceMinor)
+ *
+ * This is the amount-driven entry fold: a real reksadana purchase is "invest
+ * Rp 500,000 into this fund", not "buy 41.66666667 units at Rp 12,000". The
+ * AMOUNT is what the user commits and what actually moves on the ledger; the
+ * quantity is derived from it.
+ *
+ * Rounding is HALF-UP at the 1e-8 column scale, the same convention as every
+ * other rounding in this module: `(a + d/2) / d` with a non-negative dividend
+ * and a positive divisor (bigint `/` truncates toward zero == floor here).
+ *
+ * The residual is bounded by half a unit-tick, so re-valuing the derived units
+ * at the same price lands back on the amount within `½ + unitPrice/(2×SCALE)`
+ * minor units (proven as a property in holdings.test.ts). Below a unit price of
+ * `QUANTITY_SCALE` minor units — Rp 1,000,000 per unit, i.e. every reksadana
+ * NAV and share price — that collapses to at most ONE minor unit.
+ *
+ * Callers must therefore keep the AMOUNT authoritative for money (cash moved,
+ * cost basis) and treat the derived quantity as the position delta — never
+ * re-derive the cash from the rounded quantity, or the user's "Rp 500,000"
+ * would silently post as Rp 499,999.99.
+ *
+ * `src/components/blocks/switch-dialog.tsx` and `src/server/holdings.ts`
+ * (`recordSwitchForFamily` / the dividend-reinvest path) each still carry a
+ * private copy of this identical fold; this is the canonical one and they
+ * should collapse onto it when they are next touched.
+ */
+export function unitsFromAmountScaled(
+  amountMinor: bigint,
+  unitPriceMinor: bigint
+): bigint {
+  if (amountMinor < 0n) {
+    throw new RangeError(
+      `unitsFromAmountScaled: amountMinor must be non-negative, got ${amountMinor}`
+    )
+  }
+  if (unitPriceMinor <= 0n) {
+    throw new RangeError(
+      `unitsFromAmountScaled: unitPriceMinor must be positive, got ${unitPriceMinor}`
+    )
+  }
+  return (amountMinor * QUANTITY_SCALE + unitPriceMinor / 2n) / unitPriceMinor
+}
+
 /** Unrealized gain (loss if negative) in MINOR units: value − cost. */
 export function holdingGainMinor(value: bigint, cost: bigint): bigint {
   return value - cost
