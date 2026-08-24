@@ -12,6 +12,7 @@ import type { AccountType } from "@/lib/accounts"
 import { createAccountForFamily } from "@/server/accounts"
 import {
   correctTradeForFamily,
+  deleteHoldingForFamily,
   deleteTradeForFamily,
   getAccountHoldingsForFamily,
   getTradeForCorrectionForFamily,
@@ -131,6 +132,34 @@ describe("trade corrections — delete & edit (PER-259 Slice 5 / ADR-0054)", () 
         cashAmount: overrides.cashAmount ?? "1000000",
         quantity: overrides.quantity ?? "100",
         unitPrice: overrides.unitPrice ?? "10000",
+        idempotencyKey:
+          overrides.idempotencyKey ?? factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+  const sellFund = async (
+    owner: AuthenticatedOnboardedUser,
+    investmentAccountId: string,
+    fundingAccountId: string,
+    instrumentId: string | undefined,
+    overrides: {
+      quantity?: string
+      unitPrice?: string
+      cashAmount?: string
+      idempotencyKey?: string
+    } = {}
+  ) =>
+    await recordTradeForFamily({
+      data: {
+        investmentAccountId,
+        fundingAccountId,
+        instrumentId,
+        side: "sell",
+        cashAmount: overrides.cashAmount ?? "1200000",
+        quantity: overrides.quantity ?? "100",
+        unitPrice: overrides.unitPrice ?? "12000",
         idempotencyKey:
           overrides.idempotencyKey ?? factories.createIdempotencyKey(),
       },
@@ -580,6 +609,247 @@ describe("trade corrections — delete & edit (PER-259 Slice 5 / ADR-0054)", () 
         user: owner.user,
       })
     ).rejects.toThrow(/activity after it/)
+  })
+
+  // ==========================================================================
+  // PRODUCTION BUG (found 2026-08-24, audit of PER-259 / ADR-0054): the guard's
+  // "the Holding row is gone" fallback only asked "was the position REOPENED
+  // since?" — it could NOT tell "THIS trade closed the position" from "a LATER
+  // event closed it". Every case below reproduced a real conservation break
+  // against real Postgres BEFORE the fix (`isLastQuantityMutationForPosition`,
+  // src/server/holdings.ts): the reversal put the trade's cash back while the
+  // position it paid for had already been consumed by the later event, so money
+  // appeared out of nothing. Each asserts BOTH that the guard now refuses AND
+  // that nothing moved.
+  // ==========================================================================
+
+  const netWorth = async (
+    owner: AuthenticatedOnboardedUser,
+    accountIds: ReadonlyArray<string>
+  ) => {
+    let total = 0n
+    for (const id of accountIds) total += await balanceOf(owner, id)
+    return total
+  }
+
+  test("DELETE rejected when a later SELL closed the position to zero (no money conjured)", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const investment = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(owner)
+    const openingNetWorth = await netWorth(owner, [investment.id, cash.id])
+
+    const buy = await buyFund(owner, investment.id, cash.id)
+    await sellFund(
+      owner,
+      investment.id,
+      cash.id,
+      buy.holding?.instrumentId ?? undefined
+    )
+    const cashAfterSell = await balanceOf(owner, cash.id)
+
+    await expect(
+      deleteTradeForFamily({
+        data: {
+          transactionId: buy.transaction.id,
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+    ).rejects.toThrow(/activity after it/)
+
+    // BEFORE the fix this delete SUCCEEDED and paid the buy's 1,000,000 back
+    // into cash on top of the sell's proceeds.
+    expect(await balanceOf(owner, cash.id)).toBe(cashAfterSell)
+    expect(await balanceOf(owner, investment.id)).toBe(0n)
+    // Net worth still equals opening + the realized gain (1,200,000 − 1,000,000).
+    expect(await netWorth(owner, [investment.id, cash.id])).toBe(
+      openingNetWorth + 200_000n
+    )
+  })
+
+  test("CORRECT rejected when a later SELL closed the position to zero", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const investment = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(owner)
+
+    const buy = await buyFund(owner, investment.id, cash.id)
+    await sellFund(
+      owner,
+      investment.id,
+      cash.id,
+      buy.holding?.instrumentId ?? undefined
+    )
+    const cashAfterSell = await balanceOf(owner, cash.id)
+
+    await expect(
+      correctTradeForFamily({
+        data: {
+          transactionId: buy.transaction.id,
+          fundingAccountId: cash.id,
+          side: "buy",
+          cashAmount: "900000",
+          quantity: "90",
+          unitPrice: "10000",
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+    ).rejects.toThrow(/activity after it/)
+
+    expect(await balanceOf(owner, cash.id)).toBe(cashAfterSell)
+    expect(await balanceOf(owner, investment.id)).toBe(0n)
+  })
+
+  test("DELETE rejected when a Switch moved the WHOLE position into another fund", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const investment = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(owner)
+    const openingNetWorth = await netWorth(owner, [investment.id, cash.id])
+
+    const buy = await buyFund(owner, investment.id, cash.id)
+    await recordSwitchForFamily({
+      data: {
+        investmentAccountId: investment.id,
+        fromHoldingId: buy.holding?.id ?? "",
+        toInstrument: { kind: "mutual_fund" as const, name: "Fund B" },
+        quantity: "100",
+        fromUnitPrice: "10000",
+        toUnitPrice: "8000",
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+    const cashAfterSwitch = await balanceOf(owner, cash.id)
+
+    await expect(
+      deleteTradeForFamily({
+        data: {
+          transactionId: buy.transaction.id,
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+    ).rejects.toThrow(/activity after it/)
+
+    // BEFORE the fix this returned the buy's cash while Fund B kept the whole
+    // value — 1,000,000 conjured. A switch moves value, it never creates any.
+    expect(await balanceOf(owner, cash.id)).toBe(cashAfterSwitch)
+    expect(await balanceOf(owner, investment.id)).toBe(1_000_000n)
+    expect(await netWorth(owner, [investment.id, cash.id])).toBe(
+      openingNetWorth
+    )
+  })
+
+  test("DELETE rejected for the FIRST sell of a reopen-then-reclose cascade", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const investment = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(owner)
+
+    const buy1 = await buyFund(owner, investment.id, cash.id)
+    const instrumentId = buy1.holding?.instrumentId ?? undefined
+    const sell1 = await sellFund(owner, investment.id, cash.id, instrumentId)
+    // Reopen the SAME position, then close it again — the first sell is no
+    // longer the position's last quantity-mutating event even though no
+    // Holding row exists to say so.
+    await buyFund(owner, investment.id, cash.id, { instrumentId })
+    await sellFund(owner, investment.id, cash.id, instrumentId)
+    const cashBefore = await balanceOf(owner, cash.id)
+
+    await expect(
+      deleteTradeForFamily({
+        data: {
+          transactionId: sell1.transaction.id,
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+    ).rejects.toThrow(/activity after it/)
+
+    expect(await balanceOf(owner, cash.id)).toBe(cashBefore)
+    expect(await balanceOf(owner, investment.id)).toBe(0n)
+  })
+
+  test("DELETE rejected after an out-of-band deleteHolding removed the position", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const investment = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(owner)
+
+    const buy = await buyFund(owner, investment.id, cash.id)
+    await deleteHoldingForFamily({
+      data: {
+        holdingId: buy.holding?.id ?? "",
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+    const cashBefore = await balanceOf(owner, cash.id)
+
+    await expect(
+      deleteTradeForFamily({
+        data: {
+          transactionId: buy.transaction.id,
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+    ).rejects.toThrow(/activity after it/)
+
+    expect(await balanceOf(owner, cash.id)).toBe(cashBefore)
+  })
+
+  test("a corrected sell-to-zero stays deletable (same-transaction audit rows are ordered)", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const investment = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(owner)
+    const openingNetWorth = await netWorth(owner, [investment.id, cash.id])
+
+    const buy = await buyFund(owner, investment.id, cash.id)
+    const sell = await sellFund(
+      owner,
+      investment.id,
+      cash.id,
+      buy.holding?.instrumentId ?? undefined
+    )
+
+    // A correction writes its reversal's re-create AND its reapply's re-delete
+    // in ONE transaction, so both audit rows share `CURRENT_TIMESTAMP`. The
+    // guard must still see the reapply's DELETE as the position's last event.
+    const corrected = await correctTradeForFamily({
+      data: {
+        transactionId: sell.transaction.id,
+        fundingAccountId: cash.id,
+        side: "sell",
+        cashAmount: "1300000",
+        quantity: "100",
+        unitPrice: "13000",
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+    await deleteTradeForFamily({
+      data: {
+        transactionId: corrected.trade.transaction.id,
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+    // Back to "bought, never sold": the position is whole and net worth is the
+    // opening one (the buy moved cash into units, it created no value).
+    expect(await balanceOf(owner, investment.id)).toBe(1_000_000n)
+    expect(await netWorth(owner, [investment.id, cash.id])).toBe(
+      openingNetWorth
+    )
   })
 
   test("DELETE a non-trade transaction is rejected", async () => {

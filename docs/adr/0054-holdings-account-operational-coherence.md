@@ -188,11 +188,26 @@ FIFO-vs-average election beyond the current average-cost model — later.
     the reversal just deleted) fails with the SAME actionable error
     `recordTradeForFamily` already gives ("No <fund> position to sell"), never
     silent misbehavior.
-  - **Known limitation** (explicitly "not a full historical-replay engine"): a
-    reopen-THEN-reclose cascade, or an unrelated manual `deleteHoldingForFamily`
-    call, both leave no CURRENT Holding row and are not distinguishable from
-    "still latest" by the fallback check alone — the one documented residual
-    gap in the Slice 5 guard.
+  - **Known limitation — CLOSED (audit follow-up, 2026-08-24).** The original
+    fallback (used when no CURRENT Holding row exists) only asked "was the
+    position REOPENED since?", which could not distinguish "THIS trade closed
+    the position" from "a LATER event closed it". That was not a cosmetic gap:
+    `Buy → Sell ALL → delete/correct the BUY` and
+    `Buy → Switch ALL of A into B → delete/correct the BUY` both passed the
+    guard and reversed the buy's cash leg against a position a later event had
+    already consumed — **conjuring the trade's cash out of nothing** (reproduced
+    against real Postgres: +1,000,000 sen, net worth inflated). A
+    reopen-then-reclose cascade and an unrelated manual `deleteHoldingForFamily`
+    had the same shape.
+    The marker lives on the row, so when the row is gone the SAME identity
+    question is now put to the position's append-only `AuditLog` history:
+    `isLastQuantityMutationForPosition` (holdings.ts) asks whether this trade's
+    OWN Holding audit row is still the most recent **quantity-mutating** one for
+    the (account, instrument) position — the same "quantity-mutating" predicate
+    migration `20260823121700_backfill_holding_last_mutation_key` uses, so a
+    price-only refresh stays transparent. Row-id identity, never a value diff.
+    All three cases now fail loud with the actionable message. Slice 5 remains
+    "not a full historical-replay engine" — it refuses more, it never replays.
   - Server `deleteTradeForFamily` / `deleteTradeFn`, `correctTradeForFamily` /
     `correctTradeFn`, `getTradeForCorrectionForFamily` /
     `getTradeForCorrectionFn`; UI `trade-correction-dialog.tsx`; real-PG
