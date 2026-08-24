@@ -217,10 +217,11 @@ export function holdingCostMinor(
  * re-derive the cash from the rounded quantity, or the user's "Rp 500,000"
  * would silently post as Rp 499,999.99.
  *
- * `src/components/blocks/switch-dialog.tsx` and `src/server/holdings.ts`
- * (`recordSwitchForFamily` / the dividend-reinvest path) each still carry a
- * private copy of this identical fold; this is the canonical one and they
- * should collapse onto it when they are next touched.
+ * The single source of truth for every "amount → units" fold in the app: the
+ * Buy/Sell trade dialog's amount basis, a Dividend reinvest (amount ÷ reinvest
+ * price), and a Switch's destination side (proceeds ÷ B's price) all resolve
+ * here — no dialog or server path carries its own private copy — so a preview
+ * can never show units that differ from the ones the server actually writes.
  */
 export function unitsFromAmountScaled(
   amountMinor: bigint,

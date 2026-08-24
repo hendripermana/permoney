@@ -232,6 +232,54 @@ describe("averageUnitCostMinor (PER-198 trade cost blend)", () => {
   })
 })
 
+describe("unitsFromAmountScaled (PER-259 reinvest / switch destination fold)", () => {
+  test("inverts holdingValueMinor for exact divisions", () => {
+    // 500,000 reinvested at 10,000/unit → 50 units, worth 500,000 again.
+    const units = unitsFromAmountScaled(500_000n, 10_000n)
+    expect(scaledToQuantityString(units)).toBe("50.00000000")
+    expect(holdingValueMinor(units, 10_000n)).toBe(500_000n)
+  })
+
+  test("rounds half-up on an inexact division", () => {
+    // 1,000 / 3 = 333.333… units → scaled 33_333_333_333 + half-up.
+    expect(unitsFromAmountScaled(1_000n, 3n)).toBe(
+      (1_000n * QUANTITY_SCALE + 1n) / 3n
+    )
+  })
+
+  test("a zero amount buys zero units", () => {
+    expect(unitsFromAmountScaled(0n, 10_000n)).toBe(0n)
+  })
+
+  test("rejects a negative amount or a non-positive price", () => {
+    expect(() => unitsFromAmountScaled(-1n, 10_000n)).toThrow()
+    expect(() => unitsFromAmountScaled(1_000n, 0n)).toThrow()
+    expect(() => unitsFromAmountScaled(1_000n, -1n)).toThrow()
+  })
+
+  test("round-trips within the rounding bound of the amount it came from", () => {
+    fc.assert(
+      fc.property(
+        fc.bigInt({ min: 1n, max: 10n ** 12n }),
+        fc.bigInt({ min: 1n, max: 10n ** 9n }),
+        (amountMinor, unitPriceMinor) => {
+          const units = unitsFromAmountScaled(amountMinor, unitPriceMinor)
+          const back = holdingValueMinor(units, unitPriceMinor)
+          // Each fold rounds half-up once: the unit rounding is worth at most
+          // half a scaled unit, i.e. price / (2 × SCALE) minor units, plus the
+          // value fold's own half-minor-unit. That bound is what keeps a
+          // reinvest's cost basis honest — it can never drift by a whole unit
+          // of price.
+          const drift =
+            back > amountMinor ? back - amountMinor : amountMinor - back
+          const bound = unitPriceMinor / (2n * QUANTITY_SCALE) + 1n
+          expect(drift <= bound).toBe(true)
+        }
+      )
+    )
+  })
+})
+
 describe("scaledToQuantityString", () => {
   test("renders the canonical fixed-scale decimal string", () => {
     expect(scaledToQuantityString(quantityToScaled("100"))).toBe("100.00000000")

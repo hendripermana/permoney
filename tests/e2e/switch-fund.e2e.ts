@@ -70,8 +70,11 @@ test.describe("switch fund UI (PER-259 Slice 4)", () => {
     await dialog.getByRole("button", { name: "Record switch" }).click()
     await expect(page.getByRole("dialog")).toHaveCount(0)
 
-    // A's position closed — its row is gone.
-    await expect(page.getByText(fundAName)).toHaveCount(0)
+    // A's position closed — its row is gone from the HOLDINGS list. (Scoped:
+    // the Position activity list below records the switch as "A → B", so an
+    // unscoped text match would still find A's name there — PER-259 Slice 5.)
+    const holdingsList = page.getByRole("list", { name: "Holdings" })
+    await expect(holdingsList.getByText(fundAName)).toHaveCount(0)
 
     // B's row appeared with the switched-in units (proceeds 2,000,000 / B's
     // price 500,000 = 4 units).

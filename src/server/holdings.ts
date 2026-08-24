@@ -27,6 +27,7 @@ import {
   quantityToScaled,
   scaledToQuantityString,
   sumHoldingValuesMinor,
+  unitsFromAmountScaled,
 } from "@/lib/holdings"
 import {
   deriveTransferKindForAccounts,
@@ -1618,17 +1619,28 @@ function parseHoldingSnapshot(json: unknown): HoldingSnapshot | null {
   return holdingSnapshotSchema.parse(json)
 }
 
+// ONE position an event mutated: the `Holding` row it touched, the before/after
+// snapshots the SAME transaction captured in `AuditLog`, and the identity of
+// that audit row — the cursor the "did anything happen after this?" scan
+// compares against. A Buy/Sell trade has exactly ONE leg; a Switch has TWO
+// (sell-A + buy-B); a Dividend reinvest has ONE.
+interface HoldingEventLeg {
+  holdingId: string
+  before: HoldingSnapshot | null
+  after: HoldingSnapshot | null
+  /** AuditLog row identity — ordered by the (createdAt, id) tuple, because
+   * every row written inside ONE Postgres transaction shares the exact same
+   * `createdAt` (now() is transaction-scoped), so a timestamp alone cannot
+   * separate a correction's reversal rows from its reapply rows. */
+  auditCreatedAt: Date
+  auditRowId: string
+}
+
 interface ResolvedTradeForCorrection {
   cashTx: NonNullable<Awaited<ReturnType<typeof findTransactionAuditGraph>>>
   investmentAccount: Awaited<ReturnType<typeof fetchActiveAccount>>
   tradeKey: string
-  holdingId: string
-  /** The id of THIS trade's own `Holding` AuditLog row — the durable, append-only
-   * identity of the position change it made. `assertTradeIsLatest` compares it
-   * against the position's most recent quantity-mutating audit row (see there). */
-  holdingAuditId: string
-  holdingBefore: HoldingSnapshot | null
-  holdingAfter: HoldingSnapshot | null
+  leg: HoldingEventLeg
 }
 
 // Resolve a trade's full identity from the ONE thing the UI actually has: the
@@ -1697,166 +1709,243 @@ async function resolveTradeForCorrection(
     )
   }
   const holdingRow = holdingRows[0]!
-  const holdingBefore = parseHoldingSnapshot(holdingRow.beforeJson)
-  const holdingAfter = parseHoldingSnapshot(holdingRow.afterJson)
-  if (!holdingBefore && !holdingAfter) {
-    throw new Error(
-      `Holding audit row ${holdingRow.id} has neither a before nor an after snapshot`
-    )
-  }
 
   return {
     cashTx,
     investmentAccount,
     tradeKey,
-    holdingId: holdingRow.entityId,
-    holdingAuditId: holdingRow.id,
-    holdingBefore,
-    holdingAfter,
+    leg: toHoldingEventLeg(holdingRow),
   }
 }
 
-// The append-only answer to "is THIS trade still the last quantity-mutating
-// event on its position?" for the case where the `Holding` ROW IS GONE (so the
-// `lastMutationIdempotencyKey` marker it carried died with it — a sell-to-zero,
-// a switch-all-out, or a manual `deleteHoldingForFamily`).
+// An AuditLog row for a `Holding` → the event leg it represents. Validates the
+// captured snapshots (never trusts stored JSON blindly) and fails loud when a
+// row carries neither half.
+function toHoldingEventLeg(row: {
+  id: string
+  entityId: string
+  createdAt: Date
+  beforeJson: unknown
+  afterJson: unknown
+}): HoldingEventLeg {
+  const before = parseHoldingSnapshot(row.beforeJson)
+  const after = parseHoldingSnapshot(row.afterJson)
+  if (!before && !after) {
+    throw new Error(
+      `Holding audit row ${row.id} has neither a before nor an after snapshot`
+    )
+  }
+  return {
+    holdingId: row.entityId,
+    before,
+    after,
+    auditCreatedAt: row.createdAt,
+    auditRowId: row.id,
+  }
+}
+
+// The three refusal messages the shared per-leg guard can raise. Passed in by
+// the caller (never templated here) so the Buy/Sell copy stays byte-identical
+// while a Switch / Dividend correction can name the fund whose position moved.
+interface LatestGuardMessages {
+  /** A live row exists but carries a DIFFERENT mutation marker. */
+  touched: string
+  /** The event closed the position and something has since reopened it. */
+  reopened: string
+  /** The row this event left behind is gone, or a later audited mutation
+   * changed the same (account, instrument) position. */
+  removed: string
+}
+
+// Was there any LATER quantity-mutating audit row on this same
+// (account, instrument) position? "Quantity-mutating" uses the SAME definition
+// as the `20260823121700_backfill_holding_last_mutation_key` migration: a
+// create, a delete, or a change to `quantity` / `avgUnitCostMinor` — so a
+// price-only touch (`refreshHoldingPricesForFamily` writes only
+// `lastPriceMinor`) is correctly ignored.
 //
-// PRODUCTION BUG THIS FIXES (found 2026-08-24, verified by real-Postgres repro
-// in `tests/integration/trade-corrections.integration.ts` — "closed by a LATER
-// event"): the previous fallback only asked "was the position REOPENED since?"
-// (is there a live `Holding` for this account+instrument). That cannot tell
-// "THIS trade closed the position" from "a LATER trade closed it", so
-// `Buy → Sell ALL → delete/correct the BUY` and
-// `Buy → Switch ALL of A into B → delete/correct the BUY` both passed the guard
-// and reversed the buy's cash leg against a position that was already gone —
-// conjuring the trade's cash out of nothing (proved: +1,000,000 sen).
-//
-// The position's history survives the row in `AuditLog`, so ask THAT instead:
-// find the most recent quantity-mutating `Holding` audit row for this position
-// IDENTITY (account + instrument, carried in the snapshot JSON — the row id
-// changes when a closed position is reopened) and require it to be this trade's
-// OWN row. Row-id identity, never a value diff and never a timestamp
-// comparison, so it stays exact.
-//
-// "Quantity-mutating" is the SAME predicate the backfill migration
-// `20260823121700_backfill_holding_last_mutation_key` uses: a create, a delete,
-// or an update that moved `quantity` / `avgUnitCostMinor`. A price-only touch
-// (`refreshHoldingPricesForFamily`) is deliberately transparent here, exactly
-// as it is to the marker.
-//
-// ORDERING: `AuditLog.createdAt` defaults to `CURRENT_TIMESTAMP`, which in
-// Postgres is the TRANSACTION's start time — so every row a single correction
-// writes (its reversal's restore + its reapply's re-mutation) shares one
-// timestamp and cannot be ordered by it. The `action = 'delete'` tiebreak makes
-// that deterministic without leaning on cuid monotonicity: this fallback is
-// only ever reached when the Holding row is GONE, so whatever the newest
-// timestamp's rows are, the DELETE among them is the one that left the position
-// in its current (absent) state.
-//
-// This subsumes ALL three residual gaps ADR-0054 Slice 5 documented (a later
-// close, a reopen-then-reclose cascade, and an out-of-band
-// `deleteHoldingForFamily`): each one writes its own later audit row, so the
-// comparison fails and the correction is refused with the actionable message
-// instead of silently producing wrong money.
-async function isLastQuantityMutationForPosition(
+// This closes the reopen-THEN-reclose cascade the marker alone cannot see: a
+// reopened position is a BRAND-NEW `Holding` row (new id), so once it is
+// closed again there is no live row to compare a marker against — but the
+// append-only AuditLog still carries both events. Ordering is the
+// (createdAt, id) TUPLE: rows written in ONE Postgres transaction share the
+// exact same `createdAt`, so a reversal-and-replace correction's reversal rows
+// and its reapply rows are only separable by the row id (cuid, generated in
+// insertion order — the same ordering the backfill migration relies on).
+async function hasLaterQuantityMutationForPosition(
   tx: TenantTransactionClient,
   familyId: string,
   {
     accountId,
     instrumentId,
-    holdingAuditId,
-  }: { accountId: string; instrumentId: string; holdingAuditId: string }
+    eventKey,
+    leg,
+  }: {
+    accountId: string
+    instrumentId: string
+    eventKey: string
+    leg: HoldingEventLeg
+  }
 ): Promise<boolean> {
-  const rows = await tx.$queryRaw<Array<{ id: string }>>`
-    SELECT al.id
-    FROM "AuditLog" al
-    WHERE al."familyId" = ${familyId}
-      AND al."entityType" = 'Holding'
-      AND COALESCE(al."afterJson" ->> 'accountId', al."beforeJson" ->> 'accountId') = ${accountId}
-      AND COALESCE(al."afterJson" ->> 'instrumentId', al."beforeJson" ->> 'instrumentId') = ${instrumentId}
-      AND (
-        al.action = 'create'
-        OR al.action = 'delete'
-        OR (al."beforeJson" ->> 'quantity') IS DISTINCT FROM (al."afterJson" ->> 'quantity')
-        OR (al."beforeJson" ->> 'avgUnitCostMinor') IS DISTINCT FROM (al."afterJson" ->> 'avgUnitCostMinor')
-      )
-    ORDER BY al."createdAt" DESC, (al.action = 'delete') DESC, al.id DESC
-    LIMIT 1
-  `
-  return rows[0]?.id === holdingAuditId
+  const rows = await tx.auditLog.findMany({
+    where: {
+      familyId,
+      entityType: "Holding",
+      createdAt: { gte: leg.auditCreatedAt },
+    },
+    select: {
+      id: true,
+      createdAt: true,
+      idempotencyKey: true,
+      beforeJson: true,
+      afterJson: true,
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  })
+
+  for (const row of rows) {
+    // Every leg of THIS event shares its key — never self-incriminate. (An
+    // in-JS filter, not a Prisma `NOT`, because SQL `NOT (key = $1)` is NULL —
+    // and therefore drops — rows whose key is NULL.)
+    if (row.idempotencyKey === eventKey) continue
+    const strictlyLater =
+      row.createdAt.getTime() > leg.auditCreatedAt.getTime() ||
+      (row.createdAt.getTime() === leg.auditCreatedAt.getTime() &&
+        row.id > leg.auditRowId)
+    if (!strictlyLater) continue
+
+    const before = holdingSnapshotSchema.safeParse(row.beforeJson)
+    const after = holdingSnapshotSchema.safeParse(row.afterJson)
+    const identity = after.success
+      ? after.data
+      : before.success
+        ? before.data
+        : null
+    if (!identity) continue
+    if (
+      identity.accountId !== accountId ||
+      identity.instrumentId !== instrumentId
+    ) {
+      continue
+    }
+    // A create or a delete always moves the position; an update only counts
+    // when quantity or average unit cost actually changed.
+    if (!before.success || !after.success) return true
+    if (before.data.quantity !== after.data.quantity) return true
+    if (before.data.avgUnitCostMinor !== after.data.avgUnitCostMinor)
+      return true
+  }
+  return false
 }
 
-// The "latest quantity-mutating event" guard (ADR-0054 Slice 5 scope). Two
-// sources of truth, one rule: while the `Holding` row still exists its
-// `lastMutationIdempotencyKey` marker answers directly; once the row is gone
-// the position's `AuditLog` history answers instead
-// (`isLastQuantityMutationForPosition`). See the section header for the
-// identity-vs-value-diff rationale.
+// The "latest quantity-mutating event" guard for ONE position an event touched
+// (ADR-0054 Slice 5 scope). Shared verbatim by the Buy/Sell trade guard
+// (exactly one leg) and the Switch / Dividend-reinvest event guard (one leg per
+// affected Holding) — one implementation, so the two can never drift.
+//
+// "Latest" is an IDENTITY check, never a value diff: a later Sell-then-rebuy at
+// the same price could coincidentally reproduce the original quantity/cost.
+async function assertPositionIsLatestForEvent(
+  tx: TenantTransactionClient,
+  familyId: string,
+  {
+    leg,
+    eventKey,
+    messages,
+  }: {
+    leg: HoldingEventLeg
+    eventKey: string
+    messages: LatestGuardMessages
+  }
+): Promise<void> {
+  const current = await tx.holding.findFirst({
+    where: { id: leg.holdingId, familyId },
+  })
+  if (current) {
+    if (current.lastMutationIdempotencyKey !== eventKey) {
+      throw new HoldingError(messages.touched)
+    }
+    return
+  }
+
+  // No live Holding row for this leg.
+  const identity = leg.before ?? leg.after
+  if (!identity) {
+    throw new Error("Cannot determine the position identity for this trade")
+  }
+
+  // This event LEFT a live row behind (`after` is a snapshot, not null). Its
+  // absence is therefore unambiguous: something later removed it — a Sell to
+  // zero, a Switch that moved everything out, or a manual holding delete.
+  // Refuse; never resurrect a row the user's later action closed.
+  if (leg.after !== null) {
+    throw new HoldingError(messages.removed)
+  }
+
+  // `after === null` — THIS event itself closed the position to zero (a
+  // sell-to-zero, or a Switch that moved all of fund A out). Correcting it is
+  // safe only while nothing has touched the same (account, instrument) since.
+  const reopened = await tx.holding.findFirst({
+    where: {
+      familyId,
+      accountId: identity.accountId,
+      instrumentId: identity.instrumentId,
+    },
+  })
+  if (reopened) {
+    throw new HoldingError(messages.reopened)
+  }
+  // …including a reopen that was CLOSED again (no live row to see), which only
+  // the append-only audit trail can reveal.
+  if (
+    await hasLaterQuantityMutationForPosition(tx, familyId, {
+      accountId: identity.accountId,
+      instrumentId: identity.instrumentId,
+      eventKey,
+      leg,
+    })
+  ) {
+    throw new HoldingError(messages.removed)
+  }
+}
+
+// The Buy/Sell trade guard — the single-leg case of the shared guard above.
+// The refusal copy is unchanged from PER-259 Slice 5.
 async function assertTradeIsLatest(
   tx: TenantTransactionClient,
   familyId: string,
   resolved: ResolvedTradeForCorrection
 ): Promise<void> {
-  const current = await tx.holding.findFirst({
-    where: { id: resolved.holdingId, familyId },
+  await assertPositionIsLatestForEvent(tx, familyId, {
+    leg: resolved.leg,
+    eventKey: resolved.tradeKey,
+    messages: {
+      touched:
+        "This trade has activity after it (a later Buy/Sell, Switch, or Dividend reinvest touched this position) — record a correcting trade instead of editing this one.",
+      reopened:
+        "This trade has activity after it (the position was reopened since) — record a correcting trade instead of editing this one.",
+      removed:
+        "This trade has activity after it (the position was changed or closed since) — record a correcting trade instead of editing this one.",
+    },
   })
-  if (current) {
-    if (current.lastMutationIdempotencyKey !== resolved.tradeKey) {
-      throw new HoldingError(
-        "This trade has activity after it (a later Buy/Sell, Switch, or Dividend reinvest touched this position) — record a correcting trade instead of editing this one."
-      )
-    }
-    return
-  }
-  // The Holding ROW no longer exists, so the marker it carried is gone with it.
-  // The common, expected case: THIS trade itself was a SELL that closed the
-  // position to zero (a hard delete, same as `recordTradeForFamily`'s
-  // close-to-zero branch). But a LATER event can leave exactly the same
-  // "no row" state — a later sell-to-zero, a switch-all-out, or a manual
-  // `deleteHoldingForFamily` — and reversing THIS trade against a position
-  // some LATER trade already consumed conjures its cash out of nothing.
-  //
-  // The row is gone; its append-only history is not. Ask `AuditLog` whether
-  // this trade's own position change is still the most recent quantity-mutating
-  // one for this position identity (see `isLastQuantityMutationForPosition`).
-  // A reopened position is caught by the SAME comparison (the reopening Buy /
-  // Switch writes a later `create` row), so this single check replaces the old
-  // "was it reopened?" probe and closes every gap it left.
-  const identity = resolved.holdingBefore ?? resolved.holdingAfter
-  if (!identity) {
-    throw new Error("Cannot determine the position identity for this trade")
-  }
-  const stillLatest = await isLastQuantityMutationForPosition(tx, familyId, {
-    accountId: identity.accountId,
-    instrumentId: identity.instrumentId,
-    holdingAuditId: resolved.holdingAuditId,
-  })
-  if (!stillLatest) {
-    throw new HoldingError(
-      "This trade has activity after it (a later Buy/Sell, Switch, or Dividend reinvest closed or reopened this position) — record a correcting trade instead of editing this one."
-    )
-  }
 }
 
-// The `onHoldingsTradeReversal` hook body: restore the Holding EXACTLY to its
-// captured "before" snapshot (delete it if "before" was null — this trade
-// created it from scratch), then re-materialize the Σ-holdings anchor. Never
-// recomputes an inverse via math — item 4 of the locked Slice 5 design.
-async function reverseHoldingForTrade(
+// Restore ONE position EXACTLY to its captured "before" snapshot (delete it if
+// "before" was null — the event created it from scratch). Never recomputes an
+// inverse via math — item 4 of the locked Slice 5 design. Anchor-agnostic: the
+// caller re-materializes the Σ-holdings anchor ONCE after all legs are
+// restored (a Switch touches two positions in one account).
+async function restoreHoldingFromSnapshotWithinTx(
   tx: TenantTransactionClient,
   {
     familyId,
     holdingId,
     holdingBefore,
-    account,
-    user,
     auditCtx,
   }: {
     familyId: string
     holdingId: string
     holdingBefore: HoldingSnapshot | null
-    account: { id: string; currency: string }
-    user: ServerActor
     auditCtx: AuditContext
   }
 ): Promise<void> {
@@ -1926,13 +2015,39 @@ async function reverseHoldingForTrade(
       after: serializeHolding(created),
     })
   }
+}
 
-  // Re-materialize the Σ-holdings anchor AFTER the surgical reversal. This
-  // becomes the account's new latest valuation (fresh valuationDate = now),
-  // correctly reflecting the reversed position alongside any OTHER holding's
-  // untouched, possibly-later activity in the same account — NEVER picking
-  // "whatever anchor is now latest" (which is what the generic
-  // `rebuildWithinTx` step this hook replaces would have done).
+// The `onHoldingsTradeReversal` hook body: restore the trade's ONE position
+// from its captured snapshot, then re-materialize the Σ-holdings anchor. That
+// anchor becomes the account's new latest valuation (fresh valuationDate =
+// now), correctly reflecting the reversed position alongside any OTHER
+// holding's untouched, possibly-later activity in the same account — NEVER
+// picking "whatever anchor is now latest" (which is what the generic
+// `rebuildWithinTx` step this hook replaces would have done).
+async function reverseHoldingForTrade(
+  tx: TenantTransactionClient,
+  {
+    familyId,
+    holdingId,
+    holdingBefore,
+    account,
+    user,
+    auditCtx,
+  }: {
+    familyId: string
+    holdingId: string
+    holdingBefore: HoldingSnapshot | null
+    account: { id: string; currency: string }
+    user: ServerActor
+    auditCtx: AuditContext
+  }
+): Promise<void> {
+  await restoreHoldingFromSnapshotWithinTx(tx, {
+    familyId,
+    holdingId,
+    holdingBefore,
+    auditCtx,
+  })
   await recomputeAccountValueAnchorWithinTx(
     tx,
     familyId,
@@ -2007,8 +2122,8 @@ export async function deleteTradeForFamily({
         onHoldingsTradeReversal: async (tx2, hookArgs) => {
           await reverseHoldingForTrade(tx2, {
             familyId: hookArgs.familyId,
-            holdingId: resolved.holdingId,
-            holdingBefore: resolved.holdingBefore,
+            holdingId: resolved.leg.holdingId,
+            holdingBefore: resolved.leg.before,
             account: resolved.investmentAccount,
             user,
             auditCtx: hookArgs.auditCtx,
@@ -2025,8 +2140,8 @@ export async function deleteTradeForFamily({
           fundingAccountId: resolved.cashTx.accountId,
           amountMinor: resolved.cashTx.amount,
           date: resolved.cashTx.date,
-          holdingBefore: resolved.holdingBefore,
-          holdingAfter: resolved.holdingAfter,
+          holdingBefore: resolved.leg.before,
+          holdingAfter: resolved.leg.after,
         },
         after: null,
       })
@@ -2152,7 +2267,7 @@ export async function correctTradeForFamily({
       // moving a position to a different instrument/account is out of this
       // slice's scope (Slice 6 territory). At least one of before/after is
       // guaranteed by `resolveTradeForCorrection`.
-      const instrumentId = (resolved.holdingBefore ?? resolved.holdingAfter)!
+      const instrumentId = (resolved.leg.before ?? resolved.leg.after)!
         .instrumentId
 
       // 1. Reverse the OLD trade (cash + valuation + Holding), in this SAME tx.
@@ -2163,8 +2278,8 @@ export async function correctTradeForFamily({
         onHoldingsTradeReversal: async (tx2, hookArgs) => {
           await reverseHoldingForTrade(tx2, {
             familyId: hookArgs.familyId,
-            holdingId: resolved.holdingId,
-            holdingBefore: resolved.holdingBefore,
+            holdingId: resolved.leg.holdingId,
+            holdingBefore: resolved.leg.before,
             account: resolved.investmentAccount,
             user,
             auditCtx: hookArgs.auditCtx,
@@ -2214,8 +2329,8 @@ export async function correctTradeForFamily({
           fundingAccountId: resolved.cashTx.accountId,
           amountMinor: resolved.cashTx.amount,
           date: resolved.cashTx.date,
-          holdingBefore: resolved.holdingBefore,
-          holdingAfter: resolved.holdingAfter,
+          holdingBefore: resolved.leg.before,
+          holdingAfter: resolved.leg.after,
         },
         after: {
           cashAmount: data.cashAmount,
@@ -2334,17 +2449,17 @@ export async function getTradeForCorrectionForFamily({
     // BUY debits the funding (cash) account — cashTx.amount is negative
     // (mirrors `direction = isBuy ? "contribution" : "redemption"` exactly).
     const isBuy = resolved.cashTx.amount < 0n
-    const beforeScaled = resolved.holdingBefore
-      ? quantityToScaled(resolved.holdingBefore.quantity)
+    const beforeScaled = resolved.leg.before
+      ? quantityToScaled(resolved.leg.before.quantity)
       : 0n
-    const afterScaled = resolved.holdingAfter
-      ? quantityToScaled(resolved.holdingAfter.quantity)
+    const afterScaled = resolved.leg.after
+      ? quantityToScaled(resolved.leg.after.quantity)
       : 0n
     const deltaScaled = isBuy
       ? afterScaled - beforeScaled
       : beforeScaled - afterScaled
 
-    const instrumentId = (resolved.holdingBefore ?? resolved.holdingAfter)!
+    const instrumentId = (resolved.leg.before ?? resolved.leg.after)!
       .instrumentId
     const instrument = await tx.instrument.findUniqueOrThrow({
       where: { id: instrumentId },
@@ -2529,6 +2644,284 @@ async function resolveDistributionIncomeCategory(
   return created.id
 }
 
+// PER-259 Slice 5 (Switch/Dividend correction) — the within-transaction CORE
+// of a distribution, extracted verbatim (zero behavior change) from
+// `recordDistributionForFamily` so a second caller can compose it: the
+// holdings-event CORRECTION path reverses the old reinvest and then calls this
+// SAME core to reapply the corrected params, reusing the exact average-cost /
+// units-from-price math instead of duplicating it. Mirrors
+// `recordTradeWithinTx`'s shape: it does NOT replay-check or persist an
+// IdempotencyRecord — the caller owns that.
+async function recordDistributionWithinTx(
+  tx: TenantTransactionClient,
+  {
+    data,
+    familyId,
+    user,
+    auditCtx,
+  }: {
+    data: RecordDistributionInput
+    familyId: string
+    user: ServerActor
+    auditCtx: AuditContext
+  }
+): Promise<RecordDistributionResult> {
+  const amountMinor = BigInt(data.amount)
+  const date = data.date ?? new Date()
+
+  // The investment (holdings) account + the source holding are common to
+  // both modes. Tenant ownership is RLS-scoped and belt-and-braces checked.
+  await validateTenantReferences(tx, familyId, {
+    accountId: data.investmentAccountId,
+  })
+  const investmentAccount = await fetchActiveAccount(
+    tx,
+    familyId,
+    data.investmentAccountId,
+    "Investment"
+  )
+  if (investmentAccount.balanceSource !== "valuation") {
+    throw new HoldingError(
+      `Investment account ${investmentAccount.id} must be a valuation-tracked account (balanceSource="valuation"); it is "${investmentAccount.balanceSource}"`
+    )
+  }
+  const currency = assertKnownCurrency(investmentAccount.currency)
+
+  const holding = await loadHoldingWithInstrument(tx, familyId, data.holdingId)
+  if (holding.accountId !== investmentAccount.id) {
+    throw new HoldingError(
+      `Holding ${data.holdingId} does not belong to account ${data.investmentAccountId}`
+    )
+  }
+  const instrument = holding.instrument
+  const provenance = `${instrument.name}${instrument.symbol ? ` (${instrument.symbol})` : ""}`
+
+  let response: RecordDistributionResult
+
+  if (data.mode === "cash") {
+    // CASH PAYOUT — income on a user-chosen destination cash account; the
+    // source holding is NOT touched (units + position value unchanged).
+    const destinationAccountId = data.destinationAccountId
+    if (!destinationAccountId) {
+      // Unreachable (schema superRefine), keeps types honest.
+      throw new HoldingError("A cash payout requires a destination account")
+    }
+    await validateTenantReferences(tx, familyId, {
+      accountId: destinationAccountId,
+      categoryId: data.categoryId,
+    })
+    const destination = await fetchActiveAccount(
+      tx,
+      familyId,
+      destinationAccountId,
+      "Destination"
+    )
+    if (destination.balanceSource !== "transaction_flow") {
+      throw new HoldingError(
+        `Destination account ${destination.id} must be a cash-like account (balanceSource="transaction_flow"); it is "${destination.balanceSource}"`
+      )
+    }
+    if (destination.currency !== currency) {
+      throw new HoldingError(
+        `Cross-currency distributions are not supported this slice (holding ${currency}, destination ${destination.currency})`
+      )
+    }
+
+    // Reuse the family's "Investment Income" category (or an explicit
+    // income category the caller chose, validated to be income-typed).
+    let categoryId: string
+    if (data.categoryId) {
+      const category = await tx.category.findFirst({
+        where: { id: data.categoryId, familyId },
+        select: { id: true, type: true },
+      })
+      if (!category) {
+        throw new HoldingError(
+          `Category ${data.categoryId} not found for this family`
+        )
+      }
+      if (category.type !== "income") {
+        throw new HoldingError(
+          `Category ${data.categoryId} must be an income category for a cash distribution`
+        )
+      }
+      categoryId = category.id
+    } else {
+      categoryId = await resolveDistributionIncomeCategory(
+        tx,
+        familyId,
+        auditCtx
+      )
+    }
+
+    const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
+    const incomeTransaction = await postIncomeTransactionWithinTx(tx, {
+      account: destination,
+      amount: amountMinor,
+      date,
+      description: `Dividend — ${instrument.name}`,
+      notes: `Distribution from ${provenance} · holding ${holding.id} in ${investmentAccount.name}`,
+      categoryId,
+      familyId,
+      user,
+      auditCtx,
+      baseCurrency,
+      idempotencyKey: data.idempotencyKey,
+      status: "CLEARED",
+    })
+
+    // Explicit provenance audit row — the durable, queryable link from the
+    // income transaction back to the source holding/instrument (no schema
+    // FK migration this slice; description + notes + this row carry it).
+    await auditLog(tx, auditCtx, {
+      action: "create",
+      entityType: "Distribution",
+      entityId: incomeTransaction.id,
+      after: {
+        mode: "cash",
+        // PER-259 Slice 5 (Switch/Dividend correction) — the event date is
+        // part of the provenance so the "position activity" list and the
+        // correction prefill never have to guess it from `createdAt`.
+        date: date.toISOString(),
+        amountMinor: amountMinor.toString(),
+        investmentAccountId: investmentAccount.id,
+        holdingId: holding.id,
+        instrumentId: instrument.id,
+        instrumentName: instrument.name,
+        destinationAccountId: destination.id,
+        transactionId: incomeTransaction.id,
+      },
+    })
+
+    const destinationAfter = await tx.account.findUniqueOrThrow({
+      where: { id: destination.id },
+      select: { balance: true },
+    })
+
+    response = {
+      mode: "cash",
+      investmentAccountId: investmentAccount.id,
+      holdingId: holding.id,
+      instrumentId: instrument.id,
+      amountMinor: amountMinor.toString(),
+      destinationAccountId: destination.id,
+      incomeTransaction,
+      destinationBalanceAfterMinor: destinationAfter.balance.toString(),
+      holding: null,
+      costBasisDeltaMinor: null,
+      investmentValueAfterMinor: null,
+    }
+  } else {
+    // REINVEST — units up + cost basis up on the SOURCE holding, no external
+    // cash. Structurally BUY minus the funding cash leg: the reinvested
+    // `amount` is authoritative for cost; the units come from an explicit
+    // `quantity`, else derived from `unitPrice` (round-half-up).
+    let addedUnitsScaled: bigint
+    if (data.quantity) {
+      try {
+        addedUnitsScaled = quantityToScaled(data.quantity)
+      } catch (error) {
+        throw new HoldingError(
+          `quantity is not a valid amount: ${error instanceof Error ? error.message : String(error)}`
+        )
+      }
+    } else {
+      // data.unitPrice is guaranteed present here (schema superRefine).
+      const unitPrice = BigInt(data.unitPrice ?? "0")
+      if (unitPrice <= 0n) {
+        throw new HoldingError("Reinvest unit price must be greater than zero")
+      }
+      // units = amount / unitPrice — the shared pure fold (src/lib/holdings.ts),
+      // the SAME one the Switch destination side and both dialogs use.
+      addedUnitsScaled = unitsFromAmountScaled(amountMinor, unitPrice)
+    }
+    if (addedUnitsScaled <= 0n) {
+      throw new HoldingError(
+        "Reinvest results in zero units; increase the amount or lower the unit price"
+      )
+    }
+
+    const oldUnitsScaled = quantityToScaled(holding.quantity.toFixed(8))
+    const oldCost = holdingCostMinor(oldUnitsScaled, holding.avgUnitCostMinor)
+    const newUnitsScaled = oldUnitsScaled + addedUnitsScaled
+    const newAvg = averageUnitCostMinor(oldCost + amountMinor, newUnitsScaled)
+    const updated = await tx.holding.update({
+      where: { id: holding.id },
+      data: {
+        quantity: scaledToQuantityString(newUnitsScaled),
+        avgUnitCostMinor: newAvg,
+        // PER-259 Slice 5 — stamp the "latest" identity marker with THIS
+        // reinvest's own idempotencyKey (see marker doc comment).
+        lastMutationIdempotencyKey: data.idempotencyKey,
+      },
+      include: { instrument: true },
+    })
+    await auditLog(tx, auditCtx, {
+      action: "update",
+      entityType: "Holding",
+      entityId: updated.id,
+      before: serializeHolding(holding),
+      after: serializeHolding(updated),
+    })
+    await auditLog(tx, auditCtx, {
+      action: "create",
+      entityType: "Distribution",
+      entityId: updated.id,
+      after: {
+        mode: "reinvest",
+        date: date.toISOString(),
+        amountMinor: amountMinor.toString(),
+        investmentAccountId: investmentAccount.id,
+        holdingId: holding.id,
+        instrumentId: instrument.id,
+        instrumentName: instrument.name,
+        unitsAddedScaled: addedUnitsScaled.toString(),
+        // The price the units were bought at, when the caller named one — so a
+        // later correction prefills the EXACT figure the user typed instead of
+        // re-deriving it from amount ÷ units.
+        unitPriceMinor: data.unitPrice ?? null,
+      },
+    })
+
+    // Re-materialize the Σ-holdings anchor (source="holdings" — the only
+    // value-write the PER-259 guard allows on a holdings account).
+    await recomputeAccountValueAnchorWithinTx(
+      tx,
+      familyId,
+      investmentAccount.id,
+      investmentAccount.currency,
+      user,
+      auditCtx
+    )
+
+    const finalHolding = serializeHolding(
+      await loadHoldingWithInstrument(tx, familyId, updated.id)
+    )
+    const investmentAfter = await tx.account.findUniqueOrThrow({
+      where: { id: investmentAccount.id },
+      select: { balance: true },
+    })
+
+    response = {
+      mode: "reinvest",
+      investmentAccountId: investmentAccount.id,
+      holdingId: holding.id,
+      instrumentId: instrument.id,
+      amountMinor: amountMinor.toString(),
+      destinationAccountId: null,
+      incomeTransaction: null,
+      destinationBalanceAfterMinor: null,
+      holding: finalHolding,
+      costBasisDeltaMinor: amountMinor.toString(),
+      investmentValueAfterMinor: investmentAfter.balance.toString(),
+    }
+  }
+
+  return response
+}
+
+// The public endpoint. A THIN wrapper around `recordDistributionWithinTx`:
+// parse + hash + replay-check + persist.
 export async function recordDistributionForFamily({
   data: rawData,
   familyId,
@@ -2558,8 +2951,6 @@ export async function recordDistributionForFamily({
     { user: { id: user.id, familyId } },
     data.idempotencyKey
   )
-  const amountMinor = BigInt(data.amount)
-  const date = data.date ?? new Date()
 
   const runOnce = async () =>
     await runInTenantTransaction(familyId, user.id, async (tx) => {
@@ -2572,256 +2963,12 @@ export async function recordDistributionForFamily({
         })
       if (replay) return replay
 
-      // The investment (holdings) account + the source holding are common to
-      // both modes. Tenant ownership is RLS-scoped and belt-and-braces checked.
-      await validateTenantReferences(tx, familyId, {
-        accountId: data.investmentAccountId,
+      const response = await recordDistributionWithinTx(tx, {
+        data,
+        familyId,
+        user,
+        auditCtx,
       })
-      const investmentAccount = await fetchActiveAccount(
-        tx,
-        familyId,
-        data.investmentAccountId,
-        "Investment"
-      )
-      if (investmentAccount.balanceSource !== "valuation") {
-        throw new HoldingError(
-          `Investment account ${investmentAccount.id} must be a valuation-tracked account (balanceSource="valuation"); it is "${investmentAccount.balanceSource}"`
-        )
-      }
-      const currency = assertKnownCurrency(investmentAccount.currency)
-
-      const holding = await loadHoldingWithInstrument(
-        tx,
-        familyId,
-        data.holdingId
-      )
-      if (holding.accountId !== investmentAccount.id) {
-        throw new HoldingError(
-          `Holding ${data.holdingId} does not belong to account ${data.investmentAccountId}`
-        )
-      }
-      const instrument = holding.instrument
-      const provenance = `${instrument.name}${instrument.symbol ? ` (${instrument.symbol})` : ""}`
-
-      let response: RecordDistributionResult
-
-      if (data.mode === "cash") {
-        // CASH PAYOUT — income on a user-chosen destination cash account; the
-        // source holding is NOT touched (units + position value unchanged).
-        const destinationAccountId = data.destinationAccountId
-        if (!destinationAccountId) {
-          // Unreachable (schema superRefine), keeps types honest.
-          throw new HoldingError("A cash payout requires a destination account")
-        }
-        await validateTenantReferences(tx, familyId, {
-          accountId: destinationAccountId,
-          categoryId: data.categoryId,
-        })
-        const destination = await fetchActiveAccount(
-          tx,
-          familyId,
-          destinationAccountId,
-          "Destination"
-        )
-        if (destination.balanceSource !== "transaction_flow") {
-          throw new HoldingError(
-            `Destination account ${destination.id} must be a cash-like account (balanceSource="transaction_flow"); it is "${destination.balanceSource}"`
-          )
-        }
-        if (destination.currency !== currency) {
-          throw new HoldingError(
-            `Cross-currency distributions are not supported this slice (holding ${currency}, destination ${destination.currency})`
-          )
-        }
-
-        // Reuse the family's "Investment Income" category (or an explicit
-        // income category the caller chose, validated to be income-typed).
-        let categoryId: string
-        if (data.categoryId) {
-          const category = await tx.category.findFirst({
-            where: { id: data.categoryId, familyId },
-            select: { id: true, type: true },
-          })
-          if (!category) {
-            throw new HoldingError(
-              `Category ${data.categoryId} not found for this family`
-            )
-          }
-          if (category.type !== "income") {
-            throw new HoldingError(
-              `Category ${data.categoryId} must be an income category for a cash distribution`
-            )
-          }
-          categoryId = category.id
-        } else {
-          categoryId = await resolveDistributionIncomeCategory(
-            tx,
-            familyId,
-            auditCtx
-          )
-        }
-
-        const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
-        const incomeTransaction = await postIncomeTransactionWithinTx(tx, {
-          account: destination,
-          amount: amountMinor,
-          date,
-          description: `Dividend — ${instrument.name}`,
-          notes: `Distribution from ${provenance} · holding ${holding.id} in ${investmentAccount.name}`,
-          categoryId,
-          familyId,
-          user,
-          auditCtx,
-          baseCurrency,
-          idempotencyKey: data.idempotencyKey,
-          status: "CLEARED",
-        })
-
-        // Explicit provenance audit row — the durable, queryable link from the
-        // income transaction back to the source holding/instrument (no schema
-        // FK migration this slice; description + notes + this row carry it).
-        await auditLog(tx, auditCtx, {
-          action: "create",
-          entityType: "Distribution",
-          entityId: incomeTransaction.id,
-          after: {
-            mode: "cash",
-            amountMinor: amountMinor.toString(),
-            investmentAccountId: investmentAccount.id,
-            holdingId: holding.id,
-            instrumentId: instrument.id,
-            instrumentName: instrument.name,
-            destinationAccountId: destination.id,
-            transactionId: incomeTransaction.id,
-          },
-        })
-
-        const destinationAfter = await tx.account.findUniqueOrThrow({
-          where: { id: destination.id },
-          select: { balance: true },
-        })
-
-        response = {
-          mode: "cash",
-          investmentAccountId: investmentAccount.id,
-          holdingId: holding.id,
-          instrumentId: instrument.id,
-          amountMinor: amountMinor.toString(),
-          destinationAccountId: destination.id,
-          incomeTransaction,
-          destinationBalanceAfterMinor: destinationAfter.balance.toString(),
-          holding: null,
-          costBasisDeltaMinor: null,
-          investmentValueAfterMinor: null,
-        }
-      } else {
-        // REINVEST — units up + cost basis up on the SOURCE holding, no external
-        // cash. Structurally BUY minus the funding cash leg: the reinvested
-        // `amount` is authoritative for cost; the units come from an explicit
-        // `quantity`, else derived from `unitPrice` (round-half-up).
-        let addedUnitsScaled: bigint
-        if (data.quantity) {
-          try {
-            addedUnitsScaled = quantityToScaled(data.quantity)
-          } catch (error) {
-            throw new HoldingError(
-              `quantity is not a valid amount: ${error instanceof Error ? error.message : String(error)}`
-            )
-          }
-        } else {
-          // data.unitPrice is guaranteed present here (schema superRefine).
-          const unitPrice = BigInt(data.unitPrice ?? "0")
-          if (unitPrice <= 0n) {
-            throw new HoldingError(
-              "Reinvest unit price must be greater than zero"
-            )
-          }
-          // units = amount / unitPrice; scaled = amount × SCALE / unitPrice.
-          addedUnitsScaled =
-            (amountMinor * QUANTITY_SCALE + unitPrice / 2n) / unitPrice
-        }
-        if (addedUnitsScaled <= 0n) {
-          throw new HoldingError(
-            "Reinvest results in zero units; increase the amount or lower the unit price"
-          )
-        }
-
-        const oldUnitsScaled = quantityToScaled(holding.quantity.toFixed(8))
-        const oldCost = holdingCostMinor(
-          oldUnitsScaled,
-          holding.avgUnitCostMinor
-        )
-        const newUnitsScaled = oldUnitsScaled + addedUnitsScaled
-        const newAvg = averageUnitCostMinor(
-          oldCost + amountMinor,
-          newUnitsScaled
-        )
-        const updated = await tx.holding.update({
-          where: { id: holding.id },
-          data: {
-            quantity: scaledToQuantityString(newUnitsScaled),
-            avgUnitCostMinor: newAvg,
-            // PER-259 Slice 5 — stamp the "latest" identity marker with THIS
-            // reinvest's own idempotencyKey (see marker doc comment).
-            lastMutationIdempotencyKey: data.idempotencyKey,
-          },
-          include: { instrument: true },
-        })
-        await auditLog(tx, auditCtx, {
-          action: "update",
-          entityType: "Holding",
-          entityId: updated.id,
-          before: serializeHolding(holding),
-          after: serializeHolding(updated),
-        })
-        await auditLog(tx, auditCtx, {
-          action: "create",
-          entityType: "Distribution",
-          entityId: updated.id,
-          after: {
-            mode: "reinvest",
-            amountMinor: amountMinor.toString(),
-            investmentAccountId: investmentAccount.id,
-            holdingId: holding.id,
-            instrumentId: instrument.id,
-            instrumentName: instrument.name,
-            unitsAddedScaled: addedUnitsScaled.toString(),
-          },
-        })
-
-        // Re-materialize the Σ-holdings anchor (source="holdings" — the only
-        // value-write the PER-259 guard allows on a holdings account).
-        await recomputeAccountValueAnchorWithinTx(
-          tx,
-          familyId,
-          investmentAccount.id,
-          investmentAccount.currency,
-          user,
-          auditCtx
-        )
-
-        const finalHolding = serializeHolding(
-          await loadHoldingWithInstrument(tx, familyId, updated.id)
-        )
-        const investmentAfter = await tx.account.findUniqueOrThrow({
-          where: { id: investmentAccount.id },
-          select: { balance: true },
-        })
-
-        response = {
-          mode: "reinvest",
-          investmentAccountId: investmentAccount.id,
-          holdingId: holding.id,
-          instrumentId: instrument.id,
-          amountMinor: amountMinor.toString(),
-          destinationAccountId: null,
-          incomeTransaction: null,
-          destinationBalanceAfterMinor: null,
-          holding: finalHolding,
-          costBasisDeltaMinor: amountMinor.toString(),
-          investmentValueAfterMinor: investmentAfter.balance.toString(),
-        }
-      }
 
       await persistIdempotentEndpointResponse(tx, {
         endpoint: RECORD_DISTRIBUTION_ENDPOINT,
@@ -3287,16 +3434,293 @@ export interface RecordSwitchResult {
   investmentValueAfterMinor: string
 }
 
-// units = amount / unitPrice, scaled, round-half-up — the SAME fold the reinvest
-// and amount→quantity paths use (amount × SCALE / unitPrice). Both operands are
-// positive here (schema + guards), so the +unitPrice/2 numerator is exact half-up.
-function unitsFromAmountScaled(
-  amountMinor: bigint,
-  unitPriceMinor: bigint
-): bigint {
-  return (amountMinor * QUANTITY_SCALE + unitPriceMinor / 2n) / unitPriceMinor
+// PER-259 Slice 5 (Switch/Dividend correction) — the within-transaction CORE
+// of a switch, extracted verbatim (zero behavior change) from
+// `recordSwitchForFamily` so the holdings-event CORRECTION path can reapply a
+// corrected switch through the SAME two-sided average-cost math. Mirrors
+// `recordTradeWithinTx`: no replay-check, no IdempotencyRecord — the caller
+// owns those.
+async function recordSwitchWithinTx(
+  tx: TenantTransactionClient,
+  {
+    data,
+    familyId,
+    user,
+    auditCtx,
+  }: {
+    data: RecordSwitchInput
+    familyId: string
+    user: ServerActor
+    auditCtx: AuditContext
+  }
+): Promise<RecordSwitchResult> {
+  const date = data.date ?? new Date()
+  const fromUnitPrice = BigInt(data.fromUnitPrice)
+  const toUnitPrice = BigInt(data.toUnitPrice)
+
+  // Tenant ownership + eligibility of the holdings account (RLS-scoped,
+  // belt-and-braces). A switch never touches a cash/funding account.
+  await validateTenantReferences(tx, familyId, {
+    accountId: data.investmentAccountId,
+  })
+  const investmentAccount = await fetchActiveAccount(
+    tx,
+    familyId,
+    data.investmentAccountId,
+    "Investment"
+  )
+  if (investmentAccount.balanceSource !== "valuation") {
+    throw new HoldingError(
+      `Investment account ${investmentAccount.id} must be a valuation-tracked account (balanceSource="valuation"); it is "${investmentAccount.balanceSource}"`
+    )
+  }
+  assertKnownCurrency(investmentAccount.currency)
+
+  // Fund A — the source holding, must belong to this account.
+  const fromHolding = await loadHoldingWithInstrument(
+    tx,
+    familyId,
+    data.fromHoldingId
+  )
+  if (fromHolding.accountId !== investmentAccount.id) {
+    throw new HoldingError(
+      `Holding ${data.fromHoldingId} does not belong to account ${data.investmentAccountId}`
+    )
+  }
+
+  // Fund B — resolve/create the destination instrument (same-currency,
+  // market-priced; reuses the shared resolver the Buy path uses). Must be a
+  // DIFFERENT instrument than A: a switch is A→B, not a same-position edit.
+  const toInstrument = await resolveInstrument(
+    tx,
+    familyId,
+    investmentAccount.currency,
+    { instrumentId: data.toInstrumentId, instrument: data.toInstrument },
+    auditCtx
+  )
+  if (toInstrument.id === fromHolding.instrumentId) {
+    throw new HoldingError(
+      "A switch moves into a DIFFERENT fund (A and B cannot be the same instrument); use Buy/Sell to change a single position"
+    )
+  }
+
+  // Derive the switched A units + proceeds. Proceeds are authoritative for
+  // the internal value moved and for B's cost basis (no external cash).
+  let fromUnitsScaled: bigint
+  let proceedsMinor: bigint
+  if (data.quantity !== undefined) {
+    try {
+      fromUnitsScaled = quantityToScaled(data.quantity)
+    } catch (error) {
+      throw new HoldingError(
+        `quantity is not a valid amount: ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
+    proceedsMinor = holdingValueMinor(fromUnitsScaled, fromUnitPrice)
+  } else {
+    // amount given (schema guarantees exactly one of quantity/amount).
+    proceedsMinor = BigInt(data.amount ?? "0")
+    fromUnitsScaled = unitsFromAmountScaled(proceedsMinor, fromUnitPrice)
+  }
+  if (fromUnitsScaled <= 0n) {
+    throw new HoldingError("Switch quantity must be greater than zero")
+  }
+  if (proceedsMinor <= 0n) {
+    throw new HoldingError("Switch proceeds must be greater than zero")
+  }
+
+  const oldFromUnitsScaled = quantityToScaled(fromHolding.quantity.toFixed(8))
+  if (fromUnitsScaled > oldFromUnitsScaled) {
+    throw new HoldingError(
+      `Cannot switch ${scaledToQuantityString(fromUnitsScaled)} units; only ${fromHolding.quantity.toFixed(8)} held`
+    )
+  }
+
+  // ---- SELL side (A): average-cost method, realized gain vs average cost ----
+  const costRemoved = holdingCostMinor(
+    fromUnitsScaled,
+    fromHolding.avgUnitCostMinor
+  )
+  const realizedGainMinor = proceedsMinor - costRemoved
+  const remainingFromUnitsScaled = oldFromUnitsScaled - fromUnitsScaled
+
+  let fromHoldingId: string | null
+  if (remainingFromUnitsScaled === 0n) {
+    // Switched everything out of A — close (delete) the position, mirroring
+    // a sell-to-zero.
+    await tx.holding.delete({ where: { id: fromHolding.id } })
+    await auditLog(tx, auditCtx, {
+      action: "delete",
+      entityType: "Holding",
+      entityId: fromHolding.id,
+      before: serializeHolding(fromHolding),
+      after: null,
+    })
+    fromHoldingId = null
+  } else {
+    const updatedFrom = await tx.holding.update({
+      where: { id: fromHolding.id },
+      data: {
+        quantity: scaledToQuantityString(remainingFromUnitsScaled),
+        // PER-259 Slice 5 — stamp the "latest" identity marker (sell side).
+        lastMutationIdempotencyKey: data.idempotencyKey,
+      },
+      include: { instrument: true },
+    })
+    await auditLog(tx, auditCtx, {
+      action: "update",
+      entityType: "Holding",
+      entityId: updatedFrom.id,
+      before: serializeHolding(fromHolding),
+      after: serializeHolding(updatedFrom),
+    })
+    fromHoldingId = updatedFrom.id
+  }
+
+  // ---- BUY side (B): the proceeds buy B units, cost basis += proceeds ----
+  const addedToUnitsScaled = unitsFromAmountScaled(proceedsMinor, toUnitPrice)
+  if (addedToUnitsScaled <= 0n) {
+    throw new HoldingError(
+      "Switch buys zero units of the destination fund; raise the amount or lower the destination unit price"
+    )
+  }
+
+  const existingTo = await tx.holding.findFirst({
+    where: {
+      familyId,
+      accountId: investmentAccount.id,
+      instrumentId: toInstrument.id,
+    },
+    include: { instrument: true },
+  })
+
+  let toHoldingId: string
+  if (existingTo) {
+    const oldToUnitsScaled = quantityToScaled(existingTo.quantity.toFixed(8))
+    const oldToCost = holdingCostMinor(
+      oldToUnitsScaled,
+      existingTo.avgUnitCostMinor
+    )
+    const newToUnitsScaled = oldToUnitsScaled + addedToUnitsScaled
+    const newToAvg = averageUnitCostMinor(
+      oldToCost + proceedsMinor,
+      newToUnitsScaled
+    )
+    const updatedTo = await tx.holding.update({
+      where: { id: existingTo.id },
+      data: {
+        quantity: scaledToQuantityString(newToUnitsScaled),
+        avgUnitCostMinor: newToAvg,
+        // PER-259 Slice 5 — stamp the "latest" identity marker (buy side).
+        lastMutationIdempotencyKey: data.idempotencyKey,
+      },
+      include: { instrument: true },
+    })
+    await auditLog(tx, auditCtx, {
+      action: "update",
+      entityType: "Holding",
+      entityId: updatedTo.id,
+      before: serializeHolding(existingTo),
+      after: serializeHolding(updatedTo),
+    })
+    toHoldingId = updatedTo.id
+  } else {
+    const newToAvg = averageUnitCostMinor(proceedsMinor, addedToUnitsScaled)
+    const createdTo = await tx.holding.create({
+      data: {
+        familyId,
+        accountId: investmentAccount.id,
+        instrumentId: toInstrument.id,
+        quantity: scaledToQuantityString(addedToUnitsScaled),
+        avgUnitCostMinor: newToAvg,
+        lastPriceMinor: null,
+        // PER-259 Slice 5 — this switch is the FIRST mutation ever on the
+        // destination position; stamp it immediately.
+        lastMutationIdempotencyKey: data.idempotencyKey,
+      },
+      include: { instrument: true },
+    })
+    await auditLog(tx, auditCtx, {
+      action: "create",
+      entityType: "Holding",
+      entityId: createdTo.id,
+      after: serializeHolding(createdTo),
+    })
+    toHoldingId = createdTo.id
+  }
+
+  // Provenance audit row — the durable, queryable record of the switch
+  // linking both sides + proceeds + realized gain (mirrors Slice 2/3's
+  // Distribution/Fee provenance rows). Anchored on the source holding id.
+  await auditLog(tx, auditCtx, {
+    action: "create",
+    entityType: "Switch",
+    entityId: fromHolding.id,
+    after: {
+      date: date.toISOString(),
+      investmentAccountId: investmentAccount.id,
+      fromHoldingId: fromHolding.id,
+      fromInstrumentId: fromHolding.instrumentId,
+      fromInstrumentName: fromHolding.instrument.name,
+      fromUnitsScaled: fromUnitsScaled.toString(),
+      fromUnitPriceMinor: fromUnitPrice.toString(),
+      toHoldingId,
+      toInstrumentId: toInstrument.id,
+      toInstrumentName: toInstrument.name,
+      toUnitsScaled: addedToUnitsScaled.toString(),
+      toUnitPriceMinor: toUnitPrice.toString(),
+      proceedsMinor: proceedsMinor.toString(),
+      costRemovedMinor: costRemoved.toString(),
+      realizedGainMinor: realizedGainMinor.toString(),
+    },
+  })
+
+  // Re-materialize the Σ-holdings anchor ONCE (source="holdings" — the only
+  // value-write the PER-259 guard allows on a holdings account).
+  await recomputeAccountValueAnchorWithinTx(
+    tx,
+    familyId,
+    investmentAccount.id,
+    investmentAccount.currency,
+    user,
+    auditCtx
+  )
+
+  const finalFrom =
+    fromHoldingId === null
+      ? null
+      : serializeHolding(
+          await loadHoldingWithInstrument(tx, familyId, fromHoldingId)
+        )
+  const finalTo = serializeHolding(
+    await loadHoldingWithInstrument(tx, familyId, toHoldingId)
+  )
+  const investmentAfter = await tx.account.findUniqueOrThrow({
+    where: { id: investmentAccount.id },
+    select: { balance: true },
+  })
+
+  const response: RecordSwitchResult = {
+    investmentAccountId: investmentAccount.id,
+    fromHoldingId: fromHolding.id,
+    fromInstrumentId: fromHolding.instrumentId,
+    fromHolding: finalFrom,
+    fromQuantity: scaledToQuantityString(fromUnitsScaled),
+    proceedsMinor: proceedsMinor.toString(),
+    realizedGainMinor: realizedGainMinor.toString(),
+    fromCostRemovedMinor: costRemoved.toString(),
+    toHoldingId,
+    toInstrumentId: toInstrument.id,
+    toHolding: finalTo,
+    toQuantity: scaledToQuantityString(addedToUnitsScaled),
+    toCostAddedMinor: proceedsMinor.toString(),
+    investmentValueAfterMinor: investmentAfter.balance.toString(),
+  }
+  return response
 }
 
+// The public endpoint. A THIN wrapper around `recordSwitchWithinTx`: parse +
+// hash + replay-check + persist.
 export async function recordSwitchForFamily({
   data: rawData,
   familyId,
@@ -3325,9 +3749,6 @@ export async function recordSwitchForFamily({
     { user: { id: user.id, familyId } },
     data.idempotencyKey
   )
-  const date = data.date ?? new Date()
-  const fromUnitPrice = BigInt(data.fromUnitPrice)
-  const toUnitPrice = BigInt(data.toUnitPrice)
 
   const runOnce = async () =>
     await runInTenantTransaction(familyId, user.id, async (tx) => {
@@ -3342,271 +3763,13 @@ export async function recordSwitchForFamily({
       )
       if (replay) return replay
 
-      // Tenant ownership + eligibility of the holdings account (RLS-scoped,
-      // belt-and-braces). A switch never touches a cash/funding account.
-      await validateTenantReferences(tx, familyId, {
-        accountId: data.investmentAccountId,
-      })
-      const investmentAccount = await fetchActiveAccount(
-        tx,
+      const response = await recordSwitchWithinTx(tx, {
+        data,
         familyId,
-        data.investmentAccountId,
-        "Investment"
-      )
-      if (investmentAccount.balanceSource !== "valuation") {
-        throw new HoldingError(
-          `Investment account ${investmentAccount.id} must be a valuation-tracked account (balanceSource="valuation"); it is "${investmentAccount.balanceSource}"`
-        )
-      }
-      assertKnownCurrency(investmentAccount.currency)
-
-      // Fund A — the source holding, must belong to this account.
-      const fromHolding = await loadHoldingWithInstrument(
-        tx,
-        familyId,
-        data.fromHoldingId
-      )
-      if (fromHolding.accountId !== investmentAccount.id) {
-        throw new HoldingError(
-          `Holding ${data.fromHoldingId} does not belong to account ${data.investmentAccountId}`
-        )
-      }
-
-      // Fund B — resolve/create the destination instrument (same-currency,
-      // market-priced; reuses the shared resolver the Buy path uses). Must be a
-      // DIFFERENT instrument than A: a switch is A→B, not a same-position edit.
-      const toInstrument = await resolveInstrument(
-        tx,
-        familyId,
-        investmentAccount.currency,
-        { instrumentId: data.toInstrumentId, instrument: data.toInstrument },
-        auditCtx
-      )
-      if (toInstrument.id === fromHolding.instrumentId) {
-        throw new HoldingError(
-          "A switch moves into a DIFFERENT fund (A and B cannot be the same instrument); use Buy/Sell to change a single position"
-        )
-      }
-
-      // Derive the switched A units + proceeds. Proceeds are authoritative for
-      // the internal value moved and for B's cost basis (no external cash).
-      let fromUnitsScaled: bigint
-      let proceedsMinor: bigint
-      if (data.quantity !== undefined) {
-        try {
-          fromUnitsScaled = quantityToScaled(data.quantity)
-        } catch (error) {
-          throw new HoldingError(
-            `quantity is not a valid amount: ${error instanceof Error ? error.message : String(error)}`
-          )
-        }
-        proceedsMinor = holdingValueMinor(fromUnitsScaled, fromUnitPrice)
-      } else {
-        // amount given (schema guarantees exactly one of quantity/amount).
-        proceedsMinor = BigInt(data.amount ?? "0")
-        fromUnitsScaled = unitsFromAmountScaled(proceedsMinor, fromUnitPrice)
-      }
-      if (fromUnitsScaled <= 0n) {
-        throw new HoldingError("Switch quantity must be greater than zero")
-      }
-      if (proceedsMinor <= 0n) {
-        throw new HoldingError("Switch proceeds must be greater than zero")
-      }
-
-      const oldFromUnitsScaled = quantityToScaled(
-        fromHolding.quantity.toFixed(8)
-      )
-      if (fromUnitsScaled > oldFromUnitsScaled) {
-        throw new HoldingError(
-          `Cannot switch ${scaledToQuantityString(fromUnitsScaled)} units; only ${fromHolding.quantity.toFixed(8)} held`
-        )
-      }
-
-      // ---- SELL side (A): average-cost method, realized gain vs average cost ----
-      const costRemoved = holdingCostMinor(
-        fromUnitsScaled,
-        fromHolding.avgUnitCostMinor
-      )
-      const realizedGainMinor = proceedsMinor - costRemoved
-      const remainingFromUnitsScaled = oldFromUnitsScaled - fromUnitsScaled
-
-      let fromHoldingId: string | null
-      if (remainingFromUnitsScaled === 0n) {
-        // Switched everything out of A — close (delete) the position, mirroring
-        // a sell-to-zero.
-        await tx.holding.delete({ where: { id: fromHolding.id } })
-        await auditLog(tx, auditCtx, {
-          action: "delete",
-          entityType: "Holding",
-          entityId: fromHolding.id,
-          before: serializeHolding(fromHolding),
-          after: null,
-        })
-        fromHoldingId = null
-      } else {
-        const updatedFrom = await tx.holding.update({
-          where: { id: fromHolding.id },
-          data: {
-            quantity: scaledToQuantityString(remainingFromUnitsScaled),
-            // PER-259 Slice 5 — stamp the "latest" identity marker (sell side).
-            lastMutationIdempotencyKey: data.idempotencyKey,
-          },
-          include: { instrument: true },
-        })
-        await auditLog(tx, auditCtx, {
-          action: "update",
-          entityType: "Holding",
-          entityId: updatedFrom.id,
-          before: serializeHolding(fromHolding),
-          after: serializeHolding(updatedFrom),
-        })
-        fromHoldingId = updatedFrom.id
-      }
-
-      // ---- BUY side (B): the proceeds buy B units, cost basis += proceeds ----
-      const addedToUnitsScaled = unitsFromAmountScaled(
-        proceedsMinor,
-        toUnitPrice
-      )
-      if (addedToUnitsScaled <= 0n) {
-        throw new HoldingError(
-          "Switch buys zero units of the destination fund; raise the amount or lower the destination unit price"
-        )
-      }
-
-      const existingTo = await tx.holding.findFirst({
-        where: {
-          familyId,
-          accountId: investmentAccount.id,
-          instrumentId: toInstrument.id,
-        },
-        include: { instrument: true },
-      })
-
-      let toHoldingId: string
-      if (existingTo) {
-        const oldToUnitsScaled = quantityToScaled(
-          existingTo.quantity.toFixed(8)
-        )
-        const oldToCost = holdingCostMinor(
-          oldToUnitsScaled,
-          existingTo.avgUnitCostMinor
-        )
-        const newToUnitsScaled = oldToUnitsScaled + addedToUnitsScaled
-        const newToAvg = averageUnitCostMinor(
-          oldToCost + proceedsMinor,
-          newToUnitsScaled
-        )
-        const updatedTo = await tx.holding.update({
-          where: { id: existingTo.id },
-          data: {
-            quantity: scaledToQuantityString(newToUnitsScaled),
-            avgUnitCostMinor: newToAvg,
-            // PER-259 Slice 5 — stamp the "latest" identity marker (buy side).
-            lastMutationIdempotencyKey: data.idempotencyKey,
-          },
-          include: { instrument: true },
-        })
-        await auditLog(tx, auditCtx, {
-          action: "update",
-          entityType: "Holding",
-          entityId: updatedTo.id,
-          before: serializeHolding(existingTo),
-          after: serializeHolding(updatedTo),
-        })
-        toHoldingId = updatedTo.id
-      } else {
-        const newToAvg = averageUnitCostMinor(proceedsMinor, addedToUnitsScaled)
-        const createdTo = await tx.holding.create({
-          data: {
-            familyId,
-            accountId: investmentAccount.id,
-            instrumentId: toInstrument.id,
-            quantity: scaledToQuantityString(addedToUnitsScaled),
-            avgUnitCostMinor: newToAvg,
-            lastPriceMinor: null,
-            // PER-259 Slice 5 — this switch is the FIRST mutation ever on the
-            // destination position; stamp it immediately.
-            lastMutationIdempotencyKey: data.idempotencyKey,
-          },
-          include: { instrument: true },
-        })
-        await auditLog(tx, auditCtx, {
-          action: "create",
-          entityType: "Holding",
-          entityId: createdTo.id,
-          after: serializeHolding(createdTo),
-        })
-        toHoldingId = createdTo.id
-      }
-
-      // Provenance audit row — the durable, queryable record of the switch
-      // linking both sides + proceeds + realized gain (mirrors Slice 2/3's
-      // Distribution/Fee provenance rows). Anchored on the source holding id.
-      await auditLog(tx, auditCtx, {
-        action: "create",
-        entityType: "Switch",
-        entityId: fromHolding.id,
-        after: {
-          date: date.toISOString(),
-          investmentAccountId: investmentAccount.id,
-          fromHoldingId: fromHolding.id,
-          fromInstrumentId: fromHolding.instrumentId,
-          fromInstrumentName: fromHolding.instrument.name,
-          fromUnitsScaled: fromUnitsScaled.toString(),
-          fromUnitPriceMinor: fromUnitPrice.toString(),
-          toHoldingId,
-          toInstrumentId: toInstrument.id,
-          toInstrumentName: toInstrument.name,
-          toUnitsScaled: addedToUnitsScaled.toString(),
-          toUnitPriceMinor: toUnitPrice.toString(),
-          proceedsMinor: proceedsMinor.toString(),
-          costRemovedMinor: costRemoved.toString(),
-          realizedGainMinor: realizedGainMinor.toString(),
-        },
-      })
-
-      // Re-materialize the Σ-holdings anchor ONCE (source="holdings" — the only
-      // value-write the PER-259 guard allows on a holdings account).
-      await recomputeAccountValueAnchorWithinTx(
-        tx,
-        familyId,
-        investmentAccount.id,
-        investmentAccount.currency,
         user,
-        auditCtx
-      )
-
-      const finalFrom =
-        fromHoldingId === null
-          ? null
-          : serializeHolding(
-              await loadHoldingWithInstrument(tx, familyId, fromHoldingId)
-            )
-      const finalTo = serializeHolding(
-        await loadHoldingWithInstrument(tx, familyId, toHoldingId)
-      )
-      const investmentAfter = await tx.account.findUniqueOrThrow({
-        where: { id: investmentAccount.id },
-        select: { balance: true },
+        auditCtx,
       })
 
-      const response: RecordSwitchResult = {
-        investmentAccountId: investmentAccount.id,
-        fromHoldingId: fromHolding.id,
-        fromInstrumentId: fromHolding.instrumentId,
-        fromHolding: finalFrom,
-        fromQuantity: scaledToQuantityString(fromUnitsScaled),
-        proceedsMinor: proceedsMinor.toString(),
-        realizedGainMinor: realizedGainMinor.toString(),
-        fromCostRemovedMinor: costRemoved.toString(),
-        toHoldingId,
-        toInstrumentId: toInstrument.id,
-        toHolding: finalTo,
-        toQuantity: scaledToQuantityString(addedToUnitsScaled),
-        toCostAddedMinor: proceedsMinor.toString(),
-        investmentValueAfterMinor: investmentAfter.balance.toString(),
-      }
       await persistIdempotentEndpointResponse(tx, {
         endpoint: RECORD_SWITCH_ENDPOINT,
         familyId,
@@ -3644,6 +3807,954 @@ export const recordSwitchFn = createServerFn({ method: "POST" })
       data,
       familyId: context.familyId,
       user: context.user,
+    })
+  })
+
+// =============================================================================
+// EDIT / DELETE / CORRECT A POSITION EVENT — Switch + Dividend reinvest
+// (PER-259 Slice 5, second half / ADR-0054)
+// =============================================================================
+//
+// Slice 5 made a mis-entered Buy/Sell correctable. A Switch and a Dividend
+// REINVEST were left stranded: unlike a trade they create NO `Transaction`, so
+// there is no ledger row for the correction UI to hang off — a mistyped switch
+// was permanently stuck. This section closes that hole with the SAME discipline.
+//
+// WHAT A "POSITION EVENT" IS. Every holdings-only mutation already writes, in
+// ONE transaction, under ONE idempotencyKey:
+//   • one `Holding` AuditLog row PER position it moved, carrying the exact
+//     before/after snapshots (a Switch moves TWO: sell-A + buy-B; a reinvest
+//     moves ONE), and
+//   • exactly one provenance row (`Switch` / `Distribution`) describing the
+//     event, and
+//   • one re-materialized Σ-holdings valuation anchor.
+// That trio IS the event. Its handle is the provenance AuditLog row id — an
+// append-only, immutable identity; the marker comparison uses that row's
+// `idempotencyKey`. No schema change was needed: the audit trail already had
+// everything a reversal requires.
+//
+// GUARD — the same rule as a trade, applied to EVERY leg. An event is
+// correctable only while it is still the LATEST quantity-mutating event on
+// EACH position it touched. `assertPositionIsLatestForEvent` is shared verbatim
+// with the Buy/Sell guard (one implementation, no drift): for a Switch it runs
+// once per leg and refuses if EITHER the sold-out-of position OR the bought-into
+// position has moved since — a later Buy of B alone is enough to refuse the
+// whole switch, because reversing it would silently unwind units that later
+// activity depends on.
+//
+// DELETE = reversal only, and it is FULLY UNIFORM across both kinds: restore
+// every leg from its captured snapshot (never a recomputed inverse), then
+// re-materialize the Σ-holdings anchor ONCE. There is no cash leg to unwind —
+// a Switch is fund→fund and a reinvest creates units from the distribution
+// itself — so, unlike a trade delete, nothing routes through
+// `softDeleteValuationLinkedTransferWithinTx`. Net worth is conserved because
+// the account's value is Σ(units × price) and every unit is restored exactly.
+//
+// EDIT = reversal + reapply in ONE atomic transaction, reusing
+// `recordSwitchWithinTx` / `recordDistributionWithinTx` — the SAME cores the
+// create endpoints use, so the corrected event's average-cost blend, realized
+// gain, marker stamps and anchor are computed by one implementation. The
+// corrected event gets a NEW key and therefore a NEW event id; the old one is
+// closed out (below) and disappears from the activity list.
+//
+// "ALREADY CORRECTED" is explicit, never inferred. Reversing an event writes an
+// append-only `HoldingEventCorrection` row keyed to the original event id;
+// resolving refuses when one exists. Without it a second delete would be caught
+// only indirectly (by the marker no longer matching) and would report a
+// confusing "activity after it" instead of "already reversed".
+//
+// OUT OF SCOPE — deliberately, because they need nothing here: a Dividend CASH
+// payout and a standalone Fee both post an ordinary income/expense
+// `Transaction` on a cash account and do NOT mutate any Holding, so both are
+// already editable and deletable through the normal transaction path on that
+// account. Resolving a cash distribution here fails loud, pointing there.
+
+const DELETE_HOLDING_EVENT_ENDPOINT = "deleteHoldingEventFn"
+const CORRECT_HOLDING_EVENT_ENDPOINT = "correctHoldingEventFn"
+
+/** The provenance `entityType`s a position event can be recorded under. */
+const HOLDING_EVENT_ENTITY_TYPES = ["Switch", "Distribution"] as const
+
+export type HoldingEventKind = "switch" | "dividend_reinvest"
+
+// The provenance payloads `recordSwitchWithinTx` / `recordDistributionWithinTx`
+// write. Validated on read (never trusted blindly); `.passthrough()` so adding
+// a field later never breaks correcting an older event, and the fields added
+// after the first events shipped are `.optional()`.
+const switchProvenanceSchema = z
+  .object({
+    investmentAccountId: z.string(),
+    fromHoldingId: z.string(),
+    fromInstrumentId: z.string(),
+    fromInstrumentName: z.string(),
+    fromUnitsScaled: z.string(),
+    fromUnitPriceMinor: z.string(),
+    toHoldingId: z.string(),
+    toInstrumentId: z.string(),
+    toInstrumentName: z.string(),
+    toUnitsScaled: z.string(),
+    toUnitPriceMinor: z.string(),
+    proceedsMinor: z.string(),
+    realizedGainMinor: z.string(),
+    date: z.string().optional(),
+  })
+  .passthrough()
+
+const distributionProvenanceSchema = z
+  .object({
+    mode: z.enum(["cash", "reinvest"]),
+    investmentAccountId: z.string(),
+    holdingId: z.string(),
+    instrumentId: z.string(),
+    instrumentName: z.string(),
+    amountMinor: z.string(),
+    unitsAddedScaled: z.string().optional(),
+    unitPriceMinor: z.string().nullable().optional(),
+    date: z.string().optional(),
+  })
+  .passthrough()
+
+type SwitchProvenance = z.infer<typeof switchProvenanceSchema>
+type DistributionProvenance = z.infer<typeof distributionProvenanceSchema>
+
+interface ResolvedHoldingEventBase {
+  /** AuditLog row id of the provenance row — the event's stable handle. */
+  eventId: string
+  /** That row's idempotencyKey — what every leg's marker must still equal. */
+  eventKey: string
+  recordedAt: Date
+  eventDate: Date
+  investmentAccount: Awaited<ReturnType<typeof fetchActiveAccount>>
+  /** One entry per position the event moved. Switch: [sell-A, buy-B]. */
+  legs: HoldingEventLeg[]
+}
+
+type ResolvedHoldingEvent = ResolvedHoldingEventBase &
+  (
+    | {
+        kind: "switch"
+        payload: SwitchProvenance
+        fromLeg: HoldingEventLeg
+        toLeg: HoldingEventLeg
+      }
+    | { kind: "dividend_reinvest"; payload: DistributionProvenance }
+  )
+
+function parseEventDate(iso: string | undefined, fallback: Date): Date {
+  if (!iso) return fallback
+  const parsed = new Date(iso)
+  return Number.isNaN(parsed.getTime()) ? fallback : parsed
+}
+
+// Resolve a position event from the ONE thing the UI has: the provenance
+// AuditLog row id. Fails loud (typed HoldingError) for anything that is not a
+// still-open, still-reversible Switch / Dividend reinvest — never guesses.
+async function resolveHoldingEventForCorrection(
+  tx: TenantTransactionClient,
+  familyId: string,
+  eventId: string
+): Promise<ResolvedHoldingEvent> {
+  const row = await tx.auditLog.findFirst({ where: { id: eventId, familyId } })
+  if (!row) {
+    throw new HoldingError(
+      `Position activity ${eventId} not found for this family`
+    )
+  }
+  if (
+    !(HOLDING_EVENT_ENTITY_TYPES as readonly string[]).includes(row.entityType)
+  ) {
+    throw new HoldingError("This entry is not a Switch or a Dividend reinvest")
+  }
+  const eventKey = row.idempotencyKey
+  if (!eventKey) {
+    throw new HoldingError(
+      "This entry has no recorded idempotency key and cannot be corrected"
+    )
+  }
+
+  // Already reversed (deleted, or superseded by an edit)? Append-only, so the
+  // provenance row itself never disappears — the closing row is the signal.
+  const closed = await tx.auditLog.findFirst({
+    where: {
+      familyId,
+      entityType: "HoldingEventCorrection",
+      entityId: eventId,
+    },
+    select: { id: true },
+  })
+  if (closed) {
+    throw new HoldingError(
+      "This entry has already been edited or deleted; open the current one instead."
+    )
+  }
+
+  let switchPayload: SwitchProvenance | null = null
+  let distributionPayload: DistributionProvenance | null = null
+  let investmentAccountId: string
+  let eventDate: Date
+
+  if (row.entityType === "Switch") {
+    switchPayload = switchProvenanceSchema.parse(row.afterJson)
+    investmentAccountId = switchPayload.investmentAccountId
+    eventDate = parseEventDate(switchPayload.date, row.createdAt)
+  } else {
+    distributionPayload = distributionProvenanceSchema.parse(row.afterJson)
+    if (distributionPayload.mode !== "reinvest") {
+      throw new HoldingError(
+        "A cash dividend is a normal income transaction — edit or delete it on the account it was deposited into."
+      )
+    }
+    investmentAccountId = distributionPayload.investmentAccountId
+    eventDate = parseEventDate(distributionPayload.date, row.createdAt)
+  }
+
+  const investmentAccount = await fetchActiveAccount(
+    tx,
+    familyId,
+    investmentAccountId,
+    "Investment"
+  )
+  if (investmentAccount.balanceSource !== "valuation") {
+    // Defensive — a position event can only ever target such an account.
+    throw new HoldingError(
+      `Investment account ${investmentAccount.id} is not valuation-tracked`
+    )
+  }
+
+  // Every position the event moved, with the snapshots captured in the same
+  // transaction. Ordered deterministically from the provenance payload so a
+  // Switch's sell-A / buy-B legs are never confused with each other.
+  const holdingRows = await tx.auditLog.findMany({
+    where: { familyId, entityType: "Holding", idempotencyKey: eventKey },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  })
+  const legsById = new Map(
+    holdingRows.map((holdingRow) => [
+      holdingRow.entityId,
+      toHoldingEventLeg(holdingRow),
+    ])
+  )
+
+  if (switchPayload) {
+    const fromLeg = legsById.get(switchPayload.fromHoldingId)
+    const toLeg = legsById.get(switchPayload.toHoldingId)
+    if (!fromLeg || !toLeg || legsById.size !== 2) {
+      throw new HoldingError(
+        `Could not uniquely resolve both position changes for this switch (found ${legsById.size} matching audit rows); it cannot be corrected automatically.`
+      )
+    }
+    return {
+      eventId: row.id,
+      eventKey,
+      recordedAt: row.createdAt,
+      eventDate,
+      investmentAccount,
+      // Reversal order is the reverse of application: undo the buy side first.
+      legs: [toLeg, fromLeg],
+      kind: "switch",
+      payload: switchPayload,
+      fromLeg,
+      toLeg,
+    }
+  }
+
+  const payload = distributionPayload!
+  const leg = legsById.get(payload.holdingId)
+  if (!leg || legsById.size !== 1) {
+    throw new HoldingError(
+      `Could not uniquely resolve the position change for this dividend (found ${legsById.size} matching audit rows); it cannot be corrected automatically.`
+    )
+  }
+  return {
+    eventId: row.id,
+    eventKey,
+    recordedAt: row.createdAt,
+    eventDate,
+    investmentAccount,
+    legs: [leg],
+    kind: "dividend_reinvest",
+    payload,
+  }
+}
+
+// The multi-leg guard. Refuses when ANY position the event touched has moved
+// since — for a Switch that means a later Buy/Sell/Switch/reinvest on EITHER
+// fund A or fund B blocks the whole correction. Runs the SAME per-leg
+// implementation the Buy/Sell guard uses; only the copy names the fund.
+async function assertHoldingEventIsLatest(
+  tx: TenantTransactionClient,
+  familyId: string,
+  event: ResolvedHoldingEvent
+): Promise<void> {
+  const subject = event.kind === "switch" ? "switch" : "dividend reinvest"
+  const remedy = `record a correcting entry instead of editing this ${subject}`
+  for (const leg of event.legs) {
+    const position = holdingEventLegLabel(event, leg)
+    await assertPositionIsLatestForEvent(tx, familyId, {
+      leg,
+      eventKey: event.eventKey,
+      messages: {
+        touched: `This ${subject} has activity after it (a later Buy/Sell, Switch, or Dividend reinvest touched ${position}) — ${remedy}.`,
+        reopened: `This ${subject} has activity after it (${position} was reopened since) — ${remedy}.`,
+        removed: `This ${subject} has activity after it (${position} was changed or closed since) — ${remedy}.`,
+      },
+    })
+  }
+}
+
+function holdingEventLegLabel(
+  event: ResolvedHoldingEvent,
+  leg: HoldingEventLeg
+): string {
+  if (event.kind === "switch") {
+    if (leg.holdingId === event.payload.fromHoldingId) {
+      return event.payload.fromInstrumentName
+    }
+    if (leg.holdingId === event.payload.toHoldingId) {
+      return event.payload.toInstrumentName
+    }
+    return "this position"
+  }
+  return event.payload.instrumentName
+}
+
+// Restore EVERY leg from its captured snapshot, then re-materialize the
+// Σ-holdings anchor ONCE for the account (a Switch moved two positions inside
+// the same account — recomputing per leg would write two anchors for one
+// logical change). Never recomputes an inverse via math.
+async function reverseHoldingEventWithinTx(
+  tx: TenantTransactionClient,
+  {
+    familyId,
+    event,
+    user,
+    auditCtx,
+  }: {
+    familyId: string
+    event: ResolvedHoldingEvent
+    user: ServerActor
+    auditCtx: AuditContext
+  }
+): Promise<void> {
+  for (const leg of event.legs) {
+    await restoreHoldingFromSnapshotWithinTx(tx, {
+      familyId,
+      holdingId: leg.holdingId,
+      holdingBefore: leg.before,
+      auditCtx,
+    })
+  }
+  await recomputeAccountValueAnchorWithinTx(
+    tx,
+    familyId,
+    event.investmentAccount.id,
+    event.investmentAccount.currency,
+    user,
+    auditCtx
+  )
+}
+
+// The append-only "this event is closed" marker + full before/after provenance
+// of the correction itself (CLAUDE.md §5A: every mutation is audited in the
+// same transaction, with snapshots and the idempotency key).
+async function auditHoldingEventCorrection(
+  tx: TenantTransactionClient,
+  auditCtx: AuditContext,
+  {
+    event,
+    after,
+  }: { event: ResolvedHoldingEvent; after: Record<string, unknown> | null }
+): Promise<void> {
+  await auditLog(tx, auditCtx, {
+    action: after === null ? "delete" : "update",
+    entityType: "HoldingEventCorrection",
+    entityId: event.eventId,
+    before: {
+      eventId: event.eventId,
+      eventKey: event.eventKey,
+      kind: event.kind,
+      investmentAccountId: event.investmentAccount.id,
+      provenance: event.payload,
+      legs: event.legs.map((leg) => ({
+        holdingId: leg.holdingId,
+        before: leg.before,
+        after: leg.after,
+      })),
+    },
+    after,
+  })
+}
+
+// -----------------------------------------------------------------------------
+// DELETE — reversal only, uniform across Switch and Dividend reinvest.
+// -----------------------------------------------------------------------------
+
+export const deleteHoldingEventInputSchema = z.object({
+  eventId: z.string().min(1),
+  idempotencyKey: uuidV7Schema,
+})
+
+type DeleteHoldingEventInput = z.infer<typeof deleteHoldingEventInputSchema>
+
+export interface DeleteHoldingEventResult {
+  eventId: string
+  kind: HoldingEventKind
+  reversed: true
+  /** Investment account value after re-materializing Σ holdings, minor units. */
+  investmentValueAfterMinor: string
+}
+
+export async function deleteHoldingEventForFamily({
+  data: rawData,
+  familyId,
+  user,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  data: z.input<typeof deleteHoldingEventInputSchema>
+  familyId: string
+  user: ServerActor
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<DeleteHoldingEventResult> {
+  const data: DeleteHoldingEventInput =
+    deleteHoldingEventInputSchema.parse(rawData)
+  const requestHash = await hashCanonicalPayload({ eventId: data.eventId })
+  const auditCtx = await createAuditContext(
+    { user: { id: user.id, familyId } },
+    data.idempotencyKey
+  )
+
+  const runOnce = async () =>
+    await runInTenantTransaction(familyId, user.id, async (tx) => {
+      const replay =
+        await replayIdempotentEndpointResponse<DeleteHoldingEventResult>(tx, {
+          endpoint: DELETE_HOLDING_EVENT_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+        })
+      if (replay) return replay
+
+      const event = await resolveHoldingEventForCorrection(
+        tx,
+        familyId,
+        data.eventId
+      )
+      await assertHoldingEventIsLatest(tx, familyId, event)
+      await reverseHoldingEventWithinTx(tx, { familyId, event, user, auditCtx })
+      await auditHoldingEventCorrection(tx, auditCtx, { event, after: null })
+
+      const investmentAfter = await tx.account.findUniqueOrThrow({
+        where: { id: event.investmentAccount.id },
+        select: { balance: true },
+      })
+      const response: DeleteHoldingEventResult = {
+        eventId: event.eventId,
+        kind: event.kind,
+        reversed: true,
+        investmentValueAfterMinor: investmentAfter.balance.toString(),
+      }
+      await persistIdempotentEndpointResponse(tx, {
+        endpoint: DELETE_HOLDING_EVENT_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+        response,
+      })
+      return response
+    })
+
+  try {
+    return await runOnce()
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error
+    const replay = await scopedTenantTransaction(familyId, user.id, (tx) =>
+      replayIdempotentEndpointResponse<DeleteHoldingEventResult>(tx, {
+        endpoint: DELETE_HOLDING_EVENT_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+      })
+    )
+    if (replay) return replay
+    throw error
+  }
+}
+
+export const deleteHoldingEventFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("ledger:write")])
+  .inputValidator((data: z.input<typeof deleteHoldingEventInputSchema>) =>
+    deleteHoldingEventInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await deleteHoldingEventForFamily({
+      data,
+      familyId: context.familyId,
+      user: context.user,
+    })
+  })
+
+// -----------------------------------------------------------------------------
+// EDIT / CORRECT — reversal + reapply, ONE atomic transaction.
+// -----------------------------------------------------------------------------
+//
+// What is EDITABLE is deliberately narrow (the same call the trade correction
+// made): the amounts/prices/date of the event. What is FIXED is its identity —
+// the account, fund A, and fund B. Moving a position to another instrument or
+// account is Slice 6 (in-kind move), not a correction.
+
+export const correctHoldingEventInputSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("switch"),
+    eventId: z.string().min(1),
+    /** Units of fund A to switch out (the destination units are derived). */
+    quantity: decimalStringSchema,
+    fromUnitPrice: positiveMinorDigitsSchema,
+    toUnitPrice: positiveMinorDigitsSchema,
+    date: z.coerce.date().optional(),
+    idempotencyKey: uuidV7Schema,
+  }),
+  z.object({
+    kind: z.literal("dividend_reinvest"),
+    eventId: z.string().min(1),
+    amount: positiveMinorDigitsSchema,
+    /** Reinvest price per unit — required here (a correction always names the
+     * price it is correcting TO), a stricter contract than the create path's
+     * "price or explicit units". */
+    unitPrice: positiveMinorDigitsSchema,
+    date: z.coerce.date().optional(),
+    idempotencyKey: uuidV7Schema,
+  }),
+])
+
+type CorrectHoldingEventInput = z.infer<typeof correctHoldingEventInputSchema>
+
+export type CorrectHoldingEventResult =
+  | { oldEventId: string; kind: "switch"; switched: RecordSwitchResult }
+  | {
+      oldEventId: string
+      kind: "dividend_reinvest"
+      distribution: RecordDistributionResult
+    }
+
+export async function correctHoldingEventForFamily({
+  data: rawData,
+  familyId,
+  user,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  data: z.input<typeof correctHoldingEventInputSchema>
+  familyId: string
+  user: ServerActor
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<CorrectHoldingEventResult> {
+  const data: CorrectHoldingEventInput =
+    correctHoldingEventInputSchema.parse(rawData)
+  const requestHash = await hashCanonicalPayload(
+    data.kind === "switch"
+      ? {
+          date: data.date?.toISOString() ?? null,
+          eventId: data.eventId,
+          fromUnitPrice: data.fromUnitPrice,
+          kind: data.kind,
+          quantity: data.quantity,
+          toUnitPrice: data.toUnitPrice,
+        }
+      : {
+          amount: data.amount,
+          date: data.date?.toISOString() ?? null,
+          eventId: data.eventId,
+          kind: data.kind,
+          unitPrice: data.unitPrice,
+        }
+  )
+  const auditCtx = await createAuditContext(
+    { user: { id: user.id, familyId } },
+    data.idempotencyKey
+  )
+
+  const runOnce = async () =>
+    await runInTenantTransaction(familyId, user.id, async (tx) => {
+      const replay =
+        await replayIdempotentEndpointResponse<CorrectHoldingEventResult>(tx, {
+          endpoint: CORRECT_HOLDING_EVENT_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+        })
+      if (replay) return replay
+
+      const event = await resolveHoldingEventForCorrection(
+        tx,
+        familyId,
+        data.eventId
+      )
+      if (event.kind !== data.kind) {
+        throw new HoldingError(
+          `This entry is a ${event.kind === "switch" ? "switch" : "dividend reinvest"}; it cannot be corrected as a ${data.kind === "switch" ? "switch" : "dividend reinvest"}`
+        )
+      }
+      await assertHoldingEventIsLatest(tx, familyId, event)
+
+      // 1. Reverse the OLD event (every leg + the anchor), in this SAME tx.
+      await reverseHoldingEventWithinTx(tx, { familyId, event, user, auditCtx })
+
+      // 2. Reapply the CORRECTED params as a brand-new event, in the SAME tx,
+      // through the exact core the create endpoint uses (no duplicated math).
+      // A fresh, server-minted key: never the edit's own (which would collide
+      // across repeated corrections of the same event) and never the old
+      // event's (already consumed, and the whole point is that the corrected
+      // event is a NEW event with a NEW identity).
+      const reapplyKey = createUuidV7()
+      const reapplyAuditCtx = await createAuditContext(
+        { user: { id: user.id, familyId } },
+        reapplyKey
+      )
+
+      let response: CorrectHoldingEventResult
+      let afterSnapshot: Record<string, unknown>
+
+      if (event.kind === "switch" && data.kind === "switch") {
+        const switched = await recordSwitchWithinTx(tx, {
+          data: recordSwitchInputSchema.parse({
+            date: data.date ?? event.eventDate,
+            fromHoldingId: event.payload.fromHoldingId,
+            fromUnitPrice: data.fromUnitPrice,
+            idempotencyKey: reapplyKey,
+            investmentAccountId: event.investmentAccount.id,
+            quantity: data.quantity,
+            toInstrumentId: event.payload.toInstrumentId,
+            toUnitPrice: data.toUnitPrice,
+          }),
+          familyId,
+          user,
+          auditCtx: reapplyAuditCtx,
+        })
+        response = { oldEventId: event.eventId, kind: "switch", switched }
+        afterSnapshot = {
+          date: (data.date ?? event.eventDate).toISOString(),
+          fromUnitPriceMinor: data.fromUnitPrice,
+          newEventKey: reapplyKey,
+          quantity: data.quantity,
+          toUnitPriceMinor: data.toUnitPrice,
+        }
+      } else if (event.kind === "dividend_reinvest") {
+        const reinvest = data as Extract<
+          CorrectHoldingEventInput,
+          { kind: "dividend_reinvest" }
+        >
+        const distribution = await recordDistributionWithinTx(tx, {
+          data: recordDistributionInputSchema.parse({
+            amount: reinvest.amount,
+            date: reinvest.date ?? event.eventDate,
+            holdingId: event.payload.holdingId,
+            idempotencyKey: reapplyKey,
+            investmentAccountId: event.investmentAccount.id,
+            mode: "reinvest",
+            unitPrice: reinvest.unitPrice,
+          }),
+          familyId,
+          user,
+          auditCtx: reapplyAuditCtx,
+        })
+        response = {
+          oldEventId: event.eventId,
+          kind: "dividend_reinvest",
+          distribution,
+        }
+        afterSnapshot = {
+          amountMinor: reinvest.amount,
+          date: (reinvest.date ?? event.eventDate).toISOString(),
+          newEventKey: reapplyKey,
+          unitPriceMinor: reinvest.unitPrice,
+        }
+      } else {
+        // Unreachable — the kind equality check above already ran.
+        throw new HoldingError("Unsupported position-event correction")
+      }
+
+      await auditHoldingEventCorrection(tx, auditCtx, {
+        event,
+        after: afterSnapshot,
+      })
+
+      await persistIdempotentEndpointResponse(tx, {
+        endpoint: CORRECT_HOLDING_EVENT_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+        response,
+      })
+      return response
+    })
+
+  try {
+    return await runOnce()
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error
+    const replay = await scopedTenantTransaction(familyId, user.id, (tx) =>
+      replayIdempotentEndpointResponse<CorrectHoldingEventResult>(tx, {
+        endpoint: CORRECT_HOLDING_EVENT_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+      })
+    )
+    if (replay) return replay
+    throw error
+  }
+}
+
+export const correctHoldingEventFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("ledger:write")])
+  .inputValidator((data: z.input<typeof correctHoldingEventInputSchema>) =>
+    correctHoldingEventInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await correctHoldingEventForFamily({
+      data,
+      familyId: context.familyId,
+      user: context.user,
+    })
+  })
+
+// -----------------------------------------------------------------------------
+// READ — the account's position activity, and one event's correction prefill.
+// -----------------------------------------------------------------------------
+//
+// A Switch / reinvest leaves NO `Transaction`, so the per-account statement
+// cannot show it and the user had no way to point at one. This list is that
+// entry point: the append-only provenance rows for an account, newest first,
+// minus the ones already edited or deleted. It runs NO per-row correctability
+// probe (the same call the Buy/Sell rows make — the server is the law when the
+// dialog opens or delete is submitted).
+
+export const accountHoldingEventsQuerySchema = z.object({
+  accountId: z.string().min(1),
+  limit: z.number().int().min(1).max(100).optional(),
+})
+
+export interface HoldingEventListItem {
+  eventId: string
+  kind: HoldingEventKind
+  /** The user-set event date (ISO), falling back to when it was recorded. */
+  date: string
+  recordedAt: string
+  /** "Fund A → Fund B" for a switch; the fund name for a reinvest. */
+  title: string
+  /** Units moved, decimal string: A units switched out / units reinvested. */
+  quantity: string
+  /** Proceeds moved (switch) or the reinvested amount, minor units. */
+  amountMinor: string
+  /** Switch only: realized gain/loss vs average cost, minor units, signed. */
+  realizedGainMinor: string | null
+}
+
+export async function listAccountHoldingEventsForFamily({
+  data,
+  familyId,
+  userId,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  data: z.infer<typeof accountHoldingEventsQuerySchema>
+  familyId: string
+  userId: string
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<HoldingEventListItem[]> {
+  const limit = data.limit ?? 20
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
+    const rows = await tx.auditLog.findMany({
+      where: {
+        familyId,
+        entityType: { in: [...HOLDING_EVENT_ENTITY_TYPES] },
+        idempotencyKey: { not: null },
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      // Read generously, then filter to this account + still-open events. The
+      // cap keeps an old, busy family's audit trail from being walked whole.
+      take: 500,
+    })
+
+    const closedRows = await tx.auditLog.findMany({
+      where: { familyId, entityType: "HoldingEventCorrection" },
+      select: { entityId: true },
+    })
+    const closed = new Set(closedRows.map((row) => row.entityId))
+
+    const items: HoldingEventListItem[] = []
+    for (const row of rows) {
+      if (items.length >= limit) break
+      if (closed.has(row.id)) continue
+      if (row.entityType === "Switch") {
+        const parsed = switchProvenanceSchema.safeParse(row.afterJson)
+        if (!parsed.success) continue
+        const payload = parsed.data
+        if (payload.investmentAccountId !== data.accountId) continue
+        items.push({
+          eventId: row.id,
+          kind: "switch",
+          date: parseEventDate(payload.date, row.createdAt).toISOString(),
+          recordedAt: row.createdAt.toISOString(),
+          title: `${payload.fromInstrumentName} → ${payload.toInstrumentName}`,
+          quantity: scaledToQuantityString(BigInt(payload.fromUnitsScaled)),
+          amountMinor: payload.proceedsMinor,
+          realizedGainMinor: payload.realizedGainMinor,
+        })
+        continue
+      }
+      const parsed = distributionProvenanceSchema.safeParse(row.afterJson)
+      if (!parsed.success) continue
+      const payload = parsed.data
+      // A cash payout is an ordinary income transaction on another account and
+      // is corrected there — it never belongs in this list.
+      if (payload.mode !== "reinvest") continue
+      if (payload.investmentAccountId !== data.accountId) continue
+      items.push({
+        eventId: row.id,
+        kind: "dividend_reinvest",
+        date: parseEventDate(payload.date, row.createdAt).toISOString(),
+        recordedAt: row.createdAt.toISOString(),
+        title: payload.instrumentName,
+        quantity: scaledToQuantityString(
+          BigInt(payload.unitsAddedScaled ?? "0")
+        ),
+        amountMinor: payload.amountMinor,
+        realizedGainMinor: null,
+      })
+    }
+    return items
+  })
+}
+
+export const listAccountHoldingEventsFn = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .inputValidator((data: z.infer<typeof accountHoldingEventsQuerySchema>) =>
+    accountHoldingEventsQuerySchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await listAccountHoldingEventsForFamily({
+      data,
+      familyId: context.familyId,
+      userId: context.user.id,
+    })
+  })
+
+export const getHoldingEventForCorrectionInputSchema = z.object({
+  eventId: z.string().min(1),
+})
+
+interface HoldingEventCorrectionCommon {
+  eventId: string
+  investmentAccountId: string
+  currency: string
+  date: string
+  /** Non-null when the event is NOT the latest on one of its positions — the
+   * SAME message the mutation endpoints would reject with, shown inline
+   * immediately; the endpoints remain the authoritative check either way. */
+  notLatestReason: string | null
+}
+
+export type HoldingEventForCorrectionView = HoldingEventCorrectionCommon &
+  (
+    | {
+        kind: "switch"
+        fromInstrumentName: string
+        toInstrumentName: string
+        /** Units of A switched out, decimal string. */
+        quantity: string
+        fromUnitPriceMinor: string
+        toUnitPriceMinor: string
+        proceedsMinor: string
+      }
+    | {
+        kind: "dividend_reinvest"
+        instrumentName: string
+        amountMinor: string
+        /** Reinvest price per unit, minor units — the recorded one when the
+         * event stored it, else derived from amount ÷ units. */
+        unitPriceMinor: string
+        /** Units the reinvest added, decimal string. */
+        quantity: string
+      }
+  )
+
+export async function getHoldingEventForCorrectionForFamily({
+  data,
+  familyId,
+  userId,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  data: z.infer<typeof getHoldingEventForCorrectionInputSchema>
+  familyId: string
+  userId: string
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<HoldingEventForCorrectionView> {
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
+    const event = await resolveHoldingEventForCorrection(
+      tx,
+      familyId,
+      data.eventId
+    )
+
+    let notLatestReason: string | null = null
+    try {
+      await assertHoldingEventIsLatest(tx, familyId, event)
+    } catch (error) {
+      notLatestReason = error instanceof Error ? error.message : String(error)
+    }
+
+    const common: HoldingEventCorrectionCommon = {
+      eventId: event.eventId,
+      investmentAccountId: event.investmentAccount.id,
+      currency: event.investmentAccount.currency,
+      date: event.eventDate.toISOString(),
+      notLatestReason,
+    }
+
+    if (event.kind === "switch") {
+      return {
+        ...common,
+        kind: "switch",
+        fromInstrumentName: event.payload.fromInstrumentName,
+        toInstrumentName: event.payload.toInstrumentName,
+        quantity: scaledToQuantityString(BigInt(event.payload.fromUnitsScaled)),
+        fromUnitPriceMinor: event.payload.fromUnitPriceMinor,
+        toUnitPriceMinor: event.payload.toUnitPriceMinor,
+        proceedsMinor: event.payload.proceedsMinor,
+      }
+    }
+
+    // Reinvest: prefer the recorded unit price; derive it only for events
+    // written before the payload carried one (amount ÷ units, round-half-up —
+    // the inverse of the fold that produced the units).
+    const unitsScaled = BigInt(event.payload.unitsAddedScaled ?? "0")
+    const amountMinor = BigInt(event.payload.amountMinor)
+    const derivedUnitPrice =
+      unitsScaled > 0n
+        ? (amountMinor * QUANTITY_SCALE + unitsScaled / 2n) / unitsScaled
+        : amountMinor
+    return {
+      ...common,
+      kind: "dividend_reinvest",
+      instrumentName: event.payload.instrumentName,
+      amountMinor: event.payload.amountMinor,
+      unitPriceMinor:
+        event.payload.unitPriceMinor ?? derivedUnitPrice.toString(),
+      quantity: scaledToQuantityString(unitsScaled),
+    }
+  })
+}
+
+export const getHoldingEventForCorrectionFn = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .inputValidator(
+    (data: z.infer<typeof getHoldingEventForCorrectionInputSchema>) =>
+      getHoldingEventForCorrectionInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await getHoldingEventForCorrectionForFamily({
+      data,
+      familyId: context.familyId,
+      userId: context.user.id,
     })
   })
 
