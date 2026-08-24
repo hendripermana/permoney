@@ -10,6 +10,7 @@ import {
   quantityToScaled,
   scaledToQuantityString,
   sumHoldingValuesMinor,
+  unitsFromAmountScaled,
 } from "./holdings"
 
 describe("quantityToScaled", () => {
@@ -249,5 +250,92 @@ describe("scaledToQuantityString", () => {
 
   test("rejects a negative scaled quantity", () => {
     expect(() => scaledToQuantityString(-1n)).toThrow()
+  })
+})
+
+describe("unitsFromAmountScaled (amount-driven trade entry)", () => {
+  test("inverts holdingCostMinor for exact divisions", () => {
+    // Invest Rp 500,000 at Rp 12,000/unit → 41.66666667 units.
+    const units = unitsFromAmountScaled(50_000_000n, 1_200_000n)
+    expect(scaledToQuantityString(units)).toBe("41.66666667")
+
+    // Exact division: Rp 2,000,000 at Rp 500,000/unit → exactly 4 units.
+    expect(unitsFromAmountScaled(200_000_000n, 50_000_000n)).toBe(
+      quantityToScaled("4")
+    )
+  })
+
+  test("rounds HALF-UP at the 1e-8 column scale", () => {
+    // amount 1, price 3 → 0.33333333... units → 33333333n (rounds down).
+    expect(unitsFromAmountScaled(1n, 3n)).toBe(33_333_333n)
+    // amount 2, price 3 → 0.66666666... units → 66666667n (rounds up).
+    expect(unitsFromAmountScaled(2n, 3n)).toBe(66_666_667n)
+    // Exact .5 tick: amount 1, price 2e8 → 0.005 of a tick... use a clean case:
+    // amount 3, price 2 → 1.5 units exactly, no rounding needed.
+    expect(unitsFromAmountScaled(3n, 2n)).toBe(150_000_000n)
+  })
+
+  test("zero amount yields zero units", () => {
+    expect(unitsFromAmountScaled(0n, 1_200_000n)).toBe(0n)
+  })
+
+  test("rejects a negative amount or a non-positive price", () => {
+    expect(() => unitsFromAmountScaled(-1n, 100n)).toThrow(RangeError)
+    expect(() => unitsFromAmountScaled(100n, 0n)).toThrow(RangeError)
+    expect(() => unitsFromAmountScaled(100n, -5n)).toThrow(RangeError)
+  })
+
+  test("the derived quantity re-values back to the typed amount within the rounding bound", () => {
+    // The invariant that makes amount-driven entry safe: the AMOUNT stays
+    // authoritative for cash, and the derived quantity — re-multiplied by the
+    // same unit price — lands back on it up to two stacked half-up roundings:
+    //
+    //   |units·P/S − A| ≤ ½ tick-value = P / 2S     (deriving the units)
+    //   |revalued − units·P/S| ≤ ½ minor unit        (re-valuing them)
+    //   ⇒ drift ≤ ½ + P/2S,  i.e.  2·S·drift ≤ S + P
+    //
+    // Anything larger would mean the previewed position silently disagrees
+    // with the cash moved by more than the representation allows.
+    fc.assert(
+      fc.property(
+        fc.bigInt({ min: 1n, max: 10n ** 14n }),
+        fc.bigInt({ min: 1n, max: 10n ** 12n }),
+        (amountMinor, unitPriceMinor) => {
+          const units = unitsFromAmountScaled(amountMinor, unitPriceMinor)
+          const revalued = holdingCostMinor(units, unitPriceMinor)
+          const drift =
+            revalued > amountMinor
+              ? revalued - amountMinor
+              : amountMinor - revalued
+          expect(
+            2n * QUANTITY_SCALE * drift <= QUANTITY_SCALE + unitPriceMinor
+          ).toBe(true)
+        }
+      )
+    )
+  })
+
+  test("at any realistic per-unit price the drift is at most one minor unit", () => {
+    // A unit tick (1e-8 of a unit) is worth less than one minor unit whenever
+    // the price per unit is below QUANTITY_SCALE minor units — Rp 1,000,000 per
+    // unit/gram/share. Every reksadana NAV and share price sits far below that,
+    // so the practical drift collapses to the single-minor-unit case. (Above
+    // that line — e.g. gold quoted per KILO — the bound above still holds, it
+    // just widens by one sen per Rp 2,000,000 of unit price.)
+    fc.assert(
+      fc.property(
+        fc.bigInt({ min: 1n, max: 10n ** 14n }),
+        fc.bigInt({ min: 1n, max: QUANTITY_SCALE }),
+        (amountMinor, unitPriceMinor) => {
+          const units = unitsFromAmountScaled(amountMinor, unitPriceMinor)
+          const revalued = holdingCostMinor(units, unitPriceMinor)
+          const drift =
+            revalued > amountMinor
+              ? revalued - amountMinor
+              : amountMinor - revalued
+          expect(drift <= 1n).toBe(true)
+        }
+      )
+    )
   })
 })
