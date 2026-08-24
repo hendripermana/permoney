@@ -19,6 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { DialogDateField } from "@/components/blocks/dialog-date-field"
 import { MoneyInput } from "@/components/blocks/money-input"
 import { formatCurrency } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
@@ -495,16 +496,12 @@ export function TradeDialog({
             </div>
           </div>
 
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="trade-date">Date</Label>
-            <Input
-              id="trade-date"
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              required
-            />
-          </div>
+          <DialogDateField
+            id="trade-date"
+            value={date}
+            onChange={setDate}
+            required
+          />
 
           <div
             className={cn(

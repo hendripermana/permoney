@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { DialogDateField } from "@/components/blocks/dialog-date-field"
 import { MoneyInput } from "@/components/blocks/money-input"
 import { formatCurrency } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
@@ -51,31 +52,6 @@ function toDateInputValue(iso: string): string {
 // Shared by both correction forms below — identical Date field, identical
 // error+footer shape (Cancel / "Save correction"), so the two forms can't
 // drift in wording as they evolve independently.
-function CorrectionDateField({
-  idPrefix,
-  value,
-  onChange,
-  disabled,
-}: {
-  idPrefix: string
-  value: string
-  onChange: (value: string) => void
-  disabled: boolean
-}) {
-  return (
-    <div className="flex flex-col gap-2">
-      <Label htmlFor={`${idPrefix}-date`}>Date</Label>
-      <Input
-        id={`${idPrefix}-date`}
-        type="date"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={disabled}
-      />
-    </div>
-  )
-}
-
 function CorrectionFormFooter({
   error,
   onClose,
@@ -325,8 +301,8 @@ function SwitchCorrectionForm({
             required
           />
         </div>
-        <CorrectionDateField
-          idPrefix="switch-correction"
+        <DialogDateField
+          id="switch-correction-date"
           value={date}
           onChange={setDate}
           disabled={locked}
@@ -502,8 +478,8 @@ function ReinvestCorrectionForm({
             required
           />
         </div>
-        <CorrectionDateField
-          idPrefix="reinvest-correction"
+        <DialogDateField
+          id="reinvest-correction-date"
           value={date}
           onChange={setDate}
           disabled={locked}
