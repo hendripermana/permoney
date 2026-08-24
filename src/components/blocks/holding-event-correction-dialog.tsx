@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
-import { ArrowRightLeft, Gift, Loader2 } from "lucide-react"
+import { ArrowRightLeft, Gift } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -14,6 +14,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { DialogDateField } from "@/components/blocks/dialog-date-field"
+import { DialogLoadingOrError } from "@/components/blocks/dialog-loading-state"
 import { MoneyInput } from "@/components/blocks/money-input"
 import { formatCurrency } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
@@ -109,40 +110,31 @@ export function HoldingEventCorrectionDialog({
   return (
     <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
       <DialogContent>
-        {isLoading ? (
-          <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
-            Loading entry…
-          </div>
-        ) : loadError || !details ? (
-          <>
-            <DialogHeader>
-              <DialogTitle>Can&apos;t edit this entry</DialogTitle>
-            </DialogHeader>
-            <p className="text-sm text-destructive" role="alert">
-              {loadError instanceof Error
-                ? loadError.message
-                : "This entry could not be loaded."}
-            </p>
-            <DialogFooter>
-              <Button type="button" variant="ghost" onClick={onClose}>
-                Close
-              </Button>
-            </DialogFooter>
-          </>
-        ) : details.kind === "switch" ? (
-          <SwitchCorrectionForm
-            details={details}
-            onClose={onClose}
-            onSaved={onSaved}
-          />
-        ) : (
-          <ReinvestCorrectionForm
-            details={details}
-            onClose={onClose}
-            onSaved={onSaved}
-          />
-        )}
+        <DialogLoadingOrError
+          isLoading={isLoading}
+          error={loadError}
+          hasData={details != null}
+          loadingLabel="Loading entry…"
+          notFoundTitle="Can't edit this entry"
+          notFoundMessage="This entry could not be loaded."
+          onClose={onClose}
+        >
+          {details ? (
+            details.kind === "switch" ? (
+              <SwitchCorrectionForm
+                details={details}
+                onClose={onClose}
+                onSaved={onSaved}
+              />
+            ) : (
+              <ReinvestCorrectionForm
+                details={details}
+                onClose={onClose}
+                onSaved={onSaved}
+              />
+            )
+          ) : null}
+        </DialogLoadingOrError>
       </DialogContent>
     </Dialog>
   )
