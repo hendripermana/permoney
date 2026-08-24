@@ -19,14 +19,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { DialogDateField } from "@/components/blocks/dialog-date-field"
 import { MoneyInput } from "@/components/blocks/money-input"
 import { formatCurrency } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
 import {
   holdingCostMinor,
   holdingValueMinor,
-  QUANTITY_SCALE,
   quantityToScaled,
+  unitsFromAmountScaled,
 } from "@/lib/holdings"
 import { INSTRUMENT_KIND_OPTIONS, type InstrumentKind } from "@/lib/instruments"
 import { parseMoneyInput, toDecimalString } from "@/lib/money"
@@ -56,17 +57,6 @@ type Basis = "quantity" | "amount"
 
 function toDateInputValue(date: Date): string {
   return date.toISOString().slice(0, 10)
-}
-
-// units = amount / unitPrice, scaled, round-half-up — the SAME fold
-// `recordSwitchForFamily` uses server-side, so the client preview matches
-// exactly what will post.
-function unitsFromAmountScaled(
-  amountMinor: bigint,
-  unitPriceMinor: bigint
-): bigint {
-  if (unitPriceMinor <= 0n) return 0n
-  return (amountMinor * QUANTITY_SCALE + unitPriceMinor / 2n) / unitPriceMinor
 }
 
 type SwitchPreview =
@@ -320,12 +310,10 @@ export function SwitchDialog({
               </Select>
             </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="switch-date">Date</Label>
-              <Input
+              <DialogDateField
                 id="switch-date"
-                type="date"
                 value={date}
-                onChange={(e) => setDate(e.target.value)}
+                onChange={setDate}
                 required
               />
             </div>

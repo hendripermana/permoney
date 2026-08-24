@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
-import { ArrowDownLeft, ArrowUpRight, Loader2 } from "lucide-react"
+import { ArrowDownLeft, ArrowUpRight } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -20,6 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { DialogLoadingOrError } from "@/components/blocks/dialog-loading-state"
 import { MoneyInput } from "@/components/blocks/money-input"
 import { formatCurrency } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
@@ -79,35 +80,24 @@ export function TradeCorrectionDialog({
   return (
     <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
       <DialogContent>
-        {isLoading ? (
-          <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
-            Loading trade…
-          </div>
-        ) : loadError || !details ? (
-          <>
-            <DialogHeader>
-              <DialogTitle>Can&apos;t edit this trade</DialogTitle>
-            </DialogHeader>
-            <p className="text-sm text-destructive" role="alert">
-              {loadError instanceof Error
-                ? loadError.message
-                : "This transaction could not be loaded."}
-            </p>
-            <DialogFooter>
-              <Button type="button" variant="ghost" onClick={onClose}>
-                Close
-              </Button>
-            </DialogFooter>
-          </>
-        ) : (
-          <TradeCorrectionForm
-            details={details}
-            fundingAccounts={fundingAccounts}
-            onClose={onClose}
-            onSaved={onSaved}
-          />
-        )}
+        <DialogLoadingOrError
+          isLoading={isLoading}
+          error={loadError}
+          hasData={details != null}
+          loadingLabel="Loading trade…"
+          notFoundTitle="Can't edit this trade"
+          notFoundMessage="This transaction could not be loaded."
+          onClose={onClose}
+        >
+          {details ? (
+            <TradeCorrectionForm
+              details={details}
+              fundingAccounts={fundingAccounts}
+              onClose={onClose}
+              onSaved={onSaved}
+            />
+          ) : null}
+        </DialogLoadingOrError>
       </DialogContent>
     </Dialog>
   )
