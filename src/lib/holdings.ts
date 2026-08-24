@@ -191,6 +191,34 @@ export function holdingCostMinor(
   return divideScaledHalfUp(quantityScaled * avgUnitCostMinor)
 }
 
+/**
+ * Units (scaled) an AMOUNT buys at a given unit price — the inverse of
+ * `holdingValueMinor`, rounded half-up: `amount × SCALE / price`.
+ *
+ * The single source of truth for every "amount → units" fold: a Dividend
+ * reinvest (amount ÷ reinvest price), a Switch's destination side (proceeds ÷
+ * B's price) and the client previews of both, so a dialog can never show units
+ * that differ from the ones the server actually writes.
+ *
+ * Both operands must be positive (a zero price has no meaningful inverse).
+ */
+export function unitsFromAmountScaled(
+  amountMinor: bigint,
+  unitPriceMinor: bigint
+): bigint {
+  if (amountMinor < 0n) {
+    throw new RangeError(
+      `unitsFromAmountScaled: amountMinor must be non-negative, got ${amountMinor}`
+    )
+  }
+  if (unitPriceMinor <= 0n) {
+    throw new RangeError(
+      `unitsFromAmountScaled: unitPriceMinor must be positive, got ${unitPriceMinor}`
+    )
+  }
+  return (amountMinor * QUANTITY_SCALE + unitPriceMinor / 2n) / unitPriceMinor
+}
+
 /** Unrealized gain (loss if negative) in MINOR units: value − cost. */
 export function holdingGainMinor(value: bigint, cost: bigint): bigint {
   return value - cost

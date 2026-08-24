@@ -22,7 +22,7 @@ import {
 import { MoneyInput } from "@/components/blocks/money-input"
 import { formatCurrency } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
-import { QUANTITY_SCALE, scaledToQuantityString } from "@/lib/holdings"
+import { scaledToQuantityString, unitsFromAmountScaled } from "@/lib/holdings"
 import { parseMoneyInput } from "@/lib/money"
 import { cn } from "@/lib/utils"
 import { createUuidV7 } from "@/lib/uuid-v7"
@@ -105,7 +105,7 @@ export function DistributionDialog({
       return { kind: "empty" }
     const price = parseMoneyInput(unitPrice, currencyCode)
     if (price === null || price <= 0n) return { kind: "invalid" }
-    const scaled = (amountMinor * QUANTITY_SCALE + price / 2n) / price
+    const scaled = unitsFromAmountScaled(amountMinor, price)
     if (scaled <= 0n) return { kind: "invalid" }
     return { kind: "valid", text: scaledToQuantityString(scaled) }
   }, [isCash, amountMinor, unitPrice, currencyCode])

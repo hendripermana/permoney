@@ -25,8 +25,8 @@ import type { CurrencyCode } from "@/lib/data/currencies"
 import {
   holdingCostMinor,
   holdingValueMinor,
-  QUANTITY_SCALE,
   quantityToScaled,
+  unitsFromAmountScaled,
 } from "@/lib/holdings"
 import { INSTRUMENT_KIND_OPTIONS, type InstrumentKind } from "@/lib/instruments"
 import { parseMoneyInput, toDecimalString } from "@/lib/money"
@@ -56,17 +56,6 @@ type Basis = "quantity" | "amount"
 
 function toDateInputValue(date: Date): string {
   return date.toISOString().slice(0, 10)
-}
-
-// units = amount / unitPrice, scaled, round-half-up — the SAME fold
-// `recordSwitchForFamily` uses server-side, so the client preview matches
-// exactly what will post.
-function unitsFromAmountScaled(
-  amountMinor: bigint,
-  unitPriceMinor: bigint
-): bigint {
-  if (unitPriceMinor <= 0n) return 0n
-  return (amountMinor * QUANTITY_SCALE + unitPriceMinor / 2n) / unitPriceMinor
 }
 
 type SwitchPreview =

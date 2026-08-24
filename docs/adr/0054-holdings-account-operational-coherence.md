@@ -94,7 +94,9 @@ guards that must ALL exist for the model to be coherent (not just Buy/Sell):
 8. **Edit / delete / correct a trade** — a mis-entered Buy/Sell must be
    correctable (reverse + re-record, audited) — today edit of a valuation-linked
    transfer is unsupported (ADR-0048 known limitation); trades need coherent
-   edit/delete too.
+   edit/delete too. The same is true of every OTHER mode above: a Switch and a
+   Dividend reinvest move units without a cash leg, so they have no ledger row
+   to correct from and need their own reachable entry point (Slice 5b below).
 9. **Funding-account selection** — every trade names the cash account the money
    comes from / returns to; multi-account families need it explicit.
 10. **Multi-currency trade** — buying a USD fund from IDR cash needs FX; deferred
@@ -188,17 +190,70 @@ FIFO-vs-average election beyond the current average-cost model — later.
     the reversal just deleted) fails with the SAME actionable error
     `recordTradeForFamily` already gives ("No <fund> position to sell"), never
     silent misbehavior.
-  - **Known limitation** (explicitly "not a full historical-replay engine"): a
-    reopen-THEN-reclose cascade, or an unrelated manual `deleteHoldingForFamily`
-    call, both leave no CURRENT Holding row and are not distinguishable from
-    "still latest" by the fallback check alone — the one documented residual
-    gap in the Slice 5 guard.
   - Server `deleteTradeForFamily` / `deleteTradeFn`, `correctTradeForFamily` /
     `correctTradeFn`, `getTradeForCorrectionForFamily` /
     `getTradeForCorrectionFn`; UI `trade-correction-dialog.tsx`; real-PG
     integration suite `tests/integration/trade-corrections.integration.ts` +
     e2e `tests/e2e/trade-correction.e2e.ts`. Full §5A contract (tenant
     transaction, RLS, idempotency, audit).
+  - **Slice 5b — the SAME correction for a Switch and a Dividend REINVEST.**
+    Buy/Sell was correctable because it leaves a cash-leg `Transaction` the UI
+    can point at. A Switch (Slice 4) and a reinvest (Slice 2) leave NONE — they
+    move units, not cash — so a mistyped one was permanently stuck. Closed by
+    treating the trio those paths ALREADY write in one transaction as the
+    correctable unit:
+    - **A "position event" is its append-only provenance `AuditLog` row**
+      (`Switch` / `Distribution`) plus the one `Holding` audit row PER position
+      it moved (a Switch moves TWO: sell-A + buy-B) plus the re-materialized
+      Σ-holdings anchor. Its handle is the provenance row id; the marker
+      comparison uses that row's `idempotencyKey`. **No schema change** — the
+      audit trail already carried everything a reversal needs.
+    - **The guard runs PER LEG**, through the SAME
+      `assertPositionIsLatestForEvent` the Buy/Sell guard now calls (one
+      implementation, no drift). A Switch refuses if EITHER fund has moved
+      since: a later Buy of B alone blocks the whole reversal.
+    - **DELETE is uniform across both kinds** — restore every leg from its
+      captured snapshot, re-materialize the anchor ONCE. No cash leg exists, so
+      nothing routes through `softDeleteValuationLinkedTransferWithinTx`. EDIT
+      is reversal + reapply through `recordSwitchWithinTx` /
+      `recordDistributionWithinTx` (the same cores the create endpoints use).
+    - **"Already corrected" is explicit**, not inferred: reversing writes a
+      `HoldingEventCorrection` audit row keyed to the event id, and resolving
+      refuses when one exists.
+    - **A cash Dividend and a standalone Fee are deliberately NOT in scope
+      here** — both post an ordinary income/expense `Transaction` and mutate no
+      Holding, so both are already correctable through the normal transaction
+      path on the cash account. Reaching for a cash dividend here fails loud,
+      pointing there.
+    - **UI**: a "Position activity" list on the account page (these events can
+      never appear on the statement) + `holding-event-correction-dialog.tsx`,
+      both built to the Buy/Sell correction's shape.
+    - Server `deleteHoldingEventForFamily` / `deleteHoldingEventFn`,
+      `correctHoldingEventForFamily` / `correctHoldingEventFn`,
+      `listAccountHoldingEventsForFamily` / `listAccountHoldingEventsFn`,
+      `getHoldingEventForCorrectionForFamily` /
+      `getHoldingEventForCorrectionFn`; real-PG suite
+      `tests/integration/holding-event-corrections.integration.ts` + e2e
+      `tests/e2e/holding-event-correction.e2e.ts`.
+  - **The Slice 5 residual gap is now CLOSED** (it was: "a reopen-THEN-reclose
+    cascade, or an unrelated manual `deleteHoldingForFamily`, leaves no CURRENT
+    Holding row and is indistinguishable from 'still latest'"). Generalising the
+    guard to a Switch's two legs required getting this right, and the fix is
+    shared with Buy/Sell. Two refusals were added to the ONE per-leg check:
+    1. If the event's own `after` snapshot is NON-null it left a live row
+       behind, so that row's absence is unambiguous evidence something later
+       removed it (a Sell to zero, a Switch out, a manual delete) — refuse.
+    2. If `after` IS null (the event legitimately closed the position), scan the
+       append-only audit trail for any LATER quantity-mutating row on the same
+       (account, instrument), using the same "create / delete / quantity or
+       avgUnitCostMinor changed" definition as migration
+       `20260823121700_backfill_holding_last_mutation_key` (so a price-only
+       refresh is correctly ignored). Ordering is the (createdAt, id) TUPLE —
+       every row in one Postgres transaction shares `createdAt`, so a
+       correction's reversal rows and its reapply rows are separable only by id.
+       Both changes only ever refuse MORE; neither can let a stale event through.
+       The philosophy is unchanged: **refuse with an actionable message rather than
+       replay history**.
 - **Slice 6 — Move a position between accounts** (in-kind, no cash, cost basis carries).
 - Cross-cutting: multi-currency trade + FX rides ADR-0052 Slice C/D; everything
   broker/country-agnostic (Broker-agnostic principle above).

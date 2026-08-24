@@ -582,6 +582,111 @@ describe("trade corrections — delete & edit (PER-259 Slice 5 / ADR-0054)", () 
     ).rejects.toThrow(/activity after it/)
   })
 
+  // The two cases below closed the residual gap PER-259 Slice 5 documented
+  // ("not a full historical-replay engine") while generalising the guard to a
+  // Switch's TWO legs: the shared per-leg check now also refuses when the row
+  // the trade LEFT BEHIND is gone, and — for a trade that legitimately closed
+  // its position — when the append-only audit trail shows the same
+  // (account, instrument) moved again afterwards. Both only ever refuse MORE;
+  // neither can let a stale trade through.
+
+  test("DELETE rejected when a later SELL CLOSED the position this trade left open", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const investment = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(owner)
+
+    const buy = await buyFund(owner, investment.id, cash.id)
+    const instrumentId = buy.holding?.instrumentId ?? undefined
+    // The buy left a LIVE position; this sell closed it to zero, so there is
+    // no row left to compare a marker against. Its absence is unambiguous
+    // evidence of later activity — never resurrect the pre-buy snapshot.
+    await recordTradeForFamily({
+      data: {
+        investmentAccountId: investment.id,
+        fundingAccountId: cash.id,
+        instrumentId,
+        side: "sell",
+        cashAmount: "1000000",
+        quantity: "100",
+        unitPrice: "10000",
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+    expect(await holdingRow(owner, buy.holding?.id ?? "")).toBeNull()
+
+    await expect(
+      deleteTradeForFamily({
+        data: {
+          transactionId: buy.transaction.id,
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+    ).rejects.toThrow(/changed or closed since/)
+  })
+
+  test("DELETE a sell-to-zero rejected after a reopen-THEN-reclose cascade", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const investment = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(owner)
+
+    const buy = await buyFund(owner, investment.id, cash.id)
+    const instrumentId = buy.holding?.instrumentId ?? undefined
+    const sell = await recordTradeForFamily({
+      data: {
+        investmentAccountId: investment.id,
+        fundingAccountId: cash.id,
+        instrumentId,
+        side: "sell",
+        cashAmount: "1000000",
+        quantity: "100",
+        unitPrice: "10000",
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+    expect(sell.holding).toBeNull()
+
+    // Reopen the position (a BRAND-NEW Holding row — the old id carries no
+    // marker to compare) and close it again. No live row exists either way,
+    // so only the append-only audit trail can prove it moved since.
+    await buyFund(owner, investment.id, cash.id, {
+      instrumentId,
+      cashAmount: "300000",
+      quantity: "30",
+      unitPrice: "10000",
+    })
+    await recordTradeForFamily({
+      data: {
+        investmentAccountId: investment.id,
+        fundingAccountId: cash.id,
+        instrumentId,
+        side: "sell",
+        cashAmount: "300000",
+        quantity: "30",
+        unitPrice: "10000",
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+    await expect(
+      deleteTradeForFamily({
+        data: {
+          transactionId: sell.transaction.id,
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+    ).rejects.toThrow(/changed or closed since/)
+  })
+
   test("DELETE a non-trade transaction is rejected", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
     const cash = await makeCashAccount(owner)

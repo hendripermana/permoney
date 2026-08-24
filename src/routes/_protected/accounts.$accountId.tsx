@@ -61,6 +61,7 @@ import {
   SwitchDialog,
   type SwitchDialogState,
 } from "@/components/blocks/switch-dialog"
+import { HoldingEventCorrectionDialog } from "@/components/blocks/holding-event-correction-dialog"
 import { TradeCorrectionDialog } from "@/components/blocks/trade-correction-dialog"
 import { TransactionFormModal } from "@/components/transaction-form-modal"
 import {
@@ -95,13 +96,20 @@ import { getAccountOpeningValueFn } from "@/server/valuations"
 import { enableHoldingsTrackingFn } from "@/server/accounts"
 import { canEnableHoldingsTracking } from "@/lib/accounts"
 import {
+  deleteHoldingEventFn,
   deleteHoldingFn,
   deleteTradeFn,
   getAccountHoldingsFn,
+  listAccountHoldingEventsFn,
   refreshHoldingPricesFn,
   syncMarketPricesFn,
 } from "@/server/holdings"
-import { HoldingsPanel, type HoldingRecord } from "./-account-holdings"
+import {
+  HoldingsPanel,
+  PositionActivityPanel,
+  type HoldingEventRecord,
+  type HoldingRecord,
+} from "./-account-holdings"
 import { computeAccountHealth } from "@/lib/account-health"
 import { selectDriftBadge } from "@/lib/account-drift-presentation"
 import {
@@ -203,6 +211,12 @@ function AccountDetailPage() {
   const [tradeCorrectionDialog, setTradeCorrectionDialog] = React.useState<{
     transactionId: string
   } | null>(null)
+  // PER-259 Slice 5 (second half) — Switch / Dividend-reinvest correction. Its
+  // handle is the provenance AuditLog row id, not a transaction id: these
+  // events move units without moving cash, so they have no ledger row.
+  const [holdingEventDialog, setHoldingEventDialog] = React.useState<{
+    eventId: string
+  } | null>(null)
   // PER-241 — persisted compact ↔ comfortable density, shared with the ledger.
   const [density, setDensity] = useTransactionDensity()
 
@@ -278,6 +292,20 @@ function AccountDetailPage() {
     enabled: tracked,
   })
 
+  // PER-259 Slice 5 (second half) / ADR-0054 — position activity: the Switch
+  // and Dividend-reinvest events that moved units without moving cash, so they
+  // never reach the statement. Declarative fetch (no useEffect), tracked-only.
+  const {
+    data: holdingEvents,
+    isLoading: holdingEventsLoading,
+    refetch: refetchHoldingEvents,
+  } = useQuery({
+    queryKey: ["account_holding_events", accountId],
+    queryFn: async () =>
+      await listAccountHoldingEventsFn({ data: { accountId } }),
+    enabled: tracked,
+  })
+
   // PER-259 / ADR-0054 — a tracked account that carries ≥1 holding moves money
   // ONLY through trades (Buy/Sell in the HoldingsPanel). Its value is always
   // Σ(units × price); the generic "Add transaction" transfer and "Update value"
@@ -291,7 +319,34 @@ function AccountDetailPage() {
   // re-materialized it), so resync BOTH the holdings query and the account
   // collections the hero/KPIs read from.
   async function refreshHoldings() {
-    await Promise.all([refetchHoldings(), refreshAccountData()])
+    await Promise.all([
+      refetchHoldings(),
+      refetchHoldingEvents(),
+      refreshAccountData(),
+    ])
+  }
+
+  // PER-259 Slice 5 (second half) — delete a Switch / Dividend reinvest. Same
+  // confirm-then-server shape as the statement's trade delete: the server is
+  // the law (it refuses when the event is no longer the latest activity on a
+  // position it touched), and its message surfaces verbatim in the toast.
+  async function handleDeleteHoldingEvent(event: HoldingEventRecord) {
+    const confirmed = confirm(
+      event.kind === "switch"
+        ? "Delete this switch? Both positions are put back the way they were, and the change stays in your history."
+        : "Delete this reinvested dividend? Its units are rolled back, and the change stays in your history."
+    )
+    if (!confirmed) return
+    try {
+      await deleteHoldingEventFn({
+        data: { eventId: event.eventId, idempotencyKey: createUuidV7() },
+      })
+      await refreshHoldings()
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to delete this entry"
+      )
+    }
   }
 
   // PER-198 — cash-like accounts (same currency, active, not this account) that
@@ -804,6 +859,17 @@ function AccountDetailPage() {
               refreshingPrices={refreshingPrices}
             />
           ) : null}
+          {tracked ? (
+            <PositionActivityPanel
+              events={holdingEvents ?? []}
+              currency={currency}
+              isLoading={holdingEventsLoading}
+              onEdit={(event) =>
+                setHoldingEventDialog({ eventId: event.eventId })
+              }
+              onDelete={handleDeleteHoldingEvent}
+            />
+          ) : null}
           {health ? <AccountHealthPanel health={health} /> : null}
           {accountSupportsReserve(account) &&
           hasReserve(
@@ -1124,6 +1190,19 @@ function AccountDetailPage() {
           onSaved={async () => {
             await refreshHoldings()
             setTradeCorrectionDialog(null)
+          }}
+        />
+      ) : null}
+
+      {holdingEventDialog ? (
+        <HoldingEventCorrectionDialog
+          // Remount per event, same singleton edit pattern as the trade one.
+          key={`holding-event-correction-${holdingEventDialog.eventId}`}
+          eventId={holdingEventDialog.eventId}
+          onClose={() => setHoldingEventDialog(null)}
+          onSaved={async () => {
+            await refreshHoldings()
+            setHoldingEventDialog(null)
           }}
         />
       ) : null}
