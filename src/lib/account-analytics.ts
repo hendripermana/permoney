@@ -262,6 +262,15 @@ export interface StatementCsvRow {
   currency: string
   accountId: string
   toAccountId?: string | null
+  // REQUIRED, not optional: `signedDeltaForAccount` accepts it optionally (an
+  // income/expense row has no direction to carry), and an OPTIONAL field here
+  // let a transfer row omit the one authoritative direction signal and silently
+  // fall back to the structural `toAccountId` inference — the EXACT shape of the
+  // production sign bug that made a Sell's proceeds render negative on the
+  // receiving cash account. Every caller passes real statement rows, which
+  // always carry it; requiring it keeps a future caller from reintroducing the
+  // bug in the CSV export instead of the list.
+  transferIncoming: boolean | null
   account?: { name: string } | null
   toAccount?: { name: string } | null
   category?: { name: string } | null
@@ -275,11 +284,25 @@ function csvField(value: string): string {
   return /[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
 }
 
-function labelFor(row: StatementCsvRow, direction: 1 | -1): string {
+function labelFor(
+  row: StatementCsvRow,
+  accountId: string,
+  direction: 1 | -1
+): string {
   if (row.type === "transfer") {
+    // The counterparty is "the OTHER side of this row", which depends on which
+    // account we are looking FROM — never on the direction of money. Naming it
+    // by direction alone was wrong for a valuation-linked leg (a Sell's
+    // proceeds): that row's `accountId` IS this cash account AND it is
+    // incoming, so the old "incoming ⇒ the source is `account`" rule labelled a
+    // reksadana redemption "Transfer from Bank Jago" on Bank Jago's own
+    // statement instead of "Transfer from Bibit". Same rule the statement row
+    // renderer uses (transaction-list-row.tsx, PER-247).
+    const counterparty =
+      row.accountId === accountId ? row.toAccount?.name : row.account?.name
     return direction === 1
-      ? `Transfer from ${row.account?.name ?? "account"}`
-      : `Transfer to ${row.toAccount?.name ?? "account"}`
+      ? `Transfer from ${counterparty ?? "account"}`
+      : `Transfer to ${counterparty ?? "account"}`
   }
   return (
     row.category?.name ??
@@ -318,7 +341,7 @@ export function buildStatementCsv(
       [
         csvField(isoDate),
         csvField(row.description ?? ""),
-        csvField(labelFor(row, direction)),
+        csvField(labelFor(row, accountId, direction)),
         csvField(row.type),
         csvField(String(signed)),
         csvField(row.currency),

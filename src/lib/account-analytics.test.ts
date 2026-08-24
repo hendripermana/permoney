@@ -207,6 +207,7 @@ describe("buildStatementCsv", () => {
       amount: 35_000n,
       currency: "IDR",
       accountId: ID,
+      transferIncoming: null,
       category: { name: "Food" },
     },
     {
@@ -216,6 +217,7 @@ describe("buildStatementCsv", () => {
       amount: 100_000n,
       currency: "IDR",
       accountId: ID,
+      transferIncoming: null,
       category: { name: "Salary" },
     },
     {
@@ -225,7 +227,24 @@ describe("buildStatementCsv", () => {
       currency: "IDR",
       accountId: ID,
       toAccountId: "other",
+      transferIncoming: false,
       toAccount: { name: "GoPay" },
+    },
+    // A valuation-linked REDEMPTION (a Sell's proceeds): the single cash leg
+    // sits in the Transfer's INFLOW slot, so `accountId` is this cash account
+    // and `toAccountId` is the tracked account — structurally identical to the
+    // outgoing row above. Only `transferIncoming` distinguishes them, which is
+    // exactly why the CSV must read it and never infer from `toAccountId`.
+    {
+      date: "2026-03-13",
+      type: "transfer",
+      amount: 75_000n,
+      currency: "IDR",
+      accountId: ID,
+      toAccountId: "bibit",
+      transferIncoming: true,
+      account: { name: "Bank Jago" },
+      toAccount: { name: "Bibit" },
     },
   ]
 
@@ -238,6 +257,33 @@ describe("buildStatementCsv", () => {
     expect(lines[2]).toBe("2026-03-11,Salary,Salary,income,1000,IDR")
     // Transfer out → negative, labelled with the destination account.
     expect(lines[3]).toBe("2026-03-12,,Transfer to GoPay,transfer,-500,IDR")
+    // Sell proceeds arriving here → POSITIVE, named after the COUNTERPARTY
+    // (Bibit), never after this account itself.
+    expect(lines[4]).toBe("2026-03-13,,Transfer from Bibit,transfer,750,IDR")
+  })
+
+  it("names an incoming CLASSIC transfer leg after its source account", () => {
+    // Viewed from the DESTINATION account, the surfaced leg's `accountId` is
+    // the OTHER (source) account — so the counterparty is `account`, not
+    // `toAccount`. The same rule as the redemption row above, from the other
+    // side.
+    const line = buildStatementCsv(
+      [
+        {
+          date: "2026-03-12",
+          type: "transfer",
+          amount: 50_000n,
+          currency: "IDR",
+          accountId: "source",
+          toAccountId: ID,
+          transferIncoming: false,
+          account: { name: "Payroll" },
+          toAccount: { name: "Checking" },
+        },
+      ],
+      ID
+    ).split("\r\n")[1]
+    expect(line).toBe("2026-03-12,,Transfer from Payroll,transfer,500,IDR")
   })
 
   it("returns just the header for an empty statement", () => {

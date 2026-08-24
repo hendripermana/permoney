@@ -90,34 +90,73 @@ export function TradeDialog({
   const isBuy = side === "buy"
   const creatingInstrument = isBuy && instrumentChoice === NEW_INSTRUMENT
 
+  // A SELL needs an existing position; the instrument options are then just the
+  // holdings. A BUY can additionally create a new instrument.
+  const sellablePositions = holdings
+
+  // `instrumentChoice` is sticky across a Side flip, so a user who picked
+  // "New instrument…" while on Buy and then switched to Sell would otherwise
+  // submit the literal `__new__` sentinel and get the server's raw
+  // "Instrument __new__ not found for this family" back. Derive the effective
+  // choice for a SELL instead of synchronising state in an effect.
+  const selectedInstrumentId =
+    !isBuy && instrumentChoice === NEW_INSTRUMENT
+      ? (sellablePositions[0]?.instrument.id ?? NEW_INSTRUMENT)
+      : instrumentChoice
+  const heldQuantity =
+    holdings.find((holding) => holding.instrument.id === selectedInstrumentId)
+      ?.quantity ?? null
+
   // Live cash total = quantity × unit price, via the SAME pure helper the server
-  // uses for cost basis — pure derivation, no effect.
-  const cashPreview = React.useMemo<
-    { kind: "empty" } | { kind: "invalid" } | { kind: "valid"; minor: bigint }
+  // uses for cost basis — pure derivation, no effect. It also carries the
+  // reason a trade is not yet submittable, so the "you can't sell more than you
+  // hold" guard (ADR-0054's Sell cascade) is visible BEFORE submitting instead
+  // of only as a server rejection — the same shape `switch-dialog.tsx` already
+  // uses for its own held-units guard.
+  const preview = React.useMemo<
+    | { kind: "empty" }
+    | { kind: "invalid"; reason: string }
+    | { kind: "valid"; minor: bigint }
   >(() => {
     if (quantity.trim() === "" || unitPrice.trim() === "") {
       return { kind: "empty" }
     }
     const price = parseMoneyInput(unitPrice, currencyCode)
-    if (price === null || price <= 0n) return { kind: "invalid" }
-    try {
-      const scaled = quantityToScaled(quantity.trim())
-      if (scaled <= 0n) return { kind: "invalid" }
-      return { kind: "valid", minor: holdingCostMinor(scaled, price) }
-    } catch {
-      return { kind: "invalid" }
+    if (price === null || price <= 0n) {
+      return { kind: "invalid", reason: "Enter a valid unit price." }
     }
-  }, [quantity, unitPrice, currencyCode])
-
-  // A SELL needs an existing position; the instrument options are then just the
-  // holdings. A BUY can additionally create a new instrument.
-  const sellablePositions = holdings
+    let scaled: bigint
+    try {
+      scaled = quantityToScaled(quantity.trim())
+    } catch {
+      return { kind: "invalid", reason: "Enter a valid quantity." }
+    }
+    if (scaled <= 0n) {
+      return { kind: "invalid", reason: "Quantity must be greater than zero." }
+    }
+    if (!isBuy) {
+      if (heldQuantity === null) {
+        return { kind: "invalid", reason: "Choose a position to sell." }
+      }
+      if (scaled > quantityToScaled(heldQuantity)) {
+        return {
+          kind: "invalid",
+          reason: `Only ${heldQuantity} units held; you cannot sell more than that.`,
+        }
+      }
+    }
+    return { kind: "valid", minor: holdingCostMinor(scaled, price) }
+  }, [quantity, unitPrice, currencyCode, isBuy, heldQuantity])
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
     setError(null)
-    if (cashPreview.kind !== "valid") {
-      setError("Enter a valid quantity and unit price.")
+    if (preview.kind !== "valid") {
+      setError(
+        preview.kind === "invalid"
+          ? preview.reason
+          : "Enter a valid quantity and unit price."
+      )
       return
     }
     const price = parseMoneyInput(unitPrice, currencyCode)
@@ -131,7 +170,7 @@ export function TradeDialog({
         investmentAccountId,
         fundingAccountId,
         side,
-        cashAmount: cashPreview.minor.toString(),
+        cashAmount: preview.minor.toString(),
         quantity: quantity.trim(),
         unitPrice: price.toString(),
         idempotencyKey: createUuidV7(),
@@ -139,7 +178,7 @@ export function TradeDialog({
       if (!isBuy) {
         // SELL — must reference an existing position.
         await recordTradeFn({
-          data: { ...shared, instrumentId: instrumentChoice },
+          data: { ...shared, instrumentId: selectedInstrumentId },
         })
       } else if (creatingInstrument) {
         await recordTradeFn({
@@ -150,7 +189,7 @@ export function TradeDialog({
         })
       } else {
         await recordTradeFn({
-          data: { ...shared, instrumentId: instrumentChoice },
+          data: { ...shared, instrumentId: selectedInstrumentId },
         })
       }
       await onSaved()
@@ -166,7 +205,7 @@ export function TradeDialog({
     fundingAccountId === "" ||
     quantity.trim() === "" ||
     unitPrice.trim() === "" ||
-    cashPreview.kind !== "valid" ||
+    preview.kind !== "valid" ||
     (creatingInstrument && newName.trim() === "") ||
     (!isBuy && sellablePositions.length === 0)
 
@@ -186,7 +225,7 @@ export function TradeDialog({
             <DialogDescription>
               {isBuy
                 ? "Move cash into this account and grow a position. Net worth stays the same."
-                : "Sell a position; cash returns to your funding account. Realized gain is shown after."}
+                : "Sell a position; cash lands in the account you choose below. Realized gain is shown after."}
             </DialogDescription>
           </DialogHeader>
 
@@ -207,12 +246,20 @@ export function TradeDialog({
               </Select>
             </div>
             <div className="flex flex-col gap-2">
-              <Label>Funding account</Label>
+              {/* A Buy PAYS from this account; a Sell RECEIVES proceeds into
+                  it — same field, opposite direction of money. Labeling it
+                  "Funding account" for a Sell reads backwards (a user
+                  reported exactly this confusion after a real Sell — the
+                  cash correctly landed here, but the label implied it was
+                  the source, not the destination). */}
+              <Label>{isBuy ? "Funding account" : "Destination account"}</Label>
               <Select
                 value={fundingAccountId}
                 onValueChange={setFundingAccountId}
               >
-                <SelectTrigger aria-label="Funding account">
+                <SelectTrigger
+                  aria-label={isBuy ? "Funding account" : "Destination account"}
+                >
                   <SelectValue placeholder="Choose account" />
                 </SelectTrigger>
                 <SelectContent>
@@ -229,7 +276,7 @@ export function TradeDialog({
           <div className="flex flex-col gap-2">
             <Label>Instrument</Label>
             <Select
-              value={instrumentChoice}
+              value={selectedInstrumentId}
               onValueChange={setInstrumentChoice}
             >
               <SelectTrigger aria-label="Instrument">
@@ -254,6 +301,11 @@ export function TradeDialog({
             {!isBuy && sellablePositions.length === 0 ? (
               <p className="text-xs text-muted-foreground">
                 No positions to sell yet.
+              </p>
+            ) : null}
+            {!isBuy && heldQuantity !== null ? (
+              <p className="text-xs text-muted-foreground">
+                {heldQuantity} units held
               </p>
             ) : null}
           </div>
@@ -319,20 +371,24 @@ export function TradeDialog({
           <div
             className={cn(
               "flex items-center justify-between rounded-md border p-3 text-sm",
-              cashPreview.kind === "valid"
-                ? "bg-muted/50"
-                : "text-muted-foreground"
+              preview.kind === "valid" ? "bg-muted/50" : "text-muted-foreground"
             )}
           >
             <span className="text-muted-foreground">
               {isBuy ? "Cash out" : "Cash in"}
             </span>
             <span className="font-semibold tabular-nums">
-              {cashPreview.kind === "valid"
-                ? formatCurrency(cashPreview.minor.toString(), currency)
+              {preview.kind === "valid"
+                ? formatCurrency(preview.minor.toString(), currency)
                 : "—"}
             </span>
           </div>
+
+          {preview.kind === "invalid" ? (
+            <p className="text-sm text-destructive" role="alert">
+              {preview.reason}
+            </p>
+          ) : null}
 
           {error ? (
             <p className="text-sm text-destructive" role="alert">

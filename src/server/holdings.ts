@@ -1550,7 +1550,12 @@ export const recordTradeFn = createServerFn({ method: "POST" })
 // "Latest" is an IDENTITY check (the `Holding.lastMutationIdempotencyKey`
 // marker — see the migration + `SerializedHolding` doc comments), never a
 // value diff: a later Sell-then-rebuy-at-the-same-price could coincidentally
-// reproduce the original quantity/cost and falsely look "unchanged".
+// reproduce the original quantity/cost and falsely look "unchanged". When the
+// position row itself is GONE (a sell-to-zero, a switch-all-out, a manual
+// holding delete) the marker died with it, so the SAME identity question is put
+// to the position's append-only `AuditLog` history instead — see
+// `isLastQuantityMutationForPosition`, which closed the residual gaps the
+// original Slice 5 guard documented (audit follow-up, 2026-08-24).
 //
 // DELETE reuses the EXISTING valuation-linked-transfer delete path
 // (`softDeleteValuationLinkedTransferWithinTx`, transactions.ts) via its new
@@ -1611,6 +1616,10 @@ interface ResolvedTradeForCorrection {
   investmentAccount: Awaited<ReturnType<typeof fetchActiveAccount>>
   tradeKey: string
   holdingId: string
+  /** The id of THIS trade's own `Holding` AuditLog row — the durable, append-only
+   * identity of the position change it made. `assertTradeIsLatest` compares it
+   * against the position's most recent quantity-mutating audit row (see there). */
+  holdingAuditId: string
   holdingBefore: HoldingSnapshot | null
   holdingAfter: HoldingSnapshot | null
 }
@@ -1694,14 +1703,88 @@ async function resolveTradeForCorrection(
     investmentAccount,
     tradeKey,
     holdingId: holdingRow.entityId,
+    holdingAuditId: holdingRow.id,
     holdingBefore,
     holdingAfter,
   }
 }
 
-// The "latest quantity-mutating event" guard (ADR-0054 Slice 5 scope). See the
-// section header for the identity-vs-value-diff rationale and the one
-// documented residual gap (reopen-then-reclose after a sell-to-zero).
+// The append-only answer to "is THIS trade still the last quantity-mutating
+// event on its position?" for the case where the `Holding` ROW IS GONE (so the
+// `lastMutationIdempotencyKey` marker it carried died with it — a sell-to-zero,
+// a switch-all-out, or a manual `deleteHoldingForFamily`).
+//
+// PRODUCTION BUG THIS FIXES (found 2026-08-24, verified by real-Postgres repro
+// in `tests/integration/trade-corrections.integration.ts` — "closed by a LATER
+// event"): the previous fallback only asked "was the position REOPENED since?"
+// (is there a live `Holding` for this account+instrument). That cannot tell
+// "THIS trade closed the position" from "a LATER trade closed it", so
+// `Buy → Sell ALL → delete/correct the BUY` and
+// `Buy → Switch ALL of A into B → delete/correct the BUY` both passed the guard
+// and reversed the buy's cash leg against a position that was already gone —
+// conjuring the trade's cash out of nothing (proved: +1,000,000 sen).
+//
+// The position's history survives the row in `AuditLog`, so ask THAT instead:
+// find the most recent quantity-mutating `Holding` audit row for this position
+// IDENTITY (account + instrument, carried in the snapshot JSON — the row id
+// changes when a closed position is reopened) and require it to be this trade's
+// OWN row. Row-id identity, never a value diff and never a timestamp
+// comparison, so it stays exact.
+//
+// "Quantity-mutating" is the SAME predicate the backfill migration
+// `20260823121700_backfill_holding_last_mutation_key` uses: a create, a delete,
+// or an update that moved `quantity` / `avgUnitCostMinor`. A price-only touch
+// (`refreshHoldingPricesForFamily`) is deliberately transparent here, exactly
+// as it is to the marker.
+//
+// ORDERING: `AuditLog.createdAt` defaults to `CURRENT_TIMESTAMP`, which in
+// Postgres is the TRANSACTION's start time — so every row a single correction
+// writes (its reversal's restore + its reapply's re-mutation) shares one
+// timestamp and cannot be ordered by it. The `action = 'delete'` tiebreak makes
+// that deterministic without leaning on cuid monotonicity: this fallback is
+// only ever reached when the Holding row is GONE, so whatever the newest
+// timestamp's rows are, the DELETE among them is the one that left the position
+// in its current (absent) state.
+//
+// This subsumes ALL three residual gaps ADR-0054 Slice 5 documented (a later
+// close, a reopen-then-reclose cascade, and an out-of-band
+// `deleteHoldingForFamily`): each one writes its own later audit row, so the
+// comparison fails and the correction is refused with the actionable message
+// instead of silently producing wrong money.
+async function isLastQuantityMutationForPosition(
+  tx: TenantTransactionClient,
+  familyId: string,
+  {
+    accountId,
+    instrumentId,
+    holdingAuditId,
+  }: { accountId: string; instrumentId: string; holdingAuditId: string }
+): Promise<boolean> {
+  const rows = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT al.id
+    FROM "AuditLog" al
+    WHERE al."familyId" = ${familyId}
+      AND al."entityType" = 'Holding'
+      AND COALESCE(al."afterJson" ->> 'accountId', al."beforeJson" ->> 'accountId') = ${accountId}
+      AND COALESCE(al."afterJson" ->> 'instrumentId', al."beforeJson" ->> 'instrumentId') = ${instrumentId}
+      AND (
+        al.action = 'create'
+        OR al.action = 'delete'
+        OR (al."beforeJson" ->> 'quantity') IS DISTINCT FROM (al."afterJson" ->> 'quantity')
+        OR (al."beforeJson" ->> 'avgUnitCostMinor') IS DISTINCT FROM (al."afterJson" ->> 'avgUnitCostMinor')
+      )
+    ORDER BY al."createdAt" DESC, (al.action = 'delete') DESC, al.id DESC
+    LIMIT 1
+  `
+  return rows[0]?.id === holdingAuditId
+}
+
+// The "latest quantity-mutating event" guard (ADR-0054 Slice 5 scope). Two
+// sources of truth, one rule: while the `Holding` row still exists its
+// `lastMutationIdempotencyKey` marker answers directly; once the row is gone
+// the position's `AuditLog` history answers instead
+// (`isLastQuantityMutationForPosition`). See the section header for the
+// identity-vs-value-diff rationale.
 async function assertTradeIsLatest(
   tx: TenantTransactionClient,
   familyId: string,
@@ -1718,31 +1801,32 @@ async function assertTradeIsLatest(
     }
     return
   }
-  // The Holding row no longer exists. The common, expected case: THIS trade
-  // itself was a SELL that closed the position to zero (a hard delete, same
-  // as `recordTradeForFamily`'s close-to-zero branch) — safe to correct as
-  // long as nothing has REOPENED the same (account, instrument) position
-  // since (a fresh Holding row would exist if a later Buy/Switch did so).
+  // The Holding ROW no longer exists, so the marker it carried is gone with it.
+  // The common, expected case: THIS trade itself was a SELL that closed the
+  // position to zero (a hard delete, same as `recordTradeForFamily`'s
+  // close-to-zero branch). But a LATER event can leave exactly the same
+  // "no row" state — a later sell-to-zero, a switch-all-out, or a manual
+  // `deleteHoldingForFamily` — and reversing THIS trade against a position
+  // some LATER trade already consumed conjures its cash out of nothing.
   //
-  // KNOWN LIMITATION (ADR-0054 — explicitly "not a full historical-replay
-  // engine"): a reopen-THEN-reclose cascade, or an unrelated manual
-  // `deleteHoldingForFamily` call, both leave no CURRENT Holding row either,
-  // and are not distinguishable from "still latest" by this fallback alone.
-  // This is the one documented residual gap in the Slice 5 guard.
+  // The row is gone; its append-only history is not. Ask `AuditLog` whether
+  // this trade's own position change is still the most recent quantity-mutating
+  // one for this position identity (see `isLastQuantityMutationForPosition`).
+  // A reopened position is caught by the SAME comparison (the reopening Buy /
+  // Switch writes a later `create` row), so this single check replaces the old
+  // "was it reopened?" probe and closes every gap it left.
   const identity = resolved.holdingBefore ?? resolved.holdingAfter
   if (!identity) {
     throw new Error("Cannot determine the position identity for this trade")
   }
-  const reopened = await tx.holding.findFirst({
-    where: {
-      familyId,
-      accountId: identity.accountId,
-      instrumentId: identity.instrumentId,
-    },
+  const stillLatest = await isLastQuantityMutationForPosition(tx, familyId, {
+    accountId: identity.accountId,
+    instrumentId: identity.instrumentId,
+    holdingAuditId: resolved.holdingAuditId,
   })
-  if (reopened) {
+  if (!stillLatest) {
     throw new HoldingError(
-      "This trade has activity after it (the position was reopened since) — record a correcting trade instead of editing this one."
+      "This trade has activity after it (a later Buy/Sell, Switch, or Dividend reinvest closed or reopened this position) — record a correcting trade instead of editing this one."
     )
   }
 }
