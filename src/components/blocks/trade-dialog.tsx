@@ -137,8 +137,9 @@ export function TradeDialog({
   // above instead of missing the held position whenever `instrumentChoice` is
   // still the stale `__new__` sentinel.
   const selectedHolding =
-    holdings.find((holding) => holding.instrument.id === selectedInstrumentId) ??
-    null
+    holdings.find(
+      (holding) => holding.instrument.id === selectedInstrumentId
+    ) ?? null
   const heldQuantity = selectedHolding?.quantity ?? null
 
   const unitPriceMinor = React.useMemo<bigint | null>(() => {
