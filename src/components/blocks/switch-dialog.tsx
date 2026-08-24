@@ -19,6 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { DialogDateField } from "@/components/blocks/dialog-date-field"
 import { MoneyInput } from "@/components/blocks/money-input"
 import { formatCurrency } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
@@ -309,12 +310,10 @@ export function SwitchDialog({
               </Select>
             </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="switch-date">Date</Label>
-              <Input
+              <DialogDateField
                 id="switch-date"
-                type="date"
                 value={date}
-                onChange={(e) => setDate(e.target.value)}
+                onChange={setDate}
                 required
               />
             </div>

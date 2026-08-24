@@ -10,7 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
+import { DialogDateField } from "@/components/blocks/dialog-date-field"
 import { Label } from "@/components/ui/label"
 import {
   Select,
@@ -230,12 +230,10 @@ export function DistributionDialog({
               />
             </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="distribution-date">Date</Label>
-              <Input
+              <DialogDateField
                 id="distribution-date"
-                type="date"
                 value={date}
-                onChange={(e) => setDate(e.target.value)}
+                onChange={setDate}
                 required
               />
             </div>
