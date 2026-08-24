@@ -48,6 +48,69 @@ function toDateInputValue(iso: string): string {
   return iso.slice(0, 10)
 }
 
+// Shared by both correction forms below — identical Date field, identical
+// error+footer shape (Cancel / "Save correction"), so the two forms can't
+// drift in wording as they evolve independently.
+function CorrectionDateField({
+  idPrefix,
+  value,
+  onChange,
+  disabled,
+}: {
+  idPrefix: string
+  value: string
+  onChange: (value: string) => void
+  disabled: boolean
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <Label htmlFor={`${idPrefix}-date`}>Date</Label>
+      <Input
+        id={`${idPrefix}-date`}
+        type="date"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+      />
+    </div>
+  )
+}
+
+function CorrectionFormFooter({
+  error,
+  onClose,
+  submitting,
+  submitDisabled,
+}: {
+  error: string | null
+  onClose: () => void
+  submitting: boolean
+  submitDisabled: boolean
+}) {
+  return (
+    <>
+      {error ? (
+        <p className="text-sm text-destructive" role="alert">
+          {error}
+        </p>
+      ) : null}
+      <DialogFooter>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={onClose}
+          disabled={submitting}
+        >
+          Cancel
+        </Button>
+        <Button type="submit" disabled={submitDisabled}>
+          {submitting ? "Saving…" : "Save correction"}
+        </Button>
+      </DialogFooter>
+    </>
+  )
+}
+
 export function HoldingEventCorrectionDialog({
   eventId,
   onClose,
@@ -262,16 +325,12 @@ function SwitchCorrectionForm({
             required
           />
         </div>
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="switch-correction-date">Date</Label>
-          <Input
-            id="switch-correction-date"
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            disabled={locked}
-          />
-        </div>
+        <CorrectionDateField
+          idPrefix="switch-correction"
+          value={date}
+          onChange={setDate}
+          disabled={locked}
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-3">
@@ -329,28 +388,12 @@ function SwitchCorrectionForm({
         </div>
       </div>
 
-      {error ? (
-        <p className="text-sm text-destructive" role="alert">
-          {error}
-        </p>
-      ) : null}
-
-      <DialogFooter>
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={onClose}
-          disabled={submitting}
-        >
-          Cancel
-        </Button>
-        <Button
-          type="submit"
-          disabled={submitting || locked || preview.kind !== "valid"}
-        >
-          {submitting ? "Saving…" : "Save correction"}
-        </Button>
-      </DialogFooter>
+      <CorrectionFormFooter
+        error={error}
+        onClose={onClose}
+        submitting={submitting}
+        submitDisabled={submitting || locked || preview.kind !== "valid"}
+      />
     </form>
   )
 }
@@ -459,16 +502,12 @@ function ReinvestCorrectionForm({
             required
           />
         </div>
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="reinvest-correction-date">Date</Label>
-          <Input
-            id="reinvest-correction-date"
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            disabled={locked}
-          />
-        </div>
+        <CorrectionDateField
+          idPrefix="reinvest-correction"
+          value={date}
+          onChange={setDate}
+          disabled={locked}
+        />
       </div>
 
       <div className="flex flex-col gap-2">
@@ -497,28 +536,12 @@ function ReinvestCorrectionForm({
         </span>
       </div>
 
-      {error ? (
-        <p className="text-sm text-destructive" role="alert">
-          {error}
-        </p>
-      ) : null}
-
-      <DialogFooter>
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={onClose}
-          disabled={submitting}
-        >
-          Cancel
-        </Button>
-        <Button
-          type="submit"
-          disabled={submitting || locked || preview.kind !== "valid"}
-        >
-          {submitting ? "Saving…" : "Save correction"}
-        </Button>
-      </DialogFooter>
+      <CorrectionFormFooter
+        error={error}
+        onClose={onClose}
+        submitting={submitting}
+        submitDisabled={submitting || locked || preview.kind !== "valid"}
+      />
     </form>
   )
 }
