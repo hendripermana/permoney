@@ -137,6 +137,34 @@ describe("trade corrections — delete & edit (PER-259 Slice 5 / ADR-0054)", () 
       user: owner.user,
     })
 
+  const sellFund = async (
+    owner: AuthenticatedOnboardedUser,
+    investmentAccountId: string,
+    fundingAccountId: string,
+    instrumentId: string | undefined,
+    overrides: {
+      quantity?: string
+      unitPrice?: string
+      cashAmount?: string
+      idempotencyKey?: string
+    } = {}
+  ) =>
+    await recordTradeForFamily({
+      data: {
+        investmentAccountId,
+        fundingAccountId,
+        instrumentId,
+        side: "sell",
+        cashAmount: overrides.cashAmount ?? "1200000",
+        quantity: overrides.quantity ?? "100",
+        unitPrice: overrides.unitPrice ?? "12000",
+        idempotencyKey:
+          overrides.idempotencyKey ?? factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
   const holdingRow = (owner: AuthenticatedOnboardedUser, holdingId: string) =>
     harness.withFamily(owner.family.id, async (tx) =>
       tx.holding.findFirst({
@@ -609,20 +637,12 @@ describe("trade corrections — delete & edit (PER-259 Slice 5 / ADR-0054)", () 
     const openingNetWorth = await netWorth(owner, [investment.id, cash.id])
 
     const buy = await buyFund(owner, investment.id, cash.id)
-    await recordTradeForFamily({
-      data: {
-        investmentAccountId: investment.id,
-        fundingAccountId: cash.id,
-        instrumentId: buy.holding?.instrumentId ?? undefined,
-        side: "sell",
-        cashAmount: "1200000",
-        quantity: "100",
-        unitPrice: "12000",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
+    await sellFund(
+      owner,
+      investment.id,
+      cash.id,
+      buy.holding?.instrumentId ?? undefined
+    )
     const cashAfterSell = await balanceOf(owner, cash.id)
 
     await expect(
@@ -652,20 +672,12 @@ describe("trade corrections — delete & edit (PER-259 Slice 5 / ADR-0054)", () 
     const cash = await makeCashAccount(owner)
 
     const buy = await buyFund(owner, investment.id, cash.id)
-    await recordTradeForFamily({
-      data: {
-        investmentAccountId: investment.id,
-        fundingAccountId: cash.id,
-        instrumentId: buy.holding?.instrumentId ?? undefined,
-        side: "sell",
-        cashAmount: "1200000",
-        quantity: "100",
-        unitPrice: "12000",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
+    await sellFund(
+      owner,
+      investment.id,
+      cash.id,
+      buy.holding?.instrumentId ?? undefined
+    )
     const cashAfterSell = await balanceOf(owner, cash.id)
 
     await expect(
@@ -737,28 +749,12 @@ describe("trade corrections — delete & edit (PER-259 Slice 5 / ADR-0054)", () 
 
     const buy1 = await buyFund(owner, investment.id, cash.id)
     const instrumentId = buy1.holding?.instrumentId ?? undefined
-    const sellOptions = (key: string) => ({
-      data: {
-        investmentAccountId: investment.id,
-        fundingAccountId: cash.id,
-        instrumentId,
-        side: "sell" as const,
-        cashAmount: "1200000",
-        quantity: "100",
-        unitPrice: "12000",
-        idempotencyKey: key,
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
-    const sell1 = await recordTradeForFamily(
-      sellOptions(factories.createIdempotencyKey())
-    )
+    const sell1 = await sellFund(owner, investment.id, cash.id, instrumentId)
     // Reopen the SAME position, then close it again — the first sell is no
     // longer the position's last quantity-mutating event even though no
     // Holding row exists to say so.
     await buyFund(owner, investment.id, cash.id, { instrumentId })
-    await recordTradeForFamily(sellOptions(factories.createIdempotencyKey()))
+    await sellFund(owner, investment.id, cash.id, instrumentId)
     const cashBefore = await balanceOf(owner, cash.id)
 
     await expect(
@@ -813,20 +809,12 @@ describe("trade corrections — delete & edit (PER-259 Slice 5 / ADR-0054)", () 
     const openingNetWorth = await netWorth(owner, [investment.id, cash.id])
 
     const buy = await buyFund(owner, investment.id, cash.id)
-    const sell = await recordTradeForFamily({
-      data: {
-        investmentAccountId: investment.id,
-        fundingAccountId: cash.id,
-        instrumentId: buy.holding?.instrumentId ?? undefined,
-        side: "sell",
-        cashAmount: "1200000",
-        quantity: "100",
-        unitPrice: "12000",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
+    const sell = await sellFund(
+      owner,
+      investment.id,
+      cash.id,
+      buy.holding?.instrumentId ?? undefined
+    )
 
     // A correction writes its reversal's re-create AND its reapply's re-delete
     // in ONE transaction, so both audit rows share `CURRENT_TIMESTAMP`. The
