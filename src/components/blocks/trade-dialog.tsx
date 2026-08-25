@@ -19,7 +19,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { DialogDateField } from "@/components/blocks/dialog-date-field"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { DialogDateTimeField } from "@/components/blocks/dialog-date-time-field"
 import { MoneyInput } from "@/components/blocks/money-input"
 import { formatCurrency } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
@@ -30,7 +31,7 @@ import {
   unitsFromAmountScaled,
 } from "@/lib/holdings"
 import { INSTRUMENT_KIND_OPTIONS, type InstrumentKind } from "@/lib/instruments"
-import { parseMoneyInput } from "@/lib/money"
+import { parseMoneyInput, toDecimalString } from "@/lib/money"
 import { cn } from "@/lib/utils"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import type { HoldingRecord } from "@/routes/_protected/-account-holdings"
@@ -57,14 +58,12 @@ const NEW_INSTRUMENT = "__new__"
 // the two dialogs cannot drift apart.
 type Basis = "quantity" | "amount"
 
-// Was missing entirely until a real creator report (2026-08-24): a trade
-// recorded a few days after it actually happened had no way to be dated
-// correctly — every other money-movement dialog (Switch, Dividend, Fee, and
-// even the trade-CORRECTION dialog) already has a Date field; this was the
-// one gap. Defaults to today, exactly like the others.
-function toDateInputValue(date: Date): string {
-  return date.toISOString().slice(0, 10)
-}
+// The Sell quick-allocation chips: fractions of the position currently held.
+// 100 is spelled out (rather than folded into the ×pct/100 arithmetic) so
+// "sell everything" lands on the held quantity EXACTLY — an integer-truncated
+// 100% could otherwise leave a dust unit behind and quietly keep the position
+// open.
+const SELL_FRACTIONS = [25, 50, 75, 100] as const
 
 export interface TradeFundingAccount {
   id: string
@@ -82,6 +81,7 @@ export function TradeDialog({
   currency,
   fundingAccounts,
   holdings,
+  defaultFundingAccountId,
   onClose,
   onSaved,
 }: {
@@ -90,6 +90,12 @@ export function TradeDialog({
   currency: string
   fundingAccounts: ReadonlyArray<TradeFundingAccount>
   holdings: ReadonlyArray<HoldingRecord>
+  /**
+   * Pre-select the cash account the trade funds from / lands in. Used by the
+   * global ledger's Transfer tab, which redirects into this dialog carrying the
+   * counterpart account the user had already picked there.
+   */
+  defaultFundingAccountId?: string
   onClose: () => void
   onSaved: () => Promise<void>
 }) {
@@ -98,7 +104,10 @@ export function TradeDialog({
 
   const [side, setSide] = React.useState<"buy" | "sell">(state.side)
   const [fundingAccountId, setFundingAccountId] = React.useState<string>(
-    fundingAccounts[0]?.id ?? ""
+    () =>
+      fundingAccounts.find((a) => a.id === defaultFundingAccountId)?.id ??
+      fundingAccounts[0]?.id ??
+      ""
   )
   // Instrument choice: an existing holding's instrumentId, or NEW_INSTRUMENT.
   const [instrumentChoice, setInstrumentChoice] = React.useState<string>(
@@ -109,8 +118,15 @@ export function TradeDialog({
   const [basis, setBasis] = React.useState<Basis>("quantity")
   const [quantity, setQuantity] = React.useState<string>("")
   const [amount, setAmount] = React.useState<string>("")
-  const [unitPrice, setUnitPrice] = React.useState<string>("")
-  const [date, setDate] = React.useState<string>(toDateInputValue(new Date()))
+  // `null` = the user has not touched the Unit price field, so it shows the
+  // selected position's last known price as its DEFAULT (see `unitPrice`
+  // below). Derived-during-render instead of an effect that writes state when
+  // the instrument changes (CLAUDE.md §1 useEffect ban): once the user types,
+  // the draft wins and nothing ever clobbers their input.
+  const [unitPriceDraft, setUnitPriceDraft] = React.useState<string | null>(
+    null
+  )
+  const [date, setDate] = React.useState<Date>(() => new Date())
   const [error, setError] = React.useState<string | null>(null)
   const [submitting, setSubmitting] = React.useState(false)
 
@@ -142,6 +158,26 @@ export function TradeDialog({
       (holding) => holding.instrument.id === selectedInstrumentId
     ) ?? null
   const heldQuantity = selectedHolding?.quantity ?? null
+
+  // The position's LAST KNOWN price — the same fallback chain the holdings list
+  // and `switch-dialog.tsx` already use (a fetched/manual last price, else the
+  // average unit cost). Deliberately NOT called a "live market price": not
+  // every instrument has fresh market data, so this is only the newest figure
+  // Permoney holds.
+  const lastKnownPriceMinor =
+    selectedHolding === null
+      ? null
+      : BigInt(
+          selectedHolding.lastPriceMinor ?? selectedHolding.avgUnitCostMinor
+        )
+  const lastKnownPriceInput =
+    lastKnownPriceMinor === null
+      ? ""
+      : toDecimalString(lastKnownPriceMinor, currencyCode)
+
+  // Default, never a lock: prefilled from the position while untouched, fully
+  // editable the moment the user types.
+  const unitPrice = unitPriceDraft ?? lastKnownPriceInput
 
   const unitPriceMinor = React.useMemo<bigint | null>(() => {
     if (unitPrice.trim() === "") return null
@@ -240,6 +276,35 @@ export function TradeDialog({
     heldQuantity,
   ])
 
+  // Units currently held, scaled — drives the Sell quick-allocation chips.
+  const heldQuantityScaled = React.useMemo<bigint | null>(() => {
+    if (heldQuantity === null) return null
+    try {
+      return quantityToScaled(heldQuantity)
+    } catch {
+      return null
+    }
+  }, [heldQuantity])
+
+  // ESTIMATED realized gain on a Sell: proceeds − (units sold × this position's
+  // average unit cost). Both inputs are already client-side (the holdings list
+  // carries `avgUnitCostMinor`), so this needs no extra round-trip — but the
+  // SERVER is the authority: it blends cost basis at commit time, so its figure
+  // can differ by a rounding hair. Labeled "Est." for exactly that reason.
+  // A Buy realizes nothing, so this stays null there.
+  const estimatedRealizedGainMinor = React.useMemo<bigint | null>(() => {
+    if (isBuy || preview.kind !== "valid" || selectedHolding === null) {
+      return null
+    }
+    return (
+      preview.cashMinor -
+      holdingCostMinor(
+        preview.quantityScaled,
+        BigInt(selectedHolding.avgUnitCostMinor)
+      )
+    )
+  }, [isBuy, preview, selectedHolding])
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
     setError(null)
@@ -269,7 +334,10 @@ export function TradeDialog({
           ? quantity.trim()
           : scaledToQuantityString(preview.quantityScaled),
         unitPrice: unitPriceMinor.toString(),
-        tradeDate: date,
+        // Full timestamp, not a bare calendar day: `Transaction.date` has always
+        // been a DateTime and the schema coerces one, so the exact minute the
+        // user picked is the minute that posts.
+        tradeDate: date.toISOString(),
         idempotencyKey: createUuidV7(),
       }
       if (!isBuy) {
@@ -307,7 +375,11 @@ export function TradeDialog({
 
   return (
     <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
-      <DialogContent>
+      {/* Adding the Time half made every one of these forms a row taller, so
+          the footer could fall past the fold on a short viewport and leave the
+          submit button unclickable. Same scroll shell the main transaction
+          modal already uses. */}
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -328,18 +400,35 @@ export function TradeDialog({
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-2">
               <Label>Side</Label>
-              <Select
+              {/* Two mutually-exclusive options read better as a segmented
+                  control than as a dropdown that hides one of them. */}
+              <ToggleGroup
+                type="single"
+                variant="outline"
                 value={side}
-                onValueChange={(value) => setSide(value as "buy" | "sell")}
+                aria-label="Trade side"
+                onValueChange={(value) => {
+                  // Radix clears the value when the active item is re-clicked;
+                  // a trade always has a side, so ignore the empty case.
+                  if (value === "buy" || value === "sell") setSide(value)
+                }}
+                className="w-full"
               >
-                <SelectTrigger aria-label="Trade side">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="buy">Buy</SelectItem>
-                  <SelectItem value="sell">Sell</SelectItem>
-                </SelectContent>
-              </Select>
+                <ToggleGroupItem
+                  value="buy"
+                  className="flex-1"
+                  title="Money moves into this position"
+                >
+                  Buy
+                </ToggleGroupItem>
+                <ToggleGroupItem
+                  value="sell"
+                  className="flex-1"
+                  title="Units leave this position and cash comes back"
+                >
+                  Sell
+                </ToggleGroupItem>
+              </ToggleGroup>
             </div>
             <div className="flex flex-col gap-2">
               {/* A Buy PAYS from this account; a Sell RECEIVES proceeds into
@@ -440,7 +529,9 @@ export function TradeDialog({
           ) : null}
 
           <div className="flex flex-col gap-2">
-            <Label>Enter by</Label>
+            <Label title="Type the units you traded, or the cash you moved — whichever you actually know. The other side is derived at the unit price below.">
+              Enter by
+            </Label>
             <Select
               value={basis}
               onValueChange={(value) => setBasis(value as Basis)}
@@ -469,6 +560,38 @@ export function TradeDialog({
                   placeholder="e.g. 2.018"
                   required
                 />
+                {/* Sell-side quick allocation: "sell half of it" is how people
+                    actually think about a position. Quantity basis only — an
+                    amount-driven chip would round back through
+                    `unitsFromAmountScaled` and could leave dust behind on a
+                    100%, which is exactly what these must never do. */}
+                {!isBuy &&
+                heldQuantityScaled !== null &&
+                heldQuantityScaled > 0n ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {SELL_FRACTIONS.map((pct) => (
+                      <Button
+                        key={pct}
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        title={`Sell ${pct}% of the ${heldQuantity} units held`}
+                        onClick={() =>
+                          setQuantity(
+                            scaledToQuantityString(
+                              pct === 100
+                                ? heldQuantityScaled
+                                : (heldQuantityScaled * BigInt(pct)) / 100n
+                            )
+                          )
+                        }
+                      >
+                        {pct}%
+                      </Button>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             ) : (
               <div className="flex flex-col gap-2">
@@ -484,19 +607,39 @@ export function TradeDialog({
               </div>
             )}
             <div className="flex flex-col gap-2">
-              <Label htmlFor="trade-unit-price">Unit price ({currency})</Label>
+              <Label
+                htmlFor="trade-unit-price"
+                title="Price per unit for THIS trade. Prefilled with the last price Permoney knows for this position — overwrite it with the price you actually traded at."
+              >
+                Unit price ({currency})
+              </Label>
               <MoneyInput
                 id="trade-unit-price"
                 currency={currencyCode}
                 value={unitPrice}
-                onChange={setUnitPrice}
+                onChange={setUnitPriceDraft}
                 placeholder="0"
                 required
               />
+              {lastKnownPriceMinor === null ? null : unitPrice ===
+                lastKnownPriceInput ? (
+                <p className="text-xs text-muted-foreground">
+                  Last known price — edit if this trade used a different one.
+                </p>
+              ) : (
+                <button
+                  type="button"
+                  className="w-fit text-xs text-muted-foreground underline-offset-2 hover:underline"
+                  onClick={() => setUnitPriceDraft(lastKnownPriceInput)}
+                >
+                  Use last known:{" "}
+                  {formatCurrency(lastKnownPriceMinor, currency)}
+                </button>
+              )}
             </div>
           </div>
 
-          <DialogDateField
+          <DialogDateTimeField
             id="trade-date"
             value={date}
             onChange={setDate}
@@ -541,6 +684,36 @@ export function TradeDialog({
                   : "—"}
               </span>
             </div>
+            {/* Sell only — a Buy realizes nothing. An ESTIMATE from this
+                position's average cost; the server recomputes the booked
+                figure when the trade commits. */}
+            {!isBuy ? (
+              <div className="flex items-center justify-between">
+                <span
+                  className="text-muted-foreground"
+                  title="Estimated from this position's average unit cost. The exact figure is computed by the server when the sell is recorded."
+                >
+                  Est. realized gain/loss
+                </span>
+                <span
+                  className={cn(
+                    "font-semibold tabular-nums",
+                    estimatedRealizedGainMinor === null
+                      ? ""
+                      : estimatedRealizedGainMinor > 0n
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : estimatedRealizedGainMinor < 0n
+                          ? "text-destructive"
+                          : ""
+                  )}
+                  data-testid="trade-estimated-gain"
+                >
+                  {estimatedRealizedGainMinor === null
+                    ? "—"
+                    : formatCurrency(estimatedRealizedGainMinor, currency)}
+                </span>
+              </div>
+            ) : null}
           </div>
 
           {preview.kind === "invalid" ? (

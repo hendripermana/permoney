@@ -20,6 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { DialogDateTimeField } from "@/components/blocks/dialog-date-time-field"
 import { DialogLoadingOrError } from "@/components/blocks/dialog-loading-state"
 import { MoneyInput } from "@/components/blocks/money-input"
 import { formatCurrency } from "@/lib/currency"
@@ -45,10 +46,6 @@ import {
 // history — not editable, moving a position between instruments/accounts is
 // out of scope), and submission is reversal-and-replace
 // (`correctTradeFn`) rather than a fresh trade.
-
-function toDateInputValue(iso: string): string {
-  return iso.slice(0, 10)
-}
 
 export interface TradeCorrectionFundingAccount {
   id: string
@@ -79,7 +76,11 @@ export function TradeCorrectionDialog({
 
   return (
     <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
-      <DialogContent>
+      {/* Adding the Time half made every one of these forms a row taller, so
+          the footer could fall past the fold on a short viewport and leave the
+          submit button unclickable. Same scroll shell the main transaction
+          modal already uses. */}
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogLoadingOrError
           isLoading={isLoading}
           error={loadError}
@@ -133,8 +134,8 @@ function TradeCorrectionForm({
   const [unitPrice, setUnitPrice] = React.useState<string>(
     toDecimalString(initialUnitPriceMinor, currencyCode)
   )
-  const [date, setDate] = React.useState<string>(
-    toDateInputValue(details.tradeDate)
+  const [date, setDate] = React.useState<Date>(
+    () => new Date(details.tradeDate)
   )
   const [error, setError] = React.useState<string | null>(
     details.notLatestReason
@@ -182,7 +183,7 @@ function TradeCorrectionForm({
           cashAmount: cashPreview.minor.toString(),
           quantity: quantity.trim(),
           unitPrice: price.toString(),
-          tradeDate: new Date(date),
+          tradeDate: date.toISOString(),
           idempotencyKey: createUuidV7(),
         },
       })
@@ -294,16 +295,12 @@ function TradeCorrectionForm({
         </div>
       </div>
 
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="trade-correction-date">Date</Label>
-        <Input
-          id="trade-correction-date"
-          type="date"
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-          disabled={details.notLatestReason !== null}
-        />
-      </div>
+      <DialogDateTimeField
+        id="trade-correction-date"
+        value={date}
+        onChange={setDate}
+        disabled={details.notLatestReason !== null}
+      />
 
       <div
         className={cn(

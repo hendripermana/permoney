@@ -82,8 +82,9 @@ test.describe("Sell guards in the Buy/Sell dialog", () => {
     const flipDialog = page.getByRole("dialog")
     await flipDialog.getByRole("combobox", { name: "Instrument" }).click()
     await page.getByRole("option", { name: "New instrument…" }).click()
-    await flipDialog.getByRole("combobox", { name: "Trade side" }).click()
-    await page.getByRole("option", { name: "Sell" }).click()
+    // Side is a segmented toggle (Radix ToggleGroup type="single" → radios),
+    // not a dropdown.
+    await flipDialog.getByRole("radio", { name: "Sell" }).click()
     await expect(
       flipDialog.getByRole("combobox", { name: "Instrument" })
     ).toContainText(fundName)

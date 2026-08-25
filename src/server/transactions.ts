@@ -79,7 +79,7 @@ export const getTransactionFormData = createServerFn({ method: "GET" })
       context.familyId,
       context.user.id,
       async (tx) => {
-        const [accounts, categories, merchants] =
+        const [accounts, categories, merchants, holdingAccounts] =
           await runTenantTransactionQueriesInOrder([
             () =>
               tx.account.findMany({
@@ -98,8 +98,30 @@ export const getTransactionFormData = createServerFn({ method: "GET" })
                 where: { familyId: context.familyId },
                 orderBy: { name: "asc" },
               }),
+            // PER-259 / ADR-0054 — which accounts carry holdings, so the form
+            // can say so BEFORE the user fills in a transfer the server is
+            // bound to reject (`HoldingsAccountLedgerError`). One distinct
+            // id-only scan over the tenant's holdings, not an N+1 EXISTS per
+            // account; the same predicate `accountHasHoldings` keys off,
+            // hoisted to the whole family at once.
+            () =>
+              tx.holding.findMany({
+                where: { familyId: context.familyId },
+                select: { accountId: true },
+                distinct: ["accountId"],
+              }),
           ] as const)
-        return { accounts, categories, merchants }
+        const holdingsAccountIds = new Set(
+          holdingAccounts.map((holding) => holding.accountId)
+        )
+        return {
+          accounts: accounts.map((account) => ({
+            ...account,
+            hasHoldings: holdingsAccountIds.has(account.id),
+          })),
+          categories,
+          merchants,
+        }
       }
     )
   })

@@ -23,6 +23,9 @@ import { cn } from "@/lib/utils"
 import { getTransactionFormData } from "@/server/transactions"
 import { createMerchantFn } from "@/server/merchants"
 import { createCategoryFn } from "@/server/categories"
+import { getAccountHoldingsFn } from "@/server/holdings"
+import { DialogLoadingOrError } from "@/components/blocks/dialog-loading-state"
+import { TradeDialog } from "@/components/blocks/trade-dialog"
 import {
   decodeMoney,
   toDisplayNumber,
@@ -51,6 +54,7 @@ type FormAccount = TransactionFormData["accounts"][number]
 type FormCategory = TransactionFormData["categories"][number]
 type FormMerchant = TransactionFormData["merchants"][number]
 
+import { accountCollection } from "@/lib/account-collections"
 import {
   transactionCollection,
   type TransactionRecord,
@@ -521,6 +525,47 @@ function AmountAccountFields({
   )
 }
 
+// PER-259 / ADR-0054 — a holdings-tracked account moves money ONLY through
+// trades. Marking those options tells the user BEFORE they fill in a whole
+// transfer that this leg cannot be one.
+function accountOptionLabel(account: FormAccount): string {
+  return `${account.name} (${account.currency})${
+    account.hasHoldings ? " · holdings" : ""
+  }`
+}
+
+// Which leg of the in-progress transfer is a holdings account, and therefore
+// which trade it should become: money INTO the position is a Buy, money OUT of
+// it is a Sell. The counterpart leg is the cash account the user already
+// picked, which pre-fills the trade's funding/destination account.
+function holdingsTransferLeg(
+  formData: TransactionFormLookupData | undefined,
+  accountId: string | undefined,
+  toAccountId: string | undefined
+): {
+  investmentAccount: FormAccount
+  counterpartAccountId: string | undefined
+  side: "buy" | "sell"
+} | null {
+  const source = formData?.accounts.find((a) => a.id === accountId)
+  const destination = formData?.accounts.find((a) => a.id === toAccountId)
+  if (destination?.hasHoldings) {
+    return {
+      investmentAccount: destination,
+      counterpartAccountId: source?.hasHoldings ? undefined : source?.id,
+      side: "buy",
+    }
+  }
+  if (source?.hasHoldings) {
+    return {
+      investmentAccount: source,
+      counterpartAccountId: destination?.id,
+      side: "sell",
+    }
+  }
+  return null
+}
+
 function TransferAccountFields({
   activeTab,
   form,
@@ -559,7 +604,7 @@ function TransferAccountFields({
               </option>
               {formData?.accounts.map((acc) => (
                 <option key={acc.id} value={acc.id}>
-                  {acc.name} ({acc.currency})
+                  {accountOptionLabel(acc)}
                 </option>
               ))}
             </select>
@@ -605,7 +650,7 @@ function TransferAccountFields({
                       value={acc.id}
                       disabled={acc.id === currentAccountId}
                     >
-                      {acc.name} ({acc.currency})
+                      {accountOptionLabel(acc)}
                     </option>
                   ))}
                 </select>
@@ -619,6 +664,152 @@ function TransferAccountFields({
         )}
       </form.Field>
     </div>
+  )
+}
+
+// PER-259 / ADR-0054 — the global ledger's Transfer tab used to let a user fill
+// in an entire transfer against a holdings-tracked account and only learn on
+// submit, from a raw server rejection, that such an account moves money through
+// trades only. The per-account page already hides that path; this teaches the
+// global entry point the same rule and hands the user the REAL Buy/Sell dialog
+// (`TradeDialog`, reused as-is — deliberately NOT a second "smart" form that
+// tries to be both a transfer and a trade) with what they already picked
+// carried over.
+function HoldingsTransferNotice({
+  activeTab,
+  form,
+  formData,
+  onStartTrade,
+}: Pick<TransactionFormSectionProps, "activeTab" | "form" | "formData"> & {
+  onStartTrade: (redirect: HoldingsTradeRedirect) => void
+}) {
+  if (activeTab !== "transfer") return null
+
+  return (
+    <form.Subscribe
+      selector={(state) => ({
+        accountId: state.values.accountId,
+        toAccountId: state.values.toAccountId,
+      })}
+    >
+      {({ accountId, toAccountId }) => {
+        const leg = holdingsTransferLeg(formData, accountId, toAccountId)
+        if (leg === null) return null
+        return (
+          <div
+            className="flex flex-col gap-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm"
+            data-testid="holdings-transfer-notice"
+          >
+            <p>
+              <span className="font-medium">{leg.investmentAccount.name}</span>{" "}
+              carries holdings, so its money moves with a Buy/Sell trade, not a
+              transfer. Its value is always units × price and follows your
+              trades automatically.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-fit"
+              onClick={() =>
+                onStartTrade({
+                  investmentAccountId: leg.investmentAccount.id,
+                  side: leg.side,
+                  defaultFundingAccountId: leg.counterpartAccountId,
+                })
+              }
+            >
+              {leg.side === "buy" ? "Record a buy instead" : "Record a sell"}
+            </Button>
+          </div>
+        )
+      }}
+    </form.Subscribe>
+  )
+}
+
+interface HoldingsTradeRedirect {
+  investmentAccountId: string
+  side: "buy" | "sell"
+  defaultFundingAccountId: string | undefined
+}
+
+// Loads the one thing `TradeDialog` needs that the transaction form never had —
+// the account's holdings — and only once the user has actually asked for the
+// trade flow, so opening the transaction modal costs no extra round-trip. The
+// query key matches the account page's, so a warm cache is reused.
+function HoldingsTradeRedirectDialog({
+  redirect,
+  accounts,
+  onClose,
+  onSaved,
+}: {
+  redirect: HoldingsTradeRedirect
+  accounts: Array<FormAccount>
+  onClose: () => void
+  onSaved: () => Promise<void>
+}) {
+  const investmentAccount = accounts.find(
+    (a) => a.id === redirect.investmentAccountId
+  )
+  const {
+    data: holdingsView,
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ["account_holdings", redirect.investmentAccountId],
+    queryFn: async () =>
+      await getAccountHoldingsFn({
+        data: { accountId: redirect.investmentAccountId },
+      }),
+  })
+
+  // Cash-like accounts that can fund a buy or receive a sell — the SAME filter
+  // the account page applies before handing `TradeDialog` its options.
+  const fundingAccounts = React.useMemo(
+    () =>
+      accounts
+        .filter(
+          (a) =>
+            a.id !== redirect.investmentAccountId &&
+            a.balanceSource === "transaction_flow" &&
+            a.status === "active" &&
+            a.currency === investmentAccount?.currency
+        )
+        .map((a) => ({ id: a.id, name: a.name, currency: a.currency })),
+    [accounts, redirect.investmentAccountId, investmentAccount?.currency]
+  )
+
+  if (investmentAccount === undefined || holdingsView === undefined) {
+    return (
+      <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
+        <DialogContent>
+          <DialogLoadingOrError
+            isLoading={isLoading && investmentAccount !== undefined}
+            error={error}
+            hasData={false}
+            loadingLabel="Loading this account's positions…"
+            notFoundTitle="Can't open the trade form"
+            notFoundMessage="This account's positions could not be loaded."
+            onClose={onClose}
+          >
+            {null}
+          </DialogLoadingOrError>
+        </DialogContent>
+      </Dialog>
+    )
+  }
+
+  return (
+    <TradeDialog
+      state={{ side: redirect.side }}
+      investmentAccountId={redirect.investmentAccountId}
+      currency={investmentAccount.currency}
+      fundingAccounts={fundingAccounts}
+      holdings={holdingsView.holdings}
+      defaultFundingAccountId={redirect.defaultFundingAccountId}
+      onClose={onClose}
+      onSaved={onSaved}
+    />
   )
 }
 
@@ -1635,6 +1826,9 @@ function useTransactionFormModalController({
     },
   ])
 
+  const [tradeRedirect, setTradeRedirect] =
+    React.useState<HoldingsTradeRedirect | null>(null)
+
   const { data: formData, isLoading } = useQuery<{
     accounts: Array<FormAccount>
     categories: Array<FormCategory>
@@ -2151,10 +2345,37 @@ function useTransactionFormModalController({
     if (onClose) onClose()
   }
 
+  // PER-259 / ADR-0054 — the Transfer tab hands a holdings-account leg over to
+  // the real Buy/Sell dialog. Starting the trade closes this form (one dialog
+  // at a time); finishing it resyncs the ledger the same way a transfer would.
+  const startTradeRedirect = React.useCallback(
+    (redirect: HoldingsTradeRedirect) => {
+      setTradeRedirect(redirect)
+      setIsOpen(false)
+    },
+    []
+  )
+
+  const finishTradeRedirect = React.useCallback(async () => {
+    setTradeRedirect(null)
+    // A trade moves cash AND re-materializes the investment account's value, so
+    // the account collection has to resync too — the same pairing every other
+    // ledger mutation does. `transactionFormData` is invalidated because the
+    // very first buy on an account flips its `hasHoldings` flag.
+    await Promise.all([
+      transactionCollection.utils.refetch(),
+      accountCollection.utils.refetch(),
+      queryClient.invalidateQueries({ queryKey: ["transactionFormData"] }),
+      queryClient.invalidateQueries({ queryKey: ["account_holdings"] }),
+    ])
+    if (onClose) onClose()
+  }, [onClose, queryClient])
+
   return {
     activeTab,
     createCategoryOption,
     createMerchantOption,
+    finishTradeRedirect,
     form,
     formData,
     formError,
@@ -2168,7 +2389,10 @@ function useTransactionFormModalController({
     setActiveTab,
     setIsSplit,
     setSplitEntries,
+    setTradeRedirect,
     splitEntries,
+    startTradeRedirect,
+    tradeRedirect,
   }
 }
 
@@ -2182,6 +2406,7 @@ export function TransactionFormModal({
     activeTab,
     createCategoryOption,
     createMerchantOption,
+    finishTradeRedirect,
     form,
     formData,
     formError,
@@ -2195,112 +2420,133 @@ export function TransactionFormModal({
     setActiveTab,
     setIsSplit,
     setSplitEntries,
+    setTradeRedirect,
     splitEntries,
+    startTradeRedirect,
+    tradeRedirect,
   } = useTransactionFormModalController({ editData, onClose, defaultAccountId })
 
   return (
-    <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <TransactionDialogTrigger customTrigger={customTrigger} />
-
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>
-            {isEditMode ? "Edit Transaction" : "Add Transaction"}
-          </DialogTitle>
-          <DialogDescription>
-            {isEditMode
-              ? "Modify your transaction details below. Balances will auto-adjust."
-              : "Record your new transaction details below."}
-          </DialogDescription>
-        </DialogHeader>
-
-        <TransactionTypeTabs
-          activeTab={activeTab}
-          form={form}
-          setActiveTab={setActiveTab}
+    <>
+      {/* The trade flow replaces this form while it is open — one dialog at a
+          time — but the page's trigger below must stay mounted either way. */}
+      {tradeRedirect !== null ? (
+        <HoldingsTradeRedirectDialog
+          redirect={tradeRedirect}
+          accounts={formData?.accounts ?? []}
+          onClose={() => setTradeRedirect(null)}
+          onSaved={finishTradeRedirect}
         />
+      ) : null}
+      <Dialog open={isOpen} onOpenChange={handleOpenChange}>
+        <TransactionDialogTrigger customTrigger={customTrigger} />
 
-        <form
-          noValidate
-          onSubmit={(e) => {
-            e.preventDefault()
-            e.stopPropagation()
-            void form.handleSubmit()
-          }}
-          className="mt-4 space-y-4"
-        >
-          <FormErrorBanner formError={formError} />
-          <DescriptionField activeTab={activeTab} form={form} />
-          <AmountAccountFields
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {isEditMode ? "Edit Transaction" : "Add Transaction"}
+            </DialogTitle>
+            <DialogDescription>
+              {isEditMode
+                ? "Modify your transaction details below. Balances will auto-adjust."
+                : "Record your new transaction details below."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <TransactionTypeTabs
             activeTab={activeTab}
             form={form}
-            formData={formData}
-            isLoading={isLoading}
+            setActiveTab={setActiveTab}
           />
-          <TransferAccountFields
-            activeTab={activeTab}
-            form={form}
-            formData={formData}
-            isLoading={isLoading}
-          />
-          <DestinationAmountField
-            activeTab={activeTab}
-            form={form}
-            formData={formData}
-          />
-          <NewValuationValueField
-            activeTab={activeTab}
-            form={form}
-            formData={formData}
-          />
-          <TransferContextFields
-            activeTab={activeTab}
-            form={form}
-            formData={formData}
-          />
-          <DateTimeFields form={form} />
-          <MerchantField
-            activeTab={activeTab}
-            form={form}
-            formData={formData}
-            isLoading={isLoading}
-            onCreateMerchant={createMerchantOption}
-          />
-          <SplitModeToggle
-            activeTab={activeTab}
-            isSplit={isSplit}
-            setIsSplit={setIsSplit}
-          />
-          <CategoryField
-            activeTab={activeTab}
-            form={form}
-            formData={formData}
-            isLoading={isLoading}
-            isSplit={isSplit}
-            onCreateCategory={createCategoryOption}
-          />
-          <SplitEntriesPanel
-            activeTab={activeTab}
-            form={form}
-            formData={formData}
-            isSplit={isSplit}
-            setSplitEntries={setSplitEntries}
-            splitEntries={splitEntries}
-          />
-          <StatusField form={form} />
-          <NotesField activeTab={activeTab} form={form} />
-          <AttachmentField form={form} />
-          <TransactionActionBar
-            activeTab={activeTab}
-            form={form}
-            isEditMode={isEditMode}
-            isSplit={isSplit}
-            onCancel={handleCancel}
-            onDelete={handleDelete}
-            splitEntries={splitEntries}
-          />
-        </form>
-      </DialogContent>
-    </Dialog>
+
+          <form
+            noValidate
+            onSubmit={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              void form.handleSubmit()
+            }}
+            className="mt-4 space-y-4"
+          >
+            <FormErrorBanner formError={formError} />
+            <DescriptionField activeTab={activeTab} form={form} />
+            <AmountAccountFields
+              activeTab={activeTab}
+              form={form}
+              formData={formData}
+              isLoading={isLoading}
+            />
+            <TransferAccountFields
+              activeTab={activeTab}
+              form={form}
+              formData={formData}
+              isLoading={isLoading}
+            />
+            <HoldingsTransferNotice
+              activeTab={activeTab}
+              form={form}
+              formData={formData}
+              onStartTrade={startTradeRedirect}
+            />
+            <DestinationAmountField
+              activeTab={activeTab}
+              form={form}
+              formData={formData}
+            />
+            <NewValuationValueField
+              activeTab={activeTab}
+              form={form}
+              formData={formData}
+            />
+            <TransferContextFields
+              activeTab={activeTab}
+              form={form}
+              formData={formData}
+            />
+            <DateTimeFields form={form} />
+            <MerchantField
+              activeTab={activeTab}
+              form={form}
+              formData={formData}
+              isLoading={isLoading}
+              onCreateMerchant={createMerchantOption}
+            />
+            <SplitModeToggle
+              activeTab={activeTab}
+              isSplit={isSplit}
+              setIsSplit={setIsSplit}
+            />
+            <CategoryField
+              activeTab={activeTab}
+              form={form}
+              formData={formData}
+              isLoading={isLoading}
+              isSplit={isSplit}
+              onCreateCategory={createCategoryOption}
+            />
+            <SplitEntriesPanel
+              activeTab={activeTab}
+              form={form}
+              formData={formData}
+              isSplit={isSplit}
+              setSplitEntries={setSplitEntries}
+              splitEntries={splitEntries}
+            />
+            <StatusField form={form} />
+            <NotesField activeTab={activeTab} form={form} />
+            <AttachmentField form={form} />
+            <TransactionActionBar
+              activeTab={activeTab}
+              form={form}
+              isEditMode={isEditMode}
+              isSplit={isSplit}
+              onCancel={handleCancel}
+              onDelete={handleDelete}
+              splitEntries={splitEntries}
+            />
+          </form>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
