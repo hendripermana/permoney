@@ -133,8 +133,19 @@ FIFO-vs-average election beyond the current average-cost model — later.
 ## Implementation slices (Linear epic)
 
 - **Slice 1 — discoverability + entry-point coherence**: panel Sell (done);
-  hide/redirect "Add transaction" transfer + "Update value" on holdings accounts;
-  server + DB invariant with an actionable "use Buy/Sell" message; real-PG + e2e.
+  hide/redirect "Add transaction" transfer + "Update value" on holdings accounts
+  (done — `HoldingsTransferNotice` + `HoldingsTradeRedirectDialog` in the global
+  transaction modal; server + DB invariant with an actionable "use Buy/Sell"
+  message); real-PG + e2e. UX refinements shipped with Slice 1: **time-of-day
+  support** on all 6 trade-family dialogs (Buy/Sell, Switch, Dividend, Fee,
+  and their correction forms) via `DialogDateTimeField` — `Transaction.date` was
+  already a full `DateTime` and server schemas already coerced one, so the gap
+  was purely client-side; a user east of UTC recording just after midnight saw
+  yesterday's date pre-filled (latent UTC-vs-local day bug, now closed).
+  **Sell UX** enhancements in the Buy/Sell dialog: quick-allocation chips
+  (25%/50%/75%/100% of held position), estimated realized-gain preview (data
+  already client-side), unit-price prefilled from last known price (never claimed
+  as "live"), segmented Buy/Sell toggle (changed from dropdown).
 - **Slice 2 — Dividend / distribution** trade mode (cash-out or reinvest).
 - **Slice 3 — Fees** (standalone) — DONE (PER-259 Slice 3). A **standalone fee**
   tied to an investment (platform / annual / one-off transaction / redemption fee
