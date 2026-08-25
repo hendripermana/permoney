@@ -17,18 +17,28 @@ This document extends the account taxonomy contract in
 
 ## Transaction Kinds
 
-| `Transaction.kind`   | Type           | Meaning                                      | Ordinary spending? |
-| -------------------- | -------------- | -------------------------------------------- | ------------------ |
-| `standard`           | expense/income | Normal purchase, refund, income, adjustment. | Expense only.      |
-| `funds_movement`     | transfer       | Asset-to-asset transfer.                     | No.                |
-| `cc_payment`         | transfer       | Principal payment into a `CREDIT` account.   | No.                |
-| `loan_payment`       | transfer       | Principal payment into a `LOAN` account.     | No.                |
-| `liability_draw`     | transfer       | New borrowing from a liability into asset.   | No.                |
-| `liability_interest` | expense        | Interest cost linked to a liability account. | Finance cost.      |
-| `liability_fee`      | expense        | Fee cost linked to a liability account.      | Finance cost.      |
+| `Transaction.kind`   | Valid on type  | Meaning                                                                                                                                                         | Ordinary spending? | Client settable? |
+| -------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ---------------- |
+| `standard`           | expense/income | Normal purchase, refund, income, adjustment.                                                                                                                    | Expense only.      | Yes.             |
+| `funds_movement`     | transfer       | Asset-to-asset transfer.                                                                                                                                        | No.                | No.              |
+| `cc_payment`         | transfer       | Principal payment into a `CREDIT` account.                                                                                                                      | No.                | No.              |
+| `loan_payment`       | transfer       | Principal payment into a `LOAN` account.                                                                                                                        | No.                | No.              |
+| `liability_draw`     | transfer       | New borrowing from a liability into asset.                                                                                                                      | No.                | No.              |
+| `liability_interest` | expense        | Interest cost linked to a liability account.                                                                                                                    | Finance cost.      | Yes.             |
+| `liability_fee`      | expense        | Fee cost linked to a liability account.                                                                                                                         | Finance cost.      | Yes.             |
+| `reimbursement`      | income         | Income row that nets against an EXPENSE-type category, reducing that category's spent amount in both the Spending report and Budget progress.                   | No.                | Yes.             |
 
 `src/lib/liability-semantics.ts` is the TypeScript source for this vocabulary,
 transfer-kind derivation, and ordinary-spending classification.
+
+**Reimbursement use cases:** The `reimbursement` kind covers three real-world
+scenarios at different offset percentages: split-bill reimbursements (partial
+— pay Apple One Rp319k, friends pay back Rp254k, real burden Rp65k), partial
+refunds (dinner Rp180k, family covers Rp180k, tekor Rp500), and 100% refunds
+or cashback (buy Rp300k, full amount returned, nets to zero). This allows
+refunds to be recorded as income assigned to expense categories, offsetting
+the original spend instead of appearing as unrelated income. See ADR-0055
+(reimbursement-category-offset) and PER-260.
 
 ## Payments vs Borrowing
 
