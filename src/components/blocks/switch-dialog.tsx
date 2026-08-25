@@ -19,7 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { DialogDateField } from "@/components/blocks/dialog-date-field"
+import { DialogDateTimeField } from "@/components/blocks/dialog-date-time-field"
 import { MoneyInput } from "@/components/blocks/money-input"
 import { formatCurrency } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
@@ -54,10 +54,6 @@ const NEW_INSTRUMENT = "__new__"
 export type SwitchDialogState = { holding?: HoldingRecord }
 
 type Basis = "quantity" | "amount"
-
-function toDateInputValue(date: Date): string {
-  return date.toISOString().slice(0, 10)
-}
 
 type SwitchPreview =
   | { kind: "empty" }
@@ -108,7 +104,7 @@ export function SwitchDialog({
   const [newName, setNewName] = React.useState<string>("")
   const [newKind, setNewKind] = React.useState<InstrumentKind>("mutual_fund")
   const [toUnitPrice, setToUnitPrice] = React.useState<string>("")
-  const [date, setDate] = React.useState<string>(toDateInputValue(new Date()))
+  const [date, setDate] = React.useState<Date>(() => new Date())
   const [error, setError] = React.useState<string | null>(null)
   const [submitting, setSubmitting] = React.useState(false)
 
@@ -243,7 +239,7 @@ export function SwitchDialog({
         fromHoldingId: fromHolding.id,
         fromUnitPrice: fromUnitPriceMinor.toString(),
         toUnitPrice: toUnitPriceMinor.toString(),
-        date,
+        date: date.toISOString(),
         idempotencyKey: createUuidV7(),
         ...(isQuantityBasis
           ? { quantity: quantity.trim() }
@@ -279,7 +275,11 @@ export function SwitchDialog({
 
   return (
     <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
-      <DialogContent>
+      {/* Adding the Time half made every one of these forms a row taller, so
+          the footer could fall past the fold on a short viewport and leave the
+          submit button unclickable. Same scroll shell the main transaction
+          modal already uses. */}
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -293,31 +293,28 @@ export function SwitchDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-2">
-              <Label>From</Label>
-              <Select value={fromHoldingId} onValueChange={setFromHoldingId}>
-                <SelectTrigger aria-label="Source holding">
-                  <SelectValue placeholder="Choose holding" />
-                </SelectTrigger>
-                <SelectContent>
-                  {holdings.map((holding) => (
-                    <SelectItem key={holding.id} value={holding.id}>
-                      {holding.instrument.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex flex-col gap-2">
-              <DialogDateField
-                id="switch-date"
-                value={date}
-                onChange={setDate}
-                required
-              />
-            </div>
+          <div className="flex flex-col gap-2">
+            <Label>From</Label>
+            <Select value={fromHoldingId} onValueChange={setFromHoldingId}>
+              <SelectTrigger aria-label="Source holding">
+                <SelectValue placeholder="Choose holding" />
+              </SelectTrigger>
+              <SelectContent>
+                {holdings.map((holding) => (
+                  <SelectItem key={holding.id} value={holding.id}>
+                    {holding.instrument.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
+
+          <DialogDateTimeField
+            id="switch-date"
+            value={date}
+            onChange={setDate}
+            required
+          />
 
           <div className="flex flex-col gap-2">
             <Label>To</Label>

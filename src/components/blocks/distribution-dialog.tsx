@@ -10,7 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { DialogDateField } from "@/components/blocks/dialog-date-field"
+import { DialogDateTimeField } from "@/components/blocks/dialog-date-time-field"
 import { Label } from "@/components/ui/label"
 import {
   Select,
@@ -50,10 +50,6 @@ export type DistributionDialogState = { holding?: HoldingRecord }
 
 type Mode = "cash" | "reinvest"
 
-function toDateInputValue(date: Date): string {
-  return date.toISOString().slice(0, 10)
-}
-
 export function DistributionDialog({
   state,
   investmentAccountId,
@@ -78,7 +74,7 @@ export function DistributionDialog({
     state.holding?.id ?? holdings[0]?.id ?? ""
   )
   const [amount, setAmount] = React.useState<string>("")
-  const [date, setDate] = React.useState<string>(toDateInputValue(new Date()))
+  const [date, setDate] = React.useState<Date>(() => new Date())
   const [destinationAccountId, setDestinationAccountId] =
     React.useState<string>(destinationAccounts[0]?.id ?? "")
   const [unitPrice, setUnitPrice] = React.useState<string>("")
@@ -127,7 +123,7 @@ export function DistributionDialog({
         investmentAccountId,
         holdingId,
         amount: amountMinor.toString(),
-        date,
+        date: date.toISOString(),
         idempotencyKey: createUuidV7(),
       }
       if (isCash) {
@@ -166,7 +162,11 @@ export function DistributionDialog({
 
   return (
     <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
-      <DialogContent>
+      {/* Adding the Time half made every one of these forms a row taller, so
+          the footer could fall past the fold on a short viewport and leave the
+          submit button unclickable. Same scroll shell the main transaction
+          modal already uses. */}
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -217,27 +217,24 @@ export function DistributionDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="distribution-amount">Amount ({currency})</Label>
-              <MoneyInput
-                id="distribution-amount"
-                currency={currencyCode}
-                value={amount}
-                onChange={setAmount}
-                placeholder="0"
-                required
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <DialogDateField
-                id="distribution-date"
-                value={date}
-                onChange={setDate}
-                required
-              />
-            </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="distribution-amount">Amount ({currency})</Label>
+            <MoneyInput
+              id="distribution-amount"
+              currency={currencyCode}
+              value={amount}
+              onChange={setAmount}
+              placeholder="0"
+              required
+            />
           </div>
+
+          <DialogDateTimeField
+            id="distribution-date"
+            value={date}
+            onChange={setDate}
+            required
+          />
 
           {isCash ? (
             <div className="flex flex-col gap-2">

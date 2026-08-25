@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { DialogDateField } from "@/components/blocks/dialog-date-field"
+import { DialogDateTimeField } from "@/components/blocks/dialog-date-time-field"
 import { DialogLoadingOrError } from "@/components/blocks/dialog-loading-state"
 import { MoneyInput } from "@/components/blocks/money-input"
 import { formatCurrency } from "@/lib/currency"
@@ -45,10 +45,6 @@ import {
 // here (moving a position elsewhere is ADR-0054 Slice 6) — and a server-side
 // "this is no longer the latest activity on that position" refusal is shown
 // inline immediately, with the endpoint remaining the authoritative check.
-
-function toDateInputValue(iso: string): string {
-  return iso.slice(0, 10)
-}
 
 // Shared by both correction forms below — identical Date field, identical
 // error+footer shape (Cancel / "Save correction"), so the two forms can't
@@ -109,7 +105,11 @@ export function HoldingEventCorrectionDialog({
 
   return (
     <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
-      <DialogContent>
+      {/* Adding the Time half made every one of these forms a row taller, so
+          the footer could fall past the fold on a short viewport and leave the
+          submit button unclickable. Same scroll shell the main transaction
+          modal already uses. */}
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogLoadingOrError
           isLoading={isLoading}
           error={loadError}
@@ -169,7 +169,7 @@ function SwitchCorrectionForm({
   const [toUnitPrice, setToUnitPrice] = React.useState<string>(
     toDecimalString(BigInt(details.toUnitPriceMinor), currencyCode)
   )
-  const [date, setDate] = React.useState<string>(toDateInputValue(details.date))
+  const [date, setDate] = React.useState<Date>(() => new Date(details.date))
   const [error, setError] = React.useState<string | null>(
     details.notLatestReason
   )
@@ -254,7 +254,7 @@ function SwitchCorrectionForm({
           quantity: quantity.trim(),
           fromUnitPrice: fromPrice.toString(),
           toUnitPrice: toPrice.toString(),
-          date: new Date(date),
+          date: date.toISOString(),
           idempotencyKey: createUuidV7(),
         },
       })
@@ -293,7 +293,7 @@ function SwitchCorrectionForm({
             required
           />
         </div>
-        <DialogDateField
+        <DialogDateTimeField
           id="switch-correction-date"
           value={date}
           onChange={setDate}
@@ -384,7 +384,7 @@ function ReinvestCorrectionForm({
   const [unitPrice, setUnitPrice] = React.useState<string>(
     toDecimalString(BigInt(details.unitPriceMinor), currencyCode)
   )
-  const [date, setDate] = React.useState<string>(toDateInputValue(details.date))
+  const [date, setDate] = React.useState<Date>(() => new Date(details.date))
   const [error, setError] = React.useState<string | null>(
     details.notLatestReason
   )
@@ -431,7 +431,7 @@ function ReinvestCorrectionForm({
           eventId: details.eventId,
           amount: amountMinor.toString(),
           unitPrice: price.toString(),
-          date: new Date(date),
+          date: date.toISOString(),
           idempotencyKey: createUuidV7(),
         },
       })
@@ -470,7 +470,7 @@ function ReinvestCorrectionForm({
             required
           />
         </div>
-        <DialogDateField
+        <DialogDateTimeField
           id="reinvest-correction-date"
           value={date}
           onChange={setDate}

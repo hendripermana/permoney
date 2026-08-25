@@ -11,9 +11,24 @@ import { onboard, waitForHydration } from "./support/onboarding"
 // the trade for correction and confirms the SAME date round-trips back —
 // proof the value is actually persisted server-side, not silently dropped.
 
+// 2026-08-25, follow-up report from the same creator: the data was right but
+// the TIME was wrong, and nothing could fix it — the trade dialogs only ever
+// offered a bare date, which silently posts midnight. `Transaction.date` and
+// the trade schemas always carried a full timestamp, so the gap was purely in
+// the form. The round-trip below now asserts BOTH halves.
+//
+// Local, not UTC: the dialog renders the local calendar day (a user east of
+// UTC recording just after midnight used to be shown yesterday).
 function toDateInputValue(date: Date): string {
-  return date.toISOString().slice(0, 10)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+  const day = String(date.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
 }
+
+// A time nothing else would produce by accident: not midnight (what a
+// date-only field posts) and not "now".
+const BACKDATED_TIME = "09:17"
 
 test.describe("Buy/Sell trade backdating", () => {
   test("a trade recorded with a past date persists that date, not today's", async ({
@@ -55,6 +70,7 @@ test.describe("Buy/Sell trade backdating", () => {
     await dialog.getByLabel("Quantity").fill("10")
     await dialog.getByLabel(/Unit price/i).fill("100000")
     await dialog.getByLabel("Date").fill(backdatedValue)
+    await dialog.getByLabel("Time").fill(BACKDATED_TIME)
     await dialog.getByRole("button", { name: "Record buy" }).click()
     await expect(page.getByRole("dialog")).toHaveCount(0)
     await expect(page.getByText(fundName).first()).toBeVisible()
@@ -67,6 +83,11 @@ test.describe("Buy/Sell trade backdating", () => {
     ).toBeVisible()
     await expect(correctionDialog.getByLabel("Date")).toHaveValue(
       backdatedValue
+    )
+    // The wrong-time bug: this used to be unrecoverable because there was no
+    // time input at all, so every trade was stamped midnight (or "now").
+    await expect(correctionDialog.getByLabel("Time")).toHaveValue(
+      BACKDATED_TIME
     )
   })
 })
