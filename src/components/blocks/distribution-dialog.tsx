@@ -22,7 +22,11 @@ import {
 import { MoneyInput } from "@/components/blocks/money-input"
 import { formatCurrency } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
-import { scaledToQuantityString, unitsFromAmountScaled } from "@/lib/holdings"
+import {
+  scaledToQuantityString,
+  sortAccountOptions,
+  unitsFromAmountScaled,
+} from "@/lib/holdings"
 import { parseMoneyInput } from "@/lib/money"
 import { cn } from "@/lib/utils"
 import { createUuidV7 } from "@/lib/uuid-v7"
@@ -68,6 +72,13 @@ export function DistributionDialog({
   onSaved: () => Promise<void>
 }) {
   const currencyCode = currency as CurrencyCode
+
+  // PER-262 — sorted alphabetically via the one shared helper every
+  // account-option list in this dialog family uses.
+  const sortedDestinationAccounts = React.useMemo(
+    () => sortAccountOptions(destinationAccounts),
+    [destinationAccounts]
+  )
 
   const [mode, setMode] = React.useState<Mode>("cash")
   const [holdingId, setHoldingId] = React.useState<string>(
@@ -247,7 +258,7 @@ export function DistributionDialog({
                   <SelectValue placeholder="Choose account" />
                 </SelectTrigger>
                 <SelectContent>
-                  {destinationAccounts.map((account) => (
+                  {sortedDestinationAccounts.map((account) => (
                     <SelectItem key={account.id} value={account.id}>
                       {account.name}
                     </SelectItem>

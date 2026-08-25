@@ -93,4 +93,87 @@ test.describe("trade correction UI (PER-259 Slice 5)", () => {
     await expect(page.getByText(/Rp\s10,000,000\.00/).first()).toBeVisible()
     await expect(page.getByText("Balance drift")).toHaveCount(0)
   })
+
+  // PER-262 — the correction dialog never got the Quantity/Amount basis
+  // toggle `TradeDialog` shipped in a later slice. Backported reusing the
+  // SAME `unitsFromAmountScaled` fold (src/lib/holdings.ts) `trade-dialog.tsx`
+  // uses — this proves it end to end: correcting a trade by AMOUNT derives
+  // the right units (round-half-up at the 1e-8 column scale, same fixture as
+  // trade-amount-basis.e2e.ts) and moves exactly the typed cash.
+  test("correcting a trade by AMOUNT derives the right quantity via the shared fold", async ({
+    page,
+  }) => {
+    await onboard(page)
+    const suffix = Date.now().toString(36)
+    const walletName = `E2E Wallet ${suffix}`
+    const portfolioName = `E2E Portfolio ${suffix}`
+    const fundName = `Fund Y ${suffix}`
+
+    // --- Cash (funding) account ---
+    await page.goto("/accounts")
+    await waitForHydration(page)
+    await page.getByRole("button", { name: "New account" }).click()
+    await page.getByLabel("Name").fill(walletName)
+    await page.getByLabel("Opening balance").fill("10000000")
+    await page.getByRole("button", { name: "Create" }).click()
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+
+    // --- Tracked Asset (valuation-tracked) investment account ---
+    await page.getByRole("button", { name: "New account" }).click()
+    await page.getByLabel("Name").fill(portfolioName)
+    await page.getByRole("combobox", { name: "Account type" }).click()
+    await page.getByRole("option", { name: "Tracked Asset" }).click()
+    await page.getByRole("button", { name: "Create" }).click()
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+
+    await page.getByRole("button", { name: `Open ${portfolioName}` }).click()
+    await page.waitForURL(/\/accounts\/[^/]+$/, { timeout: 15000 })
+
+    // --- Record a Buy: 10 units @ 100,000 = 1,000,000 cash out. ---
+    await page.getByRole("button", { name: "Buy" }).first().click()
+    let dialog = page.getByRole("dialog")
+    await dialog.getByRole("combobox", { name: "Funding account" }).click()
+    await page.getByRole("option", { name: walletName }).click()
+    await dialog.getByLabel("Instrument name").fill(fundName)
+    await dialog.getByLabel("Quantity").fill("10")
+    await dialog.getByLabel(/Unit price/i).fill("100000")
+    await dialog.getByRole("button", { name: "Record buy" }).click()
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+    await expect(page.getByText(fundName).first()).toBeVisible()
+
+    // --- Correct the trade by AMOUNT: "actually Rp 500,000 @ Rp 12,000/unit"
+    //     units = round_half_up(500,000 x 1e8 / 12,000) = 41.66666667 ---
+    await page.getByRole("button", { name: "Edit Transaction" }).first().click()
+    dialog = page.getByRole("dialog")
+    await expect(
+      dialog.getByRole("heading", { name: `Edit ${fundName}` })
+    ).toBeVisible()
+
+    await dialog.getByRole("combobox", { name: "Trade entry basis" }).click()
+    await page.getByRole("option", { name: /^Amount/ }).click()
+    await expect(dialog.getByLabel("Quantity")).toHaveCount(0)
+
+    await dialog.getByLabel(/^Amount/).fill("500000")
+    await dialog.getByLabel(/Unit price/i).fill("12000")
+
+    // The preview derives the units and keeps the cash exactly as typed —
+    // never re-derived from the rounded quantity.
+    await expect(dialog.getByTestId("trade-correction-units-total")).toHaveText(
+      "41.66666667"
+    )
+    await expect(dialog.getByTestId("trade-correction-cash-total")).toHaveText(
+      /Rp\s500,000\.00/
+    )
+
+    await dialog.getByRole("button", { name: "Save correction" }).click()
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+
+    // Position corrected to the DERIVED quantity; wallet reflects the cash
+    // that actually moved (10,000,000 opening - 500,000 = 9,500,000).
+    await expect(page.getByText("41.66666667").first()).toBeVisible()
+    await expect(page.getByText(/Rp\s500,000\.00/).first()).toBeVisible()
+    await page.goto("/accounts")
+    await waitForHydration(page)
+    await expect(page.getByText(/Rp\s9,500,000\.00/).first()).toBeVisible()
+  })
 })

@@ -1699,4 +1699,119 @@ describe("trade corrections — delete & edit (PER-259 Slice 5 / ADR-0054)", () 
     })
     expect(corrected.trade.holding?.quantity).toBe("100.00000000")
   })
+
+  // ==========================================================================
+  // PER-262 — the trade-correction dialog's funding-account picker must
+  // exclude the TRADE's own `investmentAccountId`, never the page's own
+  // `accountId`. PER-261's regression test only opened the dialog from the
+  // investment account's page (where the two happen to coincide), which is
+  // exactly why it did not catch this: the bug only surfaces when the dialog
+  // is opened from the FUNDING (cash) account's own page — the trade's cash
+  // leg is a real Transaction row that also appears on that account's own
+  // statement, and the buggy code excluded whatever `accountId` the page
+  // currently was, silently dropping the one account that should be
+  // selected. This test drives the exact client construction against real
+  // Postgres data: fetch the family's active transaction_flow accounts (what
+  // the page's live-query collection would return) and apply the OLD
+  // (page-scoped) and NEW (investmentAccountId-scoped) exclusion rules
+  // side by side.
+  // ==========================================================================
+
+  describe("funding-account list exclusion — page-scoped vs. trade-scoped (PER-262)", () => {
+    const activeTransactionFlowAccounts = (
+      owner: AuthenticatedOnboardedUser,
+      currency: string
+    ) =>
+      harness.withFamily(owner.family.id, async (tx) =>
+        tx.account.findMany({
+          where: {
+            familyId: owner.family.id,
+            balanceSource: "transaction_flow",
+            status: "active",
+            currency,
+          },
+          select: { id: true, name: true, currency: true },
+        })
+      )
+
+    // The OLD (buggy) construction from accounts.$accountId.tsx before the
+    // fix: excludes whichever account's page is currently being viewed.
+    const buggyPageScopedList = (
+      accounts: ReadonlyArray<{ id: string }>,
+      viewedAccountId: string
+    ) => accounts.filter((a) => a.id !== viewedAccountId)
+
+    // The FIXED construction: the page passes the BROAD list (no exclusion),
+    // and `TradeCorrectionForm` excludes the trade's own investmentAccountId.
+    const fixedTradeScopedList = (
+      accounts: ReadonlyArray<{ id: string }>,
+      investmentAccountId: string
+    ) => accounts.filter((a) => a.id !== investmentAccountId)
+
+    test("reproduces the reported bug: opening from the CASH account's own page silently drops its own funding account under the OLD logic, but not under the FIX", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const investment = await makeInvestmentAccount(owner) // "Bibit"
+      const bankJago = await makeCashAccount(owner, "Bank Jago")
+
+      const buy = await buyFund(owner, investment.id, bankJago.id)
+      const view = await getTradeForCorrectionForFamily({
+        data: { transactionId: buy.transaction.id },
+        familyId: owner.family.id,
+        userId: owner.user.id,
+      })
+      expect(view.fundingAccountId).toBe(bankJago.id)
+      expect(view.investmentAccountId).toBe(investment.id)
+
+      const allAccounts = await activeTransactionFlowAccounts(
+        owner,
+        view.currency
+      )
+
+      // Opening the dialog from Bank Jago's OWN page: `accountId` (the page
+      // being viewed) equals the trade's funding account.
+      const buggyList = buggyPageScopedList(allAccounts, bankJago.id)
+      expect(buggyList.some((a) => a.id === bankJago.id)).toBe(false) // BUG:
+      // the correct funding account is missing from its own options.
+
+      const fixedList = fixedTradeScopedList(
+        allAccounts,
+        view.investmentAccountId
+      )
+      expect(fixedList.some((a) => a.id === bankJago.id)).toBe(true)
+      expect(fixedList.some((a) => a.id === view.fundingAccountId)).toBe(true)
+      // The ONLY account the fix excludes is the trade's own investment
+      // account — it can never fund itself.
+      expect(fixedList.some((a) => a.id === investment.id)).toBe(false)
+    })
+
+    test("the ORIGINAL working case — opening from the investment account's own page — still works under the fix (no regression)", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const investment = await makeInvestmentAccount(owner)
+      const bankJago = await makeCashAccount(owner, "Bank Jago")
+
+      const buy = await buyFund(owner, investment.id, bankJago.id)
+      const view = await getTradeForCorrectionForFamily({
+        data: { transactionId: buy.transaction.id },
+        familyId: owner.family.id,
+        userId: owner.user.id,
+      })
+
+      const allAccounts = await activeTransactionFlowAccounts(
+        owner,
+        view.currency
+      )
+
+      // Opening from the investment account's OWN page: under the OLD logic
+      // `accountId` == `investmentAccountId`, which happens to be the SAME
+      // account the fix itself excludes — this case coincidentally worked
+      // before and must keep working.
+      const buggyList = buggyPageScopedList(allAccounts, investment.id)
+      const fixedList = fixedTradeScopedList(allAccounts, investment.id)
+      expect(buggyList.map((a) => a.id).sort()).toEqual(
+        fixedList.map((a) => a.id).sort()
+      )
+      expect(fixedList.some((a) => a.id === bankJago.id)).toBe(true)
+      expect(fixedList.some((a) => a.id === view.fundingAccountId)).toBe(true)
+    })
+  })
 })

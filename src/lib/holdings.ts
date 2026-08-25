@@ -285,3 +285,22 @@ export function sumHoldingValuesMinor(
   }
   return total
 }
+
+/**
+ * Sort a funding/destination/source account-option list alphabetically by
+ * name (PER-262). Every Buy/Sell/Dividend/Fee/correction dialog under
+ * ADR-0054 renders a `<Select>` of cash-like accounts to move money
+ * to/from; each carried its own ad-hoc (unsorted) `.map()`, so the dropdown
+ * order was whatever the underlying live-query collection happened to
+ * return — non-deterministic across renders, exactly the "dropdown looks
+ * shuffled" symptom the creator reported. This is the ONE shared helper
+ * every one of those call sites uses, so the ordering rule can't drift
+ * apart between them. Generic over the option shape (each dialog keeps its
+ * own `{id, name, currency}`-ish interface) — only `name` is required.
+ * Locale-aware, non-mutating.
+ */
+export function sortAccountOptions<T extends { name: string }>(
+  accounts: ReadonlyArray<T>
+): Array<T> {
+  return [...accounts].sort((a, b) => a.name.localeCompare(b.name))
+}

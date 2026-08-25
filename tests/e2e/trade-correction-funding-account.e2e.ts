@@ -9,6 +9,18 @@ import { onboard, waitForHydration } from "./support/onboarding"
 // row must resolve to that row's own instrument + its own funding account,
 // even after opening/closing the other trade's dialog first in the same
 // session (rules out any stale-dialog-state carryover).
+//
+// PER-262 — the SECOND test below ("viewing from the shared funding
+// account…") asserts the Funding account combobox's DISPLAYED TEXT and its
+// options, not just that the dialog opens. That is the real regression test
+// for the page-scoped-exclusion bug: `fundingAccounts` used to exclude
+// whichever account's page was CURRENTLY VIEWED, which is correct for
+// creating a new trade but wrong for correcting one — opened from the
+// funding (cash) account's own page, `accountId` equals the trade's own
+// funding account, so the buggy list silently dropped it and the combobox
+// fell back to its placeholder instead of showing the real account. PER-261's
+// original version of this test opened the dialog from this exact page but
+// never asserted the combobox text, which is why it did not catch this.
 
 test.describe("trade correction dialog — funding account identity (PER-261)", () => {
   test("editing either of two trades on one statement always shows ITS OWN funding account", async ({
@@ -189,11 +201,31 @@ test.describe("trade correction dialog — funding account identity (PER-261)", 
     await expect(editButtons).toHaveCount(2)
 
     // Newest first: Portfolio B's trade, then Portfolio A's trade.
+    //
+    // PER-262 — THIS is the exact reported bug shape: `accountId` (the page
+    // currently being viewed) equals the trade's OWN funding account here,
+    // because we are on the WALLET's own page, not the investment account's.
+    // The buggy code excluded `accountId` from the funding-account options,
+    // which for THIS page silently dropped the wallet itself — the Select's
+    // `value` (correctly initialized to the trade's real funding account)
+    // then matched nothing in the truncated list, so the combobox rendered
+    // its placeholder instead of the wallet's name. Asserting the combobox's
+    // displayed TEXT (not just that the dialog opened) is what catches that;
+    // PER-261's own regression test opened the dialog from this same wallet
+    // page but never asserted this text, which is why it missed the bug.
     await editButtons.first().click()
     dialog = page.getByRole("dialog")
     await expect(
       dialog.getByRole("heading", { name: `Edit ${fundBName}` })
     ).toBeVisible()
+    await expect(
+      dialog.getByRole("combobox", { name: "Funding account" })
+    ).toHaveText(walletName)
+    // The wallet must also appear as a SELECTABLE option (not just as the
+    // pre-filled value) — opening the picker and re-selecting it must work.
+    await dialog.getByRole("combobox", { name: "Funding account" }).click()
+    await expect(page.getByRole("option", { name: walletName })).toBeVisible()
+    await page.getByRole("option", { name: walletName }).click()
     await dialog.getByRole("button", { name: "Cancel" }).click()
     await expect(page.getByRole("dialog")).toHaveCount(0)
 
@@ -202,6 +234,9 @@ test.describe("trade correction dialog — funding account identity (PER-261)", 
     await expect(
       dialog.getByRole("heading", { name: `Edit ${fundAName}` })
     ).toBeVisible()
+    await expect(
+      dialog.getByRole("combobox", { name: "Funding account" })
+    ).toHaveText(walletName)
     await dialog.getByRole("button", { name: "Cancel" }).click()
   })
 })

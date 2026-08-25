@@ -28,6 +28,7 @@ import {
   holdingCostMinor,
   quantityToScaled,
   scaledToQuantityString,
+  sortAccountOptions,
   unitsFromAmountScaled,
 } from "@/lib/holdings"
 import { INSTRUMENT_KIND_OPTIONS, type InstrumentKind } from "@/lib/instruments"
@@ -101,6 +102,14 @@ export function TradeDialog({
 }) {
   const currencyCode = currency as CurrencyCode
   const presetHolding = "holding" in state ? state.holding : null
+
+  // PER-262 — sorted once here (rather than trusting the caller's order), so
+  // this dialog renders correctly alphabetized regardless of what order the
+  // underlying live-query collection happens to yield.
+  const sortedFundingAccounts = React.useMemo(
+    () => sortAccountOptions(fundingAccounts),
+    [fundingAccounts]
+  )
 
   const [side, setSide] = React.useState<"buy" | "sell">(state.side)
   const [fundingAccountId, setFundingAccountId] = React.useState<string>(
@@ -448,7 +457,7 @@ export function TradeDialog({
                   <SelectValue placeholder="Choose account" />
                 </SelectTrigger>
                 <SelectContent>
-                  {fundingAccounts.map((account) => (
+                  {sortedFundingAccounts.map((account) => (
                     <SelectItem key={account.id} value={account.id}>
                       {account.name}
                     </SelectItem>
