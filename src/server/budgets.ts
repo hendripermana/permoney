@@ -273,7 +273,16 @@ async function fetchPeriodLedgerRows(
   period: MonthlyPeriod
 ): Promise<BudgetLedgerRowInput[]> {
   // Coarse UTC prefilter padded ±1 day; the pure engine does exact family-tz
-  // bucketing. Only canonical, non-excluded, non-deleted expense rows count.
+  // bucketing. Only canonical, non-excluded, non-deleted rows count: ordinary
+  // expense rows PLUS reimbursement/refund income rows (PER-260 / ADR-0055).
+  // A reimbursement is an income row assigned an EXPENSE-type category so it
+  // nets against that category's "spent" figure — the same net figure the
+  // Spending report (`cash-flow.ts`) already shows for that category, so the
+  // two screens never disagree about the same underlying transactions. No
+  // categoryId filter here — mirrors the (also unfiltered) expense query;
+  // `computeBudgetProgress` only surfaces contributions for allocated
+  // categories in its output, same as it already does for expense rows in
+  // non-budgeted categories.
   const rangeStart = new Date(period.periodStart)
   rangeStart.setUTCDate(rangeStart.getUTCDate() - 1)
   const rangeEnd = new Date(period.periodEnd)
@@ -282,12 +291,13 @@ async function fetchPeriodLedgerRows(
   const rows = await tx.transaction.findMany({
     where: {
       familyId,
-      type: "expense",
       deletedAt: null,
       excluded: false,
       date: { gte: rangeStart, lt: rangeEnd },
+      OR: [{ type: "expense" }, { type: "income", kind: "reimbursement" }],
     },
     select: {
+      type: true,
       currency: true,
       baseCurrency: true,
       fxRateScaled: true,
@@ -300,6 +310,8 @@ async function fetchPeriodLedgerRows(
   })
 
   return rows.map((row) => ({
+    // Narrowed by the `where` filter above; the DB CHECK guarantees the domain.
+    type: row.type as "expense" | "income",
     currency: row.currency,
     baseCurrency: row.baseCurrency,
     fxRateScaled: row.fxRateScaled,

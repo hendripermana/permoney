@@ -61,6 +61,9 @@ export function transactionToEditData(
     date: new Date(trx.date),
     notes: trx.notes ?? undefined,
     status: (trx.status as "PENDING" | "CLEARED" | "RECONCILED") ?? "CLEARED",
+    // PER-260: carry `kind` so editing an existing reimbursement pre-checks
+    // the refund toggle instead of silently reverting it to "standard".
+    kind: trx.kind,
     // PER-209: carry the split allocation so an edited split keeps its rows.
     isSplit: trx.isSplit,
     splitEntries:

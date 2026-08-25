@@ -25,6 +25,25 @@ export class TenantReferenceError extends Error {
   }
 }
 
+/**
+ * PER-260: `categoryId` resolved to a tenant/system category, but not one of
+ * the `Category.type` the caller requires for this mutation (e.g. a
+ * reimbursement-kind income row must point at an EXPENSE category). Kept
+ * distinct from `TenantReferenceError` because the failure is a business-rule
+ * mismatch, not a cross-tenant/ownership violation — the category is valid,
+ * just the wrong shape for this operation.
+ */
+export class CategoryTypeMismatchError extends Error {
+  override readonly name = "CategoryTypeMismatchError"
+  constructor(
+    readonly field: string,
+    readonly categoryId: string,
+    readonly expectedType: string
+  ) {
+    super(`Category ${categoryId} (${field}) must be of type ${expectedType}`)
+  }
+}
+
 export interface TenantReferenceSplitEntry {
   categoryId?: string | null
   merchantId?: string | null
@@ -35,6 +54,11 @@ export interface TenantReferenceCheck {
   toAccountId?: string | null
   merchantId?: string | null
   categoryId?: string | null
+  // PER-260: when set, `categoryId` must resolve to a Category of this exact
+  // `type` (in addition to the existing tenant-or-system ownership check).
+  // Optional — omitting it preserves today's behavior of accepting any
+  // category type for the transaction's own type.
+  categoryType?: "income" | "expense"
   splitEntries?: ReadonlyArray<TenantReferenceSplitEntry>
 }
 
@@ -74,7 +98,8 @@ export async function validateTenantReferences(
       tx,
       refs.categoryId,
       familyId,
-      "categoryId"
+      "categoryId",
+      refs.categoryType
     )
   }
   if (refs.splitEntries) {
@@ -144,10 +169,11 @@ async function assertCategoryInFamilyOrSystem(
   tx: TenantTransactionClient,
   id: string,
   familyId: string,
-  field: string
+  field: string,
+  requiredType?: "income" | "expense"
 ): Promise<void> {
   const row = await tx.category.findFirst({
-    select: { id: true },
+    select: { id: true, type: true },
     where: {
       id,
       OR: [{ familyId }, { isSystem: true, familyId: null }],
@@ -155,5 +181,8 @@ async function assertCategoryInFamilyOrSystem(
   })
   if (!row) {
     throw new TenantReferenceError(field, id, familyId)
+  }
+  if (requiredType && row.type !== requiredType) {
+    throw new CategoryTypeMismatchError(field, id, requiredType)
   }
 }

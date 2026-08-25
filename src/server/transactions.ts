@@ -1082,10 +1082,14 @@ function assertManualTransactionKindShape(data: {
 
   if (
     data.type === "income" &&
-    !["standard", "balance_adjustment"].includes(data.kind)
+    !["standard", "balance_adjustment", "reimbursement"].includes(data.kind)
   ) {
     throw new Error("Income transactions must use kind standard")
   }
+
+  // PER-260: reimbursement is an income-only kind (guarded above — the
+  // `type === "expense"`/`"transfer"` branches never reach here with
+  // kind="reimbursement" since it's absent from both allow-lists).
 
   if (
     data.type === "expense" &&
@@ -2482,6 +2486,11 @@ export async function createTransactionForFamily({
           toAccountId: parsedData.toAccountId,
           merchantId: parsedData.merchantId,
           categoryId: parsedData.categoryId,
+          // PER-260: a reimbursement row's category must be an EXPENSE
+          // category so it nets against that category's spending — never
+          // just trust the FK.
+          categoryType:
+            parsedData.kind === "reimbursement" ? "expense" : undefined,
           splitEntries: parsedData.splitEntries,
         })
 
@@ -3464,6 +3473,9 @@ async function replaceTransactionWithinTenantTransaction(
     toAccountId: data.toAccountId,
     merchantId: data.merchantId,
     categoryId: data.categoryId,
+    // PER-260: a reimbursement row's category must be an EXPENSE category —
+    // see the matching comment in createTransactionForFamily.
+    categoryType: data.kind === "reimbursement" ? "expense" : undefined,
     splitEntries: data.splitEntries,
   })
 

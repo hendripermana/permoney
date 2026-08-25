@@ -31,8 +31,20 @@ export async function waitForHydration(page: Page): Promise<void> {
   )
 }
 
-/** Sign up a fresh user and complete onboarding, ending on /dashboard. */
-export async function onboard(page: Page): Promise<Identity> {
+/**
+ * Sign up a fresh user and complete onboarding, ending on /dashboard.
+ *
+ * `currency` optionally overrides the onboarding form's base-reporting
+ * currency (defaults to "USD" in the UI — see `onboarding-page.tsx`). Pass it
+ * when a spec asserts on BASE-CURRENCY-derived figures (cash-flow totals,
+ * budget "spent") and creates accounts in a currency that must match the
+ * family's base currency to avoid FX-pending rows (no e2e spec seeds FX rate
+ * snapshots). Omit it to keep every existing spec's behavior unchanged.
+ */
+export async function onboard(
+  page: Page,
+  options?: { currency?: string }
+): Promise<Identity> {
   const identity = createIdentity()
   await page.goto("/signup")
   await waitForHydration(page)
@@ -43,6 +55,11 @@ export async function onboard(page: Page): Promise<Identity> {
   await page.getByRole("button", { name: "Create Account" }).click()
   await expect(page).toHaveURL(/\/onboarding(?:\?.*)?$/)
   await waitForHydration(page)
+  if (options?.currency) {
+    await page
+      .getByLabel("Base reporting currency")
+      .selectOption(options.currency)
+  }
   await page.getByRole("button", { name: "Get Started" }).click()
   await expect(page).toHaveURL(/\/dashboard(?:\?.*)?$/)
   await waitForHydration(page)
