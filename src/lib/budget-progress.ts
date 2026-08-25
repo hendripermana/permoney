@@ -9,8 +9,13 @@
  * so historical periods are stable.
  *
  * Counting rules (ADR-0037 §3), all enforced here:
- *   - Only expense rows are passed in (the server query filters type/excluded/
- *     deleted); each contributes to its own category.
+ *   - Only expense rows, PLUS reimbursement/refund income rows (PER-260 /
+ *     ADR-0055), are passed in (the server query filters type+kind/excluded/
+ *     deleted); each contributes to its own category. A reimbursement row's
+ *     magnitude is SUBTRACTED from that category's "spent" figure instead of
+ *     added — the same net-against-category-spend rule `cash-flow.ts` already
+ *     applies to its `byCategory` groups, so the Spending report and Budget
+ *     progress never disagree about the same underlying transactions.
  *   - Splits contribute per child `categoryId`; the split child's base value is
  *     the parent's stored rate applied to the child's native amount
  *     (`convertMinor`), consistent with how the parent's `baseAmount` was made.
@@ -43,6 +48,13 @@ export interface BudgetSplitEntryInput {
 }
 
 export interface BudgetLedgerRowInput {
+  /**
+   * "expense" contributes its magnitude to the category's spent figure;
+   * "income" is ONLY valid for a reimbursement/refund row (PER-260) and
+   * SUBTRACTS its magnitude instead — the server query only ever selects
+   * type="income" rows of kind="reimbursement" alongside type="expense".
+   */
+  type: "expense" | "income"
   /** Native currency of the transaction. */
   currency: string
   /** Family base currency captured at write time; null when FX-pending. */
@@ -77,7 +89,13 @@ export interface BudgetCategoryProgress {
   categoryId: string
   /** Base-currency minor units, >= 0. */
   allocatedAmount: bigint
-  /** Positive base magnitude actually spent. */
+  /**
+   * Net base magnitude actually spent: expense magnitude minus any
+   * reimbursement/refund magnitude netted against this category (PER-260).
+   * Normally >= 0; can go negative if reimbursements in the period exceed
+   * spending in the category (net inflow) — mirrors what the Spending report
+   * would show as a negative net-expense for the same category.
+   */
   actualAmount: bigint
   /** `allocated - actual` (signed; negative => over budget). */
   remainingAmount: bigint
@@ -180,6 +198,11 @@ export function computeBudgetProgress(
   for (const row of transactions) {
     if (!transactionInPeriod(row.date, period)) continue
 
+    // PER-260: a reimbursement (type="income") nets AGAINST the category's
+    // spent figure instead of adding to it — subtract its magnitude. An
+    // ordinary expense row still adds, unchanged.
+    const sign = row.type === "income" ? -1n : 1n
+
     if (row.isSplit) {
       const parentPending =
         row.baseAmount === null ||
@@ -191,7 +214,7 @@ export function computeBudgetProgress(
         if (parentPending) {
           bucket.pendingCount += 1
         } else {
-          bucket.actualAmount += splitChildBase(row, entry)
+          bucket.actualAmount += sign * splitChildBase(row, entry)
         }
       }
       continue
@@ -202,7 +225,7 @@ export function computeBudgetProgress(
       pendingTransactionCount += 1
       bucket.pendingCount += 1
     } else {
-      bucket.actualAmount += absBigInt(row.baseAmount)
+      bucket.actualAmount += sign * absBigInt(row.baseAmount)
     }
   }
 

@@ -26,6 +26,27 @@ function expense(
   date = new Date("2026-06-15T03:00:00.000Z")
 ): BudgetLedgerRowInput {
   return {
+    type: "expense",
+    currency: "IDR",
+    baseCurrency: baseAmount === null ? null : "IDR",
+    fxRateScaled: baseAmount === null ? null : encodeRate("1"),
+    baseAmount,
+    date,
+    isSplit: false,
+    categoryId,
+    splitEntries: [],
+  }
+}
+
+// A non-split reimbursement/refund income row already converted to base
+// (signed positive) — PER-260 / ADR-0055.
+function reimbursement(
+  categoryId: string | null,
+  baseAmount: bigint | null,
+  date = new Date("2026-06-15T03:00:00.000Z")
+): BudgetLedgerRowInput {
+  return {
+    type: "income",
     currency: "IDR",
     baseCurrency: baseAmount === null ? null : "IDR",
     fxRateScaled: baseAmount === null ? null : encodeRate("1"),
@@ -90,6 +111,7 @@ describe("computeBudgetProgress — multi-currency summation", () => {
   test("sums already-materialized base amounts regardless of native currency", () => {
     // Two rows in different native currencies, both projected to IDR base.
     const usdRow: BudgetLedgerRowInput = {
+      type: "expense",
       currency: "USD",
       baseCurrency: "IDR",
       fxRateScaled: encodeRate("16250"),
@@ -113,6 +135,7 @@ describe("computeBudgetProgress — multi-currency summation", () => {
 describe("computeBudgetProgress — splits via the parent's stored rate", () => {
   test("each split child converts at the parent rate and buckets to its category", () => {
     const parent: BudgetLedgerRowInput = {
+      type: "expense",
       currency: "USD",
       baseCurrency: "IDR",
       fxRateScaled: encodeRate("16250"),
@@ -159,6 +182,7 @@ describe("computeBudgetProgress — FX-pending handling", () => {
 
   test("split with a pending parent counts each child as pending, no actual", () => {
     const parent: BudgetLedgerRowInput = {
+      type: "expense",
       currency: "USD",
       baseCurrency: null,
       fxRateScaled: null,
@@ -183,6 +207,82 @@ describe("computeBudgetProgress — FX-pending handling", () => {
     expect(result.categories.every((c) => c.pendingCount === 1)).toBe(true)
     // One transaction, counted once at the period level despite two children.
     expect(result.totals.pendingTransactionCount).toBe(1)
+  })
+})
+
+describe("computeBudgetProgress — reimbursement/refund netting (PER-260)", () => {
+  test("0% reimbursed: full spend counts, matches ordinary expense behavior", () => {
+    const result = computeBudgetProgress({
+      allocations: [{ categoryId: "food", allocatedAmount: 500_000n }],
+      transactions: [expense("food", -319_000n)],
+      period: JUNE,
+    })
+    expect(result.categories[0]?.actualAmount).toBe(319_000n)
+  })
+
+  test("partial reimbursement nets against the same category's spent figure", () => {
+    // Dinner Rp180,500 (expense), family covers Rp180,000 (reimbursement
+    // assigned the SAME expense category) — real burden Rp500.
+    const result = computeBudgetProgress({
+      allocations: [{ categoryId: "food", allocatedAmount: 200_000n }],
+      transactions: [
+        expense("food", -180_500n),
+        reimbursement("food", 180_000n),
+      ],
+      period: JUNE,
+    })
+    expect(result.categories[0]?.actualAmount).toBe(500n)
+    expect(result.categories[0]?.remainingAmount).toBe(199_500n)
+    expect(result.categories[0]?.isOver).toBe(false)
+  })
+
+  test("100% refund of a cancelled order nets the category's spend to zero", () => {
+    const result = computeBudgetProgress({
+      allocations: [{ categoryId: "shopping", allocatedAmount: 500_000n }],
+      transactions: [
+        expense("shopping", -300_000n),
+        reimbursement("shopping", 300_000n),
+      ],
+      period: JUNE,
+    })
+    expect(result.categories[0]?.actualAmount).toBe(0n)
+  })
+
+  test("split-bill reimbursement across multiple payers nets against one category", () => {
+    // Pay Apple One Rp319,000 (expense), 4 friends pay back Rp254,450 total
+    // across several reimbursement rows — real burden Rp64,550.
+    const result = computeBudgetProgress({
+      allocations: [{ categoryId: "subscriptions", allocatedAmount: 400_000n }],
+      transactions: [
+        expense("subscriptions", -319_000n),
+        reimbursement("subscriptions", 63_612n),
+        reimbursement("subscriptions", 63_613n),
+        reimbursement("subscriptions", 63_612n),
+        reimbursement("subscriptions", 63_613n),
+      ],
+      period: JUNE,
+    })
+    expect(result.categories[0]?.actualAmount).toBe(64_550n)
+  })
+
+  test("reimbursement exceeding original spend nets to a negative actual (net inflow)", () => {
+    const result = computeBudgetProgress({
+      allocations: [{ categoryId: "food", allocatedAmount: 100_000n }],
+      transactions: [expense("food", -50_000n), reimbursement("food", 80_000n)],
+      period: JUNE,
+    })
+    expect(result.categories[0]?.actualAmount).toBe(-30_000n)
+    expect(result.categories[0]?.isOver).toBe(false)
+  })
+
+  test("pending (FX-unresolved) reimbursement is excluded from actual and counted", () => {
+    const result = computeBudgetProgress({
+      allocations: [{ categoryId: "food", allocatedAmount: 100_000n }],
+      transactions: [expense("food", -40_000n), reimbursement("food", null)],
+      period: JUNE,
+    })
+    expect(result.categories[0]?.actualAmount).toBe(40_000n)
+    expect(result.categories[0]?.pendingCount).toBe(1)
   })
 })
 

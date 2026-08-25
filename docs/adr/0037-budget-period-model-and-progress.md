@@ -111,10 +111,23 @@ allocation is durable, audited metadata; progress is a rebuildable projection.**
 
 The progress engine counts a ledger row toward a `BudgetCategory` iff **all** of:
 
-1. **Expense-only.** `Transaction.type = 'expense'` (or an expense split entry).
-   `income` and `transfer` rows never count. `BudgetCategory.categoryId` must
-   reference a category with `type = 'expense'` (server-validated; the UI only
-   lists expense categories). Income budgeting is reserved.
+1. **Expense transactions, netted by reimbursement/refund income
+   (ADR-0055).** The budget engine counts:
+   - `Transaction.type = 'expense'` (or an expense split entry), which **adds**
+     to the category's spent amount.
+   - `Transaction.type = 'income'` with `kind = 'reimbursement'`
+     (PER-260), which **subtracts** from the category's spent amount. A
+     reimbursement is an income row assigned an EXPENSE-type category so it
+     nets against that category's spending — covering split-bill
+     reimbursements, partial refunds, and cashback as income that offsets the
+     original expense in both the Spending report and Budget progress, instead
+     of appearing as unrelated income while the category still looks fully
+     spent.
+   - All other `income` rows (ordinary income with `kind = 'standard'`) and
+     `transfer` rows never count.
+   - `BudgetCategory.categoryId` must reference a category with
+     `type = 'expense'` (server-validated; the UI only lists expense
+     categories). Income budgeting is reserved.
 2. **Transfers are not spending.** All `type='transfer'` legs (`funds_movement`,
    `cc_payment`, `loan_payment`, `liability_draw`) are excluded. The finance-cost
    expense kinds — `liability_interest`, `liability_fee`, `fx_fee` — are

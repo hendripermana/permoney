@@ -25,6 +25,13 @@ export const TRANSACTION_KIND_VALUES = [
   // conversion fee. Never client-settable — synthesized by the transfer
   // mutation path only.
   "transfer_fee",
+  // Reimbursement/refund offset (PER-260 / ADR-0055): an income row that
+  // nets against an EXPENSE-type category instead of adding new income.
+  // Valid ONLY on type="income". Covers split-bill reimbursement, partial
+  // reimbursement, and 100%-refund dogfooding cases — one mechanism at
+  // different percentages. Client-settable (unlike transfer_fee): the user
+  // opts in via the transaction form's toggle.
+  "reimbursement",
 ] as const
 
 export type TransactionKind = (typeof TRANSACTION_KIND_VALUES)[number]
@@ -96,4 +103,13 @@ export function isOrdinarySpendingTransaction({
   type: string
 }): boolean {
   return type === "expense" && kind === "standard"
+}
+
+/**
+ * PER-260: a reimbursement/refund row — an income transaction assigned an
+ * EXPENSE-type category so it nets against that category's spending in both
+ * the cash-flow report and the budget engine. See ADR-0055.
+ */
+export function isReimbursementKind(kind: string): boolean {
+  return kind === "reimbursement"
 }

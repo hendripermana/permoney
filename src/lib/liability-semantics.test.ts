@@ -5,6 +5,7 @@ import {
   isLiabilityCostKind,
   isLiabilityPrincipalPaymentKind,
   isOrdinarySpendingTransaction,
+  isReimbursementKind,
   TRANSACTION_KIND_VALUES,
 } from "./liability-semantics"
 
@@ -21,7 +22,14 @@ describe("liability semantics", () => {
       "balance_adjustment",
       "fx_fee",
       "transfer_fee",
+      "reimbursement",
     ])
+  })
+
+  test("identifies reimbursement-kind rows (PER-260)", () => {
+    expect(isReimbursementKind("reimbursement")).toBe(true)
+    expect(isReimbursementKind("standard")).toBe(false)
+    expect(isReimbursementKind("balance_adjustment")).toBe(false)
   })
 
   test("derives transfer kind from account direction", () => {

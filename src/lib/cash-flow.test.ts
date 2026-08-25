@@ -248,6 +248,71 @@ describe("computeCashFlowReport — FX-pending", () => {
   })
 })
 
+describe("computeCashFlowReport — reimbursement category offset (PER-260)", () => {
+  // The report groups byCategory on raw categoryId regardless of Category.type
+  // and computes net = income - expense per group. A reimbursement-kind income
+  // row assigned an EXPENSE category's id therefore already nets correctly —
+  // no code change needed here, this proves the audit assumption in ADR-0055.
+
+  test("0% reimbursed (ordinary expense only): category shows pure spend", () => {
+    const r = report([
+      expenseRow({ baseAmount: -319_000n, categoryId: "subscriptions" }),
+    ])
+    const subs = cat(r, "subscriptions")
+    expect(subs?.expense).toBe(319_000n)
+    expect(subs?.income).toBe(0n)
+    expect(subs?.net).toBe(-319_000n)
+  })
+
+  test("partial reimbursement nets against the same expense category", () => {
+    // Dinner Rp180,500 (expense), family covers Rp180,000 (reimbursement
+    // assigned the SAME expense category) — real burden Rp500.
+    const r = report([
+      expenseRow({ baseAmount: -180_500n, categoryId: "food" }),
+      incomeRow({ baseAmount: 180_000n, categoryId: "food" }),
+    ])
+    const food = cat(r, "food")
+    expect(food?.expense).toBe(180_500n)
+    expect(food?.income).toBe(180_000n)
+    expect(food?.net).toBe(-500n)
+  })
+
+  test("100% refund of a cancelled order nets the category to zero", () => {
+    const r = report([
+      expenseRow({ baseAmount: -300_000n, categoryId: "shopping" }),
+      incomeRow({ baseAmount: 300_000n, categoryId: "shopping" }),
+    ])
+    const shopping = cat(r, "shopping")
+    expect(shopping?.net).toBe(0n)
+  })
+
+  test("split-bill reimbursement across multiple rows nets the same category", () => {
+    // Pay Apple One Rp319,000 (expense), 4 friends pay back Rp254,450 total —
+    // real burden Rp64,550.
+    const r = report([
+      expenseRow({ baseAmount: -319_000n, categoryId: "subscriptions" }),
+      incomeRow({ baseAmount: 63_612n, categoryId: "subscriptions" }),
+      incomeRow({ baseAmount: 63_613n, categoryId: "subscriptions" }),
+      incomeRow({ baseAmount: 63_612n, categoryId: "subscriptions" }),
+      incomeRow({ baseAmount: 63_613n, categoryId: "subscriptions" }),
+    ])
+    const subs = cat(r, "subscriptions")
+    expect(subs?.net).toBe(-64_550n)
+  })
+
+  test("does not affect an unrelated category's totals", () => {
+    const r = report([
+      expenseRow({ baseAmount: -180_500n, categoryId: "food" }),
+      incomeRow({ baseAmount: 180_000n, categoryId: "food" }),
+      expenseRow({ baseAmount: -100_000n, categoryId: "transport" }),
+    ])
+    const transport = cat(r, "transport")
+    expect(transport?.expense).toBe(100_000n)
+    expect(transport?.income).toBe(0n)
+    expect(transport?.net).toBe(-100_000n)
+  })
+})
+
 describe("computeCashFlowReport — period bucketing (family timezone)", () => {
   test("places a row by its family-tz calendar date, not raw UTC", () => {
     // 2026-06-30 19:00 UTC == 2026-07-01 02:00 in Asia/Jakarta (+07).

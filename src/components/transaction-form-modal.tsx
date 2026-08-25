@@ -5,6 +5,7 @@ import { useForm, type ReactFormExtendedApi } from "@tanstack/react-form"
 import { useHotkeys } from "@tanstack/react-hotkeys"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
+  IconArrowBackUp,
   IconArrowDownLeft,
   IconArrowUpRight,
   IconArrowsExchange,
@@ -66,6 +67,11 @@ import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { FieldError } from "@/components/ui/field"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import {
   Dialog,
   DialogContent,
@@ -168,6 +174,10 @@ interface TransactionFormModalProps {
         amount: EditAmount
         destinationAmount?: EditAmount
         currency?: string
+        // PER-260 / ADR-0055: "reimbursement" pre-checks the refund toggle on
+        // edit so re-saving an existing reimbursement doesn't silently revert
+        // it to a plain income row. Absent/null/"standard" = plain income.
+        kind?: string | null
         // PER-247: hydrated from the canonical Transfer row on the ledger
         // record (see findLedgerTransactionsForFamily).
         transferPurpose?: string | null
@@ -318,11 +328,15 @@ function TransactionDialogTrigger({
 function TransactionTypeTabs({
   activeTab,
   form,
+  isReimbursement,
   setActiveTab,
+  setIsReimbursement,
 }: {
   activeTab: TransactionType
   form: TransactionFormInstance
+  isReimbursement: boolean
   setActiveTab: React.Dispatch<React.SetStateAction<TransactionType>>
+  setIsReimbursement: React.Dispatch<React.SetStateAction<boolean>>
 }) {
   return (
     <Tabs
@@ -333,6 +347,16 @@ function TransactionTypeTabs({
         form.setFieldValue("type", selectedType)
         if (selectedType === "transfer") form.setFieldValue("categoryId", "")
         else form.setFieldValue("toAccountId", "")
+        // PER-260: the reimbursement toggle + its expense-category picker
+        // only make sense on the Income tab. Leaving Income while it was ON
+        // resets it AND the now-mismatched expense-category id, so a stray
+        // reimbursement category can never ride along into an
+        // Expense/Transfer submission. Never touches categoryId when the
+        // toggle was already off — today's tab-switch behavior is unchanged.
+        if (selectedType !== "income" && isReimbursement) {
+          setIsReimbursement(false)
+          if (selectedType !== "transfer") form.setFieldValue("categoryId", "")
+        }
       }}
       className="mt-2 w-full"
     >
@@ -1322,10 +1346,15 @@ function MerchantField({
 function SplitModeToggle({
   activeTab,
   isSplit,
+  setIsReimbursement,
   setIsSplit,
 }: {
   activeTab: TransactionType
   isSplit: boolean
+  // PER-260: turning Split ON while a reimbursement was active would leave
+  // "reimbursement" pointed at no category (split nulls the parent
+  // categoryId) — see the matching comment on ReimbursementToggle.
+  setIsReimbursement: React.Dispatch<React.SetStateAction<boolean>>
   setIsSplit: React.Dispatch<React.SetStateAction<boolean>>
 }) {
   if (activeTab === "transfer") return null
@@ -1349,9 +1378,92 @@ function SplitModeToggle({
       <Switch
         id="split-mode-toggle"
         checked={isSplit}
-        onCheckedChange={setIsSplit}
+        onCheckedChange={(checked) => {
+          setIsSplit(checked)
+          if (checked) setIsReimbursement(false)
+        }}
       />
     </div>
+  )
+}
+
+// PER-260 / ADR-0055: income-tab-only toggle. OFF (default) leaves the
+// category picker + submitted kind completely unchanged. ON swaps the
+// category picker's source to the family's EXPENSE categories (see
+// CategoryField below) so the income row nets against that category's
+// spending in both the Spending report and Budget progress.
+function ReimbursementToggle({
+  activeTab,
+  formData,
+  isLoading,
+  isReimbursement,
+  isSplit,
+  setIsReimbursement,
+}: {
+  activeTab: TransactionType
+  formData: TransactionFormLookupData | undefined
+  isLoading: boolean
+  isReimbursement: boolean
+  isSplit: boolean
+  // Plain callback (not a raw Dispatch) — the caller wraps the state setter
+  // to also clear the now-mismatched categoryId on every flip. See the
+  // call site in the main component body.
+  setIsReimbursement: (value: boolean) => void
+}) {
+  // PER-260: reimbursement nets a single categorized income row against one
+  // expense category. Split mode already hides the (parent) category picker
+  // entirely — mixing the two would leave "reimbursement" pointed at no
+  // category at all, so keep them mutually exclusive rather than defining a
+  // second, untested interaction.
+  if (activeTab !== "income" || isSplit) return null
+
+  const hasExpenseCategories =
+    isLoading || (formData?.categories ?? []).some((c) => c.type === "expense")
+
+  const toggle = (
+    <div
+      className={cn(
+        "flex items-center justify-between rounded-md border border-dashed px-3 py-2",
+        !hasExpenseCategories && "opacity-50"
+      )}
+    >
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <IconArrowBackUp className="size-4" />
+        <Label
+          htmlFor="reimbursement-toggle"
+          className={cn(
+            "text-sm font-medium",
+            hasExpenseCategories && "cursor-pointer"
+          )}
+        >
+          This is a refund/reimbursement
+        </Label>
+        {isReimbursement && (
+          <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-semibold text-emerald-700">
+            ACTIVE
+          </span>
+        )}
+      </div>
+      <Switch
+        id="reimbursement-toggle"
+        checked={isReimbursement}
+        disabled={!hasExpenseCategories}
+        onCheckedChange={setIsReimbursement}
+      />
+    </div>
+  )
+
+  if (hasExpenseCategories) return toggle
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div>{toggle}</div>
+      </TooltipTrigger>
+      <TooltipContent>
+        Create an expense category first to mark income as a reimbursement.
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -1360,17 +1472,30 @@ function CategoryField({
   form,
   formData,
   isLoading,
+  isReimbursement,
   isSplit,
   onCreateCategory,
 }: TransactionFormSectionProps & {
+  isReimbursement: boolean
   isSplit: boolean
   onCreateCategory: (name: string) => Promise<EntityComboboxItem>
 }) {
   if (activeTab === "transfer" || isSplit) return null
 
+  // PER-260: reimbursement swaps the picker's source to EXPENSE categories
+  // (the income row nets against one of those). Every other tab/state keeps
+  // today's behavior byte-for-byte. A `↩` prefix keeps it unambiguous in the
+  // list that these are expense categories being used to offset, not real
+  // income categories.
+  const useReimbursementSource = activeTab === "income" && isReimbursement
   const items: Array<EntityComboboxItem> = (formData?.categories ?? [])
-    .filter((c) => c.type === activeTab)
-    .map((c) => ({ id: c.id, label: c.name }))
+    .filter((c) =>
+      useReimbursementSource ? c.type === "expense" : c.type === activeTab
+    )
+    .map((c) => ({
+      id: c.id,
+      label: useReimbursementSource ? `↩ ${c.name}` : c.name,
+    }))
 
   return (
     <form.Field
@@ -1812,6 +1937,16 @@ function useTransactionFormModalController({
     setSplitEntries([createBlankSplitEntry(), createBlankSplitEntry()])
   }, [])
 
+  // === REIMBURSEMENT/REFUND TOGGLE (PER-260 / ADR-0055) ===
+  // Income-tab-only. OFF (default) is byte-for-byte today's behavior: the
+  // category picker stays income-type and submitted kind is "standard". ON
+  // swaps the category picker's source to expense-type categories and the
+  // submitted kind becomes "reimbursement" (validated server-side). Lives
+  // OUTSIDE the form, same reasoning as isSplit above.
+  const [isReimbursement, setIsReimbursement] = React.useState(
+    editData?.kind === "reimbursement"
+  )
+
   useHotkeys([
     {
       hotkey: "Shift+N",
@@ -1862,7 +1997,12 @@ function useTransactionFormModalController({
       const created = await createCategoryFn({
         data: {
           name,
-          type: activeTab === "income" ? "income" : "expense",
+          // PER-260: when the reimbursement toggle is on, the picker's
+          // source is EXPENSE categories — a quick-created category here
+          // must match, or it would vanish from the very list it was
+          // created from.
+          type:
+            activeTab === "income" && !isReimbursement ? "income" : "expense",
           idempotencyKey: createUuidV7(),
         },
       })
@@ -1871,7 +2011,7 @@ function useTransactionFormModalController({
       })
       return { id: created.id, label: created.name }
     },
-    [activeTab, queryClient]
+    [activeTab, isReimbursement, queryClient]
   )
 
   const defaultFormValues: TransactionFormValues = isEditMode
@@ -2112,7 +2252,17 @@ function useTransactionFormModalController({
 
         const payload = {
           type: value.type,
-          kind: value.type === "transfer" ? "funds_movement" : "standard",
+          kind:
+            value.type === "transfer"
+              ? "funds_movement"
+              : // PER-260: the toggle is only rendered/actionable on the
+                // Income tab and resets whenever Split turns on or the tab
+                // changes away from Income (see the state resets above), so
+                // this check alone is sufficient — no separate `isSplit`
+                // guard needed here.
+                value.type === "income" && isReimbursement
+                ? "reimbursement"
+                : "standard",
           amount: amountMoney,
           description: value.description,
           accountId: value.accountId,
@@ -2289,6 +2439,9 @@ function useTransactionFormModalController({
           // "New Transaction" open starts with a clean, inactive allocation
           // (PER-205 — no stale rows, no phantom "Over allocated" banner).
           resetSplitState()
+          // PER-260: same reasoning — the reimbursement toggle lives outside
+          // the form too.
+          setIsReimbursement(false)
         }
       } catch (error: unknown) {
         console.error("Failed to save transaction:", error)
@@ -2331,12 +2484,14 @@ function useTransactionFormModalController({
     }
     if (open && editData) {
       setActiveTab(editData.type)
+      setIsReimbursement(editData.kind === "reimbursement")
       form.reset()
     } else if (open && !editData) {
       // PER-205: reopening the singleton "New Transaction" modal must present a
       // clean split allocation even if a prior split entry was never submitted
       // (e.g. the user toggled Split on, then closed the dialog).
       resetSplitState()
+      setIsReimbursement(false)
     }
   }
 
@@ -2385,8 +2540,10 @@ function useTransactionFormModalController({
     isEditMode,
     isLoading,
     isOpen,
+    isReimbursement,
     isSplit,
     setActiveTab,
+    setIsReimbursement,
     setIsSplit,
     setSplitEntries,
     setTradeRedirect,
@@ -2416,8 +2573,10 @@ export function TransactionFormModal({
     isEditMode,
     isLoading,
     isOpen,
+    isReimbursement,
     isSplit,
     setActiveTab,
+    setIsReimbursement,
     setIsSplit,
     setSplitEntries,
     setTradeRedirect,
@@ -2456,7 +2615,9 @@ export function TransactionFormModal({
           <TransactionTypeTabs
             activeTab={activeTab}
             form={form}
+            isReimbursement={isReimbursement}
             setActiveTab={setActiveTab}
+            setIsReimbursement={setIsReimbursement}
           />
 
           <form
@@ -2514,13 +2675,29 @@ export function TransactionFormModal({
             <SplitModeToggle
               activeTab={activeTab}
               isSplit={isSplit}
+              setIsReimbursement={setIsReimbursement}
               setIsSplit={setIsSplit}
+            />
+            <ReimbursementToggle
+              activeTab={activeTab}
+              formData={formData}
+              isLoading={isLoading}
+              isReimbursement={isReimbursement}
+              isSplit={isSplit}
+              setIsReimbursement={(checked) => {
+                setIsReimbursement(checked)
+                // The picker's source (income <-> expense categories) flips
+                // with this toggle in either direction; a stale selection
+                // from the other list would silently ride along otherwise.
+                form.setFieldValue("categoryId", "")
+              }}
             />
             <CategoryField
               activeTab={activeTab}
               form={form}
               formData={formData}
               isLoading={isLoading}
+              isReimbursement={isReimbursement}
               isSplit={isSplit}
               onCreateCategory={createCategoryOption}
             />

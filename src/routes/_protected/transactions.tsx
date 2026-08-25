@@ -761,6 +761,9 @@ function TransactionsPage() {
                   | "PENDING"
                   | "CLEARED"
                   | "RECONCILED",
+                // PER-260: carry `kind` so re-opening an existing
+                // reimbursement pre-checks the refund toggle.
+                kind: editingTrx.kind,
                 // PER-209: hydrate the split allocation on edit. Without these
                 // two fields the modal's useState initializers fall back to a
                 // blank [blank, blank] allocation with isSplit=false, so an
