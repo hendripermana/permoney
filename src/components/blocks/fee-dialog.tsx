@@ -22,6 +22,7 @@ import { DialogDateTimeField } from "@/components/blocks/dialog-date-time-field"
 import { MoneyInput } from "@/components/blocks/money-input"
 import { formatCurrency } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
+import { sortAccountOptions } from "@/lib/holdings"
 import { parseMoneyInput } from "@/lib/money"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import type { HoldingRecord } from "@/routes/_protected/-account-holdings"
@@ -65,6 +66,13 @@ export function FeeDialog({
   onSaved: () => Promise<void>
 }) {
   const currencyCode = currency as CurrencyCode
+
+  // PER-262 — sorted alphabetically via the one shared helper every
+  // account-option list in this dialog family uses.
+  const sortedSourceAccounts = React.useMemo(
+    () => sortAccountOptions(sourceAccounts),
+    [sourceAccounts]
+  )
 
   const [holdingId, setHoldingId] = React.useState<string>(
     state.holding?.id ?? holdings[0]?.id ?? ""
@@ -185,7 +193,7 @@ export function FeeDialog({
                 <SelectValue placeholder="Choose account" />
               </SelectTrigger>
               <SelectContent>
-                {sourceAccounts.map((account) => (
+                {sortedSourceAccounts.map((account) => (
                   <SelectItem key={account.id} value={account.id}>
                     {account.name}
                   </SelectItem>

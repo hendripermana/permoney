@@ -9,6 +9,7 @@ import {
   QUANTITY_SCALE,
   quantityToScaled,
   scaledToQuantityString,
+  sortAccountOptions,
   sumHoldingValuesMinor,
   unitsFromAmountScaled,
 } from "./holdings"
@@ -385,5 +386,42 @@ describe("unitsFromAmountScaled (amount-driven trade entry)", () => {
         }
       )
     )
+  })
+})
+
+describe("sortAccountOptions (PER-262 shared account-picker sort)", () => {
+  test("sorts alphabetically by name, case-insensitively", () => {
+    const accounts = [
+      { id: "3", name: "zebra savings", currency: "IDR" },
+      { id: "1", name: "Bank Jago", currency: "IDR" },
+      { id: "2", name: "allo bank", currency: "IDR" },
+    ]
+    expect(sortAccountOptions(accounts).map((a) => a.id)).toEqual([
+      "2",
+      "1",
+      "3",
+    ])
+  })
+
+  test("does not mutate the input array", () => {
+    const accounts = [
+      { id: "1", name: "Zebra", currency: "IDR" },
+      { id: "2", name: "Alpha", currency: "IDR" },
+    ]
+    const original = [...accounts]
+    sortAccountOptions(accounts)
+    expect(accounts).toEqual(original)
+  })
+
+  test("is stable for accounts sharing a name", () => {
+    const accounts = [
+      { id: "a", name: "Same Name", currency: "IDR" },
+      { id: "b", name: "Same Name", currency: "IDR" },
+    ]
+    expect(sortAccountOptions(accounts).map((a) => a.id)).toEqual(["a", "b"])
+  })
+
+  test("empty list stays empty", () => {
+    expect(sortAccountOptions([])).toEqual([])
   })
 })

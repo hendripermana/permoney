@@ -92,6 +92,7 @@ import {
 import { computeAccountRunway } from "@/lib/account-runway"
 import { computeIdleCash } from "@/lib/account-idle-cash"
 import { computeAccountPerformance } from "@/lib/account-performance"
+import { sortAccountOptions } from "@/lib/holdings"
 import { getAccountOpeningValueFn } from "@/server/valuations"
 import { enableHoldingsTrackingFn } from "@/server/accounts"
 import { canEnableHoldingsTracking } from "@/lib/accounts"
@@ -351,18 +352,55 @@ function AccountDetailPage() {
 
   // PER-198 — cash-like accounts (same currency, active, not this account) that
   // can fund a buy or receive a sell. Derived from the live account collection.
+  // Used ONLY by dialogs that create a NEW trade/fee/dividend INTO the
+  // currently-viewed investment account (TradeDialog, DistributionDialog,
+  // FeeDialog) — excluding `accountId` is correct there because that account
+  // obviously can't fund itself. Sorted alphabetically (PER-262) via the one
+  // shared helper every account-option list in this dialog family uses.
   const fundingAccounts = React.useMemo(
     () =>
-      (accounts ?? [])
-        .filter(
-          (a) =>
-            a.id !== accountId &&
-            a.balanceSource === "transaction_flow" &&
-            a.status === "active" &&
-            a.currency === currency
-        )
-        .map((a) => ({ id: a.id, name: a.name, currency: a.currency })),
+      sortAccountOptions(
+        (accounts ?? [])
+          .filter(
+            (a) =>
+              a.id !== accountId &&
+              a.balanceSource === "transaction_flow" &&
+              a.status === "active" &&
+              a.currency === currency
+          )
+          .map((a) => ({ id: a.id, name: a.name, currency: a.currency }))
+      ),
     [accounts, accountId, currency]
+  )
+
+  // PER-262 — TradeCorrectionDialog must NOT reuse `fundingAccounts` above.
+  // That list excludes the CURRENTLY VIEWED account, which is only correct
+  // when the account can't be its own counterparty (creating a new trade
+  // INTO it). Correcting an EXISTING trade can legitimately be opened from
+  // EITHER side of that trade: the investment account's own page, or the
+  // funding (cash) account's own page — a trade's cash leg is a real
+  // Transaction row that also shows on that cash account's own statement.
+  // When opened from the cash account's page, `accountId` equals the
+  // trade's OWN funding account, so excluding it here would silently drop
+  // the one account that should be selected/selectable. This list therefore
+  // stays broad (every active transaction_flow account matching `currency`,
+  // INCLUDING this page's own account); `TradeCorrectionForm` excludes the
+  // trade's own `investmentAccountId` itself once the trade details resolve
+  // (mirrors how `details.fundingAccountId` already derives from the
+  // resolved trade, never from the page).
+  const correctionFundingAccounts = React.useMemo(
+    () =>
+      sortAccountOptions(
+        (accounts ?? [])
+          .filter(
+            (a) =>
+              a.balanceSource === "transaction_flow" &&
+              a.status === "active" &&
+              a.currency === currency
+          )
+          .map((a) => ({ id: a.id, name: a.name, currency: a.currency }))
+      ),
+    [accounts, currency]
   )
 
   // PER-239 / ADR-0051 — flip this INVESTMENT account to valuation tracking,
@@ -1185,7 +1223,7 @@ function AccountDetailPage() {
           // correction details (the singleton edit pattern, §5C).
           key={`trade-correction-${tradeCorrectionDialog.transactionId}`}
           transactionId={tradeCorrectionDialog.transactionId}
-          fundingAccounts={fundingAccounts}
+          fundingAccounts={correctionFundingAccounts}
           onClose={() => setTradeCorrectionDialog(null)}
           onSaved={async () => {
             await refreshHoldings()
