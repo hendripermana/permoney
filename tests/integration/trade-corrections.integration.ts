@@ -1405,6 +1405,96 @@ describe("trade corrections — delete & edit (PER-259 Slice 5 / ADR-0054)", () 
   })
 
   // ==========================================================================
+  // PER-261 Bug A — trade-correction dialog must never mix up two DIFFERENT
+  // trades' identity. Reproduces the exact production shape: a family with
+  // TWO investment accounts and TWO funding (cash) accounts, where ONE
+  // investment account holds trades funded from TWO DIFFERENT cash accounts —
+  // the scenario where the per-account statement shows multiple Buy/Sell
+  // rows and each row's own `transactionId` must resolve to ITS OWN
+  // instrument + funding account, never another trade's.
+  // ==========================================================================
+
+  test("getTradeForCorrection never mixes up two trades' instrument/funding account across accounts", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const investmentA = await makeInvestmentAccount(owner) // "Bibit" (default name)
+    const investmentB = await createAccountForFamily({
+      data: {
+        name: "Ajaib",
+        accountType: "TRACKED_ASSET" as AccountType,
+        accountSubtype: "brokerage",
+        openingBalance: "0",
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+    const walletA = await makeCashAccount(owner, "Bank Jago")
+    const walletB = await makeCashAccount(owner, "Ala Impian Iphone")
+
+    // Trade 1: investmentA funded by walletA, buying "Fund A".
+    const trade1 = await buyFund(owner, investmentA.id, walletA.id, {
+      quantity: "121.05060000",
+      unitPrice: "1487",
+      cashAmount: "180002",
+    })
+    // Trade 2: the SAME investment account, but a DIFFERENT position bought
+    // with a DIFFERENT funding account — mirrors "Ala Impian Iphone" funding
+    // an unrelated purchase while "Bank Jago" funded the Majoris-like trade.
+    const otherFundId = (
+      await recordTradeForFamily({
+        data: {
+          investmentAccountId: investmentA.id,
+          fundingAccountId: walletB.id,
+          instrument: { kind: "mutual_fund" as const, name: "Fund B" },
+          side: "buy",
+          cashAmount: "500000",
+          quantity: "50",
+          unitPrice: "10000",
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+    ).holding!.instrumentId
+    // Trade 3: a totally separate investment account, also funded by walletB,
+    // so a family-wide (not just per-account) mix-up would also be caught.
+    const trade3 = await buyFund(owner, investmentB.id, walletB.id, {
+      instrumentId: otherFundId,
+      quantity: "10",
+      unitPrice: "10000",
+      cashAmount: "100000",
+    })
+
+    const view1 = await getTradeForCorrectionForFamily({
+      data: { transactionId: trade1.transaction.id },
+      familyId: owner.family.id,
+      userId: owner.user.id,
+    })
+    expect(view1.instrumentName).toBe("Fund A")
+    expect(view1.fundingAccountId).toBe(walletA.id)
+    expect(view1.investmentAccountId).toBe(investmentA.id)
+    expect(view1.quantity).toBe("121.05060000")
+
+    const view3 = await getTradeForCorrectionForFamily({
+      data: { transactionId: trade3.transaction.id },
+      familyId: owner.family.id,
+      userId: owner.user.id,
+    })
+    expect(view3.instrumentName).toBe("Fund B")
+    expect(view3.fundingAccountId).toBe(walletB.id)
+    expect(view3.investmentAccountId).toBe(investmentB.id)
+
+    // Re-fetch trade1 AFTER resolving the other two — proves no shared/cached
+    // resolver state leaks across calls within the same process.
+    const view1Again = await getTradeForCorrectionForFamily({
+      data: { transactionId: trade1.transaction.id },
+      familyId: owner.family.id,
+      userId: owner.user.id,
+    })
+    expect(view1Again).toEqual(view1)
+  })
+
+  // ==========================================================================
   // LEGACY DATA — a trade recorded BEFORE `lastMutationIdempotencyKey`
   // existed (migration 20260816130000) or before its backfill
   // (20260823121700).

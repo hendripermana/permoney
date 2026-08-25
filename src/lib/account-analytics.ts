@@ -27,6 +27,7 @@ export const ACCOUNT_RANGES: ReadonlyArray<{
 ]
 
 export interface AnalyticsTxn {
+  id?: string
   date: Date | string
   createdAt?: Date | string
   amount: bigint // absolute magnitude (sign lives in `type`, or `transferIncoming` for a transfer)
@@ -123,15 +124,31 @@ function localIsoDay(date: Date): string {
 }
 
 function chronological(
-  a: Pick<AnalyticsTxn, "date" | "createdAt">,
-  b: Pick<AnalyticsTxn, "date" | "createdAt">
+  a: Pick<AnalyticsTxn, "date" | "createdAt" | "id">,
+  b: Pick<AnalyticsTxn, "date" | "createdAt" | "id">
 ): number {
   const ta = new Date(a.date).getTime()
   const tb = new Date(b.date).getTime()
   if (ta !== tb) return ta - tb
   const ca = a.createdAt ? new Date(a.createdAt).getTime() : 0
   const cb = b.createdAt ? new Date(b.createdAt).getTime() : 0
-  return ca - cb
+  if (ca !== cb) return ca - cb
+  // PER-261 hardening: `date` AND `createdAt` can be IDENTICAL — two legs
+  // written inside the same DB transaction (they share Postgres `now()`), or
+  // several rows batch-imported/seeded with one explicit timestamp. Without a
+  // final deterministic tiebreak, ties fall through to `Array.prototype.sort`
+  // stability over whatever order the array arrived in — and per this file's
+  // own `orderStatementRows` doc comment, a per-account `useLiveQuery` has NO
+  // intrinsic order, so that incidental order can silently change between
+  // re-renders (e.g. an unrelated background resync touching the same
+  // collection). A statement row reordering itself out from under a click is
+  // a "wrong row got edited" risk this ledger cannot allow — tiebreak on `id`
+  // so two ties always land in the same relative position, render after
+  // render, regardless of the live query's underlying array order.
+  if (a.id != null && b.id != null && a.id !== b.id) {
+    return a.id < b.id ? -1 : 1
+  }
+  return 0
 }
 
 /**
@@ -142,13 +159,18 @@ function chronological(
  * the account statement must sort explicitly, exactly like the /transactions
  * ledger does. The createdAt tiebreak surfaces a just-added BACKDATED entry at
  * the top of its day, which is what reconciling against a bank statement needs
- * (record today, date it to the posting day, still see it immediately). Pure +
- * unit-tested; the route only calls it.
+ * (record today, date it to the posting day, still see it immediately). A
+ * final `id` tiebreak (PER-261) makes the order fully deterministic even when
+ * date AND createdAt both tie, independent of the live query's own array
+ * order. Pure + unit-tested; the route only calls it.
  */
 export function orderStatementRows<
-  T extends Pick<AnalyticsTxn, "date" | "createdAt">,
+  T extends Pick<AnalyticsTxn, "date" | "createdAt" | "id">,
 >(rows: ReadonlyArray<T>): T[] {
-  // chronological() is ascending (date asc, createdAt asc); negate for desc.
+  // chronological() is ascending (date asc, createdAt asc, id asc); negate
+  // for desc. The `id` tiebreak is direction-agnostic (any stable order is
+  // fine) so negating it is harmless — it just flips which of two exact ties
+  // sorts first, consistently every time.
   return [...rows].sort((a, b) => -chronological(a, b))
 }
 

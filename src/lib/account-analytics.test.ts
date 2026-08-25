@@ -370,6 +370,31 @@ describe("orderStatementRows", () => {
     orderStatementRows(rows)
     expect(rows.map((r) => r.date)).toEqual(snapshot)
   })
+
+  // PER-261 — a per-account `useLiveQuery` has NO intrinsic order; when two
+  // rows share the EXACT same `date` AND `createdAt` (two legs written inside
+  // one DB transaction, or a batch import/seed sharing a timestamp), the
+  // order must still be fully deterministic — never dependent on whatever
+  // incidental array order the live query happened to hand back this render.
+  // A statement row silently swapping position between renders is a "wrong
+  // row got edited" risk this ledger cannot allow.
+  it("tiebreaks identical date AND createdAt by id, independent of input order", () => {
+    const first = txn({
+      date: "2026-02-10",
+      createdAt: "2026-02-10T09:00:00Z",
+      id: "aaa-1",
+      amount: 111n,
+    })
+    const second = txn({
+      date: "2026-02-10",
+      createdAt: "2026-02-10T09:00:00Z",
+      id: "bbb-2",
+      amount: 222n,
+    })
+    const forward = orderStatementRows([first, second]).map((r) => r.id)
+    const backward = orderStatementRows([second, first]).map((r) => r.id)
+    expect(forward).toEqual(backward)
+  })
 })
 
 describe("matchesQuery", () => {

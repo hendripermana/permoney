@@ -17,16 +17,16 @@ This document extends the account taxonomy contract in
 
 ## Transaction Kinds
 
-| `Transaction.kind`   | Valid on type  | Meaning                                                                                                                                                         | Ordinary spending? | Client settable? |
-| -------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ---------------- |
-| `standard`           | expense/income | Normal purchase, refund, income, adjustment.                                                                                                                    | Expense only.      | Yes.             |
-| `funds_movement`     | transfer       | Asset-to-asset transfer.                                                                                                                                        | No.                | No.              |
-| `cc_payment`         | transfer       | Principal payment into a `CREDIT` account.                                                                                                                      | No.                | No.              |
-| `loan_payment`       | transfer       | Principal payment into a `LOAN` account.                                                                                                                        | No.                | No.              |
-| `liability_draw`     | transfer       | New borrowing from a liability into asset.                                                                                                                      | No.                | No.              |
-| `liability_interest` | expense        | Interest cost linked to a liability account.                                                                                                                    | Finance cost.      | Yes.             |
-| `liability_fee`      | expense        | Fee cost linked to a liability account.                                                                                                                         | Finance cost.      | Yes.             |
-| `reimbursement`      | income         | Income row that nets against an EXPENSE-type category, reducing that category's spent amount in both the Spending report and Budget progress.                   | No.                | Yes.             |
+| `Transaction.kind`   | Valid on type  | Meaning                                                                                                                                       | Ordinary spending? | Client settable? |
+| -------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ---------------- |
+| `standard`           | expense/income | Normal purchase, refund, income, adjustment.                                                                                                  | Expense only.      | Yes.             |
+| `funds_movement`     | transfer       | Asset-to-asset transfer.                                                                                                                      | No.                | No.              |
+| `cc_payment`         | transfer       | Principal payment into a `CREDIT` account.                                                                                                    | No.                | No.              |
+| `loan_payment`       | transfer       | Principal payment into a `LOAN` account.                                                                                                      | No.                | No.              |
+| `liability_draw`     | transfer       | New borrowing from a liability into asset.                                                                                                    | No.                | No.              |
+| `liability_interest` | expense        | Interest cost linked to a liability account.                                                                                                  | Finance cost.      | Yes.             |
+| `liability_fee`      | expense        | Fee cost linked to a liability account.                                                                                                       | Finance cost.      | Yes.             |
+| `reimbursement`      | income         | Income row that nets against an EXPENSE-type category, reducing that category's spent amount in both the Spending report and Budget progress. | No.                | Yes.             |
 
 `src/lib/liability-semantics.ts` is the TypeScript source for this vocabulary,
 transfer-kind derivation, and ordinary-spending classification.

@@ -2435,6 +2435,25 @@ function useTransactionFormModalController({
 
         if (!isEditMode) {
           form.reset()
+          // PER-261: `form.reset()` restores EVERY field to
+          // `defaultFormValues`, which hardcodes `type: "expense"` — but the
+          // visually-controlled `activeTab` (the Tabs UI) is untouched, so a
+          // successful Transfer submit leaves the tab still showing
+          // "Transfer" while the form's own `type` field silently reverted
+          // to "expense". `TransactionTypeTabs`'s `onValueChange` is the ONLY
+          // other place that syncs `type` to the tab, and it only fires on an
+          // ACTIVE user click — reopening with the tab already visually on
+          // "Transfer" and typing straight into the fields never re-fires it,
+          // so a same-tab resubmit silently posted the stale reset type
+          // instead of what the UI displayed. Resync here so the form always
+          // agrees with the tab the user is looking at. `categoryId` and
+          // `toAccountId` don't need the same treatment: create-mode
+          // defaults already reset BOTH to "" regardless of tab, which is
+          // exactly what a fresh Transfer or Expense/Income tab wants (no
+          // stale category riding into a transfer; no stale destination
+          // account riding into an expense/income) — the same values
+          // `onValueChange` clears to when actively switching tabs.
+          form.setFieldValue("type", activeTab)
           // Split state lives outside TanStack Form; clear it too so the next
           // "New Transaction" open starts with a clean, inactive allocation
           // (PER-205 — no stale rows, no phantom "Over allocated" banner).
