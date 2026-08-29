@@ -627,6 +627,28 @@ export async function fetchAccountFacts(
     : null
 }
 
+// PER-268 — every transaction_flow account's balance facts for a family, the
+// read the historical drift audit (src/server/balance-correction.server.ts)
+// runs per-family to find accounts whose materialized `Account.balance` still
+// disagrees with `computeCanonicalBalance` under the corrected ADR-0043/PER-264
+// provenance rule — i.e. an account that was NEVER re-materialized after the
+// bug fix landed because nothing has written to it since. Named/exported
+// separately from `fetchAccountFacts` (single-account) so the audit's
+// per-family loop and the ordinary single-account read share one query shape.
+export async function listTransactionFlowAccountFacts(
+  tx: TenantTransactionClient,
+  familyId: string
+): Promise<Array<AccountBalanceFacts & { name: string }>> {
+  const accounts = await tx.account.findMany({
+    where: { familyId, balanceSource: "transaction_flow", deletedAt: null },
+    select: { ...ACCOUNT_BALANCE_SELECT, name: true },
+  })
+  return accounts.map((account) => ({
+    ...account,
+    accountType: account.accountType as AccountType,
+  }))
+}
+
 // =============================================================================
 // CREATE VALUATION
 // =============================================================================
@@ -890,7 +912,13 @@ export async function rebuildWithinTx(
   tx: TenantTransactionClient,
   familyId: string,
   account: AccountBalanceFacts,
-  auditCtx: Awaited<ReturnType<typeof createAuditContext>>
+  auditCtx: Awaited<ReturnType<typeof createAuditContext>>,
+  // PER-268 — optional extra fields folded into the AuditLog `after` payload
+  // (never `before`, which stays the plain previous balance). Lets a caller
+  // like the historical-drift correction path stamp WHY the rebuild ran
+  // (ticket reference, human-readable reason) without this function knowing
+  // anything about callers other than "some extra audit context, if any."
+  auditMetadata?: Record<string, unknown>
 ): Promise<BalanceRebuildResult> {
   const canonical = await computeCanonicalBalance(tx, familyId, account)
   const previous = toMoney(account.balance)
@@ -913,7 +941,7 @@ export async function rebuildWithinTx(
     entityType: "Account",
     entityId: account.id,
     before: { balance: previous.toString() },
-    after: { balance: canonical.toString() },
+    after: { balance: canonical.toString(), ...auditMetadata },
   })
   return {
     accountId: account.id,

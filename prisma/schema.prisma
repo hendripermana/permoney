@@ -59,6 +59,7 @@ model Family {
   importBatchArtifacts ImportBatchArtifact[]
   instruments  Instrument[]
   holdings     Holding[]
+  pendingBalanceCorrections PendingBalanceCorrection[]
 }
 
 // ADR-0036: first-class family membership + role authorization.
@@ -223,6 +224,7 @@ model Account {
   valuations       Valuation[]
   rawImportedTransactions RawImportedTransaction[]
   holdings         Holding[]
+  pendingBalanceCorrections PendingBalanceCorrection[]
 
   // Tenant-scoped fetch (every Account read is filtered by familyId once
   // ADR-0004 lands; cheap to add now). See ADR-0003.
@@ -702,6 +704,61 @@ model Valuation {
   // type lookups (opening anchor / reconciliation drift).
   @@index([familyId, accountId, valuationDate(sort: Desc)])
   @@index([familyId, accountId, type])
+}
+
+// PER-268 / ADR-0043 anchor-provenance amendment — the smallest-viable
+// notification for a HISTORICAL balance correction. Before PER-264/265/266
+// shipped, every anchor used the permissive `derived` afterAnchor rule, so an
+// account whose owner interactively reconciled it and later logged a
+// backdated transaction may have a materialized `Account.balance` that still
+// double-counts that transaction, even though the calculator itself is fixed
+// going forward (`rebuildIfGroundTruthAnchored` / anchor-rebuild.server.ts
+// heals any account on its NEXT write). A row here means: "this account's
+// stored balance disagrees with the corrected canonical formula, and the
+// owner has not yet approved the fix." It is a plain notification record —
+// writing one never touches `Account.balance` or `Valuation`.
+//
+// Lifecycle: the PER-268 audit script stages one row per drifted account
+// (`status="pending"`); the account page renders a banner from it; an
+// explicit user action (or an operator's grace-period batch, see
+// scripts/per-268-balance-correction-audit.ts) calls
+// `applyPendingBalanceCorrectionForFamily`, which re-derives the canonical
+// balance FRESH (never trusting this row's snapshot, in case more activity
+// landed since staging), writes the real correction through the same
+// `rebuildWithinTx` / `setAccountBalanceTo` / `AuditLog` path every other
+// balance rebuild uses, and flips this row to `status="applied"` — clearing
+// the banner. One row per account: a second staging pass on an already-
+// `pending` row refreshes the numbers in place rather than creating a
+// duplicate.
+model PendingBalanceCorrection {
+  id String @id @default(uuid())
+
+  accountId String
+  account   Account @relation(fields: [accountId, familyId], references: [id, familyId], onDelete: Cascade, onUpdate: Cascade, map: "PendingBalanceCorrection_accountId_familyId_fkey")
+
+  familyId String
+  family   Family @relation(fields: [familyId], references: [id])
+
+  // SIGNED, MINOR UNITS — same convention as Account.balance / Valuation.value.
+  previousBalance  BigInt
+  correctedBalance BigInt
+  driftAmount      BigInt
+
+  // The ground-truth anchor that would have absorbed the affected backdated
+  // activity — a provenance pointer with no FK, mirroring
+  // Valuation.fxRateSnapshotId (this row can outlive the anchor it names).
+  anchorValuationId String?
+  anchorDate        DateTime? @db.Date
+  anchorProvenance  String?
+
+  ticketRef String @default("PER-268")
+  status    String @default("pending") // "pending" | "applied" (CHECK in migration)
+
+  createdAt DateTime  @default(now())
+  appliedAt DateTime?
+
+  @@unique([accountId])
+  @@index([familyId, status])
 }
 
 // Dated FX rate snapshot (ADR-0035 §2). Tenant-scoped, directed `from -> to`

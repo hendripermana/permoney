@@ -1,15 +1,15 @@
 # ADR-0043 — Reconciliation-anchor valuations (balance calculator)
 
-|                   |                                                                                                                                                                                                                                                            |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**        | Accepted                                                                                                                                                                                                                                                   |
-| **Date**          | 2026-07-04                                                                                                                                                                                                                                                 |
-| **Accepted**      | 2026-07-04                                                                                                                                                                                                                                                 |
-| **Deciders**      | Hendri Permana                                                                                                                                                                                                                                             |
-| **Supersedes**    | —                                                                                                                                                                                                                                                          |
-| **Superseded by** | —                                                                                                                                                                                                                                                          |
-| **Amends**        | ADR-0034 §4 (cash balance derivation) + §7 (drift detector); reverses ADR-0034 "Alternatives considered" #2                                                                                                                                                |
-| **Amended by**    | ADR-0048 §3 (valuation-tracked accounts never accept a raw transaction-flow leg; guard + Transfer schema); PER-201 amendment below (createdAt-aware post-anchor flow, §2/§6); PER-264 amendment below (anchor provenance — ground-truth vs derived, §2/§6) |
+|                   |                                                                                                                                                                                                                                                                                                                                                    |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Status**        | Accepted                                                                                                                                                                                                                                                                                                                                           |
+| **Date**          | 2026-07-04                                                                                                                                                                                                                                                                                                                                         |
+| **Accepted**      | 2026-07-04                                                                                                                                                                                                                                                                                                                                         |
+| **Deciders**      | Hendri Permana                                                                                                                                                                                                                                                                                                                                     |
+| **Supersedes**    | —                                                                                                                                                                                                                                                                                                                                                  |
+| **Superseded by** | —                                                                                                                                                                                                                                                                                                                                                  |
+| **Amends**        | ADR-0034 §4 (cash balance derivation) + §7 (drift detector); reverses ADR-0034 "Alternatives considered" #2                                                                                                                                                                                                                                        |
+| **Amended by**    | ADR-0048 §3 (valuation-tracked accounts never accept a raw transaction-flow leg; guard + Transfer schema); PER-201 amendment below (createdAt-aware post-anchor flow, §2/§6); PER-264 amendment below (anchor provenance — ground-truth vs derived, §2/§6); PER-268 amendment below (historical-drift audit, notification & grace-period decision) |
 
 ## Context
 
@@ -768,3 +768,112 @@ outcome.
    the underlying concern (a concurrent user write must not be clobbered by
    the audit's correction) is real and already solved here, just not by the
    mechanism proposed.
+
+## Amendment — PER-268 historical-drift audit, notification & grace-period decision
+
+|            |                                                                                                                      |
+| ---------- | -------------------------------------------------------------------------------------------------------------------- |
+| **Date**   | 2026-08-29                                                                                                           |
+| **Amends** | Nothing in §1–§6's formula; implements the "Backfilling existing rows" plan the PER-264 amendment above committed to |
+| **Ticket** | PER-268                                                                                                              |
+
+### What PER-264/265/266 fixed, and what it could not reach
+
+The calculator itself, and the live write path, are both already correct:
+`computeCanonicalBalance` applies the provenance-branched `afterAnchor`
+predicate (this ADR's §2/§6, as amended), and any `transaction_flow` account
+whose latest anchor is `ground_truth` re-materializes its stored balance on
+its **next** write, inside the same `prisma.$transaction`
+(`rebuildIfGroundTruthAnchored`, `src/server/anchor-rebuild.server.ts`). That
+closes the bug going forward.
+
+It cannot reach backward. An account that had a live reconcile, then a
+forgotten backdated transaction, and **no write since** the fix shipped is
+still sitting on its pre-fix, double-counted `Account.balance` — nothing
+retroactively re-triggers a rebuild for a row nobody has touched. PER-268 is
+that backward half: find every such account, tell its owner, and only then
+correct it — never silently.
+
+### The workflow (implemented in `src/server/balance-correction.ts` /
+
+### `balance-correction.server.ts` / `scripts/per-268-balance-correction-audit.ts`)
+
+1. **Report (read-only).** `auditTransactionFlowBalanceAcrossFamilies`
+   recomputes `computeCanonicalBalance` for every `transaction_flow` account
+   in every family and diffs it against the materialized balance. Zero
+   writes — reviewable by a human before anything else runs.
+2. **Stage (writes a notification, never a balance).** For each drifted
+   account, `stageBalanceCorrectionsForFamily` writes one
+   `PendingBalanceCorrection` row (`status="pending"`). This table has its
+   own RLS policy (ADR-0036 shape) and never touches `Account.balance` or
+   `Valuation` — it exists purely so the account page can render a banner.
+3. **Notify.** No email/push infrastructure exists in this codebase (that is
+   explicitly M3/Observability territory, and building one for a single
+   historical correction would be disproportionate — see "Notification
+   mechanism" below).
+4. **Apply (the real, audited correction).** Re-derives the canonical
+   balance **fresh** (never trusting the staged snapshot — more activity may
+   have landed since staging) and writes it through `rebuildWithinTx` /
+   `setAccountBalanceTo` — the exact same optimistically-locked,
+   `AuditLog`-backed path every other balance rebuild in this codebase uses.
+   The `AuditLog` row's `after` payload carries `ticketRef: "PER-268"` and a
+   plain-language `reason`, so the row is self-explanatory to a future reader
+   without needing this ADR open.
+
+### Notification mechanism — an in-app banner, not a new channel
+
+The ticket's own acceptance criteria acknowledge this repo has no
+notification infrastructure and ask for "the smallest viable in-app banner"
+rather than a new channel. Decision: `PendingBalanceCorrectionBanner`
+(`src/components/blocks/pending-balance-correction-banner.tsx`) renders on
+the account detail page, driven by a plain `useQuery` read of
+`getPendingBalanceCorrectionFn` — no polling, no push, no email. It appears
+the moment the row is staged and the owner next opens that account, and
+disappears the instant the correction is applied (the query is refetched
+after apply, and the row's status flips to `"applied"`). This is
+intentionally the same shape as every other account-scoped notice already on
+that page (the account-health panel, the runway note, the idle-cash nudge) —
+a read of small, tenant-scoped server state, not a new subsystem.
+
+### Correction trigger — explicit acknowledgment, with an optional operator-run grace-period batch
+
+The ticket asks for "acknowledged (or after a grace period)," to be decided
+here. Decision: **explicit acknowledgment is the primary path** — the banner
+only ever changes anything when the account owner clicks "Apply correction"
+(`applyBalanceCorrectionFn`). No automatic timer applies a correction on its
+own, for a concrete reason: this codebase has **no background job
+scheduler** (cron, queue worker, or similar) at all today, and building one
+solely to auto-fire a one-time historical correction days later would be
+exactly the "general-purpose notification system" the ticket explicitly
+scopes out.
+
+The grace-period **option** still exists, but as an **operator-run batch**,
+not a timer: `applyAllDueBalanceCorrectionsForFamily`
+(`apply-all` mode in the script) applies every still-pending correction in
+one family whose staged `createdAt` is at least `--min-grace-days` (default 7) old, and lists anything younger as skipped rather than touching it. This
+gives a real, testable grace-period mechanic — "has enough calendar time
+passed that we can go ahead without an explicit click" — without inventing
+scheduler infrastructure: a human (the creator, today; an on-call operator,
+later) decides when to run the batch, exactly the same operational shape
+PER-196's cleanup script and PER-179/182's migrations already use for a
+one-time, audited, ops-triggered correction.
+
+### Pre-correction backup — referenced, not reinvented
+
+`docs/runbook-production.md` already runs a daily automated `pg_dump`
+(`deploy/backup-postgres.sh`) with a monthly tested restore. PER-268 does not
+duplicate that; instead, the script's `apply` and `apply-all` modes refuse to
+run with `--apply` unless `--i-have-a-backup` is also passed — a deliberate
+manual gate forcing the operator to go confirm a recent backup exists (per
+the runbook) before a real balance-changing write runs, mirroring the
+discipline PER-179/PER-182 already established for their own bulk-write
+migrations.
+
+### Why this stays scoped to `transaction_flow` accounts only
+
+`balanceSource="valuation"` accounts are unaffected by the PER-264 bug by
+construction: their balance is always "latest valuation of any type," never a
+transaction sum, so there is no `afterAnchor` branch to have gotten wrong for
+them. `listTransactionFlowAccountFacts` (`src/server/valuations.ts`) scopes
+the audit to exactly the account population this ADR's §2 formula (and its
+PER-264 amendment) actually governs.
