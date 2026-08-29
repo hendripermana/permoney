@@ -25,19 +25,6 @@ export const getSessionGuardFn = createServerFn({ method: "GET" }).handler(
   }
 )
 
-export const meFn = createServerFn({ method: "GET" }).handler(async () => {
-  const { user } = await requireSession()
-  return {
-    user: {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      familyId: user.familyId,
-      theme: user.theme,
-    },
-  }
-})
-
 export const signupFn = createServerFn({ method: "POST" })
   .inputValidator(signupSchema)
   .handler(async ({ data }) => {
