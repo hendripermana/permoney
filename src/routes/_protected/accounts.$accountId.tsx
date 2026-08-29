@@ -63,6 +63,7 @@ import {
 } from "@/components/blocks/switch-dialog"
 import { HoldingEventCorrectionDialog } from "@/components/blocks/holding-event-correction-dialog"
 import { TradeCorrectionDialog } from "@/components/blocks/trade-correction-dialog"
+import { PendingBalanceCorrectionBanner } from "@/components/blocks/pending-balance-correction-banner"
 import { TransactionFormModal } from "@/components/transaction-form-modal"
 import {
   accountCollection,
@@ -844,6 +845,13 @@ function AccountDetailPage() {
           </Button>
         </div>
       </div>
+
+      <PendingBalanceCorrectionBanner
+        accountId={accountId}
+        currency={currency}
+        cashLike={cashLike}
+        onApplied={refreshAccountData}
+      />
 
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,24rem)_1fr]">
         {/* Left: hero + KPI + category breakdown */}
