@@ -200,6 +200,25 @@ describe("PER-268 historical balance-drift audit + correction (ADR-0043 amendmen
     expect(stillBuggy.balance).toBe(buggyBalance)
   })
 
+  // A family with zero active members has no one `resolveActingMember` can
+  // scope RLS as (`FamilyMember` itself carries RLS — see
+  // src/server/balance-correction.server.ts). It must show up as an explicit
+  // "unauditable" row (`ownerUserId: null`), never silently dropped — a
+  // dropped row would be indistinguishable from a genuinely clean family in
+  // the CLI report, which is exactly the bug the coordinator's review caught
+  // in `runReport()`'s naive `drifted.length > 0` filter.
+  test("report marks a family with no active member as unauditable, not silently clean", async () => {
+    const orphaned = await factories.createFamily()
+
+    const report = await auditTransactionFlowBalanceAcrossFamilies()
+
+    const orphanedReport = report.find((r) => r.familyId === orphaned.id)
+    expect(orphanedReport).toBeDefined()
+    expect(orphanedReport!.ownerUserId).toBeNull()
+    expect(orphanedReport!.ownerEmail).toBeNull()
+    expect(orphanedReport!.drifted).toEqual([])
+  })
+
   // --------------------------------------------------------------------------
   // (d, part 1) notification banner state is set correctly by staging
   // --------------------------------------------------------------------------

@@ -136,10 +136,45 @@ async function runReport(): Promise<void> {
       "transaction_flow accounts for canonical-vs-materialized balance drift...\n"
   )
   const reports = await auditTransactionFlowBalanceAcrossFamilies()
-  const withDrift = reports.filter((r) => r.drifted.length > 0)
+
+  // `auditTransactionFlowBalanceAcrossFamilies` deliberately pushes a row
+  // with `ownerUserId: null, drifted: []` for a family it could not scope RLS
+  // as (no active member to act as) — "report it as unauditable rather than
+  // silently skipping" (balance-correction.server.ts). A naive
+  // `drifted.length > 0` filter throws that signal away: an unauditable
+  // family and a genuinely clean one both end up with an empty `drifted`
+  // array, so they must be partitioned by `ownerUserId`, not by drift count
+  // alone, or "no drifted accounts found" would print even when some
+  // families were never actually checked.
+  const withDrift = reports.filter(
+    (r) => r.ownerUserId !== null && r.drifted.length > 0
+  )
+  const clean = reports.filter(
+    (r) => r.ownerUserId !== null && r.drifted.length === 0
+  )
+  const unauditable = reports.filter((r) => r.ownerUserId === null)
+
+  if (unauditable.length > 0) {
+    console.log(
+      `${unauditable.length} famil${unauditable.length === 1 ? "y" : "ies"} could NOT be audited — no active member to scope RLS as:`
+    )
+    for (const family of unauditable) {
+      console.log(`  family ${family.familyId} (${family.familyName})`)
+    }
+    console.log(
+      "These families were SKIPPED, not confirmed clean — investigate their " +
+        "membership (e.g. an orphaned/fully-revoked family) before treating " +
+        "this report as complete.\n"
+    )
+  }
 
   if (withDrift.length === 0) {
-    console.log("No drifted accounts found across any family.")
+    console.log(
+      unauditable.length > 0
+        ? "No drifted accounts found across any AUDITABLE family — but see " +
+            "the unauditable list above; those were never actually checked."
+        : "No drifted accounts found across any family."
+    )
     return
   }
 
@@ -158,7 +193,11 @@ async function runReport(): Promise<void> {
     }
   }
   console.log(
-    `\n${totalAccounts} drifted account(s) across ${withDrift.length} famil${withDrift.length === 1 ? "y" : "ies"}.\n` +
+    `\n${totalAccounts} drifted account(s) across ${withDrift.length} famil${withDrift.length === 1 ? "y" : "ies"}` +
+      (clean.length > 0
+        ? ` (${clean.length} clean famil${clean.length === 1 ? "y" : "ies"} also audited, no drift)`
+        : "") +
+      `.\n` +
       "Review this output BEFORE running `stage --apply`."
   )
 }
