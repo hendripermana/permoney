@@ -375,6 +375,11 @@ async function writeSureValuationAnchors(
         idempotencyKey,
       },
       familyId,
+      // PER-266 — an imported Sure valuation. Its value came out of another
+      // ledger's own computation over the very rows this import is promoting,
+      // not from anyone looking at a real balance. `derived` keeps PER-201's
+      // date-OR-createdAt rule, which is what makes a fresh import zero-drift.
+      provenance: "derived",
       user,
       runInTenantTransaction,
     })
@@ -717,6 +722,11 @@ async function writeSureFinalReconciliationAnchors(
         idempotencyKey,
       },
       familyId,
+      // PER-266 — the final reconciliation anchor. Its value is
+      // `projectSureMigrationBalances`' projection over the promoted rows, i.e.
+      // computed by Permoney from rows it already has. `derived` by definition,
+      // and required for ADR-0043's zero-drift-import proof to keep holding.
+      provenance: "derived",
       user,
       runInTenantTransaction,
     })

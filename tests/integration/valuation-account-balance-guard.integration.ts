@@ -220,6 +220,7 @@ describe("PER-196 / ADR-0048 §3 — valuation account balance write guard", () 
         valuationDate: TEST_DATE,
       },
       familyId: fx.familyId,
+      provenance: "ground_truth",
       user: fx.user,
     })
 

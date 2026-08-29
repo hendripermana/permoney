@@ -2,7 +2,12 @@ import { createServerFn } from "@tanstack/react-start"
 import type { Valuation } from "@prisma/client"
 import { z } from "zod"
 import { allowsNegativeAssetBalance, type AccountType } from "@/lib/accounts"
-import { ANCHOR_VALUATION_TYPES } from "@/lib/net-worth"
+import {
+  ANCHOR_VALUATION_TYPES,
+  isAnchorValuationType,
+  toAnchorProvenance,
+  type AnchorProvenance,
+} from "@/lib/net-worth"
 import {
   absMoney,
   addMoney,
@@ -319,42 +324,59 @@ interface AnchorValuation {
   // `afterAnchor` segmentation predicate — a transaction recorded after the
   // anchor is post-anchor flow even when back-dated to at/before the anchor.
   createdAt: Date
+  // PER-264: which half of that predicate actually applies. See `AnchorBound`.
+  provenance: AnchorProvenance
 }
 
-// An anchor's identity for flow segmentation (PER-201): its asserted date
-// (date-only) and the wall-clock instant the row was written. Both
-// `AnchorValuation` (the balance path) and the raw anchor rows the drift check
-// reads satisfy it, so one predicate serves both boundaries (ADR-0043 §6).
+// An anchor's identity for flow segmentation (PER-201 / PER-264): its asserted
+// date (date-only), the wall-clock instant the row was written, and where its
+// asserted value came from. Both `AnchorValuation` (the balance path) and the
+// raw anchor rows the drift check reads satisfy it, so one predicate serves
+// both boundaries (ADR-0043 §6).
 interface AnchorBound {
   valuationDate: Date
   createdAt: Date
+  provenance: AnchorProvenance
 }
 
-// PER-201 / ADR-0043 §2 — the ONE segmentation predicate shared by the balance
-// formula and the ANCHOR_CHAIN drift check (ADR-0043 §6's load-bearing "one
-// segmentation function" invariant). A transaction is *after* an anchor iff it
-// is dated after the anchor's date OR was recorded after the anchor was written:
+// PER-201 / PER-264 / ADR-0043 §2 — the ONE segmentation predicate shared by the
+// balance formula and the ANCHOR_CHAIN drift check (ADR-0043 §6's load-bearing
+// "one segmentation function" invariant). The branch on `provenance` lives here
+// exactly once, so the two can never diverge by construction:
 //
-//   afterAnchor(A)(t)  ≡  t.date > A.valuationDate  OR  t.createdAt > A.createdAt
+//   afterAnchor(A)(t) ≡ A.provenance = "derived"
+//                          ? (t.date > A.valuationDate OR t.createdAt > A.createdAt)
+//                          : (t.date > A.valuationDate)
 //
-// It is absorbed into the anchor's asserted value only when BOTH are false —
-// i.e. it was dated at/before the anchor AND already existed when the anchor was
-// written. The createdAt disjunct is what fixes PER-201: a user's *back-dated*
-// transaction added AFTER an import/reconciliation anchor (date <= anchor.date
-// but createdAt > anchor.createdAt) is real post-anchor activity the
-// materialized balance already counts (it increments on every transaction
-// regardless of date), so the canonical formula must count it too. The date
-// disjunct is equally load-bearing: a *future*-dated transaction recorded
-// BEFORE a live reconciliation (date > anchor.date but createdAt <=
-// anchor.createdAt) is still after the asserted balance and must be added — so
-// the rule is a disjunction, never createdAt alone.
+// DERIVED anchors keep PER-201's disjunction verbatim. Such an anchor's value
+// was COMPUTED by summing rows Permoney already held, so it can only ever have
+// absorbed what existed when it was written. Both disjuncts are load-bearing:
+// the createdAt one is PER-201's fix (a user's *back-dated* transaction added
+// AFTER an import anchor is real post-anchor activity the materialized balance
+// already counts, so the canonical formula must count it too); the date one is
+// equally required (a *future*-dated transaction recorded BEFORE the anchor is
+// still after the asserted balance), so the rule is never createdAt alone.
 //
-// Why a fresh Sure import stays zero-drift (no double-count): the final
-// reconciliation anchor is written LAST, each import step in its own tenant
-// transaction, so its createdAt is strictly greater than every promoted
-// transaction's createdAt, and it is dated `lastActivityDay + 1` so no imported
-// leg is dated after it either — both disjuncts are false for every imported
-// row, which are therefore absorbed exactly as before (ADR-0043 amendment).
+// GROUND_TRUTH anchors segment by DATE ONLY. Their value is an INDEPENDENT
+// observation of reality — a human reading their real wallet balance during
+// "Reconcile account", or (later) a bank-fetched statement — which already
+// reflected every event up to that instant whether or not Permoney knew the
+// details. Applying the createdAt disjunct here IS the PER-264 bug: a real,
+// forgotten, back-dated transaction entered days later gets added on top of a
+// number that already contained it, inventing money the wallet never had.
+//
+// Transfer legs need no special rule: each leg is evaluated against its OWN
+// account's own anchor, exactly as the unamended §2 formula does. A cross-leg
+// conjunction was proposed and retracted — it would let reconciling account B
+// retroactively change account A's settled balance for an unrelated transfer
+// (see ADR-0043, "Transfer legs resolve independently").
+//
+// Why a fresh Sure import stays zero-drift (no double-count): its anchors are
+// `derived`, written LAST, each import step in its own tenant transaction, so
+// the anchor's createdAt is strictly greater than every promoted transaction's
+// createdAt, and it is dated `lastActivityDay + 1` so no imported leg is dated
+// after it either — both disjuncts are false for every imported row, which are
+// therefore absorbed exactly as before (ADR-0043 amendment).
 // `createdAt` is `@default(now())` on Transaction and Valuation (never null).
 //
 // Σ Transaction.amount over { afterAnchor(after) } — optionally intersected with
@@ -376,19 +398,30 @@ async function sumTransactionFlowAfterAnchor(
       accountId,
       familyId,
       deletedAt: null,
-      // afterAnchor(after): dated after the anchor OR recorded after it.
-      OR: [
-        { date: { gt: after.valuationDate } },
-        { createdAt: { gt: after.createdAt } },
-      ],
-      // ¬afterAnchor(through): dated at/before the next anchor AND recorded
-      // at/before it. ANDs with the OR above (Prisma implicit-AND of top-level
-      // keys) to give the segment afterAnchor(from) ∧ ¬afterAnchor(to).
-      ...(through
+      // afterAnchor(after) — see the predicate above. `derived` is the
+      // date-OR-createdAt disjunction; `ground_truth` is date only.
+      ...(after.provenance === "derived"
         ? {
-            date: { lte: through.valuationDate },
-            createdAt: { lte: through.createdAt },
+            OR: [
+              { date: { gt: after.valuationDate } },
+              { createdAt: { gt: after.createdAt } },
+            ],
           }
+        : { date: { gt: after.valuationDate } }),
+      // ¬afterAnchor(through) — De Morgan of the same branch, so both segment
+      // boundaries stay on this one predicate (ADR-0043 §6). ANDs with the
+      // clause above via Prisma's implicit-AND of top-level keys, except where
+      // both branches key on `date`, which needs an explicit AND to avoid one
+      // silently overwriting the other.
+      ...(through
+        ? through.provenance === "derived"
+          ? {
+              AND: [
+                { date: { lte: through.valuationDate } },
+                { createdAt: { lte: through.createdAt } },
+              ],
+            }
+          : { AND: [{ date: { lte: through.valuationDate } }] }
         : {}),
     },
   })
@@ -419,16 +452,50 @@ export async function latestValuation(
       ...(options?.asOf ? { valuationDate: { lte: options.asOf } } : {}),
     },
     orderBy: [{ valuationDate: "desc" }, { createdAt: "desc" }, { id: "desc" }],
-    select: { value: true, valuationDate: true, createdAt: true },
+    select: {
+      value: true,
+      valuationDate: true,
+      createdAt: true,
+      provenance: true,
+    },
   })
   return latest
     ? {
         value: toMoney(latest.value),
         valuationDate: latest.valuationDate,
         createdAt: latest.createdAt,
+        provenance: toAnchorProvenance(latest.provenance),
       }
     : null
 }
+
+// ANCHOR-MUTATION REBUILD INVARIANT (ADR-0043 amendment, "Second review" #2).
+// `computeCanonicalBalance` is a PURE read — it can never go stale. What CAN go
+// stale is the materialized `Account.balance` column, an incremental cache of
+// this function's output. Therefore: ANY write that changes WHICH anchor is
+// latest for an account — creating a new anchor, editing an anchor's `value` or
+// `valuationDate`, or tombstoning one via `deletedAt` — MUST re-materialize the
+// balance (`computeCanonicalBalance` -> `setAccountBalanceTo`) inside the SAME
+// `prisma.$transaction`. Never a background worker: this codebase's standard is
+// synchronous, transactional balance updates, precisely to avoid the
+// eventual-consistency window that produced PER-196 and PER-201.
+//
+// Grep-verified as of PER-265, every path that touches a `Valuation` row after
+// it is written already satisfies this — there are exactly three:
+//   1. `createValuationWithinTx` (below) re-materializes inline.
+//   2. `accounts.ts` account deletion/closure cascade-tombstones every
+//      valuation, and the account's balance no longer matters afterwards.
+//   3. `transactions.ts`'s valuation-linked-transfer delete tombstones the
+//      transfer's Valuation and immediately follows with `rebuildWithinTx`
+//      (or, for a holdings trade, the hook's own anchor re-materialization).
+// `fx.ts`'s backfill is NOT a fourth: it rewrites only the base-currency
+// projection columns, never `value` / `valuationDate` / `deletedAt`, so it
+// cannot change which anchor is latest or what it asserts.
+//
+// No product surface exposes deleting or editing a single reconciliation
+// independently of deleting its whole account, so there is nothing further to
+// guard today. This comment exists so a future "undo my last reconcile"
+// feature does not reintroduce that drift by omission.
 
 // The balance the materialized cache SHOULD hold, computed purely from
 // canonical rows. Returns the stored balance unchanged if no anchor can be
@@ -505,6 +572,47 @@ async function setAccountBalanceTo(
   }
 }
 
+/**
+ * PER-264 / PER-265 — re-materialize one account from canonical rows iff it is
+ * a `transaction_flow` account whose current latest anchor is `ground_truth`.
+ *
+ * The incremental `applyAccountBalanceDelta` path (src/server/transactions.ts)
+ * is date-blind, so for a ground-truth anchor — a human's live observation of
+ * their real wallet — it double-counts a backdated transaction the anchor had
+ * already absorbed. For an account with no anchor, or a `derived` one, the
+ * increment and this formula provably coincide and nothing is written.
+ *
+ * The scheduling half of this fix — WHEN it runs, and why not at the delta call
+ * site — lives in `src/server/anchor-rebuild.server.ts`, the seam that calls
+ * this. Returns the correction it wrote, or null when nothing changed.
+ */
+export async function rebuildIfGroundTruthAnchored(
+  tx: TenantTransactionClient,
+  familyId: string,
+  accountId: string
+): Promise<{ previous: Money; rebuilt: Money } | null> {
+  const account = await fetchAccountFacts(tx, familyId, accountId)
+  if (!account || account.balanceSource !== "transaction_flow") return null
+
+  const anchor = await latestValuation(tx, familyId, accountId, {
+    anchorTypesOnly: true,
+    asOf: new Date(),
+  })
+  if (anchor === null || anchor.provenance !== "ground_truth") return null
+
+  const canonical = await computeCanonicalBalance(tx, familyId, account)
+  const previous = toMoney(account.balance)
+  if (canonical === previous) return null
+
+  await setAccountBalanceTo(tx, {
+    accountId,
+    familyId,
+    target: canonical,
+    currentVersion: account.version,
+  })
+  return { previous, rebuilt: canonical }
+}
+
 export async function fetchAccountFacts(
   tx: TenantTransactionClient,
   familyId: string,
@@ -531,12 +639,24 @@ export async function fetchAccountFacts(
 // entry point has its own endpoint/operation-scoped idempotency key, and the
 // valuation-linked transfer shares ONE key with its paired Transaction write
 // rather than owning a second one.
+// PER-266: `provenance` is a REQUIRED, explicitly-declared argument rather than
+// a field on `CreateValuationInput`. Two reasons, both deliberate:
+//   1. It must never be client-supplied. `createValuationInputSchema` is the
+//      browser contract; a page that could claim `derived` for its own
+//      reconciliation would re-open the exact double-count this closes.
+//   2. There is no schema default to fall back on. Every call site states where
+//      its number came from, in its own words, at the point it computes it —
+//      the one thing a future call site cannot silently get wrong by omission,
+//      because TypeScript refuses to compile without it.
+// Ignored for `market` (an observation, never an anchor): the row is written
+// with NULL provenance, matching the `valuation_provenance_domain` CHECK.
 export async function createValuationWithinTx(
   tx: TenantTransactionClient,
   familyId: string,
   data: CreateValuationInput,
   user: ServerActor,
-  auditCtx: AuditContext
+  auditCtx: AuditContext,
+  provenance: AnchorProvenance
 ): Promise<{ serialized: SerializedValuation; valuation: Valuation }> {
   if (!PUBLIC_VALUATION_TYPE_SET.has(data.type)) {
     throw new ValuationError(
@@ -616,6 +736,8 @@ export async function createValuationWithinTx(
       type: valuationType,
       source: data.source ?? "manual",
       note: data.note ?? null,
+      // Anchors carry a provenance; a "market" observation never does.
+      provenance: isAnchorValuationType(valuationType) ? provenance : null,
       normalBalance: normalBalanceForClass(account.accountClass),
       allowsNegativeAsset: accountAllowsNegative,
       createdById: user.id,
@@ -663,11 +785,15 @@ export async function createValuationWithinTx(
 export async function createValuationForFamily({
   data: rawData,
   familyId,
+  provenance,
   user,
   runInTenantTransaction = scopedTenantTransaction,
 }: {
   data: z.input<typeof createValuationInputSchema>
   familyId: string
+  // PER-266 — see `createValuationWithinTx`: explicit at every call site, never
+  // defaulted, never accepted from the browser.
+  provenance: AnchorProvenance
   user: ServerActor
   runInTenantTransaction?: RunInTenantTransaction
 }): Promise<SerializedValuation> {
@@ -703,7 +829,8 @@ export async function createValuationForFamily({
         familyId,
         data,
         user,
-        auditCtx
+        auditCtx,
+        provenance
       )
 
       await persistIdempotentEndpointResponse(tx, {
@@ -745,6 +872,12 @@ export const createValuationFn = createServerFn({ method: "POST" })
     return await createValuationForFamily({
       data,
       familyId: context.familyId,
+      // PER-264/PER-266 — the interactive "Reconcile account" / "Update value"
+      // dialog. The user is asserting a number they OBSERVED (their real wallet,
+      // their broker app), not one Permoney computed for them, so it is always
+      // ground truth. Hard-coded here rather than read from `data`: provenance
+      // is a server-side fact about the write path, never a client claim.
+      provenance: "ground_truth",
       user: context.user,
     })
   })
@@ -884,7 +1017,16 @@ async function detectAnchorChainDrift(
       type: { in: [...ANCHOR_VALUATION_TYPES] },
     },
     orderBy: [{ valuationDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
-    select: { value: true, valuationDate: true, createdAt: true, source: true },
+    select: {
+      value: true,
+      valuationDate: true,
+      createdAt: true,
+      source: true,
+      // PER-264: the chain check segments with the SAME branched predicate as
+      // the balance formula (ADR-0043 §6's one-segmentation-function rule), so
+      // it needs each anchor's provenance on both segment boundaries.
+      provenance: true,
+    },
   })
 
   const reports: BalanceDriftReport[] = []
@@ -902,8 +1044,8 @@ async function detectAnchorChainDrift(
       tx,
       familyId,
       accountId,
-      from,
-      to
+      { ...from, provenance: toAnchorProvenance(from.provenance) },
+      { ...to, provenance: toAnchorProvenance(to.provenance) }
     )
     const expected = addMoney(toMoney(from.value), segmentFlow)
     const actual = toMoney(to.value)

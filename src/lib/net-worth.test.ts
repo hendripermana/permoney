@@ -43,8 +43,18 @@ const valuation = (
   // Defaults to the valuation's own date at midnight UTC. `afterAnchor` uses
   // strict `>`, so a same-instant flow is NOT "after" — existing date-only
   // expectations are preserved unless a test passes explicit createdAt values.
-  createdAt: Date = new Date(`${valuationDate}T00:00:00Z`)
-): SeriesValuation => ({ accountId, value, valuationDate, type, createdAt })
+  createdAt: Date = new Date(`${valuationDate}T00:00:00Z`),
+  // PER-264: these fixtures exercise PER-201's date-OR-createdAt rule, which is
+  // the `derived` branch. `ground_truth` anchors get their own coverage below.
+  provenance: string | null = "derived"
+): SeriesValuation => ({
+  accountId,
+  value,
+  valuationDate,
+  type,
+  createdAt,
+  provenance: type === "market" ? null : provenance,
+})
 const snapshot = (
   fromCurrency: string,
   rate: string,

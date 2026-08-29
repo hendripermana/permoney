@@ -58,22 +58,75 @@ const ANCHOR_VALUATION_TYPE_SET: ReadonlySet<string> = new Set(
 )
 
 /**
- * The `afterAnchor` predicate (ADR-0043 §2 / PER-201), the in-memory twin of the
- * Prisma `OR: [{ date: { gt } }, { createdAt: { gt } }]` in
- * `sumTransactionFlowAfterAnchor` (src/server/valuations.ts). A flow counts
- * toward the post-anchor sum iff it is dated after the anchor OR was recorded
- * after it — the disjunction is load-bearing in BOTH directions (a future-dated
- * txn recorded before a live reconciliation; a back-dated txn recorded after
- * one). Keep the two shapes identical; the ADR-0038 §6 invariant test enforces
- * parity. Dates are compared as YYYY-MM-DD strings (lexicographic == calendar).
+ * Is this valuation type an ANCHOR (a balance assertion) rather than a mere
+ * observation? The same predicate the `valuation_provenance_domain` CHECK
+ * encodes: exactly the anchor types carry a `provenance`, `market` never does.
+ */
+export function isAnchorValuationType(type: string): boolean {
+  return ANCHOR_VALUATION_TYPE_SET.has(type)
+}
+
+/**
+ * Where an anchor's asserted value came from (PER-264 / ADR-0043 "anchor
+ * provenance" amendment). The SINGLE source of truth for this domain, mirrored
+ * by the `valuation_provenance_domain` CHECK in the database.
+ *
+ * - `ground_truth` — an INDEPENDENT observation of reality: the live "Reconcile
+ *   account" tap, and later a bank-fetched statement balance. It already
+ *   reflects every event up to that moment, whether or not Permoney knew.
+ * - `derived` — COMPUTED by summing ledger rows Permoney already held when the
+ *   anchor was written (Sure-migration anchors, the Σ-holdings anchor, the
+ *   balance-preserving seed anchor) — and EVERY `opening` balance, which is
+ *   dated at account-creation time rather than at a user-chosen "track me from
+ *   here" date (ADR-0043 amendment, "Scope narrowed 2026-08-29").
+ */
+export const ANCHOR_PROVENANCES = ["ground_truth", "derived"] as const
+export type AnchorProvenance = (typeof ANCHOR_PROVENANCES)[number]
+
+const ANCHOR_PROVENANCE_SET: ReadonlySet<string> = new Set(ANCHOR_PROVENANCES)
+
+/**
+ * Narrow a raw `Valuation.provenance` column value onto the closed domain.
+ * Anything unrecognised (NULL on a legacy row, or a value written before the
+ * CHECK existed) falls back to `derived`, which preserves PER-201's strictly
+ * more permissive rule — an unknown anchor never silently starts DROPPING a
+ * backdated transaction the materialized balance already counted.
+ */
+export function toAnchorProvenance(
+  raw: string | null | undefined
+): AnchorProvenance {
+  return raw != null && ANCHOR_PROVENANCE_SET.has(raw)
+    ? (raw as AnchorProvenance)
+    : "derived"
+}
+
+/**
+ * The `afterAnchor` predicate (ADR-0043 §2 / PER-201, refined by PER-264), the
+ * in-memory twin of the Prisma `where` built in `sumTransactionFlowAfterAnchor`
+ * (src/server/valuations.ts). Keep the two shapes identical; the ADR-0038 §6
+ * invariant test enforces parity. Dates are compared as YYYY-MM-DD strings
+ * (lexicographic == calendar).
+ *
+ *   afterAnchor(A)(t) ≡ A.provenance = "derived"
+ *                          ? (t.date > A.valuationDate OR t.createdAt > A.createdAt)
+ *                          : (t.date > A.valuationDate)
+ *
+ * For a `derived` anchor the disjunction is load-bearing in BOTH directions (a
+ * future-dated txn recorded before the anchor; a back-dated txn recorded after
+ * it — PER-201's fix). For a `ground_truth` anchor the `createdAt` disjunct is
+ * exactly the bug: the human already looked at their real wallet, so a
+ * transaction dated at/before that observation was ALREADY inside the asserted
+ * number and counting it again invents money (PER-264's OVO case).
  */
 function isAfterAnchor(
   anchorDate: string,
   anchorCreatedAt: Date,
+  anchorProvenance: AnchorProvenance,
   txnDate: string,
   txnCreatedAt: Date
 ): boolean {
-  return txnDate > anchorDate || txnCreatedAt > anchorCreatedAt
+  if (txnDate > anchorDate) return true
+  return anchorProvenance === "derived" && txnCreatedAt > anchorCreatedAt
 }
 
 // ---- shared point normalizer ------------------------------------------------
@@ -215,6 +268,9 @@ export interface SeriesValuation {
   valuationDate: string // YYYY-MM-DD (date-only anchor)
   createdAt: Date // recorded-at instant; the `afterAnchor` createdAt disjunct
   type: string
+  // PER-264: raw `Valuation.provenance`. NULL for `market` rows (never an
+  // anchor) and for pre-migration rows; `toAnchorProvenance` narrows it.
+  provenance: string | null
 }
 
 export interface SeriesTransaction {
@@ -282,6 +338,7 @@ export function buildNetWorthSeries(
       anchors.push({
         date: valuation.valuationDate,
         createdAt: valuation.createdAt,
+        provenance: toAnchorProvenance(valuation.provenance),
         value: valuation.value,
       })
       anchorsByAccount.set(valuation.accountId, anchors)
@@ -393,6 +450,7 @@ export function buildNetWorthSeries(
 interface CashAnchor {
   date: string
   createdAt: Date
+  provenance: AnchorProvenance
   value: bigint
 }
 
@@ -410,6 +468,9 @@ interface ActiveAnchor {
   sumThroughAnchorDate: bigint
   // Σ flow dated at/before the anchor date BUT recorded after it — the second
   // (createdAt) disjunct, which the date subtraction above would otherwise drop.
+  // PER-264: identically 0 for a `ground_truth` anchor, whose predicate has no
+  // createdAt disjunct at all — an independently observed balance already
+  // absorbed every at/before-date row, whenever it was entered.
   backdatedAfterAnchor: bigint
 }
 
@@ -503,7 +564,15 @@ function summarizeAnchor(
   for (const txn of txns) {
     if (txn.date > anchor.date) break // txns are date-sorted ascending
     sumThroughAnchorDate += txn.amount
-    if (isAfterAnchor(anchor.date, anchor.createdAt, txn.date, txn.createdAt)) {
+    if (
+      isAfterAnchor(
+        anchor.date,
+        anchor.createdAt,
+        anchor.provenance,
+        txn.date,
+        txn.createdAt
+      )
+    ) {
       backdatedAfterAnchor += txn.amount
     }
   }

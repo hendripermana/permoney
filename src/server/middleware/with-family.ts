@@ -55,11 +55,28 @@ export async function scopedTenantTransaction<T>(
   options?: ScopedTenantTransactionOptions
 ): Promise<T> {
   const { prisma } = await import("../db.server")
+  // PER-264 / PER-265 — the `.server` suffix is a HARD FENCE, not a style
+  // choice: this module is client-reachable (it re-exports `familyMiddleware` /
+  // `requireCapability`), and without the fence this edge drags
+  // `middleware/audit` and its `@tanstack/react-start/server` import into the
+  // client bundle, failing `vp build`'s import-protection check. Imported
+  // dynamically, mirroring the `db.server` idiom above, so the module cycle
+  // (anchor-rebuild.server -> valuations -> this file) never forms at load.
+  const { flushAnchorRebuilds } = await import("../anchor-rebuild.server")
   return await withSerializableRetry(
     prisma,
     async (tx) => {
       await setTenantGuc(tx, familyId, userId)
-      return await fn(tx)
+      const result = await fn(tx)
+      // ADR-0043 anchor-provenance amendment: re-materialize any account whose
+      // balance this transaction moved incrementally AND whose latest anchor is
+      // `ground_truth`, before the transaction commits. Runs here rather than
+      // at the delta call site because several mutation paths apply the delta
+      // before writing the row it accounts for; by this point every row write
+      // in this transaction has landed. A no-op (one WeakMap miss) for the vast
+      // majority of transactions, which register nothing at all.
+      await flushAnchorRebuilds(tx, familyId, userId)
+      return result
     },
     options
   )

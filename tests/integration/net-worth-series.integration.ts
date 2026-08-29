@@ -145,6 +145,7 @@ describe("net-worth time series (PER-154 / ADR-0038)", () => {
         idempotencyKey: factories.createIdempotencyKey(),
       },
       familyId: owner.family.id,
+      provenance: "ground_truth",
       user: owner.user,
     })
 
@@ -247,6 +248,7 @@ describe("net-worth time series (PER-154 / ADR-0038)", () => {
         idempotencyKey: factories.createIdempotencyKey(),
       },
       familyId: owner.family.id,
+      provenance: "ground_truth",
       user: owner.user,
     })
     // FX: USD strengthens from 16,000 to 17,000 on 2026-03-01.
@@ -450,8 +452,19 @@ describe("net-worth time series (PER-154 / ADR-0038)", () => {
   // reconciled account) folded to 0. This is the guard that keeps the batch
   // fold and `computeCanonicalBalance` in exact parity: the series' last point
   // must equal the live card AND Σ Account.balance, on data that mirrors the
-  // failure — reconciliation-anchored accounts, a back-dated post-anchor txn
-  // (the createdAt disjunct), and a liability (the sign path).
+  // failure — reconciliation-anchored accounts, a back-dated txn entered after
+  // the anchor, and a liability (the sign path).
+  //
+  // PER-264 refines what that back-dated txn does. An interactive `reconcile`
+  // is a GROUND_TRUTH anchor: the human read a real balance, which already
+  // reflected everything up to that moment. So a transaction dated BEFORE the
+  // reconcile but entered afterwards is absorbed — recorded for history, but it
+  // must not move the balance a second time. (The `derived` branch, where the
+  // createdAt disjunct still counts such a row, is covered in
+  // valuation-primitive.integration.ts with a `source: "migration:sure"`
+  // fixture.) The parity invariant below is unchanged and is the real subject
+  // of this test: both sides of it moved together, which is exactly what it
+  // exists to prove.
   test("last point == Σ Account.balance == card for reconciliation-anchored accounts (PER-204)", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
     await setFamilyDefaults(owner, "IDR", "UTC")
@@ -477,10 +490,12 @@ describe("net-worth time series (PER-154 / ADR-0038)", () => {
     await reconcile(owner, cash.id, "210000000", "2026-06-30")
     await reconcile(owner, loan.id, "128000000", "2026-06-30") // signed → -128,000,000
 
-    // Post-anchor flow, dated after the anchor.
+    // Post-anchor flow, dated after the anchor → moves the balance.
     await expense(owner, cash.id, 5_000_000n, "2026-07-05")
-    // Back-dated flow RECORDED after the reconciliation: dated before the anchor
-    // but created now → genuine post-anchor activity (the createdAt disjunct).
+    // Back-dated flow RECORDED after the reconciliation: dated before the
+    // anchor but created now. PER-264: the reconcile is `ground_truth`, so the
+    // wallet balance the user read on 06-30 already contained this — it is
+    // recorded for history but does NOT move the balance again.
     await expense(owner, cash.id, 1_000_000n, "2026-06-01")
 
     const today = new Date().toISOString().slice(0, 10)
@@ -494,9 +509,10 @@ describe("net-worth time series (PER-154 / ADR-0038)", () => {
     expect(last.netWorth).toBe(sumSignedBalance.toString())
 
     // Materially non-zero, with the liability REDUCING net worth (sign path):
-    // cash 210,000,000 − 5,000,000 − 1,000,000 = 204,000,000; loan −128,000,000.
-    expect(last.netWorth).toBe("76000000")
-    expect(last.assets).toBe("204000000")
+    // cash 210,000,000 − 5,000,000 = 205,000,000 (the 06-01 back-dated expense
+    // is absorbed by the ground-truth reconcile, PER-264); loan −128,000,000.
+    expect(last.netWorth).toBe("77000000")
+    expect(last.assets).toBe("205000000")
     expect(last.liabilities).toBe("128000000")
   })
 

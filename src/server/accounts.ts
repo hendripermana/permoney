@@ -465,6 +465,27 @@ export async function createAccountForFamily({
           valuationDate: new Date(),
           type: "opening",
           source: "manual",
+          // PER-266 — `opening` is ALWAYS `derived`, for every writer, no
+          // exception (ADR-0043 amendment, "Scope narrowed 2026-08-29").
+          //
+          // A user-entered opening balance looks like an independent
+          // observation, and the amendment's first draft classified it
+          // `ground_truth` for that reason. But this row is stamped
+          // `valuationDate: new Date()` — the day the account happened to be
+          // set up, NOT a date the user chose as "track me from here". Under
+          // `ground_truth`'s date-only rule that silently absorbs every
+          // transaction dated before account creation, which is the single
+          // most common real flow: create the account, then enter or import
+          // last month's history. Implementation proved it — nine
+          // real-Postgres failures across five unrelated suites.
+          //
+          // PER-264's actual, diagnosed bug was a deliberate reconcile
+          // followed WEEKS later by an unrelated backfill. Generalizing the
+          // fix to `opening` addressed a different, far more common scenario
+          // on an unverified assumption. The narrower "I discovered forgotten
+          // pre-opening history weeks later" case is real but needs `opening`
+          // to carry a user-chosen as-of date; deferred as a follow-up.
+          provenance: "derived",
           normalBalance:
             taxonomy.accountClass === "LIABILITY" ? "NEGATIVE" : "POSITIVE",
           allowsNegativeAsset: accountAllowsNegative,
@@ -782,7 +803,13 @@ export async function enableHoldingsTrackingForFamily({
           idempotencyKey: data.idempotencyKey,
         },
         user,
-        auditCtx
+        auditCtx,
+        // PER-266 — the explicit exception to the source-based rule. Despite
+        // `source: "manual"`, this seed anchor's value is `before.balance`:
+        // Permoney's OWN already-known balance, copied forward so flipping
+        // balanceSource preserves it. Nobody observed anything, so it is
+        // `derived` (ADR-0043 amendment, "Backfilling existing rows").
+        "derived"
       )
 
       // Re-read: the flip + seed anchor may have touched balance/version.
