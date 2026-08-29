@@ -147,6 +147,11 @@ export async function getNetWorthSeriesForFamily({
           valuationDate: true,
           createdAt: true,
           type: true,
+          // PER-264: the anchor-provenance branch of the shared `afterAnchor`
+          // predicate. Omitting it here would silently make the net-worth
+          // series fall back to `derived` for every anchor and diverge from
+          // `computeCanonicalBalance`.
+          provenance: true,
         },
       }),
       tx.transaction.findMany({
@@ -176,6 +181,7 @@ export async function getNetWorthSeriesForFamily({
         valuationDate: toDateOnly(row.valuationDate),
         createdAt: row.createdAt,
         type: row.type,
+        provenance: row.provenance,
       })),
       transactions: transactions.map((row) => ({
         accountId: row.accountId,

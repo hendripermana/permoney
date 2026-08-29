@@ -8,7 +8,10 @@ import {
 } from "vite-plus/test"
 import type { AccountType } from "@/lib/accounts"
 import { createAccountForFamily } from "@/server/accounts"
-import { createTransactionForFamily } from "@/server/transactions"
+import {
+  createTransactionForFamily,
+  deleteTransactionForFamily,
+} from "@/server/transactions"
 import {
   createValuationForFamily,
   detectBalanceDriftForFamily,
@@ -85,6 +88,9 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
       openingBalance,
     })
 
+  // The INTERACTIVE reconcile path: a human asserting a number they observed.
+  // PER-264 classifies it `ground_truth`, so its post-anchor flow is segmented
+  // by date only.
   const addValuation = (
     owner: AuthenticatedOnboardedUser,
     accountId: string,
@@ -101,6 +107,32 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
         idempotencyKey: factories.createIdempotencyKey(),
       },
       familyId: owner.family.id,
+      provenance: "ground_truth",
+      user: owner.user,
+    })
+
+  // The MIGRATION path's twin: an anchor whose value Permoney computed from
+  // rows it already had (`source: "migration:sure"`, `provenance: "derived"`).
+  // PER-201's original guarantee — a back-dated transaction entered after the
+  // anchor is still counted — lives on this branch, so it needs a fixture that
+  // actually exercises it.
+  const addDerivedValuation = (
+    owner: AuthenticatedOnboardedUser,
+    accountId: string,
+    value: string,
+    valuationDate?: Date
+  ) =>
+    createValuationForFamily({
+      data: {
+        accountId,
+        value,
+        type: "reconciliation",
+        source: "migration:sure",
+        ...(valuationDate ? { valuationDate } : {}),
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      provenance: "derived",
       user: owner.user,
     })
 
@@ -322,6 +354,7 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
             idempotencyKey: factories.createIdempotencyKey(),
           },
           familyId: owner.family.id,
+          provenance: "ground_truth",
           user: owner.user,
         })
       ).rejects.toBeInstanceOf(ValuationError)
@@ -340,6 +373,7 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
             idempotencyKey: factories.createIdempotencyKey(),
           },
           familyId: owner.family.id,
+          provenance: "ground_truth",
           user: owner.user,
         })
       ).rejects.toBeInstanceOf(ValuationError)
@@ -356,6 +390,7 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
           idempotencyKey: factories.createIdempotencyKey(),
         },
         familyId: owner.family.id,
+        provenance: "ground_truth" as const,
         user: owner.user,
       }
 
@@ -386,6 +421,7 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
             idempotencyKey: factories.createIdempotencyKey(),
           },
           familyId: owner.family.id,
+          provenance: "ground_truth",
           user: owner.user,
         })
       ).rejects.toThrow()
@@ -734,24 +770,21 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
         userId: owner.user.id,
       })
 
-    // (a) + (c): the canonical bug. A back-dated top-up added AFTER an anchor is
-    // real post-anchor activity the materialized balance already counts; the
+    // (a) + (c): PER-201's original guarantee, now covered by a fixture that
+    // actually exercises the `derived` branch it was written for. A back-dated
+    // top-up added AFTER a DERIVED anchor (a Sure-migration reconciliation,
+    // whose value was computed from the rows Permoney already had) is real
+    // post-anchor activity the materialized balance already counts; the
     // canonical formula must count it too, so there is NO materialization drift
-    // and a rebuild is a no-op. Under the old date-only rule canonical would drop
-    // it (dated before the anchor) and report a false 8,000,000 MATERIALIZATION.
-    test("a back-dated txn added after the latest anchor is counted: no drift, rebuild is a no-op", async () => {
+    // and a rebuild is a no-op. Under a date-only rule canonical would drop it
+    // and report a false 8,000,000 MATERIALIZATION.
+    test("derived anchor: a back-dated txn added after it is counted — no drift, rebuild is a no-op", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
       const account = await makeCash(owner, "150000")
       await backdateOpeningValuation(owner, account.id, daysAgo(30))
 
-      // Effective anchor: reconciliation 200000 dated daysAgo(5).
-      await addValuation(
-        owner,
-        account.id,
-        "200000",
-        "reconciliation",
-        daysAgo(5)
-      )
+      // Effective anchor: a DERIVED reconciliation 200000 dated daysAgo(5).
+      await addDerivedValuation(owner, account.id, "200000", daysAgo(5))
       expect((await accountRow(owner, account.id)).balance).toBe(200000n)
 
       // User adds a top-up dated BEFORE the anchor (daysAgo(6)) but recorded now.
@@ -764,10 +797,11 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
         daysAgo(6)
       )
 
-      // Stored balance counted it via the incremental delta.
+      // Stored balance counted it via the incremental delta, and the
+      // ground-truth rebuild hook left it alone (this anchor is `derived`).
       expect((await accountRow(owner, account.id)).balance).toBe(8200000n)
 
-      // Canonical now includes it too (createdAt disjunct) → no MATERIALIZATION.
+      // Canonical includes it too (createdAt disjunct) → no MATERIALIZATION.
       const report = await detect(owner)
       expect(
         report.filter(
@@ -783,6 +817,223 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
       })
       expect(rebuilt.changed).toBe(false)
       expect(rebuilt.rebuiltBalance).toBe("8200000")
+    })
+
+    // PER-264 — the SAME fixture shape against a GROUND_TRUTH anchor must give
+    // the opposite answer, and must give it on the materialized column, not
+    // merely in `computeCanonicalBalance`'s return value. This is the OVO bug
+    // end to end: reconcile to an observed number, then log a real transaction
+    // you'd forgotten, dated before that reconcile. The wallet already
+    // contained it, so the displayed balance must not move.
+    test("ground_truth anchor: a back-dated txn added after it does NOT move the materialized balance", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "150000")
+      await backdateOpeningValuation(owner, account.id, daysAgo(30))
+
+      // Effective anchor: an interactive reconciliation (ground truth).
+      await addValuation(
+        owner,
+        account.id,
+        "200000",
+        "reconciliation",
+        daysAgo(5)
+      )
+      expect((await accountRow(owner, account.id)).balance).toBe(200000n)
+
+      await addTransaction(
+        owner,
+        account.id,
+        "income",
+        "8000000",
+        "Back-dated top-up the reconcile already absorbed",
+        daysAgo(6)
+      )
+
+      // THE user-visible assertion: Account.balance, the real materialized
+      // column the UI renders. The incremental delta briefly took it to
+      // 8,200,000; the same-transaction rebuild put it back.
+      expect((await accountRow(owner, account.id)).balance).toBe(200000n)
+
+      // And no phantom MATERIALIZATION alarm either: stored == canonical.
+      const report = await detect(owner)
+      expect(
+        report.filter(
+          (r) => r.accountId === account.id && r.kind === "MATERIALIZATION"
+        )
+      ).toEqual([])
+
+      const rebuilt = await rebuildAccountBalanceForFamily({
+        accountId: account.id,
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+      expect(rebuilt.changed).toBe(false)
+      expect(rebuilt.rebuiltBalance).toBe("200000")
+    })
+
+    // The transaction itself is still fully recorded — provenance governs which
+    // rows move the BALANCE, never whether history, categories or budgets see
+    // them (ADR-0043 amendment, "Second review" point 4).
+    test("ground_truth anchor: the absorbed back-dated txn is still recorded in history", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "150000")
+      await backdateOpeningValuation(owner, account.id, daysAgo(30))
+      await addValuation(
+        owner,
+        account.id,
+        "200000",
+        "reconciliation",
+        daysAgo(5)
+      )
+      await addTransaction(
+        owner,
+        account.id,
+        "income",
+        "8000000",
+        "Recorded but balance-neutral",
+        daysAgo(6)
+      )
+
+      const rows = await harness.withFamily(owner.family.id, async (tx) =>
+        tx.transaction.findMany({
+          where: { accountId: account.id, deletedAt: null },
+        })
+      )
+      expect(rows.map((r) => r.amount)).toContain(8000000n)
+      expect((await accountRow(owner, account.id)).balance).toBe(200000n)
+    })
+
+    // Symmetry: a DELETE of a back-dated row absorbed by a ground_truth anchor
+    // must not move the balance either. The delete path reverses the same
+    // incremental delta, so without the rebuild hook it would subtract money
+    // the anchor never added.
+    test("ground_truth anchor: deleting an absorbed back-dated txn leaves the balance alone", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "150000")
+      await backdateOpeningValuation(owner, account.id, daysAgo(30))
+      await addValuation(
+        owner,
+        account.id,
+        "200000",
+        "reconciliation",
+        daysAgo(5)
+      )
+      const created = await addTransaction(
+        owner,
+        account.id,
+        "income",
+        "8000000",
+        "Absorbed, then deleted",
+        daysAgo(6)
+      )
+      expect((await accountRow(owner, account.id)).balance).toBe(200000n)
+
+      await deleteTransactionForFamily({
+        id: created.id,
+        idempotencyKey: factories.createIdempotencyKey(),
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+
+      expect((await accountRow(owner, account.id)).balance).toBe(200000n)
+      const report = await detect(owner)
+      expect(
+        report.filter(
+          (r) => r.accountId === account.id && r.kind === "MATERIALIZATION"
+        )
+      ).toEqual([])
+    })
+
+    // A transaction dated AFTER a ground_truth anchor is ordinary post-anchor
+    // activity and must move the balance exactly as before — the fix must not
+    // freeze the account.
+    test("ground_truth anchor: a normally-dated txn after it still moves the balance", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "150000")
+      await backdateOpeningValuation(owner, account.id, daysAgo(30))
+      await addValuation(
+        owner,
+        account.id,
+        "200000",
+        "reconciliation",
+        daysAgo(5)
+      )
+      await addTransaction(
+        owner,
+        account.id,
+        "expense",
+        "50000",
+        "After the reconcile",
+        daysAgo(1)
+      )
+      expect((await accountRow(owner, account.id)).balance).toBe(150000n)
+      const report = await detect(owner)
+      expect(
+        report.filter(
+          (r) => r.accountId === account.id && r.kind === "MATERIALIZATION"
+        )
+      ).toEqual([])
+    })
+
+    // The ONE-SEGMENTATION-FUNCTION guard (ADR-0043 §6): `computeCanonicalBalance`
+    // and the ANCHOR_CHAIN drift check must branch on provenance identically.
+    // Two accounts differing ONLY in their latest anchor's provenance, with the
+    // same transactions, must disagree on the balance AND agree with their own
+    // chain segmentation. A forked predicate (e.g. a date-only chain against a
+    // createdAt-aware balance) fails this.
+    test("computeCanonicalBalance and ANCHOR_CHAIN share one branched predicate", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+
+      const groundTruth = await makeCash(owner, "100000")
+      await backdateOpeningValuation(owner, groundTruth.id, daysAgo(30))
+      await addValuation(
+        owner,
+        groundTruth.id,
+        "100000",
+        "reconciliation",
+        daysAgo(10)
+      )
+
+      const derived = await makeCash(owner, "100000")
+      await backdateOpeningValuation(owner, derived.id, daysAgo(30))
+      await addDerivedValuation(owner, derived.id, "100000", daysAgo(10))
+
+      // Same back-dated row on both, landing INSIDE the (daysAgo30, daysAgo10]
+      // chain segment, recorded now.
+      for (const account of [groundTruth, derived]) {
+        await addTransaction(
+          owner,
+          account.id,
+          "income",
+          "5000",
+          "Late back-dated",
+          daysAgo(20)
+        )
+      }
+
+      // Balances diverge exactly as the predicate says they must.
+      expect((await accountRow(owner, groundTruth.id)).balance).toBe(100000n)
+      expect((await accountRow(owner, derived.id)).balance).toBe(105000n)
+
+      const report = await detect(owner)
+      // Neither account has MATERIALIZATION drift — the chain check and the
+      // balance formula agree with each other on both branches.
+      expect(report.filter((r) => r.kind === "MATERIALIZATION")).toEqual([])
+
+      // ANCHOR_CHAIN: on the `derived` account the late row lands only in the
+      // "after the latest anchor" bucket (PER-201), so the historical segment
+      // stays explained. On the `ground_truth` account the same row falls
+      // inside the date-only segment and the user's asserted 100000 does not
+      // explain it — an honest "your reconcile and your recorded activity
+      // disagree" warning, which is precisely what this check exists to say.
+      const chain = report.filter((r) => r.kind === "ANCHOR_CHAIN")
+      expect(chain.filter((r) => r.accountId === derived.id)).toEqual([])
+      expect(chain.filter((r) => r.accountId === groundTruth.id)).toHaveLength(
+        1
+      )
+      expect(chain.find((r) => r.accountId === groundTruth.id)?.severity).toBe(
+        "warning"
+      )
     })
 
     // (f): the disjunction is OR, never createdAt-only. A FUTURE-dated txn
@@ -827,20 +1078,18 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
     // bucket, so it must NOT manufacture a spurious ANCHOR_CHAIN warning on the
     // historical segment it happens to date into. (A divergent impl — date-only
     // chain + createdAt balance — would report a false chain drift here.)
-    test("a late back-dated txn does not perturb a historical anchor-chain segment", async () => {
+    test("derived anchor: a late back-dated txn does not perturb a historical anchor-chain segment", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
       const account = await makeCash(owner, "100000")
       await backdateOpeningValuation(owner, account.id, daysAgo(30))
 
       // Clean chain: opening(100000 @ daysAgo30) -> anchor(100000 @ daysAgo10),
-      // zero flow between them, so no chain drift.
-      await addValuation(
-        owner,
-        account.id,
-        "100000",
-        "reconciliation",
-        daysAgo(10)
-      )
+      // zero flow between them, so no chain drift. The latest anchor is
+      // DERIVED, the branch this PER-201 property belongs to: the complement
+      // pairing afterAnchor(from) ∧ ¬afterAnchor(to) uses `to`'s createdAt
+      // bound, which a later-recorded row fails, so it lands only in the
+      // "after the latest anchor" bucket.
+      await addDerivedValuation(owner, account.id, "100000", daysAgo(10))
       expect(
         (await detect(owner)).filter(
           (r) => r.accountId === account.id && r.kind === "ANCHOR_CHAIN"
@@ -995,7 +1244,12 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
     const rawInsert = (
       owner: AuthenticatedOnboardedUser,
       accountId: string,
-      data: { value: bigint; type: string; normalBalance: string }
+      data: {
+        value: bigint
+        type: string
+        normalBalance: string
+        provenance?: string | null
+      }
     ) =>
       harness.withFamily(owner.family.id, async (tx) =>
         tx.valuation.create({
@@ -1005,6 +1259,9 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
             currency: "IDR",
             valuationDate: new Date(),
             createdById: owner.user.id,
+            // PER-264: satisfy `valuation_provenance_domain` by default so each
+            // test below still fails for the constraint it is actually about.
+            provenance: data.type === "market" ? null : "ground_truth",
             ...data,
           },
         })
@@ -1061,6 +1318,7 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
             type: "reconciliation",
             normalBalance: "POSITIVE",
             allowsNegativeAsset: true,
+            provenance: "ground_truth",
           },
         })
       )
@@ -1090,6 +1348,145 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
           })
         )
       ).rejects.toThrow()
+    })
+
+    // ------------------------------------------------------------------------
+    // PER-266 — anchor provenance is declared, never defaulted
+    // ------------------------------------------------------------------------
+
+    test("PER-264: an anchor-type valuation with NULL provenance is rejected", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "1")
+      await expect(
+        rawInsert(owner, account.id, {
+          value: 1n,
+          type: "reconciliation",
+          normalBalance: "POSITIVE",
+          provenance: null,
+        })
+      ).rejects.toThrow()
+    })
+
+    test("PER-264: an anchor-type valuation with an out-of-domain provenance is rejected", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "1")
+      await expect(
+        rawInsert(owner, account.id, {
+          value: 1n,
+          type: "manual",
+          normalBalance: "POSITIVE",
+          provenance: "guessed",
+        })
+      ).rejects.toThrow()
+    })
+
+    test("PER-264: a market observation carrying a provenance is rejected", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "1")
+      await expect(
+        rawInsert(owner, account.id, {
+          value: 1n,
+          type: "market",
+          normalBalance: "POSITIVE",
+          provenance: "ground_truth",
+        })
+      ).rejects.toThrow()
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // PER-266 — every real write path stamps provenance honestly
+  //
+  // The database CHECK above already makes it impossible to write an anchor
+  // with NO provenance, so a new call site cannot silently reintroduce the bug
+  // by omission (and `createValuationWithinTx` takes it as a required
+  // parameter, so it cannot compile without one either). These tests pin the
+  // remaining question — that each existing path declares the RIGHT one.
+  // --------------------------------------------------------------------------
+  describe("PER-266 anchor provenance at every write site", () => {
+    const anchorsOf = (owner: AuthenticatedOnboardedUser, accountId: string) =>
+      harness.withFamily(owner.family.id, async (tx) =>
+        tx.valuation.findMany({
+          where: { accountId, deletedAt: null },
+          orderBy: [{ createdAt: "asc" }],
+          select: { type: true, source: true, provenance: true },
+        })
+      )
+
+    // ADR-0043 amendment, "Scope narrowed 2026-08-29": `opening` is ALWAYS
+    // `derived`, for every writer. It is dated at account-creation time, not at
+    // a user-chosen "track me from here" date, so ground_truth's date-only rule
+    // would silently swallow ordinary post-setup backfilling and CSV import.
+    test("account create writes a DERIVED opening anchor", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "150000")
+      const rows = await anchorsOf(owner, account.id)
+      expect(rows).toEqual([
+        { type: "opening", source: "manual", provenance: "derived" },
+      ])
+    })
+
+    // The behavioural half of the same decision, and the regression guard for
+    // the nine cross-suite failures that forced it: create an account today,
+    // then record activity dated before today (entering last month's history,
+    // or a CSV import). It must move the balance exactly as it always has.
+    test("an account created today still accepts historically-dated activity", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "1000000")
+      await addTransaction(
+        owner,
+        account.id,
+        "expense",
+        "250000",
+        "Last month's groceries",
+        daysAgo(30)
+      )
+      expect((await accountRow(owner, account.id)).balance).toBe(750000n)
+      const report = await detectBalanceDriftForFamily({
+        familyId: owner.family.id,
+        userId: owner.user.id,
+      })
+      expect(
+        report.filter(
+          (r) => r.accountId === account.id && r.kind === "MATERIALIZATION"
+        )
+      ).toEqual([])
+    })
+
+    test("the interactive reconcile path writes a ground_truth anchor", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "150000")
+      await addValuation(owner, account.id, "200000", "reconciliation")
+      const rows = await anchorsOf(owner, account.id)
+      expect(rows.at(-1)).toEqual({
+        type: "reconciliation",
+        source: "manual",
+        provenance: "ground_truth",
+      })
+    })
+
+    test("a market observation carries no provenance at all", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const tracked = await makeTracked(owner, "100000000")
+      await addValuation(owner, tracked.id, "123456789", "market")
+      const rows = await anchorsOf(owner, tracked.id)
+      expect(rows.at(-1)).toEqual({
+        type: "market",
+        source: "manual",
+        provenance: null,
+      })
+    })
+
+    test("a migration-sourced anchor is derived", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "150000")
+      await addDerivedValuation(owner, account.id, "200000")
+      const rows = await anchorsOf(owner, account.id)
+      expect(rows.at(-1)).toEqual({
+        type: "reconciliation",
+        source: "migration:sure",
+        provenance: "derived",
+      })
     })
   })
 })

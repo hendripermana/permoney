@@ -213,6 +213,7 @@ describe("PER-259 / ADR-0054 — holdings-account money-movement coherence", () 
           valuationDate: TEST_DATE,
         },
         familyId: owner.family.id,
+        provenance: "ground_truth",
         user: owner.user,
       })
     ).rejects.toThrow(HoldingsAccountLedgerError)
@@ -319,6 +320,7 @@ describe("PER-259 / ADR-0054 — holdings-account money-movement coherence", () 
         valuationDate: TEST_DATE,
       },
       familyId: owner.family.id,
+      provenance: "ground_truth",
       user: owner.user,
     })
 

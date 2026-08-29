@@ -633,6 +633,34 @@ model Valuation {
   source String  @default("manual")
   note   String?
 
+  // PER-264 / ADR-0043 "anchor provenance" amendment. Domain (CHECK in
+  // migration): "ground_truth" | "derived" for every ANCHOR type
+  // (opening/reconciliation/manual); NULL for "market", which is an
+  // observation and never an anchor at all.
+  //
+  //   ground_truth — the value is an INDEPENDENT observation of reality (a
+  //     human's live "Reconcile" tap against their real wallet, and later a
+  //     bank-fetched statement balance). It already reflects every event up to
+  //     that moment, known to Permoney or not, so post-anchor flow is
+  //     segmented by DATE ONLY.
+  //   derived — the value was COMPUTED by summing ledger rows Permoney
+  //     already held when the anchor was written (the Sure-migration
+  //     reconciliation anchors, the holdings Σ(units × price) anchor, the
+  //     balance-preserving seed anchor written when an account flips to
+  //     holdings tracking). Keeps PER-201's date-OR-createdAt rule.
+  //
+  // `opening` is ALWAYS `derived`, for every writer, no exception (ADR-0043
+  // amendment, "Scope narrowed 2026-08-29"): it is dated at account-creation
+  // time rather than at a user-chosen "track me from here" date, so
+  // ground_truth's date-only rule would silently swallow ordinary post-setup
+  // backfilling and CSV import.
+  //
+  // See `afterAnchor` in src/lib/net-worth.ts and
+  // `sumTransactionFlowAfterAnchor` in src/server/valuations.ts — the one
+  // shared segmentation predicate both the balance formula and the
+  // ANCHOR_CHAIN drift check call.
+  provenance String?
+
   // Denormalized normal-balance discriminator: "POSITIVE" | "NEGATIVE", copied
   // from the account at write time so the value-sign rule is a pure table CHECK.
   normalBalance String

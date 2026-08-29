@@ -18,6 +18,8 @@ import {
   type Money,
 } from "@/lib/money"
 import { deriveTransferFx } from "@/lib/fx"
+// PER-264 / PER-265 — `.server` hard fence (see that module's header).
+import { markAccountBalanceDirty } from "./anchor-rebuild.server"
 import {
   deriveTransferPurpose,
   TRANSFER_PURPOSE_VALUES,
@@ -839,6 +841,25 @@ async function applyAccountBalanceDelta(
       `Account ${accountId} balance version drift detected`
     )
   }
+
+  // PER-264 / PER-265 (ADR-0043 anchor-provenance amendment) — the ONE place
+  // the whole write path funnels through, so registering here covers single,
+  // bulk, transfer-leg, import and future bank-sync writes at once.
+  //
+  // The increment above is date-blind. For a `transaction_flow` account whose
+  // current latest anchor is `ground_truth` (a human's live "Reconcile" against
+  // their real wallet), a BACKDATED transaction entered afterwards was already
+  // inside that observed number — incrementing it again invents money the
+  // wallet never had.
+  //
+  // The correction cannot be computed HERE: several callers apply the delta
+  // before the Transaction row it accounts for is written or tombstoned, so the
+  // canonical formula would read a stale ledger. This only marks the account;
+  // `flushAnchorRebuilds` re-materializes it at the tenant-transaction
+  // boundary, in this same transaction, once every row write has landed. See
+  // the module header of src/server/anchor-rebuild.server.ts for the full
+  // reasoning and the cost analysis.
+  markAccountBalanceDirty(tx, accountId)
 
   const after = await findAccountBalanceVersion(
     tx,
@@ -2454,7 +2475,19 @@ async function createValuationLinkedTransferWithinTx(
         familyId,
         valuationInput,
         user,
-        auditCtx
+        auditCtx,
+        // PER-266 — the valuation-linked transfer's tracked-side anchor. Its
+        // default value is `latestValuation ± cashAmount`, i.e. COMPUTED from
+        // rows Permoney already holds, which is `derived` by definition. When
+        // the user overrides it with `newValuationValue` they are typing a
+        // number from their broker app, which is closer to ground truth — but
+        // this anchor only ever lands on a `balanceSource="valuation"` account
+        // (`trackedAccount`), where the transaction-flow `afterAnchor`
+        // predicate is never evaluated at all, so the classification is
+        // documentation rather than live behavior. `derived` is recorded
+        // because it describes the default, and because it is the strictly
+        // more permissive branch should such an account ever be converted.
+        "derived"
       )
     },
   })

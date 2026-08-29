@@ -546,7 +546,14 @@ async function recomputeAccountValueAnchorWithinTx(
       idempotencyKey: auditCtx.idempotencyKey ?? "",
     },
     user,
-    auditCtx
+    auditCtx,
+    // PER-266 — this anchor's value is Σ(units × price) over the account's own
+    // `Holding` rows, computed entirely from data Permoney already holds. That
+    // is the textbook `derived` case (ADR-0043 anchor-provenance amendment).
+    // Like every holdings anchor it lands on a `balanceSource="valuation"`
+    // account, where the transaction-flow `afterAnchor` predicate never runs,
+    // so this records the truth about the number rather than changing behavior.
+    "derived"
   )
   return valuation
 }

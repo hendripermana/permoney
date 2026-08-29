@@ -253,6 +253,7 @@ describe("PER-196 / ADR-0048 §5 — phantom valuation-transfer cleanup", () => 
         valuationDate: new Date(Date.now() + 60_000),
       },
       familyId: fx.familyId,
+      provenance: "ground_truth",
       user: fx.user,
     })
     expect((await readAccount(fx.familyId, fx.tracked.id)).balance).toBe(

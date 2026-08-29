@@ -334,6 +334,7 @@ describe("holding market-price refresh (PER-238 — quotes -> holdings, anchor-s
           idempotencyKey: factories.createIdempotencyKey(),
         },
         familyId: owner.family.id,
+        provenance: "ground_truth",
         user: owner.user,
       })
       const otherBefore = await accountRow(owner, other.id)
