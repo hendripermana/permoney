@@ -27,11 +27,15 @@ import {
 } from "@/components/ui/table"
 import {
   getFxOverviewFn,
+  listFxRateSnapshotsFn,
   rebuildFxProjectionsFn,
   upsertFxRateSnapshotFn,
 } from "@/server/fx"
 
 const FX_OVERVIEW_KEY = ["fx-overview"] as const
+const FX_HISTORY_KEY = ["fx-rate-history"] as const
+
+type FxRateSnapshot = Awaited<ReturnType<typeof listFxRateSnapshotsFn>>[number]
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10)
@@ -86,6 +90,8 @@ function CurrenciesPage() {
               rates={fxOverview?.rates ?? []}
               isLoading={fxLoading}
             />
+
+            <RateHistoryCard />
           </div>
         </SidebarInset>
       </SidebarProvider>
@@ -147,6 +153,7 @@ function AddRateCard({ baseCurrency }: { baseCurrency: string }) {
       setFromCurrency("")
       setRate("")
       void queryClient.invalidateQueries({ queryKey: FX_OVERVIEW_KEY })
+      void queryClient.invalidateQueries({ queryKey: FX_HISTORY_KEY })
     },
   })
 
@@ -301,6 +308,61 @@ function RatesTableCard({
                   </TableCell>
                   <TableCell className="font-mono">{row.rate}</TableCell>
                   <TableCell>{row.asOfDate}</TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {row.source}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function RateHistoryCard() {
+  const { data: history, isLoading } = useQuery({
+    queryKey: FX_HISTORY_KEY,
+    queryFn: async () => await listFxRateSnapshotsFn({ data: {} }),
+  })
+
+  const rows: FxRateSnapshot[] = history ?? []
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Rate history</CardTitle>
+        <CardDescription>
+          Every rate snapshot Permoney has recorded, newest date first within
+          each pair.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">Loading history…</p>
+        ) : rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No rate history yet. Added rates will appear here.
+          </p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Date</TableHead>
+                <TableHead>Pair</TableHead>
+                <TableHead>Rate</TableHead>
+                <TableHead>Source</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row) => (
+                <TableRow key={row.id}>
+                  <TableCell>{row.asOfDate}</TableCell>
+                  <TableCell className="font-mono">
+                    {row.fromCurrency} → {row.toCurrency}
+                  </TableCell>
+                  <TableCell className="font-mono">{row.rate}</TableCell>
                   <TableCell className="text-muted-foreground">
                     {row.source}
                   </TableCell>
