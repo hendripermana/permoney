@@ -415,3 +415,64 @@ re-importing an **identical** bundle does _not_ hit this: the final anchor
 replays through idempotency as the _same_ row with its _original_ `createdAt`, so
 manual edits recorded after it stay counted — a strict improvement over the
 prior date-only rule, which dropped them on every rebuild.
+
+## Amendment — Anchor provenance (PER-264 / PER-265 / PER-266)
+
+|            |                                                                                  |
+| ---------- | -------------------------------------------------------------------------------- |
+| **Date**   | 2026-08-29                                                                       |
+| **Amends** | §2 (cash balance formula), §6 (ANCHOR_CHAIN drift check), and §1 (opening classification) |
+| **Ticket** | PER-264 / PER-265 / PER-266                                                     |
+
+### Problem
+
+Reconciling an account to its real balance (a live "Reconcile" observation), then logging a genuinely real but backdated transaction dated BEFORE that reconcile, silently double-counted into the current balance. The transaction was already reflected in the human's observed wallet balance (the anchor's asserted value), but `applyAccountBalanceDelta` added it again incrementally because the PER-201 date-OR-createdAt rule treated ALL anchors the same way.
+
+The root cause: PER-201's `createdAt` disjunct is the correct fix for DERIVED anchors (import/migration reconciliations that computed their value from rows Permoney already held), but it IS the bug for GROUND_TRUTH anchors (live observations of reality that already absorbed forgotten events).
+
+### Decision
+
+Introduce `Valuation.provenance: "ground_truth" | "derived"` to distinguish where an anchor's value came from:
+
+- `ground_truth` — An INDEPENDENT observation of reality (a human's live "Reconcile" tap against their real wallet, and later a bank-fetched statement balance). It already reflects every event up to that moment, known to Permoney or not, so post-anchor flow is segmented by DATE ONLY.
+- `derived` — COMPUTED by summing ledger rows Permoney already held when the anchor was written (Sure-migration reconciliation anchors, the holdings Σ(units × price) anchor, the balance-preserving seed anchor when an account flips to holdings tracking). Keeps PER-201's date-OR-createdAt rule verbatim.
+
+The refined afterAnchor predicate:
+
+```
+afterAnchor(A)(t) ≡ A.provenance = "derived"
+                       ? (t.date > A.valuationDate OR t.createdAt > A.createdAt)
+                       : (t.date > A.valuationDate)
+```
+
+This predicate lives in ONE place (`sumTransactionFlowAfterAnchor` in `src/server/valuations.ts` and its in-memory twin `isAfterAnchor` in `src/lib/net-worth.ts`), so the balance formula and drift check can never silently diverge by construction.
+
+### Scope narrowed — `opening` is ALWAYS `derived`
+
+`opening` is ALWAYS classified as `derived`, for every writer, no exception (ADR-0043 amendment, "Scope narrowed 2026-08-29"). It is dated at account-creation time rather than at a user-chosen "track me from here" date, so ground_truth's date-only rule would silently swallow ordinary post-setup backfilling and CSV import.
+
+### Transfer legs resolve independently
+
+Each transfer leg is evaluated against its OWN account's own anchor, exactly as the unamended §2 formula does. A cross-leg conjunction was proposed and retracted — it would let reconciling account B retroactively change account A's settled balance for an unrelated transfer.
+
+### Valuation-tracked accounts excluded
+
+The new provenance logic applies only to `transaction_flow` accounts. Anchors on `balanceSource="valuation"` accounts (holdings anchor, seed anchor, valuation-linked transfer anchor) are classified as `derived` but the transaction-flow `afterAnchor` predicate never runs on them at all (ADR-0048's valuation-tracked balance formula is unchanged).
+
+### Consequences
+
+#### Positive
+
+- Fixes the real production double-count bug (dogfooding a real e-wallet account). Preserves PER-201's fix for derived anchors while correctly handling ground-truth anchors.
+- Zero product-surface change (provenance is server-side only, never client-supplied).
+
+#### Negative
+
+- Every call site that creates a valuation anchor must explicitly declare provenance (TypeScript-enforced, cannot be omitted). Pre-migration rows with NULL provenance fall back to `derived` (the safer default that never silently drops a backdated transaction).
+
+### Implementation notes
+
+- The live "Reconcile account" / "Update value" dialog always writes `provenance: "ground_truth"` (hard-coded in `createValuationFn` in `src/server/valuations.ts`).
+- The Sure migration writes its reconciliation anchors as `provenance: "derived"` because their values were computed from imported rows Permoney already held.
+- The `valuation_provenance_domain` CHECK in the database enforces that exactly anchor types carry a provenance; `market` rows always have NULL.
+- PER-265 introduces `rebuildIfGroundTruthAnchored` to re-materialize balances for accounts with ground_truth anchors after a backdated transaction is posted, closing the incremental-delta blind spot.
