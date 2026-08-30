@@ -596,6 +596,113 @@ export async function computeCanonicalBalance(
   return addMoney(anchor.value, flow)
 }
 
+// PER-277 — pure "balance as of a specific date" replay. Generalizes
+// `computeCanonicalBalance`'s present-moment anchor selection
+// (`asOf: new Date()`, flow summed with no upper bound because "now" already
+// IS the natural upper bound) to an arbitrary historical `asOfDate`, whose
+// post-anchor flow sum must ALSO be bounded above by that same date — without
+// it, a past query would count activity that happens after the point being
+// asked about, which is exactly the "dishonest anchor value" defect this
+// function exists to let callers avoid (see PER-270's fuzzer fixture, the
+// original caller).
+//
+// Read-only and side-effect-free. Reuses the SAME `latestValuation` anchor
+// selector and `sumTransactionFlowAfterAnchor` segmentation predicate as
+// `computeCanonicalBalance`, so a historical query and the live balance
+// formula can never diverge (ADR-0043 §6's one-segmentation-function rule).
+//
+// Both directions bound their segment with a SYNTHETIC bound dated
+// `asOfDate` — a plain date cutoff, not a real anchor row, so it has no
+// write-time of its own. Its `provenance` is irrelevant to the result: the
+// derived/ground_truth branches of the shared predicate only diverge on
+// whether a transaction's OWN `createdAt` is after the bound's `createdAt`,
+// and every transaction this function can see already exists (was created
+// strictly before) whatever real row this replay is standing in for — so
+// that disjunct is always `false` on both branches, and both collapse to the
+// same date-only comparison the `ground_truth` branch spells out directly.
+// (Passing `"ground_truth"` in both spots below is therefore a
+// simplification, not a special case.)
+//
+//   1. A real anchor exists at/before `asOfDate` (the common case): value =
+//      that anchor's value + flow strictly between it and `asOfDate`.
+//   2. No anchor exists at/before `asOfDate`, but one exists AFTER it: this
+//      is the exact backdated-anchor shape PER-270's fuzzer generates and
+//      PER-276/277 exist because of — e.g. an account's derived opening
+//      anchor written "today," followed by a migration/reconcile anchor
+//      honestly backdated to before it. Replay BACKWARD instead of assuming
+//      zero: value = the next anchor's value minus flow strictly between
+//      `asOfDate` and that anchor (the same segment sum, solved for the
+//      other end).
+//   3. No anchor exists at all (a genuinely brand-new account as of
+//      `asOfDate`): zero — there is nothing yet to have a balance.
+export async function computeCanonicalBalanceAsOf(
+  tx: TenantTransactionClient,
+  familyId: string,
+  account: AccountBalanceFacts,
+  asOfDate: Date
+): Promise<Money> {
+  if (account.balanceSource === "valuation") {
+    const latest = await latestValuation(tx, familyId, account.id, {
+      asOf: asOfDate,
+    })
+    return latest?.value ?? toMoney(0n)
+  }
+
+  const priorAnchor = await latestValuation(tx, familyId, account.id, {
+    anchorTypesOnly: true,
+    asOf: asOfDate,
+  })
+  if (priorAnchor !== null) {
+    const flow = await sumTransactionFlowAfterAnchor(
+      tx,
+      familyId,
+      account.id,
+      priorAnchor,
+      {
+        valuationDate: asOfDate,
+        createdAt: asOfDate,
+        provenance: "ground_truth",
+      }
+    )
+    return addMoney(priorAnchor.value, flow)
+  }
+
+  const nextAnchorRow = await tx.valuation.findFirst({
+    where: {
+      accountId: account.id,
+      familyId,
+      deletedAt: null,
+      type: { in: [...ANCHOR_VALUATION_TYPES] },
+      valuationDate: { gt: asOfDate },
+    },
+    orderBy: [{ valuationDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+    select: {
+      value: true,
+      valuationDate: true,
+      createdAt: true,
+      provenance: true,
+    },
+  })
+  if (nextAnchorRow === null) return toMoney(0n)
+
+  const flowBeforeNextAnchor = await sumTransactionFlowAfterAnchor(
+    tx,
+    familyId,
+    account.id,
+    {
+      valuationDate: asOfDate,
+      createdAt: asOfDate,
+      provenance: "ground_truth",
+    },
+    {
+      valuationDate: nextAnchorRow.valuationDate,
+      createdAt: nextAnchorRow.createdAt,
+      provenance: toAnchorProvenance(nextAnchorRow.provenance),
+    }
+  )
+  return subMoney(toMoney(nextAnchorRow.value), flowBeforeNextAnchor)
+}
+
 // Optimistically-locked balance write. Returns whether it changed. A version
 // race throws `VersionDriftError`, which `withSerializableRetry` replays.
 async function setAccountBalanceTo(
