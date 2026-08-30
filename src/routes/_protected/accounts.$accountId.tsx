@@ -44,6 +44,7 @@ import {
 import { AccountVisual } from "@/components/blocks/account-visual"
 import { getQueryClient } from "@/lib/query-client"
 import { GroundTruthAnchorSubtitle } from "@/components/blocks/ground-truth-anchor-subtitle"
+import { OpeningAsOfSubtitle } from "@/components/blocks/opening-as-of-subtitle"
 import { AccountFormDialog } from "@/components/blocks/account-form-dialog"
 import { ValuationActionDialog } from "@/components/blocks/valuation-action-dialog"
 import {
@@ -859,6 +860,7 @@ function AccountDetailPage() {
         {/* Left: hero + KPI + category breakdown */}
         <div className="flex flex-col gap-4">
           <AccountVisual account={account} size="hero" />
+          <OpeningAsOfSubtitle accountId={accountId} currency={currency} />
           <GroundTruthAnchorSubtitle
             accountId={accountId}
             currency={currency}
@@ -1329,6 +1331,11 @@ async function refreshAccountData() {
     // function's many call sites for no real cost saved.
     getQueryClient().invalidateQueries({
       queryKey: ["latestGroundTruthAnchor"],
+    }),
+    // PER-269 — an opening-balance write (rare, but after account creation the
+    // detail page is the immediate next view) feeds `OpeningAsOfSubtitle`.
+    getQueryClient().invalidateQueries({
+      queryKey: ["accountOpeningAsOf"],
     }),
   ])
 }

@@ -164,6 +164,13 @@ export const createAccountInputSchema = z.object({
   currency: currencySchema.optional(),
   color: hexColorSchema.nullable().optional(),
   openingBalance: openingBalanceSchema.optional(),
+  // PER-269 — optional as-of date for the opening balance. When omitted or null
+  // the valuation is stamped today, preserving the common "new account, no prior
+  // history" default (identical to current behavior). A past date lets the user
+  // state "my balance on that day was X" without intuiting the as-of rule; a
+  // future date is rejected with a clear message (validated in
+  // createAccountForFamily before any write).
+  openingBalanceAsOfDate: z.coerce.date().nullable().optional(),
   institutionName: institutionNameSchema.nullable().optional(),
   // PER-212 / ADR-0049: link this account to a "person" Merchant, turning it
   // into an informal person-debt account. Only valid for RECEIVABLE/LOAN types
@@ -470,6 +477,31 @@ export async function createAccountForFamily({
     taxonomy.accountClass
   )
 
+  // PER-269 — resolve the opening as-of date. `null`/`undefined` → today
+  // (preserves the common default exactly). A past date is stored as the
+  // opening Valuation's valuationDate; a future date is rejected with a clear
+  // message, before any write. Compare date-only (strip the clock) so "today"
+  // is valid all day and "tomorrow" is always rejected, regardless of the
+  // current wall-clock time.
+  let openingAsOfDate: Date | null = null
+  if (
+    data.openingBalanceAsOfDate !== undefined &&
+    data.openingBalanceAsOfDate !== null
+  ) {
+    const raw = data.openingBalanceAsOfDate
+    if (Number.isNaN(raw.getTime())) {
+      throw new AccountValidationError("Invalid opening balance as-of date")
+    }
+    const asOfDateOnly = raw.toISOString().slice(0, 10)
+    const todayDateOnly = new Date().toISOString().slice(0, 10)
+    if (asOfDateOnly > todayDateOnly) {
+      throw new AccountValidationError(
+        "Opening balance as-of date cannot be in the future"
+      )
+    }
+    openingAsOfDate = new Date(`${asOfDateOnly}T00:00:00.000Z`)
+  }
+
   const requestHash = await hashCanonicalPayload({
     accountSubtype: taxonomy.accountSubtype,
     accountType: taxonomy.accountType,
@@ -479,6 +511,7 @@ export async function createAccountForFamily({
     institutionName: data.institutionName ?? null,
     name: data.name,
     openingBalance: openingRawValue.toString(),
+    openingBalanceAsOfDate: openingAsOfDate?.toISOString().slice(0, 10) ?? null,
     reserveBalance: reserveBalance?.toString() ?? null,
     mask: creditFields.mask,
     creditLimit: creditFields.creditLimit?.toString() ?? null,
@@ -561,13 +594,16 @@ export async function createAccountForFamily({
 
       // ADR-0034 §3: the opening balance is the first ledger valuation. It is the
       // rebuild anchor for cash accounts and the initial value for tracked ones.
+      // PER-269 — the chosen as-of date becomes the opening Valuation's
+      // valuationDate; `null` (no date chosen) keeps the current default
+      // `new Date()` so existing flows stay identical.
       const opening = await tx.valuation.create({
         data: {
           accountId: account.id,
           familyId,
           value: signedOpeningBalance,
           currency,
-          valuationDate: new Date(),
+          valuationDate: openingAsOfDate ?? new Date(),
           type: "opening",
           source: "manual",
           // PER-266 — `opening` is ALWAYS `derived`, for every writer, no
