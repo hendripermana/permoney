@@ -131,6 +131,30 @@ const reserveBalanceSchema = z
   ])
   .nullable()
 
+// PER-272 — non-sensitive account mask (e.g. the final 4 digits). Short digits
+// only: a full card number is never accepted (we do not store one, and inventing
+// digits would falsify data — the same invariant account-visual.test.tsx guards
+// on the render side). Nullable so it can be cleared.
+const maskSchema = z
+  .string()
+  .trim()
+  .regex(/^\d{1,8}$/, "mask must be a short string of digits (at most 8)")
+  .nullable()
+
+// PER-272 — statement/due day are calendar days 1–31; interest rate is a
+// non-negative integer in basis points; credit limit is a non-negative amount
+// in MINOR UNITS matching the account's currency (digit-string, BigInt is not
+// JSON-serializable). Nullable so each can be cleared.
+const statementDaySchema = z.number().int().min(1).max(31).nullable()
+const dueDaySchema = z.number().int().min(1).max(31).nullable()
+const interestRateBpsSchema = z.number().int().nonnegative().nullable()
+const creditLimitSchema = z
+  .union([
+    z.string().regex(/^\d+$/, "creditLimit must be a string of digits"),
+    z.number().int().nonnegative(),
+  ])
+  .nullable()
+
 export const createAccountInputSchema = z.object({
   // Optional client-generated id so the optimistic UI and the server agree.
   id: z.string().min(1).optional(),
@@ -149,6 +173,14 @@ export const createAccountInputSchema = z.object({
   // PER-217 — optional reserve/minimum balance set at creation (cash-like ASSET
   // only; validated in createAccountForFamily).
   reserveBalance: reserveBalanceSchema.optional(),
+  // PER-272 — optional credit/loan product metadata (mask, credit limit,
+  // statement/due day, interest rate). CREDIT/LOAN only; validated in
+  // createAccountForFamily.
+  mask: maskSchema.optional(),
+  creditLimit: creditLimitSchema.optional(),
+  statementDay: statementDaySchema.optional(),
+  dueDay: dueDaySchema.optional(),
+  interestRateBps: interestRateBpsSchema.optional(),
   idempotencyKey: uuidV7Schema,
 })
 
@@ -164,6 +196,13 @@ export const updateAccountInputSchema = z.object({
   // PER-217 — set/clear the reserve. `null` clears it; omitted leaves it
   // unchanged. Cash-like ASSET only (validated in updateAccountForFamily).
   reserveBalance: reserveBalanceSchema.optional(),
+  // PER-272 — set/clear credit/loan product metadata. `null` clears; omitted
+  // leaves unchanged. CREDIT/LOAN only (validated in updateAccountForFamily).
+  mask: maskSchema.optional(),
+  creditLimit: creditLimitSchema.optional(),
+  statementDay: statementDaySchema.optional(),
+  dueDay: dueDaySchema.optional(),
+  interestRateBps: interestRateBpsSchema.optional(),
   idempotencyKey: uuidV7Schema,
 })
 
@@ -208,6 +247,50 @@ function resolveReserveBalance(
     )
   }
   return value
+}
+
+// PER-272 — credit/loan product metadata (mask, credit limit, statement/due
+// day, interest rate). Only meaningful on CREDIT/LOAN (liability) accounts: a
+// credit limit or statement day on a cash account is a category error. Mirrors
+// resolveReserveBalance — reject a non-null value on any non-liability account
+// before a write; clearing (null) is always allowed. The DB CHECKs on the day
+// ranges and non-negative signs are the durable backstop.
+function resolveCreditFields(
+  fields: {
+    mask?: string | null
+    creditLimit?: string | number | null
+    statementDay?: number | null
+    dueDay?: number | null
+    interestRateBps?: number | null
+  },
+  accountClass: string
+): {
+  mask: string | null
+  creditLimit: bigint | null
+  statementDay: number | null
+  dueDay: number | null
+  interestRateBps: number | null
+} {
+  const mask = fields.mask ?? null
+  const creditLimitRaw = fields.creditLimit ?? null
+  const statementDay = fields.statementDay ?? null
+  const dueDay = fields.dueDay ?? null
+  const interestRateBps = fields.interestRateBps ?? null
+  const creditLimit = creditLimitRaw === null ? null : BigInt(creditLimitRaw)
+
+  const anySet =
+    mask !== null ||
+    creditLimit !== null ||
+    statementDay !== null ||
+    dueDay !== null ||
+    interestRateBps !== null
+  if (anySet && accountClass !== "LIABILITY") {
+    throw new AccountValidationError(
+      "mask/creditLimit/statementDay/dueDay/interestRateBps are only valid for CREDIT or LOAN accounts"
+    )
+  }
+
+  return { mask, creditLimit, statementDay, dueDay, interestRateBps }
 }
 
 export interface SerializedAccount {
@@ -374,6 +457,18 @@ export async function createAccountForFamily({
     taxonomy.accountClass,
     taxonomy.balanceSource
   )
+  // PER-272 — resolve the credit/loan product metadata against the resolved
+  // taxonomy. Rejects a non-null value on any non-liability account before write.
+  const creditFields = resolveCreditFields(
+    {
+      mask: data.mask,
+      creditLimit: data.creditLimit,
+      statementDay: data.statementDay,
+      dueDay: data.dueDay,
+      interestRateBps: data.interestRateBps,
+    },
+    taxonomy.accountClass
+  )
 
   const requestHash = await hashCanonicalPayload({
     accountSubtype: taxonomy.accountSubtype,
@@ -385,6 +480,11 @@ export async function createAccountForFamily({
     name: data.name,
     openingBalance: openingRawValue.toString(),
     reserveBalance: reserveBalance?.toString() ?? null,
+    mask: creditFields.mask,
+    creditLimit: creditFields.creditLimit?.toString() ?? null,
+    statementDay: creditFields.statementDay,
+    dueDay: creditFields.dueDay,
+    interestRateBps: creditFields.interestRateBps,
   })
   const auditCtx = await createAuditContext(
     { user: { id: user.id, familyId } },
@@ -450,6 +550,11 @@ export async function createAccountForFamily({
           institutionName: data.institutionName ?? null,
           name: data.name,
           reserveBalance,
+          mask: creditFields.mask,
+          creditLimit: creditFields.creditLimit,
+          statementDay: creditFields.statementDay,
+          dueDay: creditFields.dueDay,
+          interestRateBps: creditFields.interestRateBps,
           status: "active",
         },
       })
@@ -589,6 +694,20 @@ export async function updateAccountForFamily({
         : data.reserveBalance === null
           ? null
           : data.reserveBalance.toString(),
+    // PER-272 — same contract for the credit/loan fields: undefined = leave
+    // unchanged, null = clear. creditLimit is normalized to a digit-string.
+    mask: data.mask === undefined ? undefined : data.mask,
+    creditLimit:
+      data.creditLimit === undefined
+        ? undefined
+        : data.creditLimit === null
+          ? null
+          : data.creditLimit.toString(),
+    statementDay:
+      data.statementDay === undefined ? undefined : data.statementDay,
+    dueDay: data.dueDay === undefined ? undefined : data.dueDay,
+    interestRateBps:
+      data.interestRateBps === undefined ? undefined : data.interestRateBps,
   })
   const auditCtx = await createAuditContext(
     { user: { id: user.id, familyId } },
@@ -620,6 +739,11 @@ export async function updateAccountForFamily({
         isImportable?: boolean
         name?: string
         reserveBalance?: bigint | null
+        mask?: string | null
+        creditLimit?: bigint | null
+        statementDay?: number | null
+        dueDay?: number | null
+        interestRateBps?: number | null
       } = {}
       if (data.name !== undefined) updateData.name = data.name
       if (data.color !== undefined) updateData.color = data.color
@@ -638,6 +762,31 @@ export async function updateAccountForFamily({
           before.accountClass,
           before.balanceSource
         )
+      }
+      // PER-272 — resolve the credit/loan fields against the existing account's
+      // class (type is fixed at creation), then only write the fields the caller
+      // actually supplied (undefined = leave unchanged, null = clear). A non-null
+      // value on a non-liability account is rejected; the DB CHECKs are backstop.
+      const creditFields = resolveCreditFields(
+        {
+          mask: data.mask,
+          creditLimit: data.creditLimit,
+          statementDay: data.statementDay,
+          dueDay: data.dueDay,
+          interestRateBps: data.interestRateBps,
+        },
+        before.accountClass
+      )
+      if (data.mask !== undefined) updateData.mask = creditFields.mask
+      if (data.creditLimit !== undefined) {
+        updateData.creditLimit = creditFields.creditLimit
+      }
+      if (data.statementDay !== undefined) {
+        updateData.statementDay = creditFields.statementDay
+      }
+      if (data.dueDay !== undefined) updateData.dueDay = creditFields.dueDay
+      if (data.interestRateBps !== undefined) {
+        updateData.interestRateBps = creditFields.interestRateBps
       }
       if (data.accountSubtype !== undefined) {
         // Re-normalize against the account's existing type so a subtype edit can
