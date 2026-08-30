@@ -29,6 +29,7 @@ _Legend: [Component Name] - [Source Path]_
 
 - [x] **Toast** - `@/components/ui/use-toast.ts` & `toaster.tsx`
 - [x] **Skeleton** - `@/components/ui/skeleton.tsx`
+- [x] **AlertDialog** - `@/components/ui/alert-dialog.tsx`
 
 ### Layout & Navigation
 
