@@ -235,9 +235,7 @@ liabilities`) possible without a database.
   getNetWorthSeriesFn = createServerFn({ method: "GET" })
     .middleware([familyMiddleware])
     .inputValidator(getNetWorthSeriesInputSchema.parse)
-    .handler(
-      /* one scopedTenantTransaction → load [inception..to] → buildNetWorthSeries */
-    )
+    .handler(/* one scopedTenantTransaction → load [inception..to] → buildNetWorthSeries */)
   ```
 
 - **Read-only**: no idempotency key, no `AuditLog` (it mutates nothing). One
