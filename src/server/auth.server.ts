@@ -4,7 +4,7 @@ import { tanstackStartCookies } from "better-auth/tanstack-start"
 import { prisma as db } from "./db.server"
 import { hash, verify, type Options } from "@node-rs/argon2"
 export { signupSchema, loginSchema } from "./auth-schemas"
-const argonOpts: Options = {
+export const argonOpts: Options = {
   memoryCost: 65536, // 64 MiB
   timeCost: 3, // 3 iterations
   parallelism: 4, // 4 lanes

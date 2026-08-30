@@ -1,6 +1,7 @@
 import { PrismaPg } from "@prisma/adapter-pg"
 import { PrismaClient } from "@prisma/client"
 import { hash } from "@node-rs/argon2"
+import { argonOpts } from "../../src/server/auth.server"
 
 // PER-110 / ADR-0014 — App-tenant phase.
 //
@@ -49,13 +50,7 @@ export async function seedAppTenant(
           currency: "IDR",
         },
       }),
-      hash("password123", {
-        memoryCost: 65536,
-        timeCost: 3,
-        parallelism: 4,
-        outputLen: 32,
-        algorithm: 2,
-      }),
+      hash("password123", argonOpts),
     ])
 
     await prisma.$transaction(async (tx) => {
@@ -90,6 +85,39 @@ export async function seedAppTenant(
         },
       })
       await tx.$executeRaw`SELECT set_config('app.user_id', ${demoUser.id}, true)`
+
+      // PER-157: ensure better-auth credential row exists for the demo user.
+      // better-auth verifies password against AuthAccount (providerId="credential",
+      // AuthAccount.password = argon2 hash), NOT User.passwordHash (legacy field).
+      // The seed previously only wrote the legacy field, so login never worked.
+      // We reuse the same argon2 hash string (same password + same argonOpts as
+      // auth.server.ts) so the credential never drifts. Deterministic id = userId
+      // keeps re-seeding idempotent; we clean any stray row with a different id
+      // that a prior random-UUID run might have left.
+      const credentialPassword = passwordHash
+      await tx.authAccount.deleteMany({
+        where: {
+          userId: demoUser.id,
+          providerId: "credential",
+          id: { not: demoUser.id },
+        },
+      })
+      await tx.authAccount.upsert({
+        where: { id: demoUser.id },
+        update: {
+          accountId: demoUser.id,
+          providerId: "credential",
+          userId: demoUser.id,
+          password: credentialPassword,
+        },
+        create: {
+          id: demoUser.id,
+          accountId: demoUser.id,
+          providerId: "credential",
+          userId: demoUser.id,
+          password: credentialPassword,
+        },
+      })
 
       // Clean stale tenant rows scoped to this family (children first), now that
       // the owner membership is active so RLS lets us see and delete them. Only
