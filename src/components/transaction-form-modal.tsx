@@ -46,6 +46,14 @@ import {
 import { CURRENCIES, type CurrencyCode } from "@/lib/data/currencies"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import {
+  balanceOverrideInputSchema,
+  BALANCE_OVERRIDE_REASONS,
+  isOnOrBeforeAnchorDate,
+  OTHER_BALANCE_OVERRIDE_REASON,
+  type BalanceOverrideReason,
+} from "@/lib/balance-override"
+import { getLatestGroundTruthAnchorFn } from "@/server/valuations"
+import {
   EntityCombobox,
   type EntityComboboxItem,
 } from "@/components/blocks/entity-combobox"
@@ -140,6 +148,13 @@ const transactionSchema = z.object({
   // client-side as latest ∓ amount (see NewValuationValueField), editable.
   // Left undefined, the server computes the same prefill from fresher data.
   newValuationValue: z.number().optional(),
+  // PER-267 / ADR-0043's PER-264 amendment — the "ubah saldo juga" override.
+  // Undefined (the default) = "Catat (saldo tetap)": submit normally, no
+  // balance-override intent at all. Present only when the user explicitly
+  // opted in via BackdatedAnchorBanner; the server re-verifies the gating
+  // condition independently (see `applyBalanceOverride`,
+  // src/server/transactions.ts) rather than trusting this flag alone.
+  balanceOverride: balanceOverrideInputSchema.optional(),
   // Enterprise: Proof of Purchase (URL struk dari S3/R2)
   attachmentUrl: z.string().optional(),
 })
@@ -345,8 +360,13 @@ function TransactionTypeTabs({
         const selectedType = v as TransactionType
         setActiveTab(selectedType)
         form.setFieldValue("type", selectedType)
-        if (selectedType === "transfer") form.setFieldValue("categoryId", "")
-        else form.setFieldValue("toAccountId", "")
+        if (selectedType === "transfer") {
+          form.setFieldValue("categoryId", "")
+          // PER-267: the balance-override banner is expense/income-only
+          // (BackdatedAnchorBanner); a stray selection must not silently
+          // ride into a transfer submission the server would reject.
+          form.setFieldValue("balanceOverride", undefined)
+        } else form.setFieldValue("toAccountId", "")
         // PER-260: the reimbursement toggle + its expense-category picker
         // only make sense on the Income tab. Leaving Income while it was ON
         // resets it AND the now-mismatched expense-category id, so a stray
@@ -519,7 +539,15 @@ function AmountAccountFields({
                 name={field.name}
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-1 aria-[invalid=true]:ring-destructive/30"
                 value={field.state.value}
-                onChange={(e) => field.handleChange(e.target.value)}
+                onChange={(e) => {
+                  field.handleChange(e.target.value)
+                  // PER-267: a balance-override reason was picked against the
+                  // PREVIOUS account's anchor situation; it has no meaning for
+                  // whatever account is selected now (no-use-effect Rule 3 —
+                  // clear it directly in the event that changes the account,
+                  // not via a watching effect).
+                  form.setFieldValue("balanceOverride", undefined)
+                }}
                 disabled={isLoading}
                 aria-invalid={field.state.meta.errors.length > 0}
                 aria-describedby={
@@ -1226,6 +1254,193 @@ function NewValuationValueField({
   )
 }
 
+// PER-267 / ADR-0043's PER-264 amendment, "UI surface" section.
+//
+// Derived state, not an effect: this compares the currently-selected account
+// + date against that account's latest `ground_truth` anchor (a small query
+// keyed on accountId, since the anchor itself doesn't depend on the chosen
+// date) and renders inline — no useEffect, no local mirror of form state
+// (no-use-effect Rule 1/2). Scoped to expense/income: the server's override
+// path (`applyBalanceOverride`, src/server/transactions.ts) only supports a
+// single-account entry, whose post-delta balance has one unambiguous meaning;
+// a transfer's two legs don't.
+function BackdatedAnchorBanner({
+  activeTab,
+  form,
+}: Pick<TransactionFormSectionProps, "activeTab" | "form">) {
+  if (activeTab === "transfer") return null
+
+  return (
+    <form.Subscribe
+      selector={(state) => ({
+        accountId: state.values.accountId,
+        date: state.values.date,
+      })}
+    >
+      {({ accountId, date }) =>
+        accountId ? (
+          <BackdatedAnchorBannerInner
+            // Remount on account change: a chip picked for one account's
+            // anchor situation must never silently carry over to another
+            // account's (no-use-effect Rule 5 — reset via `key`, not effect
+            // choreography). The account/date `onChange` handlers below also
+            // clear `balanceOverride` directly, so the committed FORM value
+            // never goes stale even while this component stays mounted for
+            // the same account across a date edit.
+            key={accountId}
+            accountId={accountId}
+            date={date}
+            form={form}
+          />
+        ) : null
+      }
+    </form.Subscribe>
+  )
+}
+
+function BackdatedAnchorBannerInner({
+  accountId,
+  date,
+  form,
+}: {
+  accountId: string
+  date: Date
+  form: TransactionFormInstance
+}) {
+  const { data: anchor } = useQuery({
+    queryKey: ["latestGroundTruthAnchor", accountId],
+    queryFn: () => getLatestGroundTruthAnchorFn({ data: { accountId } }),
+  })
+
+  // Local, UI-only picker state — never the source of truth for what gets
+  // submitted (that's the `balanceOverride` FORM field, set explicitly below
+  // whenever the picked reason becomes complete). Keying the outer component
+  // by accountId (above) resets this on account change.
+  const [isExpanded, setIsExpanded] = React.useState(false)
+  const [selectedReason, setSelectedReason] =
+    React.useState<BalanceOverrideReason | null>(null)
+  const [otherNote, setOtherNote] = React.useState("")
+
+  if (!anchor || !isOnOrBeforeAnchorDate(date, anchor.valuationDate)) {
+    return null
+  }
+
+  const anchorCurrency = anchor.currency as CurrencyCode
+  const anchorDateLabel = format(
+    new Date(`${anchor.valuationDate}T00:00:00`),
+    "d MMM yyyy"
+  )
+  const anchorValueLabel = `${getCurrencySymbol(anchorCurrency)}${toDisplayNumber(
+    decodeMoney(anchor.value),
+    anchorCurrency
+  ).toLocaleString("en-US")}`
+
+  const resetOverride = () => {
+    setIsExpanded(false)
+    setSelectedReason(null)
+    setOtherNote("")
+    form.setFieldValue("balanceOverride", undefined)
+  }
+
+  const pickReason = (reason: BalanceOverrideReason, note: string) => {
+    setSelectedReason(reason)
+    setOtherNote(note)
+    const isComplete =
+      reason !== OTHER_BALANCE_OVERRIDE_REASON || note.trim().length > 0
+    form.setFieldValue(
+      "balanceOverride",
+      isComplete
+        ? {
+            reason,
+            note: reason === OTHER_BALANCE_OVERRIDE_REASON ? note : undefined,
+          }
+        : undefined
+    )
+  }
+
+  return (
+    <div
+      className="flex flex-col gap-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm"
+      data-testid="backdated-anchor-banner"
+      role="status"
+    >
+      <p>
+        Transaksi ini tetap tercatat untuk riwayat, kategori, dan anggaran —
+        tapi <span className="font-semibold">tidak mengubah saldo</span> akun
+        ini, karena sudah direkonsiliasi pada{" "}
+        <span className="font-medium">{anchorDateLabel}</span> ke{" "}
+        <span className="font-medium">{anchorValueLabel}</span>.
+      </p>
+
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          variant="default"
+          size="sm"
+          onClick={resetOverride}
+        >
+          Catat (saldo tetap)
+        </Button>
+        <Button
+          type="button"
+          variant={isExpanded ? "secondary" : "outline"}
+          size="sm"
+          aria-expanded={isExpanded}
+          onClick={() => (isExpanded ? resetOverride() : setIsExpanded(true))}
+        >
+          Ubah saldo juga
+        </Button>
+      </div>
+
+      {isExpanded && (
+        <div
+          className="flex flex-col gap-2 rounded-md border border-amber-500/30 bg-background/60 p-2"
+          data-testid="balance-override-reasons"
+        >
+          <p className="text-xs text-muted-foreground">Pilih alasan:</p>
+          <div className="flex flex-wrap gap-1.5">
+            {BALANCE_OVERRIDE_REASONS.map((option) => (
+              <Button
+                key={option.value}
+                type="button"
+                size="sm"
+                variant={
+                  selectedReason === option.value ? "default" : "outline"
+                }
+                aria-pressed={selectedReason === option.value}
+                onClick={() => pickReason(option.value, otherNote)}
+              >
+                {option.label}
+              </Button>
+            ))}
+          </div>
+          {selectedReason === OTHER_BALANCE_OVERRIDE_REASON && (
+            <Input
+              placeholder="Ceritakan singkat…"
+              aria-label="Alasan lainnya"
+              value={otherNote}
+              onChange={(e) =>
+                pickReason(OTHER_BALANCE_OVERRIDE_REASON, e.target.value)
+              }
+            />
+          )}
+          <form.Subscribe selector={(state) => state.values.balanceOverride}>
+            {(committed) =>
+              !committed ? (
+                <p className="text-xs text-amber-700 dark:text-amber-400">
+                  {selectedReason === null
+                    ? "Pilih salah satu alasan untuk melanjutkan."
+                    : "Tulis alasan singkat untuk melanjutkan."}
+                </p>
+              ) : null
+            }
+          </form.Subscribe>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function DateTimeFields({ form }: Pick<TransactionFormSectionProps, "form">) {
   return (
     <div className="grid grid-cols-[1fr_auto] gap-4">
@@ -1267,6 +1482,10 @@ function DateTimeFields({ form }: Pick<TransactionFormSectionProps, "form">) {
                       0
                     )
                     field.handleChange(merged)
+                    // PER-267: a balance-override reason was picked against
+                    // the PREVIOUS date's anchor situation (no-use-effect
+                    // Rule 3 — clear directly in the event, not via effect).
+                    form.setFieldValue("balanceOverride", undefined)
                   }}
                   autoFocus
                 />
@@ -1294,6 +1513,8 @@ function DateTimeFields({ form }: Pick<TransactionFormSectionProps, "form">) {
                 const merged = new Date(existing)
                 merged.setHours(newDate.getHours(), newDate.getMinutes(), 0, 0)
                 field.handleChange(merged)
+                // PER-267: see the date field's onSelect above.
+                form.setFieldValue("balanceOverride", undefined)
               }}
             />
           </div>
@@ -2322,6 +2543,12 @@ function useTransactionFormModalController({
           feeCategoryId: feeMoney ? value.feeCategoryId || null : null,
           transferPurpose: transferPurposePayload,
           newValuationValue: newValuationValueString,
+          // PER-267: the "ubah saldo juga" override — expense/income only
+          // (BackdatedAnchorBanner never sets this for a transfer, and the
+          // tab-switch handler above clears it defensively). The server
+          // (`applyBalanceOverride`) re-verifies the gating condition itself.
+          balanceOverride:
+            value.type !== "transfer" ? (value.balanceOverride ?? null) : null,
           accountBalanceAfter: null, // Computed server-side
           attachmentUrl: value.attachmentUrl || null,
           deletedAt: null,
@@ -2684,6 +2911,7 @@ export function TransactionFormModal({
               formData={formData}
             />
             <DateTimeFields form={form} />
+            <BackdatedAnchorBanner activeTab={activeTab} form={form} />
             <MerchantField
               activeTab={activeTab}
               form={form}
