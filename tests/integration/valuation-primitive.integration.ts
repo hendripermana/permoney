@@ -1159,6 +1159,218 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
   })
 
   // --------------------------------------------------------------------------
+  // PER-267 / ADR-0043's PER-264 amendment, "UI surface" section — the
+  // transaction form's "ubah saldo juga" override for a backdated entry
+  // excluded by a `ground_truth` anchor.
+  // --------------------------------------------------------------------------
+  describe("balanceOverride ('ubah saldo juga')", () => {
+    const addTransactionWithOverride = (
+      owner: AuthenticatedOnboardedUser,
+      accountId: string,
+      type: "income" | "expense" | "transfer",
+      amount: string,
+      description: string,
+      date: Date,
+      balanceOverride: { reason: string; note?: string } | undefined,
+      toAccountId?: string
+    ) =>
+      createTransactionForFamily({
+        data: {
+          type,
+          amount,
+          description,
+          accountId,
+          toAccountId: toAccountId ?? null,
+          date,
+          balanceOverride,
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+
+    const valuationsFor = (
+      owner: AuthenticatedOnboardedUser,
+      accountId: string
+    ) =>
+      harness.withFamily(owner.family.id, async (tx) =>
+        tx.valuation.findMany({
+          where: { accountId, deletedAt: null },
+          orderBy: [{ valuationDate: "asc" }, { createdAt: "asc" }],
+        })
+      )
+
+    const valuationAuditRows = (
+      owner: AuthenticatedOnboardedUser,
+      valuationId: string
+    ) =>
+      harness.withFamily(owner.family.id, async (tx) =>
+        tx.auditLog.findMany({
+          where: { entityType: "Valuation", entityId: valuationId },
+        })
+      )
+
+    test("moves the balance and stamps the chosen reason on the new anchor's AuditLog row", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "150000")
+      await backdateOpeningValuation(owner, account.id, daysAgo(30))
+      await addValuation(
+        owner,
+        account.id,
+        "200000",
+        "reconciliation",
+        daysAgo(5)
+      )
+      expect((await accountRow(owner, account.id)).balance).toBe(200000n)
+
+      await addTransactionWithOverride(
+        owner,
+        account.id,
+        "income",
+        "8000000",
+        "Found cash I'd forgotten to log",
+        daysAgo(6),
+        { reason: "forgot_to_log" }
+      )
+
+      // The override's whole point: unlike the default path (tested above),
+      // the balance NOW includes the backdated transaction.
+      expect((await accountRow(owner, account.id)).balance).toBe(8200000n)
+
+      // A new ground_truth anchor was written, dated "now" (after the old
+      // reconciliation), valued at exactly the new balance.
+      const valuations = await valuationsFor(owner, account.id)
+      const newAnchor = valuations.at(-1)
+      expect(newAnchor?.provenance).toBe("ground_truth")
+      expect(newAnchor?.type).toBe("reconciliation")
+      expect(newAnchor?.value).toBe(8200000n)
+
+      // The reason is queryable from the audit trail on that anchor's own
+      // AuditLog row (acceptance criteria: verified by an integration test).
+      const auditRows = await valuationAuditRows(owner, newAnchor!.id)
+      expect(auditRows).toHaveLength(1)
+      const after = auditRows[0]!.afterJson as Record<string, unknown>
+      expect(after.balanceOverrideReason).toBe("forgot_to_log")
+      expect(after.ticketRef).toBe("PER-267")
+    })
+
+    test("'other' reason requires a note, and it is queryable from the audit trail too", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "150000")
+      await backdateOpeningValuation(owner, account.id, daysAgo(30))
+      await addValuation(
+        owner,
+        account.id,
+        "200000",
+        "reconciliation",
+        daysAgo(5)
+      )
+
+      await addTransactionWithOverride(
+        owner,
+        account.id,
+        "income",
+        "8000000",
+        "Gift from a relative",
+        daysAgo(6),
+        { reason: "other", note: "Uang THR yang baru dihitung ulang" }
+      )
+
+      const valuations = await valuationsFor(owner, account.id)
+      const newAnchor = valuations.at(-1)
+      const auditRows = await valuationAuditRows(owner, newAnchor!.id)
+      const after = auditRows[0]!.afterJson as Record<string, unknown>
+      expect(after.balanceOverrideReason).toBe("other")
+      expect(after.balanceOverrideNote).toBe(
+        "Uang THR yang baru dihitung ulang"
+      )
+    })
+
+    test("rejects an 'other' reason with no note (schema-level, before any write)", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "150000")
+      await backdateOpeningValuation(owner, account.id, daysAgo(30))
+      await addValuation(
+        owner,
+        account.id,
+        "200000",
+        "reconciliation",
+        daysAgo(5)
+      )
+
+      await expect(
+        addTransactionWithOverride(
+          owner,
+          account.id,
+          "income",
+          "8000000",
+          "Missing note",
+          daysAgo(6),
+          { reason: "other" }
+        )
+      ).rejects.toThrow()
+
+      // Rejected before any write: balance and anchor chain are untouched.
+      expect((await accountRow(owner, account.id)).balance).toBe(200000n)
+      expect(await valuationsFor(owner, account.id)).toHaveLength(2) // opening + reconciliation
+    })
+
+    test("rejects the override outright for a transfer", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "150000")
+      const destination = await makeCash(owner, "0")
+      await backdateOpeningValuation(owner, account.id, daysAgo(30))
+      await addValuation(
+        owner,
+        account.id,
+        "200000",
+        "reconciliation",
+        daysAgo(5)
+      )
+
+      await expect(
+        addTransactionWithOverride(
+          owner,
+          account.id,
+          "transfer",
+          "8000000",
+          "Not supported on a transfer",
+          daysAgo(6),
+          { reason: "forgot_to_log" },
+          destination.id
+        )
+      ).rejects.toThrow(ValuationError)
+    })
+
+    test("rejects the override when the transaction is not actually excluded by a ground_truth anchor", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "150000")
+      await backdateOpeningValuation(owner, account.id, daysAgo(30))
+      await addValuation(
+        owner,
+        account.id,
+        "200000",
+        "reconciliation",
+        daysAgo(5)
+      )
+
+      // Dated AFTER the anchor — already moves the balance normally; the
+      // override never applies to a transaction that wasn't excluded.
+      await expect(
+        addTransactionWithOverride(
+          owner,
+          account.id,
+          "income",
+          "8000000",
+          "Already counted normally",
+          daysAgo(1),
+          { reason: "forgot_to_log" }
+        )
+      ).rejects.toThrow(ValuationError)
+    })
+  })
+
+  // --------------------------------------------------------------------------
   // current / available / held semantics
   // --------------------------------------------------------------------------
   describe("getAccountBalanceForFamily (current / available / held)", () => {

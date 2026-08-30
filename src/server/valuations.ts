@@ -678,7 +678,16 @@ export async function createValuationWithinTx(
   data: CreateValuationInput,
   user: ServerActor,
   auditCtx: AuditContext,
-  provenance: AnchorProvenance
+  provenance: AnchorProvenance,
+  // PER-267 — optional extra fields folded into this write's OWN AuditLog
+  // `after` payload (never `before`), mirroring `rebuildWithinTx`'s
+  // `auditMetadata` (PER-268). Lets a narrowly-scoped caller — the
+  // transaction-form's "ubah saldo juga" override — stamp WHY a live
+  // reconciliation anchor was written (the user's selected reason chip, plus
+  // free text for "Lainnya") on the very row it explains, without this
+  // function knowing anything about callers other than "some extra audit
+  // context, if any."
+  auditMetadata?: Record<string, unknown>
 ): Promise<{ serialized: SerializedValuation; valuation: Valuation }> {
   if (!PUBLIC_VALUATION_TYPE_SET.has(data.type)) {
     throw new ValuationError(
@@ -775,7 +784,7 @@ export async function createValuationWithinTx(
     action: "create",
     entityType: "Valuation",
     entityId: valuation.id,
-    after: serialized,
+    after: auditMetadata ? { ...serialized, ...auditMetadata } : serialized,
   })
 
   // Re-materialize the balance from canonical rows (ADR-0043). Tracked
@@ -1253,6 +1262,89 @@ export const getAccountBalanceFn = createServerFn({ method: "GET" })
   )
   .handler(async ({ data, context }) => {
     return await getAccountBalanceForFamily({
+      accountId: data.accountId,
+      familyId: context.familyId,
+      userId: context.user.id,
+    })
+  })
+
+// =============================================================================
+// PER-267 — the account's effective `ground_truth` anchor (ADR-0043 amendment).
+//
+// One read, two consumers, deliberately kept as a single deep module rather
+// than two near-duplicate queries:
+//   1. The transaction-form banner — compares its own chosen date against
+//      `valuationDate` to warn the user their entry won't move the balance.
+//   2. The account detail page's balance subtitle — "Direkonsiliasi {date} →
+//      {value}, {n} transaksi tercatat sesudahnya", so the number is
+//      self-explanatory.
+// Returns null for a tracked (`valuation`-sourced) account, or a
+// `transaction_flow` account whose latest anchor is `derived` (migrated) or
+// absent — there is no live, human-observed anchor to show or warn against.
+// =============================================================================
+
+export interface GroundTruthAnchorView {
+  accountId: string
+  currency: string
+  valuationDate: string
+  value: string
+  // Count of non-deleted transactions dated strictly after `valuationDate` —
+  // the ground_truth branch of the shared `afterAnchor` predicate is date-only
+  // (ADR-0043's PER-264 amendment), so this is exactly what the balance
+  // formula already sums, just counted instead of summed.
+  transactionsAfter: number
+}
+
+export async function getLatestGroundTruthAnchorForFamily({
+  accountId,
+  familyId,
+  userId,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  accountId: string
+  familyId: string
+  userId: string
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<GroundTruthAnchorView | null> {
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
+    const account = await fetchAccountFacts(tx, familyId, accountId)
+    if (!account) {
+      throw new ValuationError(`Account ${accountId} not found`)
+    }
+    if (account.balanceSource !== "transaction_flow") return null
+
+    const anchor = await latestValuation(tx, familyId, accountId, {
+      anchorTypesOnly: true,
+      asOf: new Date(),
+    })
+    if (anchor === null || anchor.provenance !== "ground_truth") return null
+
+    const transactionsAfter = await tx.transaction.count({
+      where: {
+        accountId,
+        familyId,
+        deletedAt: null,
+        date: { gt: anchor.valuationDate },
+      },
+    })
+
+    return {
+      accountId,
+      currency: account.currency,
+      valuationDate: anchor.valuationDate.toISOString().slice(0, 10),
+      value: anchor.value.toString(),
+      transactionsAfter,
+    }
+  })
+}
+
+export const getLatestGroundTruthAnchorFn = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .inputValidator((data: z.infer<typeof accountBalanceQuerySchema>) =>
+    accountBalanceQuerySchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await getLatestGroundTruthAnchorForFamily({
       accountId: data.accountId,
       familyId: context.familyId,
       userId: context.user.id,

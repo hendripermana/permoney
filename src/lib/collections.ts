@@ -6,6 +6,7 @@ import type { TransferPurpose } from "./money-movement"
 import { decodeMoney, encodeMoney, type Money } from "./money"
 import { getQueryClient } from "./query-client"
 import { createUuidV7 } from "./uuid-v7"
+import type { BalanceOverrideReason } from "./balance-override"
 import {
   createTransactionFn,
   deleteTransactionFn,
@@ -116,6 +117,14 @@ async function resyncLedgerAndBalances(): Promise<void> {
   await Promise.all([
     transactionCollection.utils.refetch(),
     accountCollection.utils.refetch(),
+    // PER-267: a create/update/delete can flip which anchor is an account's
+    // latest `ground_truth` one (chiefly the "ubah saldo juga" override,
+    // which writes a fresh anchor) — invalidate the TanStack Query cache the
+    // transaction-form banner and the account page's subtitle both read, so
+    // neither serves a stale pre-mutation answer past this refetch.
+    getQueryClient().invalidateQueries({
+      queryKey: ["latestGroundTruthAnchor"],
+    }),
   ])
 }
 
@@ -161,6 +170,13 @@ export const transactionCollection = createCollection(
         // the transaction form modal's NewValuationValueField).
         const newValuationValue = feeFields.newValuationValue as
           | string
+          | null
+          | undefined
+        // PER-267: the "ubah saldo juga" balance-override — also a write-only
+        // ephemeral field (see BackdatedAnchorBanner in the transaction form
+        // modal). The server re-verifies the gating condition independently.
+        const balanceOverride = feeFields.balanceOverride as
+          | { reason: BalanceOverrideReason; note?: string }
           | null
           | undefined
 
@@ -216,6 +232,7 @@ export const transactionCollection = createCollection(
                 | null
                 | undefined) ?? null,
             newValuationValue: newValuationValue ?? undefined,
+            balanceOverride: balanceOverride ?? null,
             attachmentUrl:
               (payload.attachmentUrl as string | null | undefined) ?? null,
           },

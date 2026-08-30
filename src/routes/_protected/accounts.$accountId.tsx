@@ -42,6 +42,8 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { AccountVisual } from "@/components/blocks/account-visual"
+import { getQueryClient } from "@/lib/query-client"
+import { GroundTruthAnchorSubtitle } from "@/components/blocks/ground-truth-anchor-subtitle"
 import { AccountFormDialog } from "@/components/blocks/account-form-dialog"
 import { ValuationActionDialog } from "@/components/blocks/valuation-action-dialog"
 import {
@@ -857,6 +859,11 @@ function AccountDetailPage() {
         {/* Left: hero + KPI + category breakdown */}
         <div className="flex flex-col gap-4">
           <AccountVisual account={account} size="hero" />
+          <GroundTruthAnchorSubtitle
+            accountId={accountId}
+            currency={currency}
+            cashLike={cashLike}
+          />
           <div className="flex flex-wrap gap-1.5">
             <Badge variant="secondary">
               {ACCOUNT_TYPE_LABEL[
@@ -1309,6 +1316,20 @@ async function refreshAccountData() {
   await Promise.all([
     accountCollection.utils.refetch(),
     transactionCollection.utils.refetch(),
+    // PER-267: a valuation write (chiefly the interactive "Reconcile" action)
+    // can create/change the account's effective `ground_truth` anchor, which
+    // `GroundTruthAnchorSubtitle` reads via TanStack Query — a plain
+    // collection refetch above doesn't touch that cache. Without this, the
+    // subtitle (and the transaction form's banner, on the SAME query key)
+    // keeps serving the pre-reconcile cached answer for up to `staleTime`
+    // (60s), which is exactly the "flash of stale state" the acceptance
+    // criteria rules out. Broad prefix match (no accountId) mirrors
+    // `resyncLedgerAndBalances` (src/lib/collections.ts) — invalidating by
+    // account would need threading accountId through every one of this
+    // function's many call sites for no real cost saved.
+    getQueryClient().invalidateQueries({
+      queryKey: ["latestGroundTruthAnchor"],
+    }),
   ])
 }
 

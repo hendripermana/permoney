@@ -26,6 +26,11 @@ import {
   type TransferPurpose,
 } from "@/lib/money-movement"
 import { assertSplitParity } from "@/lib/split-parity"
+import {
+  balanceOverrideInputSchema,
+  type BalanceOverrideReason,
+} from "@/lib/balance-override"
+import { createUuidV7 } from "@/lib/uuid-v7"
 import { computeBaseProjectionForAmount, getFamilyBaseCurrency } from "./fx"
 import {
   familyMiddleware,
@@ -66,6 +71,7 @@ import {
   valueMagnitudeSchema,
   ValuationError,
   type CreateValuationInput,
+  type ServerActor,
 } from "./valuations"
 
 export { IdempotencyConflictError } from "./idempotency"
@@ -950,6 +956,15 @@ const transactionInputSchema = z.object({
   // editable). Ignored for non-transfer transactions and for a transfer
   // between two transaction_flow accounts.
   newValuationValue: valueMagnitudeSchema.optional(),
+  // PER-267 / ADR-0043's PER-264 amendment, "UI surface" section: the
+  // transaction form's rarely-used "ubah saldo juga" escape hatch. Present
+  // only when the user explicitly chose to also move the balance for a
+  // transaction that would otherwise be excluded by a `ground_truth` anchor
+  // (see `createTransactionForFamily`'s standard expense/income branch for
+  // the server-side re-verification — this flag is NEVER trusted on its own).
+  // Ignored for transfers (out of scope for this slice; see the rejection
+  // there for why).
+  balanceOverride: balanceOverrideInputSchema.nullable().optional(),
 })
 
 const createTransactionTransportInputSchema = transactionInputSchema.extend({
@@ -1127,6 +1142,103 @@ function assertManualTransactionKindShape(data: {
   if (isLiabilityCostKind(data.kind) && !data.toAccountId) {
     throw new Error(`${data.kind} requires a liability toAccountId`)
   }
+}
+
+/**
+ * PER-267 / ADR-0043's PER-264 amendment, "UI surface" section — the
+ * transaction form's "ubah saldo juga" escape hatch.
+ *
+ * Called from `createTransactionForFamily`'s standard expense/income branch,
+ * AFTER the transaction row and its incremental balance delta are already
+ * written (so `balanceIncludingThisTransaction` is the account's balance as
+ * if this transaction had already counted — exactly "money discovered right
+ * now"). Re-verifies the gating condition itself: the client's decision to
+ * show the override control is a UI convenience, never a money-moving
+ * authority, so this never trusts `data.balanceOverride` alone. If the
+ * account's current anchor is not `ground_truth`, or the transaction wasn't
+ * actually excluded by it, the override is a no-op request against a
+ * condition that doesn't hold — rejected loud rather than silently writing an
+ * anchor nothing needed.
+ *
+ * Writes ONE new `ground_truth` reconciliation anchor dated now, valued at
+ * `balanceIncludingThisTransaction`. Because that anchor becomes the latest
+ * anchor (dated after the old one) with zero flow after it (it's dated now),
+ * `createValuationWithinTx`'s own re-materialization computes exactly that
+ * value back out — so it writes the anchor and leaves the already-correct
+ * materialized balance untouched, no extra `Account` audit row.
+ */
+async function applyBalanceOverride(
+  tx: TenantTransactionClient,
+  {
+    familyId,
+    user,
+    auditCtx,
+    accountId,
+    transactionDate,
+    balanceIncludingThisTransaction,
+    currency,
+    reason,
+    note,
+  }: {
+    familyId: string
+    user: ServerActor
+    auditCtx: AuditContext
+    accountId: string
+    transactionDate: Date
+    balanceIncludingThisTransaction: bigint
+    currency: string
+    reason: BalanceOverrideReason
+    note: string | null
+  }
+): Promise<void> {
+  const anchor = await latestValuation(tx, familyId, accountId, {
+    anchorTypesOnly: true,
+    asOf: new Date(),
+  })
+  if (
+    anchor === null ||
+    anchor.provenance !== "ground_truth" ||
+    !(transactionDate.getTime() <= anchor.valuationDate.getTime())
+  ) {
+    throw new ValuationError(
+      "Balance override does not apply: this transaction's date is not " +
+        "at/before the account's last reconciliation, so it already " +
+        "moves the balance normally"
+    )
+  }
+
+  await createValuationWithinTx(
+    tx,
+    familyId,
+    {
+      accountId,
+      value: balanceIncludingThisTransaction.toString(),
+      currency,
+      valuationDate: new Date(),
+      type: "reconciliation",
+      source: "manual",
+      note,
+      // Never persisted as its own IdempotencyRecord (this call bypasses
+      // `createValuationForFamily`'s replay wrapper, same as the other direct
+      // `createValuationWithinTx` call sites in this file) — the whole
+      // multi-row write's idempotency is already owned by the enclosing
+      // transaction create's own `replayIdempotentTransaction` check, which
+      // hashes `data` (now including `balanceOverride`) as one canonical
+      // payload. A valid uuidv7 is still required by the schema shape.
+      idempotencyKey: createUuidV7(),
+    },
+    user,
+    auditCtx,
+    "ground_truth",
+    // PER-267 acceptance criteria: the reason chip (and free text for
+    // "Lainnya") must be queryable from the audit trail. Folded into this
+    // Valuation's own `AuditLog.after` payload — see `createValuationWithinTx`.
+    {
+      ticketRef: "PER-267",
+      balanceOverrideReason: reason,
+      balanceOverrideNote: note,
+    }
+  )
 }
 
 /**
@@ -2548,6 +2660,17 @@ export async function createTransactionForFamily({
         assertSplitParity(data)
         assertManualTransactionKindShape(data)
 
+        // PER-267: the "ubah saldo juga" balance override is scoped to a
+        // single-account expense/income entry (see the standard branch below
+        // for why — its value is the account's own post-delta balance, which
+        // has no single meaning for a two-leg transfer). Fail loud rather
+        // than silently ignoring a misused flag on a path that never reads it.
+        if (data.type === "transfer" && data.balanceOverride) {
+          throw new ValuationError(
+            "Balance override ('ubah saldo juga') is not supported for transfers"
+          )
+        }
+
         // Base reporting currency for the family; each posted row materializes
         // its base projection at write time (PER-147 / ADR-0035 §4).
         const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
@@ -2889,6 +3012,38 @@ export async function createTransactionForFamily({
           ...createdAuditEntries("Transaction", [newTransaction]),
           ...createdAuditEntries("SplitEntry", createdSplitEntries),
         ])
+
+        // PER-267 / ADR-0043's PER-264 amendment, "UI surface" section — the
+        // "ubah saldo juga" override. Default behavior needs nothing here: a
+        // backdated entry under a `ground_truth` anchor is already excluded
+        // from the materialized balance by `flushAnchorRebuilds`
+        // (`applyAccountBalanceDelta` marked this account dirty above; the
+        // tenant-transaction boundary re-materializes it from canonical rows
+        // before commit — see anchor-rebuild.server.ts). This block only runs
+        // for the opt-in override, and re-verifies the gating condition
+        // itself rather than trusting the client's decision to send it: a
+        // client claiming the override applies to a transaction that isn't
+        // actually excluded must not be allowed to fabricate a reconciliation.
+        if (data.balanceOverride) {
+          await applyBalanceOverride(tx, {
+            familyId,
+            user,
+            auditCtx,
+            accountId: data.accountId,
+            transactionDate: data.date,
+            // `newAccount.balance` is the account's balance immediately after
+            // `applyAccountBalanceDelta`'s unconditional increment above —
+            // i.e. exactly "the balance as if this transaction had already
+            // counted," which is what "money discovered right now" means.
+            // Read BEFORE `flushAnchorRebuilds` runs (at the tenant-transaction
+            // boundary, after this callback returns), so it is not yet
+            // corrected back to the anchor-only figure.
+            balanceIncludingThisTransaction: newAccount.balance,
+            currency: newAccount.currency,
+            reason: data.balanceOverride.reason,
+            note: data.balanceOverride.note ?? null,
+          })
+        }
 
         return serializeTransaction({
           ...newTransaction,
