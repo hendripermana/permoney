@@ -1370,6 +1370,73 @@ export interface AccountOpeningValueView {
   openingValue: string | null
 }
 
+// PER-269 — opening anchor with its valuationDate (the "as of" date).
+// Like getAccountOpeningValueForFamily but also returns the date and value
+// for the account detail page's "as of {date}" subtitle (follows the
+// GroundTruthAnchorSubtitle pattern, ADR-0043 §2). Returns null when the
+// account has no opening valuation (e.g. a raw insert), or when the opening
+// valuationDate is today (the default case needs no subtitle).
+export interface AccountOpeningAsOfView {
+  accountId: string
+  currency: string
+  valuationDate: string | null
+  value: string | null
+  provenance: string | null
+}
+
+export async function getAccountOpeningAsOfForFamily({
+  accountId,
+  familyId,
+  userId,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  accountId: string
+  familyId: string
+  userId: string
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<AccountOpeningAsOfView> {
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
+    const account = await fetchAccountFacts(tx, familyId, accountId)
+    if (!account) {
+      throw new ValuationError(`Account ${accountId} not found`)
+    }
+    const opening = await tx.valuation.findFirst({
+      where: { accountId, familyId, type: "opening", deletedAt: null },
+      orderBy: { valuationDate: "asc" },
+      select: { value: true, valuationDate: true, provenance: true },
+    })
+    if (!opening) {
+      return {
+        accountId,
+        currency: account.currency,
+        valuationDate: null,
+        value: null,
+        provenance: null,
+      }
+    }
+    return {
+      accountId,
+      currency: account.currency,
+      valuationDate: opening.valuationDate.toISOString().slice(0, 10),
+      value: opening.value.toString(),
+      provenance: opening.provenance,
+    }
+  })
+}
+
+export const getAccountOpeningAsOfFn = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .inputValidator((data: z.infer<typeof accountBalanceQuerySchema>) =>
+    accountBalanceQuerySchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await getAccountOpeningAsOfForFamily({
+      accountId: data.accountId,
+      familyId: context.familyId,
+      userId: context.user.id,
+    })
+  })
+
 export async function getAccountOpeningValueForFamily({
   accountId,
   familyId,

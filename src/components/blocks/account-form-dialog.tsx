@@ -94,6 +94,12 @@ export function AccountFormDialog({
     editing?.currency ?? "IDR"
   )
   const [openingBalance, setOpeningBalance] = React.useState<string>("")
+  // PER-269 — optional as-of date for the opening balance. Defaults to today
+  // (the `new Date()` contract the server already had), past dates are allowed,
+  // future dates are rejected with a clear message before any write.
+  const [openingAsOfDate, setOpeningAsOfDate] = React.useState<string>(() =>
+    new Date().toISOString().slice(0, 10)
+  )
   const [institutionName, setInstitutionName] = React.useState<string>(
     editing?.institutionName ?? ""
   )
@@ -257,6 +263,29 @@ export function AccountFormDialog({
           }
           openingMinor = parsed.toString()
         }
+        // PER-269 — validate the as-of date before any write: an empty value
+        // means "today" (the default that preserves current behavior exactly),
+        // a past YYYY-MM-DD is stored as the opening Valuation's valuationDate,
+        // and a future date is rejected with a clear, user-facing message.
+        let openingBalanceAsOfDate: Date | undefined
+        if (openingAsOfDate.trim() !== "") {
+          // Input type="date" always yields YYYY-MM-DD; guard the shape so a
+          // programmatic or autofill value can't slip through as an invalid date.
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(openingAsOfDate.trim())) {
+            throw new Error("Enter a valid as-of date (YYYY-MM-DD).")
+          }
+          const picked = new Date(`${openingAsOfDate.trim()}T00:00:00.000Z`)
+          if (Number.isNaN(picked.getTime())) {
+            throw new Error("Enter a valid as-of date.")
+          }
+          const today = new Date().toISOString().slice(0, 10)
+          if (openingAsOfDate.trim() > today) {
+            throw new Error(
+              "Opening balance as-of date cannot be in the future"
+            )
+          }
+          openingBalanceAsOfDate = picked
+        }
         await createAccountFn({
           data: {
             name: name.trim(),
@@ -264,6 +293,7 @@ export function AccountFormDialog({
             accountSubtype: resolvedSubtype,
             currency,
             openingBalance: openingMinor,
+            ...(openingBalanceAsOfDate ? { openingBalanceAsOfDate } : {}),
             institutionName: institutionName.trim() || null,
             ...(reserveMinor ? { reserveBalance: reserveMinor } : {}),
             ...(maskValue === undefined ? {} : { mask: maskValue }),
@@ -377,16 +407,32 @@ export function AccountFormDialog({
 
           {editing ? null : (
             <div className="flex flex-col gap-2">
-              <Label htmlFor="opening-balance">
-                Opening balance ({currency})
-              </Label>
-              <MoneyInput
-                id="opening-balance"
-                currency={currency as CurrencyCode}
-                value={openingBalance}
-                onChange={setOpeningBalance}
-                placeholder="0"
-              />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="opening-balance">
+                    Opening balance ({currency})
+                  </Label>
+                  <MoneyInput
+                    id="opening-balance"
+                    currency={currency as CurrencyCode}
+                    value={openingBalance}
+                    onChange={setOpeningBalance}
+                    placeholder="0"
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="opening-as-of-date">
+                    Balance as of this date
+                  </Label>
+                  <Input
+                    id="opening-as-of-date"
+                    type="date"
+                    value={openingAsOfDate}
+                    max={new Date().toISOString().slice(0, 10)}
+                    onChange={(e) => setOpeningAsOfDate(e.target.value)}
+                  />
+                </div>
+              </div>
               <p className="text-xs text-muted-foreground">
                 {previewClass === "LIABILITY"
                   ? "Recorded as amount owed."
@@ -396,7 +442,8 @@ export function AccountFormDialog({
                   : "Tracked asset — balance follows valuations."}
                 {allowsNegativeAssetBalance(accountType)
                   ? " Already overdrawn? Enter a negative amount."
-                  : null}
+                  : null}{" "}
+                Balance as of the date you choose — defaults to today.
               </p>
             </div>
           )}
