@@ -1,7 +1,14 @@
 import * as React from "react"
 import { createFileRoute } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { PiggyBank, RefreshCw, TriangleAlert } from "lucide-react"
+import {
+  PiggyBank,
+  RefreshCw,
+  TriangleAlert,
+  Archive,
+  Clock,
+  ChevronDown,
+} from "lucide-react"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
@@ -26,6 +33,16 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { cn } from "@/lib/utils"
 import type { CurrencyCode } from "@/lib/data/currencies"
 import {
@@ -37,15 +54,24 @@ import {
 import { createUuidV7 } from "@/lib/uuid-v7"
 import {
   getBudgetForPeriodFn,
+  listBudgetsFn,
+  archiveBudgetFn,
   listExpenseCategoriesFn,
   setBudgetAllocationsFn,
   type SerializedBudgetProgress,
+  type SerializedBudgetSummary,
   type SerializedExpenseCategory,
 } from "@/server/budgets"
 
 export const Route = createFileRoute("/_protected/budgets")({
   ssr: false,
   staticData: { title: "Budgets" },
+  loader: async () => {
+    // Preload the budget list so the history picker renders instantly.
+    // The current period's progress is fetched via query in the component.
+    await listBudgetsFn({ data: { includeArchived: false } })
+    return null
+  },
   component: BudgetsPage,
 })
 
@@ -59,10 +85,24 @@ function spendPercent(actualWire: string, allocatedWire: string): number {
   return Math.min(100, Math.round((Number(actualWire) / allocated) * 100))
 }
 
+function formatMonthLabel(month: string): string {
+  const [year, monthNum] = month.split("-")
+  const date = new Date(Date.UTC(Number(year), Number(monthNum) - 1, 1))
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    month: "long",
+    year: "numeric",
+  }).format(date)
+}
+
 function BudgetsPage() {
   // null = let the server pick the current month in the FAMILY timezone, so the
   // default period never depends on the browser's clock (ADR-0037 §1).
   const [selectedMonth, setSelectedMonth] = React.useState<string | null>(null)
+  const [showHistory, setShowHistory] = React.useState(false)
+  const [archivingMonth, setArchivingMonth] = React.useState<string | null>(
+    null
+  )
 
   const {
     data: progress,
@@ -78,6 +118,17 @@ function BudgetsPage() {
         data: selectedMonth ? { month: selectedMonth } : {},
       }),
   })
+
+  const {
+    data: budgetList,
+    isLoading: isListLoading,
+    refetch: _refetchList,
+  } = useQuery({
+    queryKey: ["budget-list"],
+    queryFn: async () =>
+      await listBudgetsFn({ data: { includeArchived: true } }),
+  })
+
   const {
     data: categories,
     isError: isCategoriesError,
@@ -87,8 +138,37 @@ function BudgetsPage() {
     queryFn: async () => await listExpenseCategoriesFn(),
   })
 
+  const queryClient = useQueryClient()
+
+  const archiveMutation = useMutation({
+    mutationFn: async (month: string) =>
+      await archiveBudgetFn({
+        data: { month, idempotencyKey: createUuidV7() },
+      }),
+    onSuccess: () => {
+      setArchivingMonth(null)
+      setShowHistory(false)
+      void queryClient.invalidateQueries({ queryKey: ["budget"] })
+      void queryClient.invalidateQueries({ queryKey: ["budget-list"] })
+    },
+    onError: (mutationError: unknown) => {
+      setArchivingMonth(null)
+      // Could add toast/error UI here if needed
+      console.error("Archive failed:", mutationError)
+    },
+  })
+
   // Until the user picks one, mirror the month the server resolved.
   const month = selectedMonth ?? progress?.month ?? ""
+
+  const activeBudgets = React.useMemo(
+    () => (budgetList ?? []).filter((b) => !b.archivedAt),
+    [budgetList]
+  )
+  const archivedBudgets = React.useMemo(
+    () => (budgetList ?? []).filter((b) => b.archivedAt),
+    [budgetList]
+  )
 
   return (
     <TooltipProvider>
@@ -114,18 +194,46 @@ function BudgetsPage() {
                   </p>
                 </div>
               </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="budget-month">Period</Label>
-                <Input
-                  id="budget-month"
-                  type="month"
-                  value={month}
-                  disabled={isLoading}
-                  className="w-44"
-                  onChange={(event) => setSelectedMonth(event.target.value)}
-                />
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="grid gap-1.5">
+                  <Label htmlFor="budget-month">Period</Label>
+                  <Input
+                    id="budget-month"
+                    type="month"
+                    value={month}
+                    disabled={isLoading}
+                    className="w-44"
+                    onChange={(event) => setSelectedMonth(event.target.value)}
+                  />
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowHistory((prev) => !prev)}
+                  className="gap-1.5"
+                >
+                  <Clock className="size-4" />
+                  History
+                  <ChevronDown
+                    className={cn(
+                      "size-4 transition-transform",
+                      showHistory && "rotate-180"
+                    )}
+                  />
+                </Button>
               </div>
             </div>
+
+            {showHistory && (
+              <BudgetHistoryPanel
+                activeBudgets={activeBudgets}
+                archivedBudgets={archivedBudgets}
+                selectedMonth={selectedMonth}
+                onSelectMonth={setSelectedMonth}
+                onArchive={(month) => setArchivingMonth(month)}
+                isListLoading={isListLoading}
+              />
+            )}
 
             {isLoading ? (
               <p className="text-sm text-muted-foreground">Loading budget…</p>
@@ -152,10 +260,205 @@ function BudgetsPage() {
                 />
               </>
             )}
+
+            <AlertDialog
+              open={archivingMonth !== null}
+              onOpenChange={(open) => !open && setArchivingMonth(null)}
+            >
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Archive budget?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This will hide the budget for{" "}
+                    <strong>{formatMonthLabel(archivingMonth ?? "")}</strong>{" "}
+                    from the default list. The budget data is preserved and can
+                    be viewed by enabling "Show archived" in the history panel.
+                    This action is recorded in the audit log.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() =>
+                      archivingMonth && archiveMutation.mutate(archivingMonth)
+                    }
+                    disabled={archiveMutation.isPending}
+                  >
+                    {archiveMutation.isPending
+                      ? "Archiving…"
+                      : "Archive budget"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
         </SidebarInset>
       </SidebarProvider>
     </TooltipProvider>
+  )
+}
+
+function BudgetHistoryPanel({
+  activeBudgets,
+  archivedBudgets,
+  selectedMonth,
+  onSelectMonth,
+  onArchive,
+  isListLoading,
+}: {
+  activeBudgets: SerializedBudgetSummary[]
+  archivedBudgets: SerializedBudgetSummary[]
+  selectedMonth: string | null
+  onSelectMonth: (month: string | null) => void
+  onArchive: (month: string) => void
+  isListLoading: boolean
+}) {
+  if (isListLoading) {
+    return (
+      <Card>
+        <CardContent className="py-8 text-center">
+          <div className="mx-auto size-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          <p className="mt-2 text-sm text-muted-foreground">Loading history…</p>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Clock className="size-5" />
+          Budget history
+        </CardTitle>
+        <CardDescription>
+          Click a period to view its budget. Archive to hide from the default
+          list.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {activeBudgets.length === 0 && archivedBudgets.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            No budgets created yet. Set allocations for a period to start
+            tracking.
+          </p>
+        ) : (
+          <div className="space-y-4">
+            {activeBudgets.length > 0 && (
+              <div className="space-y-2">
+                <h3 className="text-xs font-medium tracking-wider text-muted-foreground uppercase">
+                  Active periods
+                </h3>
+                {activeBudgets.map((budget) => (
+                  <BudgetHistoryRow
+                    key={budget.budgetId}
+                    budget={budget}
+                    isSelected={
+                      selectedMonth === budget.periodStart.slice(0, 7)
+                    }
+                    onSelect={() =>
+                      onSelectMonth(budget.periodStart.slice(0, 7))
+                    }
+                    onArchive={() => onArchive(budget.periodStart.slice(0, 7))}
+                  />
+                ))}
+              </div>
+            )}
+            {archivedBudgets.length > 0 && (
+              <div className="space-y-2">
+                <h3 className="text-xs font-medium tracking-wider text-muted-foreground uppercase">
+                  Archived periods
+                </h3>
+                {archivedBudgets.map((budget) => (
+                  <BudgetHistoryRow
+                    key={budget.budgetId}
+                    budget={budget}
+                    isSelected={
+                      selectedMonth === budget.periodStart.slice(0, 7)
+                    }
+                    onSelect={() =>
+                      onSelectMonth(budget.periodStart.slice(0, 7))
+                    }
+                    onArchive={() => onArchive(budget.periodStart.slice(0, 7))}
+                    isArchived
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function BudgetHistoryRow({
+  budget,
+  isSelected,
+  onSelect,
+  onArchive,
+  isArchived = false,
+}: {
+  budget: SerializedBudgetSummary
+  isSelected: boolean
+  onSelect: () => void
+  onArchive: () => void
+  isArchived?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={cn(
+        "flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors",
+        isSelected
+          ? "border-primary/50 bg-primary/10"
+          : "border-border bg-card hover:bg-muted/40",
+        isArchived && "opacity-60"
+      )}
+    >
+      <div className="flex min-w-0 flex-1 items-center gap-3">
+        <div
+          className={cn(
+            "size-2.5 shrink-0 rounded-full",
+            isArchived ? "bg-muted-foreground/50" : "bg-emerald-500"
+          )}
+        />
+        <div className="min-w-0">
+          <p
+            className={cn(
+              "truncate font-medium",
+              isArchived && "text-muted-foreground"
+            )}
+          >
+            {budget.name}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {budget.periodStart} → {budget.periodEnd} · {budget.currency}
+          </p>
+        </div>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {isArchived ? (
+          <Badge variant="outline" className="gap-1 text-xs">
+            <Archive className="size-3" />
+            Archived
+          </Badge>
+        ) : (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={(e) => {
+              e.stopPropagation()
+              onArchive()
+            }}
+            aria-label={`Archive ${budget.name}`}
+          >
+            <Archive className="size-4 text-muted-foreground hover:text-destructive" />
+          </Button>
+        )}
+      </div>
+    </button>
   )
 }
 
