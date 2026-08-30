@@ -339,29 +339,82 @@ interface AnchorBound {
   provenance: AnchorProvenance
 }
 
-// PER-201 / PER-264 / ADR-0043 §2 — the ONE segmentation predicate shared by the
-// balance formula and the ANCHOR_CHAIN drift check (ADR-0043 §6's load-bearing
-// "one segmentation function" invariant). The branch on `provenance` lives here
-// exactly once, so the two can never diverge by construction:
+// PER-276 — `Valuation.valuationDate` is `@db.Date` (stored at midnight, no
+// time-of-day); `Transaction.date` is a full `DateTime`. A DERIVED anchor's
+// date disjunct must compare CALENDAR DAYS, not raw instants: the boundary is
+// "the first instant of the day *after* the anchor's date", not "any instant
+// after the anchor's midnight timestamp" — the latter treats every same-day,
+// later-clock-time transaction as "after" the anchor purely from midnight
+// truncation, which is the exact bug this function exists to close (see the
+// predicate comment below). Exactly one day in milliseconds: `valuationDate`
+// is already UTC-midnight-truncated by the DB, and DATE has no time zone or
+// DST, so plain millisecond arithmetic is correct and avoids any dependency on
+// the server process's local time zone (unlike a calendar library's
+// `addDays`, which resolves "a day" against the local zone).
+const ONE_DAY_MS = 24 * 60 * 60 * 1000
+function startOfNextCalendarDay(valuationDate: Date): Date {
+  return new Date(valuationDate.getTime() + ONE_DAY_MS)
+}
+
+// PER-201 / PER-264 / PER-276 / ADR-0043 §2 — the ONE segmentation predicate
+// shared by the balance formula and the ANCHOR_CHAIN drift check (ADR-0043
+// §6's load-bearing "one segmentation function" invariant). The branch on
+// `provenance` lives here exactly once, so the two can never diverge by
+// construction:
 //
 //   afterAnchor(A)(t) ≡ A.provenance = "derived"
-//                          ? (t.date > A.valuationDate OR t.createdAt > A.createdAt)
+//                          ? (t.date >= startOfNextCalendarDay(A.valuationDate)
+//                             OR t.createdAt > A.createdAt)
 //                          : (t.date > A.valuationDate)
 //
-// DERIVED anchors keep PER-201's disjunction verbatim. Such an anchor's value
-// was COMPUTED by summing rows Permoney already held, so it can only ever have
-// absorbed what existed when it was written. Both disjuncts are load-bearing:
+// DERIVED anchors keep PER-201's disjunction, corrected for calendar-day
+// granularity (PER-276, below). Such an anchor's value was COMPUTED by summing
+// rows Permoney already held, so it can only ever have absorbed what existed
+// when it was written. Both disjuncts are load-bearing:
 // the createdAt one is PER-201's fix (a user's *back-dated* transaction added
 // AFTER an import anchor is real post-anchor activity the materialized balance
 // already counts, so the canonical formula must count it too); the date one is
-// equally required (a *future*-dated transaction recorded BEFORE the anchor is
-// still after the asserted balance), so the rule is never createdAt alone.
+// equally required (a transaction dated on a *later calendar day* recorded
+// BEFORE the anchor is still after the asserted balance), so the rule is never
+// createdAt alone.
 //
-// GROUND_TRUTH anchors segment by DATE ONLY. Their value is an INDEPENDENT
-// observation of reality — a human reading their real wallet balance during
-// "Reconcile account", or (later) a bank-fetched statement — which already
-// reflected every event up to that instant whether or not Permoney knew the
-// details. Applying the createdAt disjunct here IS the PER-264 bug: a real,
+// PER-276 — why the date disjunct compares calendar days, not raw instants:
+// `t.date > A.valuationDate` compared a full timestamp to a midnight-truncated
+// date. Postgres casts the `DATE` to midnight for the comparison, so ANY
+// transaction dated the SAME calendar day as the anchor — including one
+// recorded (and already summed into the anchor's own asserted value) BEFORE
+// the anchor was written — has a real, non-midnight clock time that is
+// numerically greater than that midnight, making the date disjunct spuriously
+// `true`. Because the two disjuncts are joined with OR, that one spurious
+// `true` was enough to double-count the transaction: once inside the anchor's
+// own recorded value, and again as "after" it. The `createdAt` disjunct
+// already correctly said `false` for that transaction (it was recorded before
+// the anchor); the bug was the date disjunct overriding a correct `false` with
+// an incorrect `true` on a same-day technicality. Comparing whole calendar
+// days — `t.date >= startOfNextCalendarDay(A.valuationDate)` — makes the date
+// disjunct fire only for a transaction dated on a strictly LATER calendar day
+// than the anchor; a same-day transaction can now only be counted "after" the
+// anchor via the createdAt disjunct, i.e. only when it was genuinely recorded
+// after the anchor was written — restoring the createdAt disjunct's intended
+// authority over same-day activity instead of letting the date disjunct
+// short-circuit it. Verified against the reported repro: an opening anchor
+// (200,000), a same-day +1 income recorded first, then a same-day derived
+// anchor whose asserted value was correctly computed as 200,001 — before this
+// fix the transaction counted a second time (200,002); after it, the date
+// disjunct is false (same calendar day) and the createdAt disjunct is false
+// (the income was recorded before the anchor), so it stays absorbed and the
+// balance is 200,001.
+//
+// GROUND_TRUTH anchors segment by DATE ONLY, deliberately UNCHANGED by PER-276:
+// their value is an INDEPENDENT observation of reality — a human reading their
+// real wallet balance during "Reconcile account", or (later) a bank-fetched
+// statement — which already reflected every event up to that instant whether
+// or not Permoney knew the details. `t.date > A.valuationDate` treating a
+// later-same-day transaction as "after" a ground-truth anchor is intentional
+// (PER-267's `isOnOrBeforeAnchorDate` mirrors this exact asymmetry on the
+// client): a human's reconcile is a point-in-time snapshot, so a transaction
+// they log for later that same day genuinely happened after they looked.
+// Applying the createdAt disjunct here IS the (separate) PER-264 bug: a real,
 // forgotten, back-dated transaction entered days later gets added on top of a
 // number that already contained it, inventing money the wallet never had.
 //
@@ -374,9 +427,14 @@ interface AnchorBound {
 // Why a fresh Sure import stays zero-drift (no double-count): its anchors are
 // `derived`, written LAST, each import step in its own tenant transaction, so
 // the anchor's createdAt is strictly greater than every promoted transaction's
-// createdAt, and it is dated `lastActivityDay + 1` so no imported leg is dated
-// after it either — both disjuncts are false for every imported row, which are
-// therefore absorbed exactly as before (ADR-0043 amendment).
+// createdAt, and it is dated `lastActivityDay + 1` — a calendar day strictly
+// AFTER every imported leg's date, not merely a later instant on the same day
+// — so no imported leg is dated on or after `startOfNextCalendarDay` of the
+// anchor either. Both disjuncts are therefore false for every imported row,
+// which are therefore absorbed exactly as before (ADR-0043 amendment). This
+// reasoning is unaffected by PER-276's calendar-day correction: it already
+// relied on the imported legs and the anchor being on DIFFERENT calendar days,
+// never on the same-day, raw-instant comparison PER-276 corrects.
 // `createdAt` is `@default(now())` on Transaction and Valuation (never null).
 //
 // Σ Transaction.amount over { afterAnchor(after) } — optionally intersected with
@@ -398,12 +456,14 @@ async function sumTransactionFlowAfterAnchor(
       accountId,
       familyId,
       deletedAt: null,
-      // afterAnchor(after) — see the predicate above. `derived` is the
-      // date-OR-createdAt disjunction; `ground_truth` is date only.
+      // afterAnchor(after) — see the predicate above. `derived` compares
+      // CALENDAR DAYS on its date disjunct (PER-276: >= the start of the next
+      // day, not > the anchor's midnight instant) OR createdAt; `ground_truth`
+      // stays date-only, comparing raw instants (unchanged, by design).
       ...(after.provenance === "derived"
         ? {
             OR: [
-              { date: { gt: after.valuationDate } },
+              { date: { gte: startOfNextCalendarDay(after.valuationDate) } },
               { createdAt: { gt: after.createdAt } },
             ],
           }
@@ -417,7 +477,7 @@ async function sumTransactionFlowAfterAnchor(
         ? through.provenance === "derived"
           ? {
               AND: [
-                { date: { lte: through.valuationDate } },
+                { date: { lt: startOfNextCalendarDay(through.valuationDate) } },
                 { createdAt: { lte: through.createdAt } },
               ],
             }

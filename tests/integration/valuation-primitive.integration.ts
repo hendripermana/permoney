@@ -1159,6 +1159,107 @@ describe("valuation primitive + balance rebuild & drift (PER-146/PER-177, ADR-00
   })
 
   // --------------------------------------------------------------------------
+  // PER-276 / ADR-0043's PER-276 amendment — a `derived` anchor created the
+  // SAME calendar day as a transaction already recorded earlier that day must
+  // not double-count it. `Valuation.valuationDate` is midnight-truncated
+  // (`@db.Date`); `Transaction.date` keeps its real clock time. Before this
+  // fix, `t.date > A.valuationDate` compared the transaction's real timestamp
+  // against the anchor's midnight instant, so the date disjunct fired `true`
+  // on same-day technicality alone — double-counting a transaction already
+  // baked into the anchor's own asserted value.
+  // --------------------------------------------------------------------------
+  describe("PER-276 same-day derived-anchor double-count", () => {
+    const detect = (owner: AuthenticatedOnboardedUser) =>
+      detectBalanceDriftForFamily({
+        familyId: owner.family.id,
+        userId: owner.user.id,
+      })
+
+    // The exact reported repro: opening 200,000; a same-day +1 income recorded
+    // FIRST; then a same-day `derived` (migration-shaped) anchor whose
+    // asserted value was correctly computed as 200,001 at write time (the
+    // income WAS after the opening anchor, by date, so it belongs in the
+    // anchor's own number). Pre-fix, the income's real timestamp exceeded the
+    // new anchor's midnight-truncated `valuationDate`, so it was counted a
+    // SECOND time — a materialized balance of 200,002. Post-fix it must stay
+    // absorbed: same calendar day (date disjunct false) and recorded BEFORE
+    // the anchor (createdAt disjunct false) → not "after" → 200,001.
+    test("a same-day income recorded before a same-day derived anchor is not double-counted", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "200000")
+
+      await addTransaction(
+        owner,
+        account.id,
+        "income",
+        "1",
+        "Same-day income, recorded before the anchor"
+      )
+
+      // The migration writer computed this value correctly at write time:
+      // opening (200000) + the income already on record (1) = 200001.
+      await addDerivedValuation(owner, account.id, "200001")
+
+      expect((await accountRow(owner, account.id)).balance).toBe(200001n)
+
+      const report = await detect(owner)
+      expect(report.filter((r) => r.accountId === account.id)).toEqual([])
+    })
+
+    // The complement: a transaction dated the SAME calendar day as a `derived`
+    // anchor but recorded AFTER it is genuine new post-anchor activity and
+    // must still be counted — the fix must not freeze same-day activity
+    // outright, only close the date-disjunct's same-day loophole. The
+    // createdAt disjunct alone must still catch this.
+    test("a same-day transaction recorded after a derived anchor still moves the balance", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "100000")
+
+      // No prior same-day activity: the anchor's own value is just the
+      // opening balance it inherits.
+      await addDerivedValuation(owner, account.id, "100000")
+
+      await addTransaction(
+        owner,
+        account.id,
+        "expense",
+        "5000",
+        "Same-day activity, recorded after the anchor"
+      )
+
+      expect((await accountRow(owner, account.id)).balance).toBe(95000n)
+
+      const report = await detect(owner)
+      expect(report.filter((r) => r.accountId === account.id)).toEqual([])
+    })
+
+    // Same shape, but the anchor-chain SEGMENT boundary (`through`) rather
+    // than the live-balance `after` bound: the segment between the opening
+    // anchor and the same-day derived anchor must correctly explain the
+    // same-day income as part of that segment's flow, not exclude it and
+    // manufacture a false ANCHOR_CHAIN warning. This is exactly the shape
+    // PER-270's fuzzer shrunk to.
+    test("ANCHOR_CHAIN: the segment into a same-day derived anchor is explained, not flagged", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "200000")
+
+      await addTransaction(
+        owner,
+        account.id,
+        "income",
+        "1",
+        "Same-day income inside the opening->migration segment"
+      )
+      await addDerivedValuation(owner, account.id, "200001")
+
+      const chain = (await detect(owner)).filter(
+        (r) => r.accountId === account.id && r.kind === "ANCHOR_CHAIN"
+      )
+      expect(chain).toEqual([])
+    })
+  })
+
+  // --------------------------------------------------------------------------
   // PER-267 / ADR-0043's PER-264 amendment, "UI surface" section — the
   // transaction form's "ubah saldo juga" override for a backdated entry
   // excluded by a `ground_truth` anchor.
