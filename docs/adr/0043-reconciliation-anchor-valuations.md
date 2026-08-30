@@ -1,15 +1,15 @@
 # ADR-0043 — Reconciliation-anchor valuations (balance calculator)
 
-|                   |                                                                                                                                                                                                                                                                                                                                                    |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**        | Accepted                                                                                                                                                                                                                                                                                                                                           |
-| **Date**          | 2026-07-04                                                                                                                                                                                                                                                                                                                                         |
-| **Accepted**      | 2026-07-04                                                                                                                                                                                                                                                                                                                                         |
-| **Deciders**      | Hendri Permana                                                                                                                                                                                                                                                                                                                                     |
-| **Supersedes**    | —                                                                                                                                                                                                                                                                                                                                                  |
-| **Superseded by** | —                                                                                                                                                                                                                                                                                                                                                  |
-| **Amends**        | ADR-0034 §4 (cash balance derivation) + §7 (drift detector); reverses ADR-0034 "Alternatives considered" #2                                                                                                                                                                                                                                        |
-| **Amended by**    | ADR-0048 §3 (valuation-tracked accounts never accept a raw transaction-flow leg; guard + Transfer schema); PER-201 amendment below (createdAt-aware post-anchor flow, §2/§6); PER-264 amendment below (anchor provenance — ground-truth vs derived, §2/§6); PER-268 amendment below (historical-drift audit, notification & grace-period decision) |
+|                   |                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Status**        | Accepted                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| **Date**          | 2026-07-04                                                                                                                                                                                                                                                                                                                                                                                                                |
+| **Accepted**      | 2026-07-04                                                                                                                                                                                                                                                                                                                                                                                                                |
+| **Deciders**      | Hendri Permana                                                                                                                                                                                                                                                                                                                                                                                                            |
+| **Supersedes**    | —                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| **Superseded by** | —                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| **Amends**        | ADR-0034 §4 (cash balance derivation) + §7 (drift detector); reverses ADR-0034 "Alternatives considered" #2                                                                                                                                                                                                                                                                                                               |
+| **Amended by**    | ADR-0048 §3 (valuation-tracked accounts never accept a raw transaction-flow leg; guard + Transfer schema); PER-201 amendment below (createdAt-aware post-anchor flow, §2/§6); PER-264 amendment below (anchor provenance — ground-truth vs derived, §2/§6); PER-268 amendment below (historical-drift audit, notification & grace-period decision); PER-276 amendment below (same-day derived-anchor double-count, §2/§6) |
 
 ## Context
 
@@ -877,3 +877,146 @@ transaction sum, so there is no `afterAnchor` branch to have gotten wrong for
 them. `listTransactionFlowAccountFacts` (`src/server/valuations.ts`) scopes
 the audit to exactly the account population this ADR's §2 formula (and its
 PER-264 amendment) actually governs.
+
+## Amendment — same-day derived-anchor double-count (PER-276)
+
+|            |                                                                                                                        |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------- |
+| **Date**   | 2026-08-30                                                                                                             |
+| **Amends** | §2 (cash balance formula) and §6 (ANCHOR_CHAIN drift) of this ADR, correcting the PER-264 amendment's `derived` branch |
+| **Ticket** | PER-276                                                                                                                |
+
+### Problem
+
+`Valuation.valuationDate` is `@db.Date` — Postgres stores and compares it as a
+date with no time component. `Transaction.date` is a full timestamp. The
+`derived` branch of `afterAnchor`, as written by the PER-264 amendment, is:
+
+```
+afterAnchor(A)(t) ≡ t.date > A.valuationDate  OR  t.createdAt > A.createdAt
+```
+
+`t.date > A.valuationDate` compares a full timestamp against a
+midnight-truncated date. Postgres satisfies that comparison by implicitly
+casting the `DATE` to `<that day> 00:00:00`, so **any** transaction dated the
+same calendar day as the anchor — including one recorded, and already summed
+into the anchor's own asserted value, strictly _before_ the anchor was
+written — has a real, non-midnight clock time that is numerically greater
+than that midnight instant. The date disjunct fires `true` on that
+technicality alone, and because the two disjuncts are joined with `OR`, one
+spurious `true` is enough: the transaction is counted twice — once inside the
+`derived` anchor's own computed value, and again as flow "after" it.
+
+`fast-check`'s property-based ledger fuzzer (PER-270, PR #280) found the
+minimal counterexample: an account with a same-day income transaction
+followed immediately by a same-day `derived` migration anchor. Verified
+directly against real Postgres (not merely the fuzzer's simulation): an
+opening anchor of 200,000, a same-day `+1` income recorded first, then a
+same-day `derived` reconciliation anchor whose asserted value was correctly
+computed as 200,001 at write time — the pre-fix materialized balance came out
+200,002, a real, reproducible double-count. Because `computeCanonicalBalance`
+(the live-balance path) and `sumTransactionFlowAfterAnchor`'s own `after`
+bound agree with each other (both apply the identical, identically-wrong
+predicate to the identical anchor), `MATERIALIZATION` drift does not fire —
+both sides are wrong together. Only `ANCHOR_CHAIN`, which additionally bounds
+the sum by the _next_ anchor (`through`), catches it: the segment-bounded sum
+correctly excludes the transaction (its raw timestamp also exceeds the
+_next_ anchor's midnight-truncated date, where one exists), producing a
+mismatch between the segment's "explained" total and the anchor's actual
+recorded value.
+
+This is not exotic. It is the ordinary shape of a Sure migration run the same
+day a user has already logged something manually, a PER-268-style historical
+correction applied same-day as ordinary activity, or any future bank-sync
+import (M8) run same-day as manual entries.
+
+### Why `ground_truth` is deliberately untouched
+
+`ground_truth`'s date-only rule (`t.date > A.valuationDate`, no `createdAt`
+disjunct at all) intentionally treats a later-same-day transaction as "after"
+a live reconciliation — PER-267's client-side `isOnOrBeforeAnchorDate`
+mirrors this exact asymmetry. A human's reconcile is a point-in-time
+snapshot: a transaction they log for _later_ that same day genuinely
+happened after they looked at their wallet. That reasoning has nothing to do
+with the `derived` bug above, which is specific to how the `derived` branch's
+date disjunct interacts with a same-day transaction that was recorded
+_before_ a _computed_ anchor. This amendment changes nothing about
+`ground_truth`.
+
+### Decision — compare calendar days, not raw instants, on the `derived` date disjunct
+
+The `derived` branch's date disjunct is corrected to compare whole calendar
+days: a transaction only satisfies it when dated on a calendar day strictly
+**after** the anchor's day, not merely at a later instant within the same
+day.
+
+```
+afterAnchor(A)(t) ≡ A.provenance = "derived"
+                       ? (t.date >= startOfNextCalendarDay(A.valuationDate)
+                          OR t.createdAt > A.createdAt)
+                       : (t.date > A.valuationDate)
+
+startOfNextCalendarDay(valuationDate) = valuationDate + 24h
+```
+
+`startOfNextCalendarDay` is exact millisecond arithmetic, not a calendar
+library's "add a day": `A.valuationDate` is already UTC-midnight-truncated by
+the `DATE` column (no time-of-day, no time zone), and a `DATE` has no DST to
+account for, so adding exactly 24 hours in milliseconds lands precisely on
+the next date's midnight — independent of the server process's local time
+zone, which a `date-fns`-style `addDays` would resolve against.
+
+With this correction, a same-day transaction can only be classified "after" a
+`derived` anchor via the `createdAt` disjunct — i.e. only when it was
+genuinely recorded after the anchor was written, restoring the `createdAt`
+disjunct's intended authority over same-day activity instead of letting the
+date disjunct short-circuit it on a midnight-truncation technicality. Applied
+to the repro above: the income's `date` is the same calendar day as the
+anchor (date disjunct now `false`) and its `createdAt` is before the
+anchor's (`createdAt` disjunct `false`) → not "after" → stays absorbed in the
+anchor's own 200,001 → materialized balance is 200,001, matching the anchor's
+asserted value exactly.
+
+The `through`-bound (segment-upper-bound) side of the shared predicate is
+corrected symmetrically, by De Morgan of the same corrected disjunct, so
+`sumTransactionFlowAfterAnchor` — the ONE segmentation function this ADR's §6
+requires — is still the single place either boundary's logic lives; the two
+call sites (`computeCanonicalBalance` and `detectAnchorChainDrift`) cannot
+diverge from each other, exactly as before this amendment.
+
+### Confirms, rather than reopens, "why a fresh Sure import stays zero-drift"
+
+The PER-201 amendment's zero-drift proof for a fresh Sure import rests on the
+final anchor being dated `lastActivityDay + 1` — a calendar day strictly
+_after_ every promoted leg's date, never merely a later instant on the same
+day. This amendment's correction only changes behavior for transactions
+dated on the _same_ calendar day as a `derived` anchor; a fresh import's
+transactions are never dated on the same day as its own final anchor by
+construction, so both disjuncts remain false for every imported row exactly
+as the original proof describes. Nothing about that proof needed to change.
+
+### The in-memory net-worth fold (`src/lib/net-worth.ts`) never had this bug
+
+ADR-0043 §6 requires ONE segmentation function so the DB-side balance formula
+and drift check can never diverge — that discipline lives entirely inside
+`sumTransactionFlowAfterAnchor`, the function this amendment corrects.
+`buildNetWorthSeries`' own in-memory twin (`isAfterAnchor`, PER-154/ADR-0038)
+is a **second, independent** implementation of the same predicate, kept in
+parity with the DB version by convention and an integration-test invariant
+(ADR-0038 §6: series' last point == Σ `Account.balance`), not by sharing code.
+Tracing it during this fix found that `isAfterAnchor` already compares
+pre-formatted `YYYY-MM-DD` calendar-date **strings** on both sides (never a
+raw instant against a midnight-truncated date) — so a same-day transaction
+already correctly fails its date disjunct today, before this amendment. That
+function needed no logic change; only its doc comment was extended to record
+why, so a future reader does not go looking for a matching PER-276 fix that
+the in-memory fold never needed. This does surface a **pre-existing, narrower
+gap** this amendment does not attempt to close: the DB predicate's calendar
+day is a plain UTC day (from `DATE` column semantics), while the in-memory
+fold's transaction-side day is localized to the family's own timezone
+(`calendarDateInTimezone`) — for a family whose timezone differs from UTC, a
+transaction within a few hours of local midnight could fall on different
+calendar days under the two conventions. This is orthogonal to the raw-
+instant-vs-date bug this amendment fixes (it existed identically before and
+after this change), is not covered by PER-276's acceptance criteria, and is
+left as a documented follow-up rather than folded into this fix.

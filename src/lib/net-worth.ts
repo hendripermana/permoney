@@ -105,7 +105,15 @@ export function toAnchorProvenance(
  * in-memory twin of the Prisma `where` built in `sumTransactionFlowAfterAnchor`
  * (src/server/valuations.ts). Keep the two shapes identical; the ADR-0038 §6
  * invariant test enforces parity. Dates are compared as YYYY-MM-DD strings
- * (lexicographic == calendar).
+ * (lexicographic == calendar) — both sides of this comparison are ALREADY
+ * calendar-day granularity here (`anchorDate`/`txnDate` are formatted strings,
+ * never raw instants), so this function never had the PER-276 bug: a same-day
+ * `txnDate === anchorDate` correctly fails `txnDate > anchorDate` and falls
+ * through to the createdAt disjunct, exactly as the corrected DB predicate now
+ * does too. PER-276 only had to change `sumTransactionFlowAfterAnchor`, whose
+ * DB-side comparison mixed a raw `Transaction.date` instant against a
+ * midnight-truncated `Valuation.valuationDate` — a distinction that doesn't
+ * exist here, since both dates are pre-formatted to strings before comparison.
  *
  *   afterAnchor(A)(t) ≡ A.provenance = "derived"
  *                          ? (t.date > A.valuationDate OR t.createdAt > A.createdAt)
