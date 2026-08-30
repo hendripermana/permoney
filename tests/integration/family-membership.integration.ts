@@ -345,6 +345,163 @@ describe("family membership & role authorization (PER-144)", () => {
     expect(byUser.get(owner.user.id)).toBe("admin")
   })
 
+  // PER-271 — transferOwnershipFn already existed with no UI ever calling it.
+  // These prove the three things the UI work depended on being true rather
+  // than assumed: an AuditLog row per changed row, the caller-is-owner check
+  // re-validated at the domain layer (not just the `ownership:transfer`
+  // capability middleware in front of the server fn), and that the ex-owner
+  // genuinely loses owner-only power the moment the transfer commits.
+  test("ownership transfer writes an AuditLog row for both the promoted and demoted member", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const { user: heir } = await addOutsider(owner.family.id, owner.user.id)
+
+    const [promoted, demoted] = await transferOwnershipForFamily({
+      data: {
+        userId: heir.id,
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      actor: { id: owner.user.id, role: "owner" },
+      runInTenantTransaction: runner(owner.user.id),
+    })
+
+    const audits = await harness.withFamily(owner.family.id, (tx) =>
+      tx.auditLog.findMany({
+        where: {
+          entityType: "FamilyMember",
+          entityId: { in: [promoted!.id, demoted!.id] },
+        },
+        orderBy: { createdAt: "asc" },
+      })
+    )
+    expect(audits).toHaveLength(2)
+    expect(audits.every((a) => a.action === "update")).toBe(true)
+    expect(audits.every((a) => a.userId === owner.user.id)).toBe(true)
+    expect(audits.every((a) => a.familyId === owner.family.id)).toBe(true)
+
+    const promotedAudit = audits.find((a) => a.entityId === promoted!.id)
+    expect(promotedAudit?.afterJson).toMatchObject({
+      userId: heir.id,
+      role: "owner",
+    })
+    const demotedAudit = audits.find((a) => a.entityId === demoted!.id)
+    expect(demotedAudit?.afterJson).toMatchObject({
+      userId: owner.user.id,
+      role: "admin",
+    })
+  })
+
+  test("a non-owner actor is rejected even if it reaches the domain function directly (defense in depth behind the capability middleware)", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const { user: heir } = await addOutsider(owner.family.id, owner.user.id)
+    const { user: thirdParty } = await addOutsider(
+      owner.family.id,
+      owner.user.id
+    )
+    await updateMemberRoleForFamily({
+      data: {
+        userId: heir.id,
+        role: "admin",
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      actor: { id: owner.user.id, role: "owner" },
+      runInTenantTransaction: runner(owner.user.id),
+    })
+
+    // A caller who merely CLAIMS role "admin" (e.g. a stale/forged context) is
+    // still rejected by the function's own self.role check, which re-reads the
+    // ACTUAL row from the database rather than trusting the passed-in actor.
+    await expect(
+      transferOwnershipForFamily({
+        data: {
+          userId: thirdParty.id,
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        actor: { id: heir.id, role: "admin" },
+        runInTenantTransaction: runner(heir.id),
+      })
+    ).rejects.toBeInstanceOf(MembershipForbiddenError)
+  })
+
+  test("after transfer, only the NEW owner can perform an owner-only action — the ex-owner cannot", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const { user: heir } = await addOutsider(owner.family.id, owner.user.id)
+    const { user: thirdParty } = await addOutsider(
+      owner.family.id,
+      owner.user.id
+    )
+
+    await transferOwnershipForFamily({
+      data: {
+        userId: heir.id,
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      actor: { id: owner.user.id, role: "owner" },
+      runInTenantTransaction: runner(owner.user.id),
+    })
+
+    // The ex-owner (now admin) can no longer perform the owner-only action of
+    // transferring ownership — even though they just held it a moment ago.
+    await expect(
+      transferOwnershipForFamily({
+        data: {
+          userId: thirdParty.id,
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        actor: { id: owner.user.id, role: "admin" },
+        runInTenantTransaction: runner(owner.user.id),
+      })
+    ).rejects.toBeInstanceOf(MembershipForbiddenError)
+
+    // The new owner CAN.
+    const result = await transferOwnershipForFamily({
+      data: {
+        userId: thirdParty.id,
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      actor: { id: heir.id, role: "owner" },
+      runInTenantTransaction: runner(heir.id),
+    })
+    const byUser = new Map(result.map((m) => [m.userId, m.role]))
+    expect(byUser.get(thirdParty.id)).toBe("owner")
+    expect(byUser.get(heir.id)).toBe("admin")
+  })
+
+  test("replaying an ownership transfer with the same idempotency key does not double promote/demote", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const { user: heir } = await addOutsider(owner.family.id, owner.user.id)
+    const key = factories.createIdempotencyKey()
+
+    const first = await transferOwnershipForFamily({
+      data: { userId: heir.id, idempotencyKey: key },
+      familyId: owner.family.id,
+      actor: { id: owner.user.id, role: "owner" },
+      runInTenantTransaction: runner(owner.user.id),
+    })
+    const replay = await transferOwnershipForFamily({
+      data: { userId: heir.id, idempotencyKey: key },
+      familyId: owner.family.id,
+      actor: { id: owner.user.id, role: "owner" },
+      runInTenantTransaction: runner(owner.user.id),
+    })
+
+    expect(replay).toEqual(first)
+    const audits = await harness.withFamily(owner.family.id, (tx) =>
+      tx.auditLog.findMany({
+        where: {
+          entityType: "FamilyMember",
+          entityId: { in: [first[0]!.id, first[1]!.id] },
+        },
+      })
+    )
+    expect(audits).toHaveLength(2)
+  })
+
   // -------------------------------------------------------------------------
   // Idempotency
   // -------------------------------------------------------------------------

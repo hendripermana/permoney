@@ -1,13 +1,23 @@
 import * as React from "react"
 import { createFileRoute } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { UserPlus, Users } from "lucide-react"
+import { Crown, UserPlus, Users } from "lucide-react"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Button } from "@/components/ui/button"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import {
   Card,
   CardContent,
@@ -38,8 +48,10 @@ import {
   addMemberFn,
   getMembersFn,
   removeMemberFn,
+  transferOwnershipFn,
   updateMemberRoleFn,
 } from "@/server/family-members"
+import { getSettingsOverviewFn, SETTINGS_OVERVIEW_KEY } from "@/server/settings"
 
 const MEMBERS_KEY = ["family-members"] as const
 
@@ -68,6 +80,20 @@ function MembersPage() {
     queryKey: MEMBERS_KEY,
     queryFn: async () => await getMembersFn(),
   })
+  // Reuse the same cache entry every other settings consumer reads (see
+  // getSettingsOverviewFn's own doc comment) rather than adding a new
+  // "who am I" server fn — match the caller's own row in the member list by
+  // email to find their role and userId (self-transfer is blocked server-side
+  // regardless, but the UI needs this to know whether to show the action and
+  // whom to exclude from the "new owner" list).
+  const { data: overview } = useQuery({
+    queryKey: SETTINGS_OVERVIEW_KEY,
+    queryFn: async () => await getSettingsOverviewFn(),
+  })
+  const currentMember = (members ?? []).find(
+    (member) => member.email === overview?.profile.email
+  )
+  const isCurrentUserOwner = currentMember?.role === "owner"
 
   return (
     <TooltipProvider>
@@ -96,6 +122,13 @@ function MembersPage() {
             <AddMemberCard />
 
             <MembersTableCard members={members ?? []} isLoading={isLoading} />
+
+            {isCurrentUserOwner && currentMember ? (
+              <TransferOwnershipCard
+                members={members ?? []}
+                currentUserId={currentMember.userId}
+              />
+            ) : null}
           </div>
         </SidebarInset>
       </SidebarProvider>
@@ -301,5 +334,134 @@ function MemberRow({ member }: { member: Member }) {
         </Button>
       </TableCell>
     </TableRow>
+  )
+}
+
+// PER-271 — dedicated ownership hand-off flow (ADR-0036 §6). Ownership is
+// deliberately excluded from the ordinary role Select above; it moves ONLY
+// through transferOwnershipFn, which the server gates on the
+// `ownership:transfer` capability (owner-only) and re-checks the caller's
+// role again inside the tenant transaction. Hiding this card for non-owners
+// is a UX nicety, not the security boundary — the server enforces it
+// independently, so a non-owner hitting the endpoint directly still gets
+// rejected.
+function TransferOwnershipCard({
+  members,
+  currentUserId,
+}: {
+  members: Member[]
+  currentUserId: string
+}) {
+  const queryClient = useQueryClient()
+  const candidates = members.filter(
+    (member) => member.userId !== currentUserId && member.status === "active"
+  )
+  const [selectedUserId, setSelectedUserId] = React.useState("")
+  const [dialogOpen, setDialogOpen] = React.useState(false)
+  const resolvedUserId = candidates.some((c) => c.userId === selectedUserId)
+    ? selectedUserId
+    : (candidates[0]?.userId ?? "")
+  const selectedMember = candidates.find((c) => c.userId === resolvedUserId)
+
+  const mutation = useMutation({
+    mutationFn: async () =>
+      await transferOwnershipFn({
+        data: { userId: resolvedUserId, idempotencyKey: createUuidV7() },
+      }),
+    onSuccess: () => {
+      setDialogOpen(false)
+      void queryClient.invalidateQueries({ queryKey: MEMBERS_KEY })
+    },
+  })
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Crown className="size-4 text-amber-500" aria-hidden />
+          Transfer ownership
+        </CardTitle>
+        <CardDescription>
+          Hand primary ownership of this family to another member. You will
+          become an admin — you keep full access to money and settings, but you
+          lose the ability to manage owners or transfer ownership again.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {candidates.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            There&apos;s no one else to hand ownership to yet — add another
+            member first.
+          </p>
+        ) : (
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="transfer-target">New owner</Label>
+              <Select value={resolvedUserId} onValueChange={setSelectedUserId}>
+                <SelectTrigger id="transfer-target" className="w-64">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {candidates.map((candidate) => (
+                    <SelectItem key={candidate.userId} value={candidate.userId}>
+                      {candidate.name} ({candidate.email})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={mutation.isPending || !selectedMember}
+              onClick={() => setDialogOpen(true)}
+            >
+              <Crown className="size-4" aria-hidden />
+              Transfer ownership
+            </Button>
+            {mutation.isError ? (
+              <p className="w-full text-sm text-destructive">
+                {(mutation.error as Error).message}
+              </p>
+            ) : null}
+          </div>
+        )}
+      </CardContent>
+
+      <AlertDialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Transfer ownership to {selectedMember?.name}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {selectedMember?.name} ({selectedMember?.email}) will become the
+              owner of this family, with full control over money movement,
+              settings, and membership. You will be moved to admin — you keep
+              access to the ledger and settings, but you will no longer be able
+              to manage owners, remove the new owner, or transfer ownership
+              yourself.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={mutation.isPending}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                // Keep the dialog controlled: run the mutation ourselves and
+                // only close on success, so a rejection (e.g. a concurrent
+                // change) leaves the dialog open with the error visible.
+                event.preventDefault()
+                mutation.mutate()
+              }}
+              disabled={mutation.isPending}
+            >
+              {mutation.isPending ? "Transferring…" : "Transfer ownership"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </Card>
   )
 }

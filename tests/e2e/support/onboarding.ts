@@ -65,3 +65,27 @@ export async function onboard(
   await waitForHydration(page)
   return identity
 }
+
+/**
+ * Sign up a fresh user and stop at /onboarding — deliberately WITHOUT
+ * completing it. The account is authenticated (a real session exists) but
+ * family-less (`User.familyId = null`), exactly the shape `addMemberFn`
+ * expects for "an existing Permoney account with no active family yet" (see
+ * `src/server/family-members.ts`'s `addMemberForFamily` doc comment): adding
+ * them to another family adopts it as their active pointer. Used by specs
+ * that need a second, genuinely distinct authenticated identity to add as a
+ * non-owner member of a first user's family (role-authorization e2e specs).
+ */
+export async function signUpWithoutOnboarding(page: Page): Promise<Identity> {
+  const identity = createIdentity()
+  await page.goto("/signup")
+  await waitForHydration(page)
+  await page.getByLabel("Full Name").fill(identity.fullName)
+  await page.getByLabel("Username").fill(identity.username)
+  await page.getByLabel("Email").fill(identity.email)
+  await page.getByLabel("Password").fill(identity.password)
+  await page.getByRole("button", { name: "Create Account" }).click()
+  await expect(page).toHaveURL(/\/onboarding(?:\?.*)?$/)
+  await waitForHydration(page)
+  return identity
+}
