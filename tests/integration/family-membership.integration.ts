@@ -365,10 +365,15 @@ describe("family membership & role authorization (PER-144)", () => {
       runInTenantTransaction: runner(owner.user.id),
     })
 
+    // Scoped to action:"update" — the heir's row already carries a "create"
+    // audit from addOutsider's addMemberForFamily (same entityId, since the
+    // membership row that was created is the very row this transfer promotes),
+    // which entityId-only filtering would otherwise double-count.
     const audits = await harness.withFamily(owner.family.id, (tx) =>
       tx.auditLog.findMany({
         where: {
           entityType: "FamilyMember",
+          action: "update",
           entityId: { in: [promoted!.id, demoted!.id] },
         },
         orderBy: { createdAt: "asc" },
@@ -491,10 +496,14 @@ describe("family membership & role authorization (PER-144)", () => {
     })
 
     expect(replay).toEqual(first)
+    // Scoped to action:"update" for the same reason as the AuditLog test
+    // above — the heir's row also carries an unrelated "create" audit from
+    // addOutsider with the same entityId.
     const audits = await harness.withFamily(owner.family.id, (tx) =>
       tx.auditLog.findMany({
         where: {
           entityType: "FamilyMember",
+          action: "update",
           entityId: { in: [first[0]!.id, first[1]!.id] },
         },
       })
