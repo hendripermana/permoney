@@ -88,6 +88,10 @@ function spendPercent(actualWire: string, allocatedWire: string): number {
 function formatMonthLabel(month: string): string {
   const [year, monthNum] = month.split("-")
   const date = new Date(Date.UTC(Number(year), Number(monthNum) - 1, 1))
+  // `AlertDialogContent` is always mounted in the tree (Radix controls
+  // visibility via `open`, not conditional render), so this runs on every
+  // page render including when no archive is in flight and `month` is "".
+  if (Number.isNaN(date.getTime())) return ""
   return new Intl.DateTimeFormat("en-US", {
     timeZone: "UTC",
     month: "long",
