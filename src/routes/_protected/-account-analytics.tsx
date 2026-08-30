@@ -132,7 +132,7 @@ export function BalanceTrendChart({
           cursor={false}
           content={
             <ChartTooltipContent
-              labelFormatter={(value) => formatChartDay(String(value))}
+              labelFormatter={(value) => formatChartDay(value as string)}
               formatter={(value) => formatCurrency(Number(value), currency)}
               indicator="dot"
             />

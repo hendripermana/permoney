@@ -261,7 +261,7 @@ export function NetWorthCard({ data }: { data: NetWorthSeriesResult }) {
                   cursor={false}
                   content={
                     <ChartTooltipContent
-                      labelFormatter={(value) => formatDay(String(value))}
+                      labelFormatter={(value) => formatDay(value as string)}
                       indicator="dot"
                     />
                   }
@@ -369,7 +369,7 @@ export function CashFlowCard({ data }: { data: CashFlowReportResult }) {
                 cursor={false}
                 content={
                   <ChartTooltipContent
-                    labelFormatter={(value) => formatDay(String(value))}
+                    labelFormatter={(value) => formatDay(value as string)}
                     indicator="dot"
                   />
                 }
