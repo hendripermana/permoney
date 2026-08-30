@@ -8,6 +8,7 @@ import {
 } from "@/server/transactions"
 import {
   computeCanonicalBalance,
+  computeCanonicalBalanceAsOf,
   createValuationForFamily,
   detectBalanceDriftForFamily,
   rebuildAccountBalanceForFamily,
@@ -688,9 +689,26 @@ async function applyAnchorOps(
           fixture.familyId
         )
 
-        // Determine anchor value: if valueDelta is null, use current canonical
-        // balance so the chain stays drift-free (honest sequence). Otherwise
-        // offset the current balance by delta to exercise mismatch handling.
+        const valuationDate = daysAgo(op.valuationDateDaysAgo)
+
+        // Determine anchor value: if valueDelta is null, this is an "honest"
+        // anchor, so its value must be the balance AS OF valuationDate — never
+        // the present-moment canonical balance (PER-277). An anchor dated in
+        // the past can only have known about activity dated at/before that
+        // same date; using the present-moment balance would silently bake in
+        // events the anchor's own asserted date claims hadn't happened yet
+        // (e.g. an expense posted TODAY, then a migrationAnchor backdated to
+        // YESTERDAY with valueDelta: null — using computeCanonicalBalance(now)
+        // would fold today's expense into "yesterday's" balance, which
+        // detectAnchorChainDrift correctly flags as self-inconsistent input,
+        // not a real bug). computeCanonicalBalanceAsOf replays the SAME
+        // shared segmentation predicate bounded at valuationDate, so the
+        // generated anchor stays genuinely honest — and ANCHOR_CHAIN stays
+        // empty for it — however far in the past it is backdated.
+        //
+        // A non-null valueDelta is a DELIBERATE corruption (exercising
+        // mismatch handling), so it is untouched — still offset from the
+        // CURRENT stored balance, same as before.
         let anchorValue: bigint
         if (op.valueDelta === null) {
           const facts = await harness.withFamily(
@@ -712,12 +730,15 @@ async function applyAnchorOps(
               }
             }
           )
-          const canonical = await harness.withFamily(fixture.familyId, (tx) =>
-            computeCanonicalBalance(tx, fixture.familyId, facts)
+          const honest = await harness.withFamily(fixture.familyId, (tx) =>
+            computeCanonicalBalanceAsOf(
+              tx,
+              fixture.familyId,
+              facts,
+              valuationDate
+            )
           )
-          anchorValue = canonical
-          // For migration anchors, keep them derived; for reconcile they are ground_truth.
-          // Using canonical keeps ANCHOR_CHAIN empty for honest sequences.
+          anchorValue = honest
         } else {
           const row = await harness.withFamily(fixture.familyId, (tx) =>
             tx.account.findUniqueOrThrow({ where: { id: accountId } })
@@ -727,8 +748,6 @@ async function applyAnchorOps(
           anchorValue = base + op.valueDelta
           if (anchorValue < 0n) anchorValue = 0n
         }
-
-        const valuationDate = daysAgo(op.valuationDateDaysAgo)
 
         if (op.kind === "reconcile") {
           await createGroundTruthReconcile(
@@ -1574,7 +1593,37 @@ describe("anchor provenance (property-based, real Postgres) — PER-270", () => 
                 (op.kind === "reconcile" || op.kind === "migrationAnchor") &&
                 op.valueDelta !== null
             )
-            if (!hasForcedDelta) {
+            // PER-277 (found while verifying the fix above with a raised numRuns) —
+            // a `reconcile` op is `ground_truth` (createGroundTruthReconcile), and
+            // ground_truth's afterAnchor rule is DATE-ONLY by design (ADR-0043's
+            // PER-264 amendment): it deliberately absorbs any transaction dated
+            // at/before it, no matter when that transaction is recorded, because a
+            // human's reconcile is an independent observation of reality that
+            // already reflected everything up to that moment. So a LATER op in the
+            // SAME sequence that backdates a transaction to at/before an EARLIER
+            // honest reconcile's date is not corruption — MATERIALIZATION correctly
+            // stays unaffected (the reconcile's asserted value is untouched) — but
+            // it can make the segment BEFORE that reconcile (from the anchor before
+            // it, through it) look "unexplained" by the segment's own flow, because
+            // the newly-backdated transaction is (correctly) excluded from being
+            // "after" the reconcile yet still lands inside that earlier segment.
+            // This is exactly the documented, intentional "restatement not
+            // explained by activity" case ANCHOR_CHAIN reports at `warning` (not
+            // `error`) severity for — proven minimal repro:
+            // [{kind:"reconcile",account:0,valuationDateDaysAgo:0,valueDelta:null},
+            //  {kind:"expense",account:0,amount:1n,dateDaysAgo:1}]. It is orthogonal
+            // to the dishonest-anchor-VALUE bug this test exists to catch (that bug
+            // was about a DERIVED anchor's own value baking in future activity —
+            // `migrationAnchor`'s createdAt disjunct makes it immune to this
+            // specific timing issue, see `computeCanonicalBalanceAsOf`). So the
+            // "chain must be empty for an honest sequence" guarantee only holds
+            // when the sequence contains no ground_truth reconcile at all — this
+            // property's real purpose (verifying honest BACKDATED migrationAnchor
+            // generation stays drift-free) is unaffected by that narrowing.
+            const hasGroundTruthReconcile = ops.some(
+              (op) => op.kind === "reconcile"
+            )
+            if (!hasForcedDelta && !hasGroundTruthReconcile) {
               const chain = drifts.filter((d) => d.kind === "ANCHOR_CHAIN")
               expect(chain).toEqual([])
             }
