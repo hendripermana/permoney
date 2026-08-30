@@ -6,6 +6,7 @@ import {
   expect,
   test,
 } from "vite-plus/test"
+import { z } from "zod"
 import {
   AccountNotFoundError,
   AccountValidationError,
@@ -434,6 +435,243 @@ describe("accounts manual UX vertical slice (PER-143)", () => {
         captured = error
       }
       expect(captured).toBeTruthy()
+    })
+  })
+
+  describe("credit/loan product metadata (PER-272)", () => {
+    test("creates a CREDIT account with all five fields and persists them with an audit row", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+
+      const created = await createAccountForFamily({
+        data: {
+          name: "Visa Platinum",
+          accountType: "CREDIT",
+          accountSubtype: "credit_card",
+          openingBalance: "0",
+          mask: "4242",
+          creditLimit: "5000000",
+          statementDay: 15,
+          dueDay: 5,
+          interestRateBps: 1800,
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+
+      expect(created.mask).toBe("4242")
+      expect(created.creditLimit).toBe("5000000")
+      expect(created.statementDay).toBe(15)
+      expect(created.dueDay).toBe(5)
+      expect(created.interestRateBps).toBe(1800)
+
+      const row = await harness.withFamily(owner.family.id, async (tx) =>
+        tx.account.findUniqueOrThrow({ where: { id: created.id } })
+      )
+      expect(row.mask).toBe("4242")
+      expect(row.creditLimit).toBe(5000000n)
+      expect(row.statementDay).toBe(15)
+      expect(row.dueDay).toBe(5)
+      expect(row.interestRateBps).toBe(1800)
+
+      const audits = await harness.withFamily(owner.family.id, async (tx) =>
+        tx.auditLog.findMany({
+          where: { entityType: "Account", entityId: created.id },
+        })
+      )
+      expect(audits).toHaveLength(1)
+      expect(audits[0]?.action).toBe("create")
+    })
+
+    test("creates a LOAN account with the credit/loan fields too", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+
+      const created = await createAccountForFamily({
+        data: {
+          name: "KPR BCA",
+          accountType: "LOAN",
+          accountSubtype: "mortgage",
+          openingBalance: "0",
+          mask: "9876",
+          creditLimit: "500000000",
+          statementDay: 1,
+          dueDay: 28,
+          interestRateBps: 850,
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+
+      expect(created.accountType).toBe("LOAN")
+      expect(created.mask).toBe("9876")
+      expect(created.creditLimit).toBe("500000000")
+      expect(created.statementDay).toBe(1)
+      expect(created.dueDay).toBe(28)
+      expect(created.interestRateBps).toBe(850)
+    })
+
+    test("update sets then clears all five fields (null clears; omit leaves unchanged)", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await factories.createAccount({
+        familyId: owner.family.id,
+        accountType: "CREDIT",
+      })
+
+      const set = await updateAccountForFamily({
+        data: {
+          id: account.id,
+          mask: "1234",
+          creditLimit: "2000000",
+          statementDay: 20,
+          dueDay: 10,
+          interestRateBps: 900,
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+      expect(set.mask).toBe("1234")
+      expect(set.creditLimit).toBe("2000000")
+      expect(set.statementDay).toBe(20)
+      expect(set.dueDay).toBe(10)
+      expect(set.interestRateBps).toBe(900)
+
+      const renamed = await updateAccountForFamily({
+        data: {
+          id: account.id,
+          name: "Renamed",
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+      expect(renamed.mask).toBe("1234")
+      expect(renamed.creditLimit).toBe("2000000")
+      expect(renamed.statementDay).toBe(20)
+      expect(renamed.dueDay).toBe(10)
+      expect(renamed.interestRateBps).toBe(900)
+
+      const cleared = await updateAccountForFamily({
+        data: {
+          id: account.id,
+          mask: null,
+          creditLimit: null,
+          statementDay: null,
+          dueDay: null,
+          interestRateBps: null,
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+      expect(cleared.mask).toBeNull()
+      expect(cleared.creditLimit).toBeNull()
+      expect(cleared.statementDay).toBeNull()
+      expect(cleared.dueDay).toBeNull()
+      expect(cleared.interestRateBps).toBeNull()
+
+      const audits = await harness.withFamily(owner.family.id, async (tx) =>
+        tx.auditLog.findMany({
+          where: {
+            entityType: "Account",
+            entityId: account.id,
+            action: "update",
+          },
+        })
+      )
+      expect(audits.length).toBeGreaterThanOrEqual(3)
+    })
+
+    test("rejects credit fields on a DEPOSITORY (non-liability) account on create", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      let captured: unknown
+      try {
+        await createAccountForFamily({
+          data: {
+            name: "Checking with bogus limit",
+            accountType: "DEPOSITORY",
+            openingBalance: "0",
+            creditLimit: "1000000",
+            idempotencyKey: factories.createIdempotencyKey(),
+          },
+          familyId: owner.family.id,
+          user: owner.user,
+        })
+        expect.fail("Expected AccountValidationError")
+      } catch (error) {
+        captured = error
+      }
+      expect(captured).toBeInstanceOf(AccountValidationError)
+    })
+
+    test("rejects credit fields on a non-liability account on update", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await factories.createAccount({
+        familyId: owner.family.id,
+        accountType: "DEPOSITORY",
+      })
+
+      let captured: unknown
+      try {
+        await updateAccountForFamily({
+          data: {
+            id: account.id,
+            statementDay: 10,
+            idempotencyKey: factories.createIdempotencyKey(),
+          },
+          familyId: owner.family.id,
+          user: owner.user,
+        })
+        expect.fail("Expected AccountValidationError")
+      } catch (error) {
+        captured = error
+      }
+      expect(captured).toBeInstanceOf(AccountValidationError)
+    })
+
+    test("mask never accepts anything resembling a full card number", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      let captured: unknown
+      try {
+        await createAccountForFamily({
+          data: {
+            name: "Visa",
+            accountType: "CREDIT",
+            openingBalance: "0",
+            mask: "4111111111111111",
+            idempotencyKey: factories.createIdempotencyKey(),
+          },
+          familyId: owner.family.id,
+          user: owner.user,
+        })
+        expect.fail("Expected a schema rejection for a full card number mask")
+      } catch (error) {
+        captured = error
+      }
+      expect(captured).toBeInstanceOf(z.ZodError)
+    })
+
+    test("statementDay is validated 1–31 by the schema", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      let captured: unknown
+      try {
+        await createAccountForFamily({
+          data: {
+            name: "Visa",
+            accountType: "CREDIT",
+            openingBalance: "0",
+            statementDay: 32,
+            idempotencyKey: factories.createIdempotencyKey(),
+          },
+          familyId: owner.family.id,
+          user: owner.user,
+        })
+        expect.fail("Expected a schema rejection for statementDay 32")
+      } catch (error) {
+        captured = error
+      }
+      expect(captured).toBeInstanceOf(z.ZodError)
     })
   })
 

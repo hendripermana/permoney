@@ -27,6 +27,7 @@ import {
   allowsNegativeAssetBalance,
   getAccountClassForType,
   isCashLikeAccount,
+  isLiabilityAccountType,
   type AccountType,
 } from "@/lib/accounts"
 import { accountSupportsReserve } from "@/lib/account-reserve"
@@ -45,6 +46,27 @@ import { createAccountFn, updateAccountFn } from "@/server/accounts"
 // Radix Select forbids an empty-string item value, so an unset subtype uses a
 // sentinel that maps back to "default for the chosen type" on submit.
 const DEFAULT_SUBTYPE_SENTINEL = "__default"
+
+// PER-272 — parse a calendar-day input (statement/due day, 1–31). Empty clears
+// (null); a malformed non-empty value throws before any write.
+function parseCalendarDay(raw: string, label: string): number | null {
+  if (raw.trim() === "") return null
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value < 1 || value > 31) {
+    throw new Error(`Enter a valid ${label} (1–31).`)
+  }
+  return value
+}
+
+// PER-272 — parse a basis-point interest rate (non-negative integer).
+function parseInterestRateBps(raw: string): number | null {
+  if (raw.trim() === "") return null
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error("Enter a valid interest rate in basis points (100 = 1%).")
+  }
+  return value
+}
 
 export type AccountFormState =
   | { mode: "create" }
@@ -90,6 +112,28 @@ export function AccountFormDialog({
   )
   const [error, setError] = React.useState<string | null>(null)
   const [submitting, setSubmitting] = React.useState(false)
+  // PER-272 — credit/loan product metadata. mask is a short digit string;
+  // creditLimit is a MAJOR-unit string (MoneyInput) seeded from the stored
+  // minor-unit value; the day and rate fields are raw strings parsed on submit
+  // (lazy init, no useEffect).
+  const [mask, setMask] = React.useState<string>(editing?.mask ?? "")
+  const [creditLimitInput, setCreditLimitInput] = React.useState<string>(() =>
+    editing?.creditLimit
+      ? toDecimalString(
+          BigInt(editing.creditLimit),
+          (editing.currency as CurrencyCode) ?? "IDR"
+        )
+      : ""
+  )
+  const [statementDay, setStatementDay] = React.useState<string>(
+    editing?.statementDay != null ? String(editing.statementDay) : ""
+  )
+  const [dueDay, setDueDay] = React.useState<string>(
+    editing?.dueDay != null ? String(editing.dueDay) : ""
+  )
+  const [interestRateBps, setInterestRateBps] = React.useState<string>(
+    editing?.interestRateBps != null ? String(editing.interestRateBps) : ""
+  )
 
   // Derived, pure: the class and balance source preview track the chosen type.
   const previewClass = getAccountClassForType(accountType)
@@ -99,6 +143,12 @@ export function AccountFormDialog({
   const supportsReserve = editing
     ? accountSupportsReserve(editing)
     : previewClass === "ASSET" && previewCashLike
+  // PER-272 — credit/loan product fields only apply to CREDIT/LOAN (liability)
+  // accounts. On create this tracks the chosen type; on edit it reflects the
+  // (fixed) account.
+  const supportsCreditFields = editing
+    ? isLiabilityAccountType(editing.accountType as AccountType)
+    : isLiabilityAccountType(accountType)
 
   // Subtypes are flexible; offer the known vocabulary as a convenience, led by
   // the "default for type" sentinel.
@@ -134,6 +184,37 @@ export function AccountFormDialog({
         }
       }
 
+      // PER-272 — parse the credit/loan product fields when the type supports
+      // them. Empty clears (null); a malformed non-empty value is rejected
+      // before any write. Fields are left undefined when unsupported so they
+      // are omitted from the payload entirely.
+      let maskValue: string | null | undefined
+      let creditLimitMinor: string | null | undefined
+      let statementDayValue: number | null | undefined
+      let dueDayValue: number | null | undefined
+      let interestRateBpsValue: number | null | undefined
+
+      if (supportsCreditFields) {
+        maskValue = mask.trim() === "" ? null : mask.trim()
+
+        if (creditLimitInput.trim() === "") {
+          creditLimitMinor = null
+        } else {
+          const parsedCreditLimit = parseMoneyInput(
+            creditLimitInput,
+            currency as CurrencyCode
+          )
+          if (parsedCreditLimit === null || parsedCreditLimit < 0n) {
+            throw new Error("Enter a valid credit limit.")
+          }
+          creditLimitMinor = parsedCreditLimit.toString()
+        }
+
+        statementDayValue = parseCalendarDay(statementDay, "statement day")
+        dueDayValue = parseCalendarDay(dueDay, "due day")
+        interestRateBpsValue = parseInterestRateBps(interestRateBps)
+      }
+
       if (editing) {
         await updateAccountFn({
           data: {
@@ -145,6 +226,17 @@ export function AccountFormDialog({
             ...(reserveMinor === undefined
               ? {}
               : { reserveBalance: reserveMinor }),
+            ...(maskValue === undefined ? {} : { mask: maskValue }),
+            ...(creditLimitMinor === undefined
+              ? {}
+              : { creditLimit: creditLimitMinor }),
+            ...(statementDayValue === undefined
+              ? {}
+              : { statementDay: statementDayValue }),
+            ...(dueDayValue === undefined ? {} : { dueDay: dueDayValue }),
+            ...(interestRateBpsValue === undefined
+              ? {}
+              : { interestRateBps: interestRateBpsValue }),
             idempotencyKey: createUuidV7(),
           },
         })
@@ -174,6 +266,17 @@ export function AccountFormDialog({
             openingBalance: openingMinor,
             institutionName: institutionName.trim() || null,
             ...(reserveMinor ? { reserveBalance: reserveMinor } : {}),
+            ...(maskValue === undefined ? {} : { mask: maskValue }),
+            ...(creditLimitMinor === undefined
+              ? {}
+              : { creditLimit: creditLimitMinor }),
+            ...(statementDayValue === undefined
+              ? {}
+              : { statementDay: statementDayValue }),
+            ...(dueDayValue === undefined ? {} : { dueDay: dueDayValue }),
+            ...(interestRateBpsValue === undefined
+              ? {}
+              : { interestRateBps: interestRateBpsValue }),
             idempotencyKey: createUuidV7(),
           },
         })
@@ -325,6 +428,76 @@ export function AccountFormDialog({
                 changes your balance or net worth; it only lowers your{" "}
                 <span className="font-medium">safe-to-spend</span> (available =
                 balance − reserve).{editing ? " Leave empty to remove." : ""}
+              </p>
+            </div>
+          ) : null}
+
+          {supportsCreditFields ? (
+            <div className="flex flex-col gap-3 rounded-md border p-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="credit-mask">
+                    Card/account mask (optional)
+                  </Label>
+                  <Input
+                    id="credit-mask"
+                    value={mask}
+                    onChange={(e) => setMask(e.target.value)}
+                    placeholder="e.g. 1234"
+                    inputMode="numeric"
+                    maxLength={8}
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="credit-limit">
+                    Credit limit ({currency})
+                  </Label>
+                  <MoneyInput
+                    id="credit-limit"
+                    currency={currency as CurrencyCode}
+                    value={creditLimitInput}
+                    onChange={setCreditLimitInput}
+                    placeholder="0"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="statement-day">Statement day</Label>
+                  <Input
+                    id="statement-day"
+                    value={statementDay}
+                    onChange={(e) => setStatementDay(e.target.value)}
+                    placeholder="1–31"
+                    inputMode="numeric"
+                    maxLength={2}
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="due-day">Due day</Label>
+                  <Input
+                    id="due-day"
+                    value={dueDay}
+                    onChange={(e) => setDueDay(e.target.value)}
+                    placeholder="1–31"
+                    inputMode="numeric"
+                    maxLength={2}
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="interest-rate">Interest (bps)</Label>
+                  <Input
+                    id="interest-rate"
+                    value={interestRateBps}
+                    onChange={(e) => setInterestRateBps(e.target.value)}
+                    placeholder="100 = 1%"
+                    inputMode="numeric"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Statement and due days are 1–31. Interest is in basis points
+                (100 bps = 1%).{editing ? " Leave empty to clear." : ""}
               </p>
             </div>
           ) : null}
