@@ -242,8 +242,7 @@ skills:
 - when: "Use dotenvx to run commands with environment variables, manage multiple .env files, expand variables, and encrypt env files for safe commits and CI/CD."
   use: "dotenv#dotenvx"
 - when: "Vite+ skill for development workflow and CLI operations. Use this skill to route user requests to the appropriate bundled Vite+ docs."
-  use: "vite-plus#vite-plus"
-
+use: "vite-plus#vite-plus"
 <!-- intent-skills:end -->
 
 # 🚨 STRICT REACT & FRONTEND ENGINEERING RULES
