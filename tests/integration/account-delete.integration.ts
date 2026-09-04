@@ -12,6 +12,7 @@ import {
   getAccountDeletionImpactForFamily,
   getAccountsForFamily,
 } from "@/server/accounts"
+import { upsertHoldingForFamily } from "@/server/holdings"
 import { createTransactionForFamily } from "@/server/transactions"
 import {
   createIntegrationHarness,
@@ -117,6 +118,73 @@ describe("deleteAccountForFamily (PER-183)", () => {
     expect(
       remaining.find((account) => account.id === created.id)
     ).toBeUndefined()
+  })
+
+  test("hard-deletes a never-transacted account that has a manually-entered holding, cleaning it up too", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+
+    const created = await createAccountForFamily({
+      data: {
+        name: "Bibit",
+        accountType: "TRACKED_ASSET",
+        accountSubtype: "brokerage",
+        openingBalance: "0",
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+    const holding = await upsertHoldingForFamily({
+      data: {
+        accountId: created.id,
+        instrument: { kind: "metal", name: "BSI Gold", symbol: "XAU" },
+        quantity: "1",
+        avgUnitCost: "1000000",
+        lastPrice: "1000000",
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+    const impactBefore = await getAccountDeletionImpactForFamily({
+      data: { id: created.id },
+      familyId: owner.family.id,
+      userId: owner.user.id,
+    })
+    expect(impactBefore.isEmpty).toBe(false)
+    expect(impactBefore.holdingCount).toBe(1)
+
+    const result = await deleteAccountForFamily({
+      data: {
+        id: created.id,
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+    expect(result).toEqual({
+      accountId: created.id,
+      deleted: true,
+      hardDeleted: true,
+    })
+
+    const [accountRow, holdingRows, holdingAuditRows] =
+      await harness.withFamily(owner.family.id, async (tx) => {
+        return await Promise.all([
+          tx.account.findFirst({ where: { id: created.id } }),
+          tx.holding.findMany({ where: { accountId: created.id } }),
+          tx.auditLog.findMany({
+            where: { entityType: "Holding", action: "delete" },
+          }),
+        ])
+      })
+
+    expect(accountRow).toBeNull()
+    expect(holdingRows).toHaveLength(0)
+    expect(holdingAuditRows.map((row) => row.entityId)).toEqual([holding.id])
   })
 
   test("replays the same idempotency key without a second delete, and a fresh key against an already-gone account is a quiet success", async () => {
