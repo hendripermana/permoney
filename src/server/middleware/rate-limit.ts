@@ -16,6 +16,22 @@ export class RateLimitError extends Error {
 let redis: Redis | undefined
 let redisInitialized = false
 
+// Degraded-to-fallback is silent-by-design in non-production (no Redis
+// configured locally is the normal case), but in production it means
+// brute-force protection is no longer distributed across instances and
+// resets on every restart — that must never happen quietly. Never log the
+// env var VALUES here, only the fact/error, so this can't leak secrets.
+function logProductionDegradation(reason: string, error?: unknown): void {
+  if (process.env.NODE_ENV !== "production") return
+  console.error(
+    `[rate-limit] ${reason} — falling back to a per-process in-memory ` +
+      `rate limiter, which is NOT distributed across instances and resets ` +
+      `on every restart. Brute-force protection is degraded. Set ` +
+      `UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN to restore it.`,
+    error instanceof Error ? error.message : error
+  )
+}
+
 function getRedis(): Redis | undefined {
   if (redisInitialized) return redis
   redisInitialized = true
@@ -25,15 +41,32 @@ function getRedis(): Redis | undefined {
       process.env.UPSTASH_REDIS_REST_TOKEN
     ) {
       redis = Redis.fromEnv()
+    } else {
+      logProductionDegradation(
+        "UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN are not set"
+      )
     }
-  } catch {
-    // Ignore
+  } catch (error) {
+    logProductionDegradation(
+      "Failed to initialize the Upstash Redis client",
+      error
+    )
   }
   return redis
 }
 
-// In-memory fallback map for local dev/testing
-const fallbackMap = new Map<string, { count: number; resetAt: number }>()
+// In-memory fallback map for local dev/testing, or a degraded production
+// Redis. Swept on every access (see sweepFallbackMap) so it never grows
+// unbounded under sustained traffic. Exported for direct testability
+// (rate-limit.test.ts), matching this codebase's convention of exporting
+// otherwise-private module state/schemas specifically to unit-test them.
+export const fallbackMap = new Map<string, { count: number; resetAt: number }>()
+
+function sweepFallbackMap(now: number): void {
+  for (const [key, record] of fallbackMap) {
+    if (record.resetAt < now) fallbackMap.delete(key)
+  }
+}
 
 const getRateLimiter = (
   prefix: string,
@@ -53,6 +86,7 @@ const getRateLimiter = (
   return {
     limit: async (identifier: string) => {
       const now = Date.now()
+      sweepFallbackMap(now)
       const key = `${prefix}:${identifier}`
       let record = fallbackMap.get(key)
       if (!record || record.resetAt < now) {
