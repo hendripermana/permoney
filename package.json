@@ -62,7 +62,7 @@
     "@tanstack/start-server-core": "1.169.16",
     "@tanstack/zod-adapter": "^1.167.0",
     "@upstash/ratelimit": "^2.0.8",
-    "@upstash/redis": "^1.38.2",
+    "@upstash/redis": "^1.38.3",
     "better-auth": "^1.6.29",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
