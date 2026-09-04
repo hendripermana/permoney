@@ -94,7 +94,7 @@ const stagedRowInputSchema = z.object({
 
 export type StagedRowInput = z.input<typeof stagedRowInputSchema>
 
-const createImportBatchInputSchema = z.object({
+export const createImportBatchInputSchema = z.object({
   sourceKind: z
     .enum(["csv_upload", "provider", "migration"])
     .default("csv_upload"),
@@ -105,12 +105,18 @@ const createImportBatchInputSchema = z.object({
   accountId: z.string().min(1).nullable().optional(),
   contentHash: z.string().min(1),
   idempotencyKey: uuidV7Schema.optional(),
-  rows: z.array(stagedRowInputSchema).min(1),
+  // Bound at 5000: a CSV import can legitimately be larger than a manual
+  // bulk edit, but the whole array is staged inside one interactive
+  // transaction — unbounded is a resource-exhaustion risk (same rationale
+  // as the bulk transaction schemas in transactions.ts).
+  rows: z.array(stagedRowInputSchema).min(1).max(5000),
 })
 
-const reviewImportRowsInputSchema = z.object({
+export const reviewImportRowsInputSchema = z.object({
   batchId: z.string().min(1),
   idempotencyKey: uuidV7Schema,
+  // Bound to match createImportBatchInputSchema's `rows` cap — a review
+  // batch can never legitimately exceed the import batch it reviews.
   decisions: z
     .array(
       z.object({
@@ -120,7 +126,8 @@ const reviewImportRowsInputSchema = z.object({
         merchantId: z.string().min(1).nullable().optional(),
       })
     )
-    .min(1),
+    .min(1)
+    .max(5000),
 })
 
 const promoteImportBatchInputSchema = z.object({

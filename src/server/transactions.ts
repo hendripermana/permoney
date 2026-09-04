@@ -1031,9 +1031,15 @@ const bulkTransactionRowInputSchema = z.object({
   attachmentUrl: z.string().nullable().optional(),
 })
 
-const bulkCreateTransactionsTransportInputSchema = z.object({
+// Bound at 500, matching the precedent already set for
+// budget.allocations (src/server/budgets.ts). A whole array is processed
+// inside one interactive transaction on the RLS-scoped connection; an
+// unbounded array risks unbounded transaction time and connection-pool
+// starvation for other tenants. No legitimate UI-originated bulk edit
+// approaches this size.
+export const bulkCreateTransactionsTransportInputSchema = z.object({
   idempotencyKey: uuidV7Schema.optional(),
-  transactions: z.array(bulkTransactionRowInputSchema),
+  transactions: z.array(bulkTransactionRowInputSchema).max(500),
 })
 
 const bulkCreateTransactionsInputSchema =
@@ -1041,8 +1047,9 @@ const bulkCreateTransactionsInputSchema =
     idempotencyKey: true,
   })
 
-const bulkUpdateTransactionsTransportInputSchema = z.object({
-  ids: z.array(z.string().min(1)),
+// Same 500-row bound as bulkCreateTransactionsTransportInputSchema.
+export const bulkUpdateTransactionsTransportInputSchema = z.object({
+  ids: z.array(z.string().min(1)).max(500),
   idempotencyKey: uuidV7Schema.optional(),
   categoryId: z.string().nullable().optional(),
   merchantId: z.string().nullable().optional(),
@@ -1054,8 +1061,9 @@ const bulkUpdateTransactionsInputSchema =
     idempotencyKey: true,
   })
 
-const bulkDeleteTransactionsTransportInputSchema = z.object({
-  ids: z.array(z.string().min(1)),
+// Same 500-row bound as bulkCreateTransactionsTransportInputSchema.
+export const bulkDeleteTransactionsTransportInputSchema = z.object({
+  ids: z.array(z.string().min(1)).max(500),
   idempotencyKey: uuidV7Schema.optional(),
 })
 

@@ -115,11 +115,26 @@ export interface SureMigrationTimings {
   rebuild: number
 }
 
-const sureMigrationInputSchema = z.object({
+// 50 MB, generously sized: this is a one-time full-family migration import
+// (ADR-0041 notes real bundles can be multi-MB), not a routine operation.
+// A byte-length `.refine` is used instead of `.max()` because `.max()`
+// counts UTF-16 code units, not bytes.
+export const SURE_MIGRATION_BUNDLE_MAX_BYTES = 50 * 1024 * 1024
+
+export const sureMigrationInputSchema = z.object({
   filename: z.string().min(1).max(255),
   // Raw `all.ndjson` content. Phase 1a accepts it as a UTF-8 string over the
   // server-fn POST; a future slice may switch to multipart upload.
-  bundle: z.string().min(1),
+  bundle: z
+    .string()
+    .min(1)
+    .refine(
+      (s) =>
+        new TextEncoder().encode(s).length <= SURE_MIGRATION_BUNDLE_MAX_BYTES,
+      {
+        message: `bundle must not exceed ${SURE_MIGRATION_BUNDLE_MAX_BYTES} bytes`,
+      }
+    ),
   // PER-188 — client-minted UUIDv7, the key into the ephemeral progress Map
   // below. Optional so existing callers (integration tests, any future
   // caller that doesn't care about live progress) don't have to pass one;
