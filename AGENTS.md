@@ -362,37 +362,82 @@ For every new server file, the model must obey these rules:
 - **MUST** wrap every database access, secret API key read, and filesystem operation in `createServerFn(...).handler(...)`. Do not perform those operations in route loaders, because loaders are isomorphic during navigation.
 - **MUST** validate server function input with `.inputValidator(z.object({...}))` and derive client-side types from `Awaited<ReturnType<typeof serverFn>>`. Do not import Prisma model types into UI code.
 - **MUST** use the `*.server.ts` suffix for any module that imports `@prisma/client`, secrets, Node built-ins, or filesystem APIs. Consumers must import it with the explicit `.server` suffix.
-- **MUST** keep `*.server.ts` top-level code side-effect free. Do not call `new PrismaClient(...)`, `new PrismaLibSql(...)`, `throw new Error(...)`, or assign to `globalThis` at module scope.
+- **MUST** keep `*.server.ts` top-level code side-effect free. Do not call `new PrismaClient(...)`, `new PrismaPg(...)`, `throw new Error(...)`, or assign to `globalThis` at module scope.
 
 ### A. Server Function Authoring Rules
 
 ```ts
 // src/server/db.server.ts — HARD FENCE + SIDE-EFFECT FREE
 import { PrismaClient } from "@prisma/client"
-import { PrismaLibSql } from "@prisma/adapter-libsql"
+import { PrismaPg } from "@prisma/adapter-pg"
 
+// SINGLETON STORAGE — HMR-safe via globalThis di dev
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined
 }
 
-function createPrismaClient(): PrismaClient {
-  if (typeof window !== "undefined") {
-    throw new Error("🚨 SECURITY BREACH: db.server.ts leaked to client bundle.")
+const POSTGRES_SCHEMES = ["postgres://", "postgresql://"] as const
+
+function validatePostgresUrl(url: string | undefined): string {
+  if (!url || url.trim() === "") {
+    throw new Error(
+      `🚨 DATABASE_URL is not set. Expected a Postgres URL like ` +
+        `"postgres://user:pass@host:5432/db". For local dev: ` +
+        `"postgres://permoney:permoney@localhost:5433/permoney" ` +
+        `(start the local DB with \`vp run db:up\`).`
+    )
   }
-  const adapter = new PrismaLibSql({ url: process.env.DATABASE_URL! })
-  const client = new PrismaClient({ adapter })
-  if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = client
+  const isPostgres = POSTGRES_SCHEMES.some((s) => url.startsWith(s))
+  if (!isPostgres) {
+    const scheme = url.includes(":") ? `${url.split(":")[0]}:` : "<no-scheme>"
+    throw new Error(
+      `🚨 DATABASE_URL must use a "postgres://" or "postgresql://" scheme ` +
+        `(got "${scheme}"). Permoney migrated to Postgres in ADR-0003; ` +
+        `legacy "file:" / "libsql:" URLs are no longer supported. ` +
+        `For local dev: "postgres://permoney:permoney@localhost:5433/permoney".`
+    )
+  }
+  return url
+}
+
+// 1. LAZY FACTORY — dipanggil PERTAMA KALI saat properti prisma diakses.
+function createPrismaClient(): PrismaClient {
+  // SECURITY TRAP (runtime defense-in-depth)
+  if (typeof window !== "undefined") {
+    throw new Error(
+      "🚨 SECURITY BREACH: The database connection file (db.ts) was imported into the client-side bundle. Check your UI component imports!"
+    )
+  }
+
+  const dbUrl = validatePostgresUrl(process.env.DATABASE_URL)
+
+  // PRISMA V7 DRIVER ADAPTER — `PrismaPg` accepts the same `pg.Pool` config
+  // as `pg` itself; pass the raw connection string, let it parse host/port/
+  // auth. For prod, set `?sslmode=require` (or `verify-full` + a CA bundle).
+  const adapter = new PrismaPg({ connectionString: dbUrl })
+
+  const client = new PrismaClient({
+    adapter,
+    log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
+  })
+
   return client
 }
 
+// 2. PROXY SINGLETON — zero module-level side effects. Every access lazily
+//    inits the singleton on first hit, then caches it via globalForPrisma —
+//    in ALL environments, not just dev, because the client is constructed
+//    INSIDE the getter (never at module scope); skipping the cache in
+//    production would build a brand-new PrismaClient + pg Pool on every
+//    property access, exhausting Postgres connection slots under load.
 export const prisma: PrismaClient = /* @__PURE__ */ new Proxy(
   {} as PrismaClient,
   {
-    get(_t, prop) {
-      const client = globalForPrisma.prisma ?? createPrismaClient()
+    get(_target, prop) {
+      const client = (globalForPrisma.prisma ??= createPrismaClient())
       const value = Reflect.get(client, prop) as unknown
       return typeof value === "function"
-        ? (value as (...a: Array<unknown>) => unknown).bind(client)
+        ? (value as (...args: Array<unknown>) => unknown).bind(client)
         : value
     },
   }
@@ -430,7 +475,7 @@ The splitter replaces `.handler(body)` with an RPC stub on the client. The `impo
 
 Defense-in-depth: even with the hard fence, `src/server/db.server.ts` and any module reachable from it MUST be side-effect free at top level:
 
-- **BANNED:** `new PrismaClient(...)`, `new PrismaLibSql(...)`, `throw new Error(...)`, `globalThis.x = ...` at module scope.
+- **BANNED:** `new PrismaClient(...)`, `new PrismaPg(...)`, `throw new Error(...)`, `globalThis.x = ...` at module scope.
 - **REQUIRED:** All construction goes inside a factory function. Exports use a `Proxy` for lazy access, annotated with `/* @__PURE__ */` so Rolldown can eliminate the module entirely when no client code references it.
 - **REQUIRED:** The `typeof window !== "undefined"` security trap lives INSIDE the factory (defense-in-depth), never at module scope.
 
@@ -439,30 +484,75 @@ Canonical implementation — do not regress from this pattern:
 ```ts
 // src/server/db.server.ts — HARD FENCE + SIDE-EFFECT FREE
 import { PrismaClient } from "@prisma/client"
-import { PrismaLibSql } from "@prisma/adapter-libsql"
+import { PrismaPg } from "@prisma/adapter-pg"
 
+// SINGLETON STORAGE — HMR-safe via globalThis di dev
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined
 }
 
-function createPrismaClient(): PrismaClient {
-  if (typeof window !== "undefined") {
-    throw new Error("🚨 SECURITY BREACH: db.server.ts leaked to client bundle.")
+const POSTGRES_SCHEMES = ["postgres://", "postgresql://"] as const
+
+function validatePostgresUrl(url: string | undefined): string {
+  if (!url || url.trim() === "") {
+    throw new Error(
+      `🚨 DATABASE_URL is not set. Expected a Postgres URL like ` +
+        `"postgres://user:pass@host:5432/db". For local dev: ` +
+        `"postgres://permoney:permoney@localhost:5433/permoney" ` +
+        `(start the local DB with \`vp run db:up\`).`
+    )
   }
-  const adapter = new PrismaLibSql({ url: process.env.DATABASE_URL! })
-  const client = new PrismaClient({ adapter })
-  if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = client
+  const isPostgres = POSTGRES_SCHEMES.some((s) => url.startsWith(s))
+  if (!isPostgres) {
+    const scheme = url.includes(":") ? `${url.split(":")[0]}:` : "<no-scheme>"
+    throw new Error(
+      `🚨 DATABASE_URL must use a "postgres://" or "postgresql://" scheme ` +
+        `(got "${scheme}"). Permoney migrated to Postgres in ADR-0003; ` +
+        `legacy "file:" / "libsql:" URLs are no longer supported. ` +
+        `For local dev: "postgres://permoney:permoney@localhost:5433/permoney".`
+    )
+  }
+  return url
+}
+
+// 1. LAZY FACTORY — dipanggil PERTAMA KALI saat properti prisma diakses.
+function createPrismaClient(): PrismaClient {
+  // SECURITY TRAP (runtime defense-in-depth)
+  if (typeof window !== "undefined") {
+    throw new Error(
+      "🚨 SECURITY BREACH: The database connection file (db.ts) was imported into the client-side bundle. Check your UI component imports!"
+    )
+  }
+
+  const dbUrl = validatePostgresUrl(process.env.DATABASE_URL)
+
+  // PRISMA V7 DRIVER ADAPTER — `PrismaPg` accepts the same `pg.Pool` config
+  // as `pg` itself; pass the raw connection string, let it parse host/port/
+  // auth. For prod, set `?sslmode=require` (or `verify-full` + a CA bundle).
+  const adapter = new PrismaPg({ connectionString: dbUrl })
+
+  const client = new PrismaClient({
+    adapter,
+    log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
+  })
+
   return client
 }
 
+// 2. PROXY SINGLETON — zero module-level side effects. Every access lazily
+//    inits the singleton on first hit, then caches it via globalForPrisma —
+//    in ALL environments, not just dev, because the client is constructed
+//    INSIDE the getter (never at module scope); skipping the cache in
+//    production would build a brand-new PrismaClient + pg Pool on every
+//    property access, exhausting Postgres connection slots under load.
 export const prisma: PrismaClient = /* @__PURE__ */ new Proxy(
   {} as PrismaClient,
   {
-    get(_t, prop) {
-      const client = globalForPrisma.prisma ?? createPrismaClient()
+    get(_target, prop) {
+      const client = (globalForPrisma.prisma ??= createPrismaClient())
       const value = Reflect.get(client, prop) as unknown
       return typeof value === "function"
-        ? (value as (...a: Array<unknown>) => unknown).bind(client)
+        ? (value as (...args: Array<unknown>) => unknown).bind(client)
         : value
     },
   }
