@@ -38,8 +38,10 @@ import {
   bulkUpdateTransactionsFn,
   getTransactionFormData,
 } from "@/server/transactions"
+import { getFxOverviewFn } from "@/server/fx"
 import { formatCurrency } from "@/lib/currency"
-import { ZERO_MONEY, type Money } from "@/lib/money"
+import { type Money } from "@/lib/money"
+import { computeTransactionKpiTotals } from "@/lib/transaction-kpi"
 import {
   applyFilters,
   applySearch,
@@ -174,6 +176,14 @@ function TransactionsPage() {
     queryKey: ["transactionFormData"],
     queryFn: () => getTransactionFormData(),
   })
+
+  // Family base currency — same shared query key/pattern as
+  // accounts.index.tsx / currencies.tsx, so it's cache-shared across routes.
+  const { data: fxOverview } = useQuery({
+    queryKey: ["fx-overview"],
+    queryFn: async () => await getFxOverviewFn(),
+  })
+  const baseCurrency = fxOverview?.baseCurrency ?? "IDR"
 
   // === 2. RAW DATA dari TanStack DB ===
   const { data: transactions } = useLiveQuery((q) =>
@@ -345,33 +355,22 @@ function TransactionsPage() {
   }
 
   // === 5. PERFORMANT KPI DERIVATION (useMemo) ===
+  // Cards sum each row's already-materialized base-currency projection
+  // (`baseAmount`), not the raw per-currency `amount` — a multi-currency
+  // ledger cannot sum incompatible units. See computeTransactionKpiTotals.
   const kpiData = React.useMemo(() => {
-    const incomeTransactions = filteredTransactions.filter(
-      (t) => t.type === "income"
-    )
-    const expenseTransactions = filteredTransactions.filter(
-      (t) => t.type === "expense"
-    )
-
-    // BIGINT REDUCTION: amounts are Money (bigint minor units). Use 0n as
-    // identity element; never `0` (number) which would force coercion and
-    // throw "Cannot mix BigInt and other types" at runtime.
-    const totalIncome: Money = incomeTransactions.reduce(
-      (sum: Money, t) => (sum + t.amount) as Money,
-      ZERO_MONEY
-    )
-    const totalExpenses: Money = expenseTransactions.reduce(
-      (sum: Money, t) => (sum + t.amount) as Money,
-      ZERO_MONEY
-    )
+    const { totalIncome, totalExpenses, netCashFlow } =
+      computeTransactionKpiTotals(filteredTransactions)
 
     return {
       totalIncome,
       totalExpenses,
-      netCashFlow: (totalIncome - totalExpenses) as Money,
+      netCashFlow,
       transactionCount: filteredTransactions.length,
-      incomeCount: incomeTransactions.length,
-      expenseCount: expenseTransactions.length,
+      incomeCount: filteredTransactions.filter((t) => t.type === "income")
+        .length,
+      expenseCount: filteredTransactions.filter((t) => t.type === "expense")
+        .length,
     }
   }, [filteredTransactions])
 
@@ -504,7 +503,7 @@ function TransactionsPage() {
                   </p>
                   <div className="flex items-center justify-between">
                     <h2 className="text-3xl font-semibold text-emerald-600">
-                      + {formatCurrency(kpiData.totalIncome)}
+                      + {formatCurrency(kpiData.totalIncome, baseCurrency)}
                     </h2>
                     <div className="rounded-md bg-emerald-100 p-2 text-emerald-700">
                       <IconArrowDownRight size={20} />
@@ -523,7 +522,7 @@ function TransactionsPage() {
                   </p>
                   <div className="flex items-center justify-between">
                     <h2 className="text-3xl font-semibold text-red-600">
-                      - {formatCurrency(kpiData.totalExpenses)}
+                      - {formatCurrency(kpiData.totalExpenses, baseCurrency)}
                     </h2>
                     <div className="rounded-md bg-red-100 p-2 text-red-700">
                       <IconArrowUpRight size={20} />
@@ -548,7 +547,7 @@ function TransactionsPage() {
                         : "text-red-600"
                     )}
                   >
-                    {formatCurrency(kpiData.netCashFlow)}
+                    {formatCurrency(kpiData.netCashFlow, baseCurrency)}
                   </h2>
                   <p className="mt-2 text-xs text-muted-foreground">
                     {getPeriodLabel()}
