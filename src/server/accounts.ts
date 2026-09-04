@@ -1278,6 +1278,7 @@ export interface AccountDeletionImpact {
   transferCount: number
   otherAccountNames: string[]
   valuationCount: number
+  holdingCount: number
 }
 
 /**
@@ -1299,36 +1300,40 @@ export async function getAccountDeletionImpactForFamily({
   const data = accountIdQuerySchema.parse(rawData)
 
   return await runInTenantTransaction(familyId, userId, async (tx) => {
-    const [transactionCount, valuationCount, transfers] = await Promise.all([
-      tx.transaction.count({
-        where: {
-          familyId,
-          deletedAt: null,
-          OR: [{ accountId: data.id }, { toAccountId: data.id }],
-        },
-      }),
-      tx.valuation.count({
-        where: { familyId, accountId: data.id, deletedAt: null },
-      }),
-      tx.transfer.findMany({
-        where: {
-          deletedAt: null,
-          OR: [
-            { outflowTransaction: { accountId: data.id, deletedAt: null } },
-            { inflowTransaction: { accountId: data.id, deletedAt: null } },
-            // PER-196 / ADR-0048 §4: a valuation-linked transfer's
-            // tracked-asset side has no Transaction leg at all — only
-            // reachable via the linked Valuation's accountId.
-            { valuation: { accountId: data.id, deletedAt: null } },
-          ],
-        },
-        select: {
-          outflowTransaction: { select: { accountId: true } },
-          inflowTransaction: { select: { accountId: true } },
-          valuation: { select: { accountId: true } },
-        },
-      }),
-    ])
+    const [transactionCount, valuationCount, holdingCount, transfers] =
+      await Promise.all([
+        tx.transaction.count({
+          where: {
+            familyId,
+            deletedAt: null,
+            OR: [{ accountId: data.id }, { toAccountId: data.id }],
+          },
+        }),
+        tx.valuation.count({
+          where: { familyId, accountId: data.id, deletedAt: null },
+        }),
+        tx.holding.count({
+          where: { familyId, accountId: data.id },
+        }),
+        tx.transfer.findMany({
+          where: {
+            deletedAt: null,
+            OR: [
+              { outflowTransaction: { accountId: data.id, deletedAt: null } },
+              { inflowTransaction: { accountId: data.id, deletedAt: null } },
+              // PER-196 / ADR-0048 §4: a valuation-linked transfer's
+              // tracked-asset side has no Transaction leg at all — only
+              // reachable via the linked Valuation's accountId.
+              { valuation: { accountId: data.id, deletedAt: null } },
+            ],
+          },
+          select: {
+            outflowTransaction: { select: { accountId: true } },
+            inflowTransaction: { select: { accountId: true } },
+            valuation: { select: { accountId: true } },
+          },
+        }),
+      ])
 
     const otherAccountIds = new Set<string>()
     for (const transfer of transfers) {
@@ -1357,11 +1362,12 @@ export async function getAccountDeletionImpactForFamily({
       : []
 
     return {
-      isEmpty: transactionCount === 0,
+      isEmpty: transactionCount === 0 && holdingCount === 0,
       transactionCount,
       transferCount: transfers.length,
       otherAccountNames: otherAccounts.map((account) => account.name),
       valuationCount,
+      holdingCount,
     }
   })
 }
@@ -1518,6 +1524,12 @@ export async function deleteAccountForFamily({
         for (const valuation of valuations) {
           await tx.valuation.delete({ where: { id: valuation.id } })
         }
+        const holdings = await tx.holding.findMany({
+          where: { familyId, accountId: data.id },
+        })
+        for (const holding of holdings) {
+          await tx.holding.delete({ where: { id: holding.id } })
+        }
         await tx.rawImportedTransaction.deleteMany({
           where: { familyId, accountId: data.id },
         })
@@ -1529,6 +1541,17 @@ export async function deleteAccountForFamily({
             entityType: "Valuation",
             entityId: valuation.id,
             before: valuation,
+            after: null,
+            familyId,
+          })),
+          ...holdings.map((holding) => ({
+            action: "delete" as const,
+            entityType: "Holding",
+            entityId: holding.id,
+            // `quantity` is a Prisma Decimal — it doesn't JSON-serialize on
+            // its own inside a Json column, so stringify it like
+            // `serializeHolding` (holdings.ts) does for the same field.
+            before: { ...holding, quantity: holding.quantity.toString() },
             after: null,
             familyId,
           })),

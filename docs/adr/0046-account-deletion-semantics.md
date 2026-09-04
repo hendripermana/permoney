@@ -53,7 +53,7 @@ never seeded" for free, with no separate branch.
 ### 2. Two-branch canonical delete, driven by transaction-reference count
 
 `deleteAccountForFamily` (`src/server/accounts.ts`) branches purely on
-whether any `Transaction` row (active or soft-deleted, `accountId` OR
+whether any `Transaction` or `Holding` row (active or soft-deleted, `accountId` OR
 `toAccountId`) has ever referenced the account — not on account status,
 balance, or age:
 
@@ -81,10 +81,13 @@ balance, or age:
   exists to protect, so "No Hard Delete for Ledger History" has nothing to
   apply to. The account's `Valuation` rows (almost always at least one —
   `createAccountForFamily` writes an opening valuation per ADR-0034 §3 for
-  any account with an opening balance) and any `RawImportedTransaction`
+  any account with an opening balance), `Holding` rows (manually-entered
+  holdings or holdings derived from import), and any `RawImportedTransaction`
   staging rows (never canonical ledger data — ADR-0008) are deleted in the
   same transaction, ordered before the `Account` row itself, with a full
-  before-snapshot audit row (`action: "delete"`).
+  before-snapshot audit row (`action: "delete"`). Holdings have an
+  `onDelete: Restrict` constraint, so they must be explicitly deleted before
+  the account can be removed.
 
 Both branches run through the same server function (`deleteAccountFn`) and
 the same UI affordance — there is no special-cased "sample data purge" path.
@@ -125,7 +128,7 @@ independently-maintained filter list.
 Edit/Archive/Reactivate (never equal-weight with Archive) — a destructive
 `AlertDialog` (shadcn) branches on a read-only impact preview
 (`getAccountDeletionImpactFn`): a simple confirm for an empty account, or a
-blast-radius summary (transaction count, transfer count, names of every
+blast-radius summary (transaction count, holding count, transfer count, names of every
 OTHER account whose balance will be adjusted) plus a type-the-account-name
 confirmation for an account with history, with copy nudging toward Archive
 as the path for a real account still in use. This ships now rather than
