@@ -61,7 +61,6 @@
     "@tanstack/start-client-core": "^1.170.13",
     "@tanstack/start-server-core": "1.169.16",
     "@tanstack/zod-adapter": "^1.167.0",
-    "@tanstack/zod-form-adapter": "^0.42.1",
     "@upstash/ratelimit": "^2.0.8",
     "@upstash/redis": "^1.38.2",
     "better-auth": "^1.6.29",
