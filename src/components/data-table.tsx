@@ -28,7 +28,6 @@ import {
   getSortedRowModel,
   useLegacyTable as useReactTable,
   type LegacyCell as Cell,
-  type LegacyColumn as Column,
   type LegacyColumnDef as ColumnDef,
   type LegacyHeader as Header,
   type LegacyHeaderGroup as HeaderGroup,
@@ -453,13 +452,14 @@ export function DataTable({
             <DropdownMenuContent align="end" className="w-32">
               {table
                 .getAllColumns()
-                .filter(
-                  (column: Column<z.infer<typeof schema>, unknown>) =>
-                    typeof column.accessorFn !== "undefined" &&
-                    column.getCanHide()
-                )
-                .map((column: Column<z.infer<typeof schema>, unknown>) => {
-                  return (
+                .reduce<Array<React.ReactNode>>((items, column) => {
+                  if (
+                    typeof column.accessorFn === "undefined" ||
+                    !column.getCanHide()
+                  ) {
+                    return items
+                  }
+                  items.push(
                     <DropdownMenuCheckboxItem
                       key={column.id}
                       className="capitalize"
@@ -471,7 +471,8 @@ export function DataTable({
                       {column.id}
                     </DropdownMenuCheckboxItem>
                   )
-                })}
+                  return items
+                }, [])}
             </DropdownMenuContent>
           </DropdownMenu>
           <Button variant="outline" size="sm">
