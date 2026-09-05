@@ -584,6 +584,7 @@ model AuthAccount {
   id                    String    @id
   accountId             String
   providerId            String
+  issuer                String?
   userId                String
   user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   accessToken           String?
