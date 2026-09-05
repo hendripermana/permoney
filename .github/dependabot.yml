@@ -30,9 +30,14 @@ updates:
           - vite-plus
           - vite
           - vitest
+          - "@vitest/*"
           - "@vitejs/*"
           - "@rsbuild/*"
           - "@testing-library/*"
+      better-auth:
+        patterns:
+          - better-auth
+          - "@better-auth/*"
     labels:
       - dependencies
 

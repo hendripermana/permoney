@@ -11,7 +11,10 @@ import {
   createFileRoute,
   type ErrorComponentProps,
 } from "@tanstack/react-router"
-import { getCoreRowModel, useReactTable } from "@tanstack/react-table"
+import {
+  getCoreRowModel,
+  useLegacyTable as useReactTable,
+} from "@tanstack/react-table/legacy"
 import type { RowSelectionState } from "@tanstack/react-table"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { zodValidator } from "@tanstack/zod-adapter"
@@ -250,7 +253,7 @@ function TransactionsPage() {
     state: { rowSelection },
     enableRowSelection: true,
     onRowSelectionChange: setRowSelection,
-    getRowId: (row) => row.id,
+    getRowId: (row: TransactionData) => row.id,
     getCoreRowModel: getCoreRowModel(),
   })
 
