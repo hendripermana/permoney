@@ -30,6 +30,7 @@ model Iso4217Currency {
   marketInstrumentBaseCurrencies   MarketInstrument[] @relation("MarketInstrumentBaseCurrency")
   marketInstrumentQuoteCurrencies  MarketInstrument[] @relation("MarketInstrumentQuoteCurrency")
   marketQuoteCurrencies            MarketQuote[]      @relation("MarketQuoteCurrency")
+  goalTargetCurrencies             Goal[]             @relation("GoalCurrency")
 
   @@map("iso_4217_currency")
 }
@@ -60,6 +61,7 @@ model Family {
   instruments  Instrument[]
   holdings     Holding[]
   pendingBalanceCorrections PendingBalanceCorrection[]
+  goals        Goal[]
 }
 
 // ADR-0036: first-class family membership + role authorization.
@@ -225,6 +227,7 @@ model Account {
   rawImportedTransactions RawImportedTransaction[]
   holdings         Holding[]
   pendingBalanceCorrections PendingBalanceCorrection[]
+  goalLink         GoalAccount?
 
   // Tenant-scoped fetch (every Account read is filtered by familyId once
   // ADR-0004 lands; cheap to add now). See ADR-0003.
@@ -1132,8 +1135,110 @@ model Holding {
   instrumentId String
   instrument   Instrument @relation(fields: [instrumentId, familyId], references: [id, familyId], onDelete: Restrict, onUpdate: Cascade, map: "Holding_instrumentId_familyId_fkey")
 
+  goalAllocations GoalHoldingAllocation[]
+
   @@unique([id, familyId], map: "Holding_id_familyId_key")
   @@index([familyId, accountId])
+}
+
+// Goal — broker-agnostic PURPOSE grouping, orthogonal to Account (custody).
+// Account answers WHERE money/assets physically sit; Goal answers WHY they
+// exist (Tabungan Nikah, Dana Darurat) — the universal pattern behind Bibit
+// "Portofolio", Betterment/Wealthfront "Goals", and M1 Finance "Pies", kept
+// broker/country-agnostic rather than copying any one vendor's model.
+//
+// Linking or reassigning a Holding/Account to a Goal is PURE relabeling: it
+// changes no units, no cost basis, no cash. It is therefore NEVER a ledger
+// Transaction — only an append-only AuditLog "GoalAllocation" row, read back
+// through a typed, Zod-validated projection (mirrors the existing Switch/
+// Distribution "position event" pattern in src/server/holdings.ts) rather
+// than a physical CQRS table, which would be premature infrastructure at
+// this app's scale.
+model Goal {
+  id       String @id @default(cuid())
+  familyId String
+  family   Family @relation(fields: [familyId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+
+  // Optional progress target — informational only, never enforced/allocated
+  // by Permoney (we are a tracker, not a broker).
+  targetAmountMinor BigInt?
+  targetCurrency    String?
+  currencyRegistry  Iso4217Currency? @relation("GoalCurrency", fields: [targetCurrency], references: [code], onDelete: Restrict, onUpdate: Cascade, map: "goal_currency_is_iso_4217")
+  targetDate        DateTime?        @db.Date
+
+  // Bibit/robo-advisor-style risk label. Pure display metadata — Permoney
+  // never computes or enforces an actual allocation against it.
+  riskProfile String?
+
+  archivedAt  DateTime?
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
+
+  accounts    GoalAccount[]
+  allocations GoalHoldingAllocation[]
+
+  // Composite-FK target (ADR-0010 Pattern A) for GoalAccount/GoalHoldingAllocation.
+  @@unique([id, familyId], map: "Goal_id_familyId_key")
+  @@index([familyId, archivedAt])
+}
+
+// A WHOLE Account counted 100% toward one Goal (e.g. a savings account that
+// IS the "Dana Darurat"). An account belongs to at most one Goal in v1 —
+// @@unique on accountId alone enforces that without needing familyId in the
+// key (an account can never belong to two families to begin with).
+model GoalAccount {
+  id       String @id @default(cuid())
+  familyId String
+
+  goalId String
+  goal   Goal   @relation(fields: [goalId, familyId], references: [id, familyId], onDelete: Cascade, onUpdate: Cascade, map: "GoalAccount_goalId_familyId_fkey")
+
+  accountId String
+  account   Account @relation(fields: [accountId, familyId], references: [id, familyId], onDelete: Cascade, onUpdate: Cascade, map: "GoalAccount_accountId_familyId_fkey")
+
+  createdAt DateTime @default(now())
+
+  // (accountId, familyId) rather than accountId alone: Prisma requires the
+  // FK's referenced-side fields be covered by the unique for the one-to-one
+  // Account.goalLink relation. Functionally still "one Goal per account" —
+  // an account can never belong to two families to begin with.
+  @@unique([accountId, familyId], map: "GoalAccount_accountId_familyId_unique")
+  @@index([familyId, goalId])
+}
+
+// A PARTIAL allocation of a Holding's units to a Goal (e.g. Rp 2 juta of a
+// Rp 3 juta reksadana position earmarked for "Dana Darurat", leaving Rp 1
+// juta unassigned). `quantity` is in the SAME unit scale as Holding.quantity
+// — NEVER a Rupiah snapshot — so an allocation's value floats naturally with
+// NAV exactly like the rest of the position.
+//
+// INVARIANT (enforced in application code, integration-tested, mirroring the
+// PER-208 property-based ledger-invariant discipline): for any holdingId,
+// SUM(quantity) across all its GoalHoldingAllocation rows must never exceed
+// that Holding's own quantity. Unallocated units simply have no row here —
+// "no Goal" is the absence of an allocation, not an explicit state.
+model GoalHoldingAllocation {
+  id       String @id @default(cuid())
+  familyId String
+
+  goalId String
+  goal   Goal   @relation(fields: [goalId, familyId], references: [id, familyId], onDelete: Cascade, onUpdate: Cascade, map: "GoalHoldingAllocation_goalId_familyId_fkey")
+
+  holdingId String
+  holding   Holding @relation(fields: [holdingId, familyId], references: [id, familyId], onDelete: Cascade, onUpdate: Cascade, map: "GoalHoldingAllocation_holdingId_familyId_fkey")
+
+  // Same Decimal(38,8) shape as Holding.quantity — exact fractional units.
+  quantity Decimal @db.Decimal(38, 8)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@unique([goalId, holdingId], map: "GoalHoldingAllocation_goalId_holdingId_unique")
+  @@index([familyId, holdingId])
 }
 
 // ADR-0050 (PER-233) — Market-data ingestion: global, family-neutral price store.

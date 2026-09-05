@@ -64,6 +64,10 @@ import {
   SwitchDialog,
   type SwitchDialogState,
 } from "@/components/blocks/switch-dialog"
+import {
+  AssignToGoalDialog,
+  type AssignToGoalDialogState,
+} from "@/components/blocks/assign-to-goal-dialog"
 import { HoldingEventCorrectionDialog } from "@/components/blocks/holding-event-correction-dialog"
 import { TradeCorrectionDialog } from "@/components/blocks/trade-correction-dialog"
 import { PendingBalanceCorrectionBanner } from "@/components/blocks/pending-balance-correction-banner"
@@ -208,6 +212,10 @@ function AccountDetailPage() {
   // PER-259 Slice 4 — switch dialog (atomic sell-A + buy-B, one account).
   const [switchDialog, setSwitchDialog] =
     React.useState<SwitchDialogState | null>(null)
+  // Goal — assign part/all of a holding's units to a broker-agnostic purpose
+  // grouping (pure relabeling, no cash, never a ledger Transaction).
+  const [assignToGoalDialog, setAssignToGoalDialog] =
+    React.useState<AssignToGoalDialogState | null>(null)
   // PER-241 — the per-account statement now shares the /transactions row, so it
   // gets the same singleton edit modal + inline delete.
   const [editingTrx, setEditingTrx] =
@@ -910,6 +918,9 @@ function AccountDetailPage() {
               onFeeHolding={(holding) => setFeeDialog({ holding })}
               onSwitch={() => setSwitchDialog({})}
               onSwitchHolding={(holding) => setSwitchDialog({ holding })}
+              onAssignHoldingToGoal={(holding) =>
+                setAssignToGoalDialog({ holding })
+              }
               onRefreshPrices={handleRefreshPrices}
               refreshingPrices={refreshingPrices}
             />
@@ -1230,6 +1241,19 @@ function AccountDetailPage() {
           onSaved={async () => {
             await refreshHoldings()
             setSwitchDialog(null)
+          }}
+        />
+      ) : null}
+
+      {assignToGoalDialog ? (
+        <AssignToGoalDialog
+          key={`assign-goal-${assignToGoalDialog.holding.id}`}
+          state={assignToGoalDialog}
+          currency={currency}
+          onClose={() => setAssignToGoalDialog(null)}
+          onSaved={async () => {
+            await refreshHoldings()
+            setAssignToGoalDialog(null)
           }}
         />
       ) : null}
