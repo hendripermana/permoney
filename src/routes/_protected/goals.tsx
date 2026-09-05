@@ -24,12 +24,22 @@ import { Label } from "@/components/ui/label"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { Textarea } from "@/components/ui/textarea"
 import { TooltipProvider } from "@/components/ui/tooltip"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { getAccountsFn } from "@/server/accounts"
 import { formatCurrency } from "@/lib/currency"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import {
   createGoalFn,
+  linkAccountToGoalFn,
   listHoldingGoalHistoryFn,
   listGoalsFn,
+  unlinkAccountFromGoalFn,
   type GoalWithHoldingsView,
 } from "@/server/goals"
 
@@ -179,6 +189,119 @@ function CreateGoalDialog({
   )
 }
 
+function LinkAccountDialog({
+  goalId,
+  open,
+  onClose,
+  onSaved,
+}: {
+  goalId: string
+  open: boolean
+  onClose: () => void
+  onSaved: () => Promise<void>
+}) {
+  const { data: accounts, isLoading: accountsLoading } = useQuery({
+    queryKey: ["accounts"],
+    queryFn: async () => await getAccountsFn(),
+  })
+  const { data: goals } = useQuery({
+    queryKey: ["goals"],
+    queryFn: async () => await listGoalsFn(),
+  })
+  const linkedElsewhere = new Set(
+    (goals ?? [])
+      .filter((g) => g.id !== goalId)
+      .flatMap((g) => g.accounts.map((a) => a.accountId))
+  )
+  const eligible = (accounts ?? []).filter(
+    (a) => a.status === "active" && !linkedElsewhere.has(a.id)
+  )
+
+  const [accountId, setAccountId] = React.useState<string>("")
+  const [error, setError] = React.useState<string | null>(null)
+  const [submitting, setSubmitting] = React.useState(false)
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault()
+    setError(null)
+    if (!accountId) {
+      setError("Choose an account.")
+      return
+    }
+    setSubmitting(true)
+    try {
+      await linkAccountToGoalFn({ data: { goalId, accountId } })
+      setAccountId("")
+      await onSaved()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught))
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => (next ? null : onClose())}>
+      <DialogContent>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <DialogHeader>
+            <DialogTitle>Link a whole account</DialogTitle>
+            <DialogDescription>
+              Count this account&apos;s entire balance toward this Goal — for an
+              account that already IS the purpose (e.g. a savings account you
+              only use for this). An account can belong to at most one Goal.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-2">
+            <Label>Account</Label>
+            <Select
+              value={accountId}
+              onValueChange={setAccountId}
+              disabled={accountsLoading}
+            >
+              <SelectTrigger aria-label="Account">
+                <SelectValue placeholder="Choose account" />
+              </SelectTrigger>
+              <SelectContent>
+                {eligible.map((account) => (
+                  <SelectItem key={account.id} value={account.id}>
+                    {account.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {!accountsLoading && eligible.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Every account is either already linked to a Goal or inactive.
+              </p>
+            ) : null}
+          </div>
+
+          {error ? (
+            <p className="text-sm text-destructive" role="alert">
+              {error}
+            </p>
+          ) : null}
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={onClose}
+              disabled={submitting}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={submitting || !accountId}>
+              {submitting ? "Linking…" : "Link account"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function HoldingHistoryToggle({ holdingId }: { holdingId: string }) {
   const [open, setOpen] = React.useState(false)
   const { data: history } = useQuery({
@@ -215,7 +338,13 @@ function HoldingHistoryToggle({ holdingId }: { holdingId: string }) {
   )
 }
 
-function GoalCard({ goal }: { goal: GoalWithHoldingsView }) {
+function GoalCard({
+  goal,
+  onRefresh,
+}: {
+  goal: GoalWithHoldingsView
+  onRefresh: () => Promise<void>
+}) {
   const { minor, currency } = goalCurrentValueMinor(goal)
   const targetMinor = goal.targetAmountMinor
     ? BigInt(goal.targetAmountMinor)
@@ -224,6 +353,12 @@ function GoalCard({ goal }: { goal: GoalWithHoldingsView }) {
     targetMinor && targetMinor > 0n && currency === goal.targetCurrency
       ? Math.min(100, Number((minor * 100n) / targetMinor))
       : null
+  const [linkOpen, setLinkOpen] = React.useState(false)
+
+  async function handleUnlink(accountId: string) {
+    await unlinkAccountFromGoalFn({ data: { accountId } })
+    await onRefresh()
+  }
 
   return (
     <Card>
@@ -271,11 +406,20 @@ function GoalCard({ goal }: { goal: GoalWithHoldingsView }) {
           ) : null}
         </div>
 
-        {goal.accounts.length > 0 ? (
-          <div>
+        <div>
+          <div className="flex items-center justify-between">
             <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
               Whole accounts
             </p>
+            <button
+              type="button"
+              className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+              onClick={() => setLinkOpen(true)}
+            >
+              + Link account
+            </button>
+          </div>
+          {goal.accounts.length > 0 ? (
             <ul className="mt-1 flex flex-col gap-1">
               {goal.accounts.map((account) => (
                 <li
@@ -283,17 +427,24 @@ function GoalCard({ goal }: { goal: GoalWithHoldingsView }) {
                   className="flex items-center justify-between text-sm"
                 >
                   <span>{account.accountName}</span>
-                  <span className="tabular-nums">
+                  <span className="flex items-center gap-2 tabular-nums">
                     {formatCurrency(
                       BigInt(account.balanceMinor),
                       account.currency
                     )}
+                    <button
+                      type="button"
+                      className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+                      onClick={() => handleUnlink(account.accountId)}
+                    >
+                      Unlink
+                    </button>
                   </span>
                 </li>
               ))}
             </ul>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
 
         {goal.holdingAllocations.length > 0 ? (
           <div>
@@ -329,11 +480,21 @@ function GoalCard({ goal }: { goal: GoalWithHoldingsView }) {
 
         {goal.accounts.length === 0 && goal.holdingAllocations.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            Nothing assigned yet — link an account or assign part of a holding
-            to this Goal from its account page.
+            Nothing assigned yet — link a whole account above, or assign part of
+            a holding to this Goal from that holding&apos;s account page.
           </p>
         ) : null}
       </CardContent>
+
+      <LinkAccountDialog
+        goalId={goal.id}
+        open={linkOpen}
+        onClose={() => setLinkOpen(false)}
+        onSaved={async () => {
+          await onRefresh()
+          setLinkOpen(false)
+        }}
+      />
     </Card>
   )
 }
@@ -383,7 +544,7 @@ function GoalsPage() {
             ) : goals && goals.length > 0 ? (
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
                 {goals.map((goal) => (
-                  <GoalCard key={goal.id} goal={goal} />
+                  <GoalCard key={goal.id} goal={goal} onRefresh={refresh} />
                 ))}
               </div>
             ) : (
