@@ -3,6 +3,7 @@ import {
   ArrowRightLeft,
   ArrowUpRight,
   Coins,
+  FolderInput,
   Gift,
   History,
   PiggyBank,
@@ -105,6 +106,7 @@ export function HoldingsPanel({
   onFeeHolding,
   onSwitch,
   onSwitchHolding,
+  onMoveHolding,
   onRefreshPrices,
   refreshingPrices,
 }: Readonly<{
@@ -124,6 +126,8 @@ export function HoldingsPanel({
   onFeeHolding: (holding: HoldingRecord) => void
   onSwitch: () => void
   onSwitchHolding: (holding: HoldingRecord) => void
+  /** PER-259 Slice 6 — move this holding's whole position to another account. */
+  onMoveHolding: (holding: HoldingRecord) => void
   onRefreshPrices: () => void
   refreshingPrices: boolean
 }>) {
@@ -295,6 +299,16 @@ export function HoldingsPanel({
                     >
                       <ArrowRightLeft className="size-3.5" />
                       Switch
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => onMoveHolding(holding)}
+                    >
+                      <FolderInput className="size-3.5" />
+                      Move
                     </Button>
                     <Button
                       type="button"
