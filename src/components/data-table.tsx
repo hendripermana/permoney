@@ -18,20 +18,26 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
+import { flexRender } from "@tanstack/react-table"
 import {
-  flexRender,
   getCoreRowModel,
   getFacetedRowModel,
   getFacetedUniqueValues,
   getFilteredRowModel,
   getPaginationRowModel,
   getSortedRowModel,
-  useReactTable,
-  type ColumnDef,
+  useLegacyTable as useReactTable,
+  type LegacyCell as Cell,
+  type LegacyColumn as Column,
+  type LegacyColumnDef as ColumnDef,
+  type LegacyHeader as Header,
+  type LegacyHeaderGroup as HeaderGroup,
+  type LegacyRow as Row,
+} from "@tanstack/react-table/legacy"
+import {
   type ColumnFiltersState,
-  type Row,
   type SortingState,
-  type VisibilityState,
+  type ColumnVisibilityState as VisibilityState,
 } from "@tanstack/react-table"
 import { Area, AreaChart, CartesianGrid, XAxis } from "recharts"
 import { toast } from "sonner"
@@ -323,11 +329,13 @@ function DraggableRow({ row }: { row: Row<z.infer<typeof schema>> }) {
         transition: transition,
       }}
     >
-      {row.getVisibleCells().map((cell) => (
-        <TableCell key={cell.id}>
-          {flexRender(cell.column.columnDef.cell, cell.getContext())}
-        </TableCell>
-      ))}
+      {row
+        .getVisibleCells()
+        .map((cell: Cell<z.infer<typeof schema>, unknown>) => (
+          <TableCell key={cell.id}>
+            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+          </TableCell>
+        ))}
     </TableRow>
   )
 }
@@ -371,7 +379,7 @@ export function DataTable({
       columnFilters,
       pagination,
     },
-    getRowId: (row) => row.id.toString(),
+    getRowId: (row: z.infer<typeof schema>) => row.id.toString(),
     enableRowSelection: true,
     onRowSelectionChange: setRowSelection,
     onSortingChange: setSorting,
@@ -446,11 +454,11 @@ export function DataTable({
               {table
                 .getAllColumns()
                 .filter(
-                  (column) =>
+                  (column: Column<z.infer<typeof schema>, unknown>) =>
                     typeof column.accessorFn !== "undefined" &&
                     column.getCanHide()
                 )
-                .map((column) => {
+                .map((column: Column<z.infer<typeof schema>, unknown>) => {
                   return (
                     <DropdownMenuCheckboxItem
                       key={column.id}
@@ -486,22 +494,26 @@ export function DataTable({
           >
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-muted">
-                {table.getHeaderGroups().map((headerGroup) => (
-                  <TableRow key={headerGroup.id}>
-                    {headerGroup.headers.map((header) => {
-                      return (
-                        <TableHead key={header.id} colSpan={header.colSpan}>
-                          {header.isPlaceholder
-                            ? null
-                            : flexRender(
-                                header.column.columnDef.header,
-                                header.getContext()
-                              )}
-                        </TableHead>
-                      )
-                    })}
-                  </TableRow>
-                ))}
+                {table
+                  .getHeaderGroups()
+                  .map((headerGroup: HeaderGroup<z.infer<typeof schema>>) => (
+                    <TableRow key={headerGroup.id}>
+                      {headerGroup.headers.map(
+                        (header: Header<z.infer<typeof schema>, unknown>) => {
+                          return (
+                            <TableHead key={header.id} colSpan={header.colSpan}>
+                              {header.isPlaceholder
+                                ? null
+                                : flexRender(
+                                    header.column.columnDef.header,
+                                    header.getContext()
+                                  )}
+                            </TableHead>
+                          )
+                        }
+                      )}
+                    </TableRow>
+                  ))}
               </TableHeader>
               <TableBody className="**:data-[slot=table-cell]:first:w-8">
                 {table.getRowModel().rows?.length ? (
@@ -509,9 +521,11 @@ export function DataTable({
                     items={dataIds}
                     strategy={verticalListSortingStrategy}
                   >
-                    {table.getRowModel().rows.map((row) => (
-                      <DraggableRow key={row.id} row={row} />
-                    ))}
+                    {table
+                      .getRowModel()
+                      .rows.map((row: Row<z.infer<typeof schema>>) => (
+                        <DraggableRow key={row.id} row={row} />
+                      ))}
                   </SortableContext>
                 ) : (
                   <TableRow>
