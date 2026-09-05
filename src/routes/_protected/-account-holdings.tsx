@@ -9,6 +9,7 @@ import {
   Plus,
   Receipt,
   RefreshCw,
+  Target,
   TrendingDown,
   TrendingUp,
   Trash2,
@@ -105,6 +106,7 @@ export function HoldingsPanel({
   onFeeHolding,
   onSwitch,
   onSwitchHolding,
+  onAssignHoldingToGoal,
   onRefreshPrices,
   refreshingPrices,
 }: Readonly<{
@@ -124,6 +126,8 @@ export function HoldingsPanel({
   onFeeHolding: (holding: HoldingRecord) => void
   onSwitch: () => void
   onSwitchHolding: (holding: HoldingRecord) => void
+  /** Broker-agnostic purpose grouping — assign part/all of this holding to a Goal. */
+  onAssignHoldingToGoal: (holding: HoldingRecord) => void
   onRefreshPrices: () => void
   refreshingPrices: boolean
 }>) {
@@ -295,6 +299,16 @@ export function HoldingsPanel({
                     >
                       <ArrowRightLeft className="size-3.5" />
                       Switch
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => onAssignHoldingToGoal(holding)}
+                    >
+                      <Target className="size-3.5" />
+                      Goal
                     </Button>
                     <Button
                       type="button"

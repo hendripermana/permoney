@@ -11,6 +11,7 @@ import {
   IconUsers,
   IconReceipt2,
   IconHandStop,
+  IconTarget,
 } from "@tabler/icons-react"
 
 import { NavMain, type NavItem } from "@/components/nav-main"
@@ -57,6 +58,11 @@ const data: {
       title: "Budgets",
       url: "/budgets",
       icon: IconChartBar,
+    },
+    {
+      title: "Goals",
+      url: "/goals",
+      icon: IconTarget,
     },
     // PER-166 follow-up: "Smart Import" (/import) and "Currencies & FX"
     // (/currencies) intentionally live under Settings → "Related tools"

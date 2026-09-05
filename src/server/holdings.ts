@@ -145,7 +145,7 @@ const currencySchema = z
 // with the holdings scale helper. Kept permissive here (non-empty string); the
 // exact shape is enforced by `quantityToScaled` / `toMinorUnits`, which throw a
 // precise error surfaced as a `HoldingError`.
-const decimalStringSchema = z.string().trim().min(1)
+export const decimalStringSchema = z.string().trim().min(1)
 
 const inlineInstrumentSchema = z.object({
   kind: z.enum(INSTRUMENT_KINDS),
@@ -251,7 +251,7 @@ export interface AccountHoldingsView {
   totalGainMinor: string
 }
 
-type HoldingWithInstrument = Holding & { instrument: Instrument }
+export type HoldingWithInstrument = Holding & { instrument: Instrument }
 
 function serializeInstrument(instrument: Instrument): SerializedInstrument {
   return {
@@ -274,11 +274,13 @@ function quantityToFixedString(holding: Holding): string {
 // The price used for the CURRENT value: the manual last price when set, else the
 // average unit cost (a freshly-added holding with no price yet shows value ==
 // cost, gain 0 — honest, never fabricated). ADR-0051 §"Cost basis (honest)".
-function currentPriceMinor(holding: Holding): bigint {
+export function currentPriceMinor(holding: Holding): bigint {
   return holding.lastPriceMinor ?? holding.avgUnitCostMinor
 }
 
-function serializeHolding(holding: HoldingWithInstrument): SerializedHolding {
+export function serializeHolding(
+  holding: HoldingWithInstrument
+): SerializedHolding {
   const quantityScaled = quantityToScaled(quantityToFixedString(holding))
   const value = holdingValueMinor(quantityScaled, currentPriceMinor(holding))
   const cost = holdingCostMinor(quantityScaled, holding.avgUnitCostMinor)
@@ -308,7 +310,7 @@ function serializeHolding(holding: HoldingWithInstrument): SerializedHolding {
 // Currency + money parsing helpers
 // -----------------------------------------------------------------------------
 
-function assertKnownCurrency(currency: string): CurrencyCode {
+export function assertKnownCurrency(currency: string): CurrencyCode {
   if (!(currency in CURRENCIES)) {
     throw new HoldingError(`Unsupported currency ${currency}`)
   }
@@ -558,7 +560,7 @@ async function recomputeAccountValueAnchorWithinTx(
   return valuation
 }
 
-async function loadHoldingWithInstrument(
+export async function loadHoldingWithInstrument(
   tx: TenantTransactionClient,
   familyId: string,
   holdingId: string
@@ -1061,7 +1063,7 @@ const tradeSideSchema = z.enum(["buy", "sell"])
 // A strictly-positive amount already in MINOR units (sen), as a digit-string —
 // the same wire contract as valuations' `valueMagnitudeSchema`, but non-negative
 // and non-zero. The UI derives this from the shared money parser.
-const positiveMinorDigitsSchema = z
+export const positiveMinorDigitsSchema = z
   .string()
   .trim()
   .regex(/^\d+$/, "must be a whole number of minor units")
@@ -1110,7 +1112,7 @@ export interface RecordTradeResult {
 // A cash-like funding account: exists, active, not soft-deleted,
 // balanceSource="transaction_flow". Returns the full row (needed by the
 // transfer primitive).
-async function fetchActiveAccount(
+export async function fetchActiveAccount(
   tx: TenantTransactionClient,
   familyId: string,
   accountId: string,
