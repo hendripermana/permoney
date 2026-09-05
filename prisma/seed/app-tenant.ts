@@ -107,6 +107,7 @@ export async function seedAppTenant(
         update: {
           accountId: demoUser.id,
           providerId: "credential",
+          issuer: "local:credential",
           userId: demoUser.id,
           password: credentialPassword,
         },
@@ -114,6 +115,7 @@ export async function seedAppTenant(
           id: demoUser.id,
           accountId: demoUser.id,
           providerId: "credential",
+          issuer: "local:credential",
           userId: demoUser.id,
           password: credentialPassword,
         },
