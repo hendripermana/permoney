@@ -285,6 +285,17 @@ FIFO-vs-average election beyond the current average-cost model — later.
        Both changes only ever refuse MORE; neither can let a stale event through.
        The philosophy is unchanged: **refuse with an actionable message rather than
        replay history**.
-- **Slice 6 — Move a position between accounts** (in-kind, no cash, cost basis carries).
+- **Slice 6 — Move a position between accounts** (in-kind, no cash, cost basis carries) — DONE (PER-259 Slice 6).
+    The holding's units + cost basis leave the source account and land, whole, in the destination account; NO cash leg,
+    NO realized gain (cost basis carries over exactly). Both accounts' position anchors (Σ(units × price)) re-materialize
+    in the same transaction. Implements "pindah portofolio" (as seen in Bibit and similar platforms). v1 scope:
+    whole-position move only (no partial split), same-currency accounts only (cross-currency is a later slice,
+    same deferral as multi-currency trades), and no embedded move fee (a broker-charged transfer fee is recorded
+    separately via Slice 3's standalone-fee path after the move). Server `recordPositionMoveForFamily` /
+    `recordPositionMoveFn`, `recordPositionMoveWithinTx` primitive (holdings.ts); UI `move-position-dialog.tsx`
+    (per-holding-row "Move" button in the holdings panel, mirroring Buy/Sell/Switch); real-PG integration suite
+    `tests/integration/position-moves.integration.ts` (8 tests: fresh-destination carry-over, blend into an existing
+    position, same-account / cross-currency / non-holdings-account / cross-tenant rejections, idempotent replay,
+    both accounts' holdings views post-move).
 - Cross-cutting: multi-currency trade + FX rides ADR-0052 Slice C/D; everything
   broker/country-agnostic (Broker-agnostic principle above).

@@ -3818,6 +3818,344 @@ export const recordSwitchFn = createServerFn({ method: "POST" })
   })
 
 // =============================================================================
+// IN-KIND POSITION MOVE — move a position between accounts, no sale
+// (PER-259 Slice 6 / ADR-0054 item 13)
+// =============================================================================
+//
+// A broker lets you move a fund/position from one portfolio to another
+// WITHOUT selling (Bibit "pindah portofolio", and its analogues everywhere).
+// Modeled as an in-kind move: the holding (units + cost basis) leaves the
+// source account and lands in the destination account; both accounts'
+// Σ(units × price) re-materialize; NO cash leg, NO realized gain (cost basis
+// carries over exactly). Distinct from Sell-then-Buy, which realizes gain and
+// moves cash. v1 scope (locked with the creator): whole-position move only
+// (no partial split), same-currency accounts only (cross-currency is a later
+// slice, same deferral as multi-currency trades), and no embedded move fee —
+// a broker-charged transfer fee is recorded separately via Slice 3's
+// standalone-fee path after the move, never folded into this call.
+const RECORD_POSITION_MOVE_ENDPOINT = "recordPositionMoveFn"
+
+const recordPositionMoveInputSchema = z.object({
+  // The source holding being moved OUT of its account entirely.
+  fromHoldingId: z.string().min(1),
+  // Destination account — must be a DIFFERENT valuation-tracked account in
+  // the same currency as the source account.
+  toAccountId: z.string().min(1),
+  // Back-datable (a broker-side transfer settles on its own date).
+  date: z.coerce.date().optional(),
+  idempotencyKey: uuidV7Schema,
+})
+type RecordPositionMoveInput = z.infer<typeof recordPositionMoveInputSchema>
+
+export interface RecordPositionMoveResult {
+  fromAccountId: string
+  fromHoldingId: string
+  toAccountId: string
+  toHoldingId: string
+  instrumentId: string
+  /** Units moved, decimal string — always the position's FULL quantity (v1: whole-position only). */
+  movedQuantity: string
+  /** Cost basis carried over with the move, minor units (no realized gain). */
+  movedCostMinor: string
+  /** Always null in v1 — a move always closes the source position. */
+  fromHolding: null
+  /** Resulting destination position after the move (averaged into an existing one, if any). */
+  toHolding: SerializedHolding
+  fromAccountValueAfterMinor: string
+  toAccountValueAfterMinor: string
+}
+
+async function recordPositionMoveWithinTx(
+  tx: TenantTransactionClient,
+  {
+    data,
+    familyId,
+    user,
+    auditCtx,
+  }: {
+    data: RecordPositionMoveInput
+    familyId: string
+    user: ServerActor
+    auditCtx: AuditContext
+  }
+): Promise<RecordPositionMoveResult> {
+  const date = data.date ?? new Date()
+
+  const fromHolding = await loadHoldingWithInstrument(
+    tx,
+    familyId,
+    data.fromHoldingId
+  )
+  const fromAccount = await fetchActiveAccount(
+    tx,
+    familyId,
+    fromHolding.accountId,
+    "Source investment"
+  )
+  if (fromAccount.balanceSource !== "valuation") {
+    throw new HoldingError(
+      `Source account ${fromAccount.id} must be a valuation-tracked account (balanceSource="valuation"); it is "${fromAccount.balanceSource}"`
+    )
+  }
+  assertKnownCurrency(fromAccount.currency)
+
+  if (data.toAccountId === fromAccount.id) {
+    throw new HoldingError(
+      "Move target must be a different account than the source — use Buy/Sell to change a position within the same account"
+    )
+  }
+  const toAccount = await fetchActiveAccount(
+    tx,
+    familyId,
+    data.toAccountId,
+    "Destination investment"
+  )
+  if (toAccount.balanceSource !== "valuation") {
+    throw new HoldingError(
+      `Destination account ${toAccount.id} must be a valuation-tracked account (balanceSource="valuation"); it is "${toAccount.balanceSource}"`
+    )
+  }
+  assertKnownCurrency(toAccount.currency)
+  if (toAccount.currency !== fromAccount.currency) {
+    throw new HoldingError(
+      `Cannot move a position between accounts with different currencies (source "${fromAccount.currency}", destination "${toAccount.currency}") — cross-currency in-kind moves are not supported yet`
+    )
+  }
+
+  // v1: whole-position move only. The full quantity + its exact cost basis
+  // carry over — no unit price is needed at all (this is not a sale).
+  const movedUnitsScaled = quantityToScaled(fromHolding.quantity.toFixed(8))
+  if (movedUnitsScaled <= 0n) {
+    throw new HoldingError("Nothing to move — this position has zero units")
+  }
+  const movedCostMinor = holdingCostMinor(
+    movedUnitsScaled,
+    fromHolding.avgUnitCostMinor
+  )
+
+  // ---- Remove from source: a move always closes the position (v1: whole-position only) ----
+  await tx.holding.delete({ where: { id: fromHolding.id } })
+  await auditLog(tx, auditCtx, {
+    action: "delete",
+    entityType: "Holding",
+    entityId: fromHolding.id,
+    before: serializeHolding(fromHolding),
+    after: null,
+  })
+
+  // ---- Add to destination: average-cost into an existing position, or create ----
+  const existingTo = await tx.holding.findFirst({
+    where: {
+      familyId,
+      accountId: toAccount.id,
+      instrumentId: fromHolding.instrumentId,
+    },
+    include: { instrument: true },
+  })
+
+  let toHoldingId: string
+  if (existingTo) {
+    const oldToUnitsScaled = quantityToScaled(existingTo.quantity.toFixed(8))
+    const oldToCost = holdingCostMinor(
+      oldToUnitsScaled,
+      existingTo.avgUnitCostMinor
+    )
+    const newToUnitsScaled = oldToUnitsScaled + movedUnitsScaled
+    const newToAvg = averageUnitCostMinor(
+      oldToCost + movedCostMinor,
+      newToUnitsScaled
+    )
+    const updatedTo = await tx.holding.update({
+      where: { id: existingTo.id },
+      data: {
+        quantity: scaledToQuantityString(newToUnitsScaled),
+        avgUnitCostMinor: newToAvg,
+        // PER-259 Slice 5 — stamp the "latest" identity marker.
+        lastMutationIdempotencyKey: data.idempotencyKey,
+      },
+      include: { instrument: true },
+    })
+    await auditLog(tx, auditCtx, {
+      action: "update",
+      entityType: "Holding",
+      entityId: updatedTo.id,
+      before: serializeHolding(existingTo),
+      after: serializeHolding(updatedTo),
+    })
+    toHoldingId = updatedTo.id
+  } else {
+    const createdTo = await tx.holding.create({
+      data: {
+        familyId,
+        accountId: toAccount.id,
+        instrumentId: fromHolding.instrumentId,
+        quantity: scaledToQuantityString(movedUnitsScaled),
+        // Exact carry-over — no averaging needed against a fresh position.
+        avgUnitCostMinor: fromHolding.avgUnitCostMinor,
+        // Carry the last known price too, rather than losing pricing context.
+        lastPriceMinor: fromHolding.lastPriceMinor,
+        lastMutationIdempotencyKey: data.idempotencyKey,
+      },
+      include: { instrument: true },
+    })
+    await auditLog(tx, auditCtx, {
+      action: "create",
+      entityType: "Holding",
+      entityId: createdTo.id,
+      after: serializeHolding(createdTo),
+    })
+    toHoldingId = createdTo.id
+  }
+
+  // Provenance audit row — the durable, queryable record of the move linking
+  // both sides (mirrors Slice 4/2/3's Switch/Distribution/Fee provenance rows).
+  // Anchored on the source holding id.
+  await auditLog(tx, auditCtx, {
+    action: "create",
+    entityType: "PositionMove",
+    entityId: fromHolding.id,
+    after: {
+      date: date.toISOString(),
+      fromAccountId: fromAccount.id,
+      fromHoldingId: fromHolding.id,
+      toAccountId: toAccount.id,
+      toHoldingId,
+      instrumentId: fromHolding.instrumentId,
+      instrumentName: fromHolding.instrument.name,
+      movedUnitsScaled: movedUnitsScaled.toString(),
+      movedCostMinor: movedCostMinor.toString(),
+    },
+  })
+
+  // Re-materialize BOTH accounts' Σ-holdings anchors — the position left one
+  // and landed in the other, so both values move.
+  await recomputeAccountValueAnchorWithinTx(
+    tx,
+    familyId,
+    fromAccount.id,
+    fromAccount.currency,
+    user,
+    auditCtx
+  )
+  await recomputeAccountValueAnchorWithinTx(
+    tx,
+    familyId,
+    toAccount.id,
+    toAccount.currency,
+    user,
+    auditCtx
+  )
+
+  const finalTo = serializeHolding(
+    await loadHoldingWithInstrument(tx, familyId, toHoldingId)
+  )
+  const fromAccountAfter = await tx.account.findUniqueOrThrow({
+    where: { id: fromAccount.id },
+    select: { balance: true },
+  })
+  const toAccountAfter = await tx.account.findUniqueOrThrow({
+    where: { id: toAccount.id },
+    select: { balance: true },
+  })
+
+  return {
+    fromAccountId: fromAccount.id,
+    fromHoldingId: fromHolding.id,
+    toAccountId: toAccount.id,
+    toHoldingId,
+    instrumentId: fromHolding.instrumentId,
+    movedQuantity: scaledToQuantityString(movedUnitsScaled),
+    movedCostMinor: movedCostMinor.toString(),
+    fromHolding: null,
+    toHolding: finalTo,
+    fromAccountValueAfterMinor: fromAccountAfter.balance.toString(),
+    toAccountValueAfterMinor: toAccountAfter.balance.toString(),
+  }
+}
+
+export async function recordPositionMoveForFamily({
+  data: rawData,
+  familyId,
+  user,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  data: z.input<typeof recordPositionMoveInputSchema>
+  familyId: string
+  user: ServerActor
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<RecordPositionMoveResult> {
+  const data: RecordPositionMoveInput =
+    recordPositionMoveInputSchema.parse(rawData)
+
+  const requestHash = await hashCanonicalPayload({
+    date: data.date?.toISOString() ?? null,
+    fromHoldingId: data.fromHoldingId,
+    toAccountId: data.toAccountId,
+  })
+  const auditCtx = await createAuditContext(
+    { user: { id: user.id, familyId } },
+    data.idempotencyKey
+  )
+
+  const runOnce = async () =>
+    await runInTenantTransaction(familyId, user.id, async (tx) => {
+      const replay =
+        await replayIdempotentEndpointResponse<RecordPositionMoveResult>(tx, {
+          endpoint: RECORD_POSITION_MOVE_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+        })
+      if (replay) return replay
+
+      const response = await recordPositionMoveWithinTx(tx, {
+        data,
+        familyId,
+        user,
+        auditCtx,
+      })
+
+      await persistIdempotentEndpointResponse(tx, {
+        endpoint: RECORD_POSITION_MOVE_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+        response,
+      })
+      return response
+    })
+
+  try {
+    return await runOnce()
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error
+    const replay = await scopedTenantTransaction(familyId, user.id, (tx) =>
+      replayIdempotentEndpointResponse<RecordPositionMoveResult>(tx, {
+        endpoint: RECORD_POSITION_MOVE_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+      })
+    )
+    if (replay) return replay
+    throw error
+  }
+}
+
+export const recordPositionMoveFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("ledger:write")])
+  .inputValidator((data: z.input<typeof recordPositionMoveInputSchema>) =>
+    recordPositionMoveInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await recordPositionMoveForFamily({
+      data,
+      familyId: context.familyId,
+      user: context.user,
+    })
+  })
+
+// =============================================================================
 // EDIT / DELETE / CORRECT A POSITION EVENT — Switch + Dividend reinvest
 // (PER-259 Slice 5, second half / ADR-0054)
 // =============================================================================
