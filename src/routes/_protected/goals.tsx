@@ -36,8 +36,9 @@ import {
 // Goal — broker-agnostic purpose grouping (Bibit "Portofolio" / Betterment
 // "Goals" / M1 "Pies" generalized), orthogonal to Account (custody). A Goal
 // bundles whole Accounts and/or partial Holding allocations under one named
-// purpose (Tabungan Nikah, Dana Darurat). Assigning/reassigning is pure
-// relabeling — see src/server/goals.ts for the full architecture note.
+// purpose (an emergency fund, a house down payment, a wedding fund — any
+// label the user picks). Assigning/reassigning is pure relabeling — see
+// src/server/goals.ts for the full architecture note.
 
 export const Route = createFileRoute("/_protected/goals")({
   ssr: false,
@@ -126,8 +127,9 @@ function CreateGoalDialog({
               New Goal
             </DialogTitle>
             <DialogDescription>
-              A purpose-based bucket (Tabungan Nikah, Dana Darurat) you can
-              assign whole accounts or part of a holding into. Purely
+              A purpose-based bucket you can assign whole accounts or part of a
+              holding into — an emergency fund, a house down payment, anything
+              you want to track separately from where the money is held. Purely
               organizational — it never moves money on its own.
             </DialogDescription>
           </DialogHeader>
@@ -138,7 +140,7 @@ function CreateGoalDialog({
               id="goal-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Dana Darurat"
+              placeholder="e.g. Emergency Fund"
               required
             />
           </div>
@@ -367,8 +369,7 @@ function GoalsPage() {
                 <h1 className="text-2xl font-semibold tracking-tight">Goals</h1>
                 <p className="text-sm text-muted-foreground">
                   Purpose-based buckets across your accounts and holdings —
-                  Tabungan Nikah, Dana Darurat, and anything else you want to
-                  track separately from custody.
+                  track what your money is FOR, separate from where it is held.
                 </p>
               </div>
               <Button onClick={() => setCreateOpen(true)}>
