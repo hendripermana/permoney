@@ -6,13 +6,10 @@ import {
   expect,
   test,
 } from "vite-plus/test"
-import type { AccountType } from "@/lib/accounts"
-import { createAccountForFamily } from "@/server/accounts"
 import {
   getAccountHoldingsForFamily,
   HoldingError,
   recordSwitchForFamily,
-  recordTradeForFamily,
 } from "@/server/holdings"
 import {
   createIntegrationHarness,
@@ -23,6 +20,11 @@ import {
   type AuthenticatedOnboardedUser,
   type TestFactories,
 } from "./support/factories"
+import {
+  makeCashAccount,
+  makeInvestmentAccount,
+  seedPosition,
+} from "./support/holdings-fixtures"
 
 // PER-259 Slice 4 / ADR-0054 — Switch (atomic sell-A + buy-B, ONE holdings
 // account, NO external cash). Broker/country-agnostic (Bibit "pindah/switch",
@@ -48,38 +50,6 @@ describe("switch (PER-259 Slice 4 / ADR-0054)", () => {
     await harness.teardown()
   })
 
-  const makeInvestmentAccount = async (
-    owner: AuthenticatedOnboardedUser,
-    name = "Reksadana"
-  ) =>
-    await createAccountForFamily({
-      data: {
-        name,
-        accountType: "TRACKED_ASSET" as AccountType,
-        accountSubtype: "brokerage",
-        openingBalance: "0",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
-
-  const makeCashAccount = async (
-    owner: AuthenticatedOnboardedUser,
-    name = "Checking",
-    openingBalance = "2000000"
-  ) =>
-    await createAccountForFamily({
-      data: {
-        name,
-        accountType: "DEPOSITORY" as AccountType,
-        openingBalance,
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
-
   const balanceOf = (owner: AuthenticatedOnboardedUser, accountId: string) =>
     harness.withFamily(owner.family.id, async (tx) => {
       const row = await tx.account.findUniqueOrThrow({
@@ -88,37 +58,6 @@ describe("switch (PER-259 Slice 4 / ADR-0054)", () => {
       })
       return row.balance
     })
-
-  // Buys `quantity` units of `instrument` @ `unitPrice` in `investmentId`,
-  // funded from `fundingId`. Returns the resulting holding + instrument id.
-  const seedPosition = async (
-    owner: AuthenticatedOnboardedUser,
-    investmentId: string,
-    fundingId: string,
-    instrument: { kind: "mutual_fund"; name: string },
-    quantity: string,
-    unitPrice: string
-  ) => {
-    const cashAmount = (BigInt(quantity) * BigInt(unitPrice)).toString()
-    const buy = await recordTradeForFamily({
-      data: {
-        investmentAccountId: investmentId,
-        fundingAccountId: fundingId,
-        instrument,
-        side: "buy",
-        cashAmount,
-        quantity,
-        unitPrice,
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
-    return {
-      instrumentId: buy.holding?.instrumentId ?? "",
-      holdingId: buy.holding?.id ?? "",
-    }
-  }
 
   const fundA = { kind: "mutual_fund" as const, name: "BNI-AM Dana Ardhani" }
   const fundB = {
@@ -133,9 +72,10 @@ describe("switch (PER-259 Slice 4 / ADR-0054)", () => {
   // --------------------------------------------------------------------------
   test("partial switch into an existing holding blends average cost; account value moves only by the realized gain", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner, "Checking", "2000000")
     const a = await seedPosition(
+      factories,
       owner,
       investment.id,
       cash.id,
@@ -144,6 +84,7 @@ describe("switch (PER-259 Slice 4 / ADR-0054)", () => {
       "10000"
     )
     const b = await seedPosition(
+      factories,
       owner,
       investment.id,
       cash.id,
@@ -226,9 +167,10 @@ describe("switch (PER-259 Slice 4 / ADR-0054)", () => {
   // --------------------------------------------------------------------------
   test("switching ALL of A into a new inline fund closes A's position and creates B", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner, "Checking", "2000000")
     const a = await seedPosition(
+      factories,
       owner,
       investment.id,
       cash.id,
@@ -284,10 +226,15 @@ describe("switch (PER-259 Slice 4 / ADR-0054)", () => {
   // --------------------------------------------------------------------------
   test("a quantity-based switch and an equivalent amount-based switch produce the same result", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const cash = await makeCashAccount(owner, "Checking", "10000000")
+    const cash = await makeCashAccount(factories, owner, "Checking", "10000000")
 
-    const investmentQty = await makeInvestmentAccount(owner, "By quantity")
+    const investmentQty = await makeInvestmentAccount(
+      factories,
+      owner,
+      "By quantity"
+    )
     const aQty = await seedPosition(
+      factories,
       owner,
       investmentQty.id,
       cash.id,
@@ -296,6 +243,7 @@ describe("switch (PER-259 Slice 4 / ADR-0054)", () => {
       "10000"
     )
     const bQty = await seedPosition(
+      factories,
       owner,
       investmentQty.id,
       cash.id,
@@ -317,8 +265,13 @@ describe("switch (PER-259 Slice 4 / ADR-0054)", () => {
       user: owner.user,
     })
 
-    const investmentAmt = await makeInvestmentAccount(owner, "By amount")
+    const investmentAmt = await makeInvestmentAccount(
+      factories,
+      owner,
+      "By amount"
+    )
     const aAmt = await seedPosition(
+      factories,
       owner,
       investmentAmt.id,
       cash.id,
@@ -327,6 +280,7 @@ describe("switch (PER-259 Slice 4 / ADR-0054)", () => {
       "10000"
     )
     const bAmt = await seedPosition(
+      factories,
       owner,
       investmentAmt.id,
       cash.id,
@@ -366,9 +320,10 @@ describe("switch (PER-259 Slice 4 / ADR-0054)", () => {
   // --------------------------------------------------------------------------
   test("rejects switching into the SAME instrument (A === B)", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner, "Checking", "2000000")
     const a = await seedPosition(
+      factories,
       owner,
       investment.id,
       cash.id,
@@ -396,9 +351,10 @@ describe("switch (PER-259 Slice 4 / ADR-0054)", () => {
 
   test("rejects switching more units than held", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner, "Checking", "2000000")
     const a = await seedPosition(
+      factories,
       owner,
       investment.id,
       cash.id,
@@ -432,9 +388,10 @@ describe("switch (PER-259 Slice 4 / ADR-0054)", () => {
 
   test("rejects a non-holdings account (balanceSource != valuation)", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner, "Checking", "2000000")
     const a = await seedPosition(
+      factories,
       owner,
       investment.id,
       cash.id,
@@ -464,9 +421,10 @@ describe("switch (PER-259 Slice 4 / ADR-0054)", () => {
   test("a switch referencing another family's holding/account is rejected", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
     const intruder = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner, "Checking", "2000000")
     const a = await seedPosition(
+      factories,
       owner,
       investment.id,
       cash.id,
@@ -503,9 +461,10 @@ describe("switch (PER-259 Slice 4 / ADR-0054)", () => {
   // --------------------------------------------------------------------------
   test("replaying the same key returns the same result and does not double-mutate", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner, "Checking", "2000000")
     const a = await seedPosition(
+      factories,
       owner,
       investment.id,
       cash.id,
@@ -514,6 +473,7 @@ describe("switch (PER-259 Slice 4 / ADR-0054)", () => {
       "10000"
     )
     const b = await seedPosition(
+      factories,
       owner,
       investment.id,
       cash.id,

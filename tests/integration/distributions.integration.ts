@@ -6,8 +6,6 @@ import {
   expect,
   test,
 } from "vite-plus/test"
-import type { AccountType } from "@/lib/accounts"
-import { createAccountForFamily } from "@/server/accounts"
 import {
   getAccountHoldingsForFamily,
   HoldingError,
@@ -23,6 +21,10 @@ import {
   type AuthenticatedOnboardedUser,
   type TestFactories,
 } from "./support/factories"
+import {
+  makeCashAccount,
+  makeInvestmentAccount,
+} from "./support/holdings-fixtures"
 
 // PER-259 Slice 2 / ADR-0054 — Dividend / distribution (cash payout + reinvest).
 // Broker/country-agnostic. Money amounts are in MINOR units (IDR sen). Fixtures
@@ -44,38 +46,6 @@ describe("dividend / distribution (PER-259 Slice 2 / ADR-0054)", () => {
   afterAll(async () => {
     await harness.teardown()
   })
-
-  const makeInvestmentAccount = async (
-    owner: AuthenticatedOnboardedUser,
-    name = "Reksadana"
-  ) =>
-    await createAccountForFamily({
-      data: {
-        name,
-        accountType: "TRACKED_ASSET" as AccountType,
-        accountSubtype: "brokerage",
-        openingBalance: "0",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
-
-  const makeCashAccount = async (
-    owner: AuthenticatedOnboardedUser,
-    name = "Checking",
-    openingBalance = "150000"
-  ) =>
-    await createAccountForFamily({
-      data: {
-        name,
-        accountType: "DEPOSITORY" as AccountType,
-        openingBalance,
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
 
   const balanceOf = (owner: AuthenticatedOnboardedUser, accountId: string) =>
     harness.withFamily(owner.family.id, async (tx) => {
@@ -122,9 +92,9 @@ describe("dividend / distribution (PER-259 Slice 2 / ADR-0054)", () => {
   // --------------------------------------------------------------------------
   test("CASH: income lands on a separate destination, source holding unchanged, back-dated", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
-    const pension = await makeCashAccount(owner, "Dana Pensiun", "0")
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner, "Checking", "150000")
+    const pension = await makeCashAccount(factories, owner, "Dana Pensiun", "0")
     const { holdingId } = await seedPosition(owner, investment.id, cash.id)
 
     const investValueBefore = await balanceOf(owner, investment.id)
@@ -188,9 +158,9 @@ describe("dividend / distribution (PER-259 Slice 2 / ADR-0054)", () => {
 
   test("CASH: a Distribution provenance audit row links back to the source holding", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
-    const pension = await makeCashAccount(owner, "Dana Pensiun", "0")
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner, "Checking", "150000")
+    const pension = await makeCashAccount(factories, owner, "Dana Pensiun", "0")
     const { instrumentId, holdingId } = await seedPosition(
       owner,
       investment.id,
@@ -231,9 +201,9 @@ describe("dividend / distribution (PER-259 Slice 2 / ADR-0054)", () => {
 
   test("CASH: replaying the same key posts a single income", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
-    const pension = await makeCashAccount(owner, "Dana Pensiun", "0")
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner, "Checking", "150000")
+    const pension = await makeCashAccount(factories, owner, "Dana Pensiun", "0")
     const { holdingId } = await seedPosition(owner, investment.id, cash.id)
     const key = factories.createIdempotencyKey()
     const payload = {
@@ -267,9 +237,13 @@ describe("dividend / distribution (PER-259 Slice 2 / ADR-0054)", () => {
 
   test("CASH: rejects a destination that is not cash-like", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const otherInvestment = await makeInvestmentAccount(owner, "Reksadana 2")
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const otherInvestment = await makeInvestmentAccount(
+      factories,
+      owner,
+      "Reksadana 2"
+    )
+    const cash = await makeCashAccount(factories, owner, "Checking", "150000")
     const { holdingId } = await seedPosition(owner, investment.id, cash.id)
 
     await expect(
@@ -293,8 +267,8 @@ describe("dividend / distribution (PER-259 Slice 2 / ADR-0054)", () => {
   // --------------------------------------------------------------------------
   test("REINVEST: units up + cost basis up, no external cash, anchor re-materialized", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner, "Checking", "150000")
     const { holdingId } = await seedPosition(owner, investment.id, cash.id)
 
     const cashBefore = await balanceOf(owner, cash.id)
@@ -350,8 +324,8 @@ describe("dividend / distribution (PER-259 Slice 2 / ADR-0054)", () => {
 
   test("REINVEST: derives units from amount ÷ unitPrice (fractional)", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner, "Checking", "150000")
     const { holdingId } = await seedPosition(owner, investment.id, cash.id)
 
     // Reinvest 595 at 10,000/unit → 0.0595 units (595 × 1e8 / 10000 = 5,950,000).
@@ -373,8 +347,8 @@ describe("dividend / distribution (PER-259 Slice 2 / ADR-0054)", () => {
 
   test("REINVEST: replaying the same key applies the units once", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner, "Checking", "150000")
     const { holdingId } = await seedPosition(owner, investment.id, cash.id)
     const key = factories.createIdempotencyKey()
     const payload = {
@@ -409,9 +383,9 @@ describe("dividend / distribution (PER-259 Slice 2 / ADR-0054)", () => {
   test("a distribution referencing another family's accounts is rejected", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
     const intruder = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
-    const pension = await makeCashAccount(owner, "Dana Pensiun", "0")
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner, "Checking", "150000")
+    const pension = await makeCashAccount(factories, owner, "Dana Pensiun", "0")
     const { holdingId } = await seedPosition(owner, investment.id, cash.id)
 
     await expect(

@@ -6,8 +6,6 @@ import {
   expect,
   test,
 } from "vite-plus/test"
-import type { AccountType } from "@/lib/accounts"
-import { createAccountForFamily } from "@/server/accounts"
 import {
   getAccountHoldingsForFamily,
   HoldingError,
@@ -23,6 +21,10 @@ import {
   type AuthenticatedOnboardedUser,
   type TestFactories,
 } from "./support/factories"
+import {
+  makeCashAccount,
+  makeInvestmentAccount,
+} from "./support/holdings-fixtures"
 
 // PER-259 Slice 3 / ADR-0054 — Standalone investment fee (EXPENSE).
 // Broker/country-agnostic. Amounts are in MINOR units (IDR sen). A fee reduces a
@@ -46,38 +48,6 @@ describe("investment fee (PER-259 Slice 3 / ADR-0054)", () => {
   afterAll(async () => {
     await harness.teardown()
   })
-
-  const makeInvestmentAccount = async (
-    owner: AuthenticatedOnboardedUser,
-    name = "Reksadana"
-  ) =>
-    await createAccountForFamily({
-      data: {
-        name,
-        accountType: "TRACKED_ASSET" as AccountType,
-        accountSubtype: "brokerage",
-        openingBalance: "0",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
-
-  const makeCashAccount = async (
-    owner: AuthenticatedOnboardedUser,
-    name = "Checking",
-    openingBalance = "2000000"
-  ) =>
-    await createAccountForFamily({
-      data: {
-        name,
-        accountType: "DEPOSITORY" as AccountType,
-        openingBalance,
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
 
   const balanceOf = (owner: AuthenticatedOnboardedUser, accountId: string) =>
     harness.withFamily(owner.family.id, async (tx) => {
@@ -124,9 +94,9 @@ describe("investment fee (PER-259 Slice 3 / ADR-0054)", () => {
   // --------------------------------------------------------------------------
   test("posts an expense on the chosen cash account; source holding unchanged; back-dated; Investment Fee category", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
-    const wallet = await makeCashAccount(owner, "Wallet", "500000")
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner, "Checking", "2000000")
+    const wallet = await makeCashAccount(factories, owner, "Wallet", "500000")
     const { holdingId } = await seedPosition(owner, investment.id, cash.id)
 
     const investValueBefore = await balanceOf(owner, investment.id)
@@ -191,8 +161,8 @@ describe("investment fee (PER-259 Slice 3 / ADR-0054)", () => {
 
   test("a Fee provenance audit row links back to the source holding", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner, "Checking", "2000000")
     const { instrumentId, holdingId } = await seedPosition(
       owner,
       investment.id,
@@ -232,8 +202,8 @@ describe("investment fee (PER-259 Slice 3 / ADR-0054)", () => {
 
   test("replaying the same key posts a single expense", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner, "Checking", "2000000")
     const { holdingId } = await seedPosition(owner, investment.id, cash.id)
     const cashAfterSeed = await balanceOf(owner, cash.id)
     const key = factories.createIdempotencyKey()
@@ -270,8 +240,8 @@ describe("investment fee (PER-259 Slice 3 / ADR-0054)", () => {
   // --------------------------------------------------------------------------
   test("rejects a source account that is not cash-like (the holdings account itself)", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner, "Checking", "2000000")
     const { holdingId } = await seedPosition(owner, investment.id, cash.id)
 
     const investValueBefore = await balanceOf(owner, investment.id)
@@ -297,8 +267,8 @@ describe("investment fee (PER-259 Slice 3 / ADR-0054)", () => {
 
   test("rejects a non-expense category override", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner, "Checking", "2000000")
     const { holdingId } = await seedPosition(owner, investment.id, cash.id)
 
     const incomeCategory = await harness.withFamily(
@@ -336,8 +306,8 @@ describe("investment fee (PER-259 Slice 3 / ADR-0054)", () => {
   test("a fee referencing another family's accounts is rejected", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
     const intruder = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner, "Checking", "2000000")
     const { holdingId } = await seedPosition(owner, investment.id, cash.id)
     const cashAfterSeed = await balanceOf(owner, cash.id)
 
