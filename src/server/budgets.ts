@@ -3,6 +3,7 @@ import { z } from "zod"
 import { decodeMoney, encodeMoney } from "@/lib/money"
 import {
   computeBudgetProgress,
+  foldRolloverCarry,
   type BudgetAllocationInput,
   type BudgetLedgerRowInput,
   type BudgetProgress,
@@ -41,6 +42,7 @@ import { isUniqueConstraintError, uuidV7Schema } from "./mutation-kit"
 const PERIOD_KIND_MONTHLY = "monthly"
 const SET_ALLOCATIONS_ENDPOINT = "setBudgetAllocationsFn"
 const ARCHIVE_BUDGET_ENDPOINT = "archiveBudgetFn"
+const MOVE_ALLOCATION_ENDPOINT = "moveBudgetAllocationFn"
 
 export class BudgetValidationError extends Error {
   override readonly name = "BudgetValidationError"
@@ -116,7 +118,14 @@ export interface SerializedBudgetCategoryProgress {
   categoryName: string
   categoryColor: string
   categoryIcon: string
+  /** Raw per-period fact — never includes rollover. */
   allocatedAmount: string
+  /** 'none' | 'carryover' (PER-278 / ADR-0037 §2 follow-up). */
+  rolloverPolicy: string
+  /** Carry-in from prior periods; "0" when `rolloverPolicy` is `"none"`. */
+  rolledOverAmount: string
+  /** `allocatedAmount + rolledOverAmount` — what this category has to spend. */
+  effectiveAllocatedAmount: string
   actualAmount: string
   remainingAmount: string
   isOver: boolean
@@ -139,6 +148,7 @@ export interface SerializedBudgetProgress {
   uncategorized: { actualAmount: string; pendingCount: number }
   totals: {
     allocatedAmount: string
+    rolledOverAmount: string
     actualAmount: string
     remainingAmount: string
     isOver: boolean
@@ -160,6 +170,7 @@ interface CategoryMeta {
   name: string
   color: string
   icon: string
+  rolloverPolicy: string
 }
 
 function serializeProgress(
@@ -197,6 +208,11 @@ function serializeProgress(
         categoryColor: info?.color ?? "#6172F3",
         categoryIcon: info?.icon ?? "shapes",
         allocatedAmount: encodeMoney(category.allocatedAmount),
+        rolloverPolicy: info?.rolloverPolicy ?? "none",
+        rolledOverAmount: encodeMoney(category.rolledOverAmount),
+        effectiveAllocatedAmount: encodeMoney(
+          category.effectiveAllocatedAmount
+        ),
         actualAmount: encodeMoney(category.actualAmount),
         remainingAmount: encodeMoney(category.remainingAmount),
         isOver: category.isOver,
@@ -209,6 +225,7 @@ function serializeProgress(
     },
     totals: {
       allocatedAmount: encodeMoney(progress.totals.allocatedAmount),
+      rolledOverAmount: encodeMoney(progress.totals.rolledOverAmount),
       actualAmount: encodeMoney(progress.totals.actualAmount),
       remainingAmount: encodeMoney(progress.totals.remainingAmount),
       isOver: progress.totals.isOver,
@@ -231,6 +248,7 @@ interface BudgetRowWithCategories {
   categories: {
     categoryId: string
     allocatedAmount: bigint
+    rolloverPolicy: string
     category: { name: string; color: string; icon: string }
   }[]
 }
@@ -260,6 +278,7 @@ async function loadBudgetRow(
         select: {
           categoryId: true,
           allocatedAmount: true,
+          rolloverPolicy: true,
           category: { select: { name: true, color: true, icon: true } },
         },
       },
@@ -267,27 +286,29 @@ async function loadBudgetRow(
   })
 }
 
-async function fetchPeriodLedgerRows(
+/**
+ * Fetches canonical, non-excluded, non-deleted ledger rows in `[rangeStart,
+ * rangeEnd)` (UTC instant bounds — a coarse prefilter; the pure engine does
+ * exact family-tz bucketing per period). Ordinary expense rows PLUS
+ * reimbursement/refund income rows (PER-260 / ADR-0055) only — a
+ * reimbursement is an income row assigned an EXPENSE-type category so it
+ * nets against that category's "spent" figure, the same net figure the
+ * Spending report (`cash-flow.ts`) already shows for that category. No
+ * categoryId filter — `computeBudgetProgress` only surfaces contributions for
+ * allocated categories in its output.
+ *
+ * Shared by the current-period read (`fetchPeriodLedgerRows`, one call) and
+ * the rollover chain resolver (`resolveRolloverCarryIn`, one call spanning
+ * however many historical periods a category's carryover chain covers) —
+ * bucketing per period happens in `computeBudgetProgress`, not here, so one
+ * wide fetch safely serves several period computations.
+ */
+async function fetchLedgerRowsInRange(
   tx: TenantTransactionClient,
   familyId: string,
-  period: MonthlyPeriod
+  rangeStart: Date,
+  rangeEnd: Date
 ): Promise<BudgetLedgerRowInput[]> {
-  // Coarse UTC prefilter padded ±1 day; the pure engine does exact family-tz
-  // bucketing. Only canonical, non-excluded, non-deleted rows count: ordinary
-  // expense rows PLUS reimbursement/refund income rows (PER-260 / ADR-0055).
-  // A reimbursement is an income row assigned an EXPENSE-type category so it
-  // nets against that category's "spent" figure — the same net figure the
-  // Spending report (`cash-flow.ts`) already shows for that category, so the
-  // two screens never disagree about the same underlying transactions. No
-  // categoryId filter here — mirrors the (also unfiltered) expense query;
-  // `computeBudgetProgress` only surfaces contributions for allocated
-  // categories in its output, same as it already does for expense rows in
-  // non-budgeted categories.
-  const rangeStart = new Date(period.periodStart)
-  rangeStart.setUTCDate(rangeStart.getUTCDate() - 1)
-  const rangeEnd = new Date(period.periodEnd)
-  rangeEnd.setUTCDate(rangeEnd.getUTCDate() + 2)
-
   const rows = await tx.transaction.findMany({
     where: {
       familyId,
@@ -326,6 +347,229 @@ async function fetchPeriodLedgerRows(
   }))
 }
 
+async function fetchPeriodLedgerRows(
+  tx: TenantTransactionClient,
+  familyId: string,
+  period: MonthlyPeriod
+): Promise<BudgetLedgerRowInput[]> {
+  const rangeStart = new Date(period.periodStart)
+  rangeStart.setUTCDate(rangeStart.getUTCDate() - 1)
+  const rangeEnd = new Date(period.periodEnd)
+  rangeEnd.setUTCDate(rangeEnd.getUTCDate() + 2)
+  return fetchLedgerRowsInRange(tx, familyId, rangeStart, rangeEnd)
+}
+
+function dateOnlyString(date: Date): string {
+  return date.toISOString().slice(0, 10)
+}
+
+/**
+ * Resolves the read-time rollover carry-in for a set of `"carryover"`
+ * categories in the period starting at `targetPeriodStart` (PER-278 /
+ * ADR-0037 §2 follow-up).
+ *
+ * Deliberately READ-TIME DERIVED, not materialized like Sure's
+ * `Budget::RolloverCalculator` (which stores `rolled_over_amount` and
+ * recomputes a forward chain under an advisory lock whenever a budget is
+ * bootstrapped or an allocation changes). Permoney's whole budget-progress
+ * contract is already "pure function over the canonical ledger... trivially
+ * correct under reclassification" (ADR-0037 consequences) — editing a
+ * transaction in a closed historical month must retroactively correct that
+ * month's actual/remaining with NO explicit rebuild step. A materialized
+ * carry would silently drift the moment a past transaction is edited unless
+ * every transaction mutation path also re-triggered a chain recompute for
+ * every affected category — real coupling into the transaction mutation hot
+ * path that Sure accepts (hence the advisory lock to avoid concurrent-
+ * recompute races) and this slice does not need to. The tradeoff: this walks
+ * O(chain depth) historical periods per carryover category on every budget
+ * read instead of O(1). Budget reads are already documented as low-frequency
+ * (ADR-0037 §9) and rollover is opt-in per category, so this is accepted for
+ * v1; if it becomes a hot path, materializing is the natural follow-up (the
+ * math — `foldRolloverCarry` — does not change either way).
+ *
+ * Chain-walk rules (verified against Sure's real
+ * `budget/rollover_calculator.rb`, not just ADR-0037's placeholder text):
+ *   - Walk each category's periods strictly BEFORE `targetPeriodStart`,
+ *     newest → oldest, collecting a prefix while `rolloverPolicy ===
+ *     "carryover"`; stop (exclude) at the first period whose policy is
+ *     `"none"` — that period's own surplus never left it, mirroring Sure's
+ *     "switching the toggle off stops the money in both directions."
+ *   - A month with NO `Budget` row, or a `Budget` with no `BudgetCategory` row
+ *     for this category, is a genuine GAP, not a zero — it is simply absent
+ *     from the query result and the walk continues past it untouched
+ *     (Sure: "a month the user never set up is a gap in the chain").
+ *   - The first period a category was ever budgeted with `"carryover"` has an
+ *     empty prefix before it, so its carry-in is 0 — chain seeding needs no
+ *     special case.
+ */
+interface RolloverChainRow {
+  categoryId: string
+  allocatedAmount: bigint
+  rolloverPolicy: string
+  budget: { periodStart: Date; periodEnd: Date }
+}
+
+interface ChainPeriod {
+  periodStart: Date
+  periodEnd: Date
+  allocatedAmount: bigint
+}
+
+interface RolloverChains {
+  chains: Map<string, ChainPeriod[]>
+  earliestStart: Date | null
+  latestEnd: Date | null
+}
+
+function groupByCategoryId(
+  rows: RolloverChainRow[]
+): Map<string, RolloverChainRow[]> {
+  const byCategory = new Map<string, RolloverChainRow[]>()
+  for (const row of rows) {
+    const list = byCategory.get(row.categoryId)
+    if (list) list.push(row)
+    else byCategory.set(row.categoryId, [row])
+  }
+  return byCategory
+}
+
+/** One category's newest→oldest rows to its oldest→newest `"carryover"`
+ * prefix, stopping at the first `"none"` row (a wall — see the caller's
+ * doc comment). Empty when the period immediately before the target isn't
+ * itself `"carryover"`. */
+function carryoverPrefix(rows: RolloverChainRow[]): ChainPeriod[] {
+  const prefix: ChainPeriod[] = []
+  for (const row of rows) {
+    if (row.rolloverPolicy !== "carryover") break
+    prefix.push({
+      periodStart: row.budget.periodStart,
+      periodEnd: row.budget.periodEnd,
+      allocatedAmount: row.allocatedAmount,
+    })
+  }
+  prefix.reverse() // oldest -> newest, ending just before the target period
+  return prefix
+}
+
+/** Builds each category's carryover chain plus the combined date span the
+ * chains cover — a single ledger fetch (by the caller) can then serve every
+ * chain's per-period actuals. */
+function buildRolloverChains(rows: RolloverChainRow[]): RolloverChains {
+  const chains = new Map<string, ChainPeriod[]>()
+  let earliestStart: Date | null = null
+  let latestEnd: Date | null = null
+
+  for (const [categoryId, categoryRows] of groupByCategoryId(rows)) {
+    const prefix = carryoverPrefix(categoryRows)
+    if (prefix.length === 0) continue
+    chains.set(categoryId, prefix)
+    const first = prefix.at(0)
+    const last = prefix.at(-1)
+    if (
+      first &&
+      (earliestStart === null || first.periodStart < earliestStart)
+    ) {
+      earliestStart = first.periodStart
+    }
+    if (last && (latestEnd === null || last.periodEnd > latestEnd)) {
+      latestEnd = last.periodEnd
+    }
+  }
+
+  return { chains, earliestStart, latestEnd }
+}
+
+/** One category's carry-in: each historical period's actual is derived fresh
+ * from `rangeRows` via the same pure engine used everywhere else (no
+ * separate accounting path), then folded per `foldRolloverCarry`. */
+function foldChainCarryIn(
+  categoryId: string,
+  chain: ChainPeriod[],
+  rangeRows: BudgetLedgerRowInput[],
+  timezone: string
+): bigint {
+  const foldInputs = chain.map((histPeriod) => {
+    const historicalProgress = computeBudgetProgress({
+      allocations: [
+        { categoryId, allocatedAmount: histPeriod.allocatedAmount },
+      ],
+      transactions: rangeRows,
+      period: {
+        start: dateOnlyString(histPeriod.periodStart),
+        end: dateOnlyString(histPeriod.periodEnd),
+        timezone,
+      },
+    })
+    return {
+      allocatedAmount: histPeriod.allocatedAmount,
+      actualAmount: historicalProgress.categories[0]?.actualAmount ?? 0n,
+    }
+  })
+  return foldRolloverCarry(foldInputs)
+}
+
+async function resolveRolloverCarryIn(
+  tx: TenantTransactionClient,
+  familyId: string,
+  timezone: string,
+  targetPeriodStart: Date,
+  carryoverCategoryIds: string[]
+): Promise<Map<string, bigint>> {
+  const result = new Map<string, bigint>()
+  if (carryoverCategoryIds.length === 0) return result
+
+  // ALL prior periods for these categories, any policy — the walk below needs
+  // to see a "none" row to know where to stop, so filtering to
+  // rolloverPolicy="carryover" here would silently bridge across a period the
+  // user turned rollover off for.
+  const priorRows = await tx.budgetCategory.findMany({
+    where: {
+      familyId,
+      categoryId: { in: carryoverCategoryIds },
+      budget: {
+        periodKind: PERIOD_KIND_MONTHLY,
+        periodStart: { lt: targetPeriodStart },
+      },
+    },
+    select: {
+      categoryId: true,
+      allocatedAmount: true,
+      rolloverPolicy: true,
+      budget: { select: { periodStart: true, periodEnd: true } },
+    },
+    orderBy: { budget: { periodStart: "desc" } },
+  })
+
+  const { chains, earliestStart, latestEnd } = buildRolloverChains(priorRows)
+
+  // Common case: no category has any prior "carryover" history yet — bail
+  // before the ledger fetch (mirrors Sure's own "families that never enabled
+  // rollover pay one query and never contend").
+  if (chains.size === 0 || earliestStart === null || latestEnd === null) {
+    return result
+  }
+
+  const rangeStart = new Date(earliestStart)
+  rangeStart.setUTCDate(rangeStart.getUTCDate() - 1)
+  const rangeEnd = new Date(latestEnd)
+  rangeEnd.setUTCDate(rangeEnd.getUTCDate() + 2)
+  const rangeRows = await fetchLedgerRowsInRange(
+    tx,
+    familyId,
+    rangeStart,
+    rangeEnd
+  )
+
+  for (const [categoryId, chain] of chains) {
+    result.set(
+      categoryId,
+      foldChainCarryIn(categoryId, chain, rangeRows, timezone)
+    )
+  }
+
+  return result
+}
+
 async function computePeriodProgress(
   tx: TenantTransactionClient,
   familyId: string,
@@ -344,10 +588,25 @@ async function computePeriodProgress(
   const baseCurrency = family.currency
   const budget = await loadBudgetRow(tx, familyId, period.periodStart)
 
+  // PER-278 / ADR-0037 §2 follow-up: resolve carry-in for opted-in categories
+  // BEFORE the current period's own ledger fetch (serialized, not
+  // Promise.all — see the comment above on the family lookup).
+  const carryoverCategoryIds = (budget?.categories ?? [])
+    .filter((category) => category.rolloverPolicy === "carryover")
+    .map((category) => category.categoryId)
+  const carryIn = await resolveRolloverCarryIn(
+    tx,
+    familyId,
+    family.timezone,
+    period.periodStart,
+    carryoverCategoryIds
+  )
+
   const allocations: BudgetAllocationInput[] = (budget?.categories ?? []).map(
     (category) => ({
       categoryId: category.categoryId,
       allocatedAmount: category.allocatedAmount,
+      rolledOverAmount: carryIn.get(category.categoryId) ?? 0n,
     })
   )
   const categoryMeta = new Map<string, CategoryMeta>(
@@ -357,6 +616,7 @@ async function computePeriodProgress(
         name: category.category.name,
         color: category.category.color,
         icon: category.category.icon,
+        rolloverPolicy: category.rolloverPolicy,
       },
     ])
   )
@@ -870,6 +1130,242 @@ export const archiveBudgetFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data, context }) => {
     return await archiveBudgetForFamily({
+      data,
+      familyId: context.familyId,
+      userId: context.user.id,
+    })
+  })
+
+// ===========================================================================
+// WRITE — move allocation between two categories in the SAME period
+// PER-278 / ADR-0037 §2 follow-up ("Roll With the Punches" reallocation)
+// ===========================================================================
+//
+// Verified against Sure's real `BudgetCategory.move_allocation!`
+// (`we-promise/sure`), which this mirrors (minus Permoney's non-existent
+// parent/subcategory ring-fencing — ADR-0037 §3.3 has no budget rollup this
+// slice, so that whole branch does not exist here):
+//   - Amount must be positive.
+//   - Both categories must belong to the SAME budget (period) — a move never
+//     crosses periods; there is no such thing as moving allocation "into the
+//     future" or "into the past" here.
+//   - Not the same category.
+//   - The source must stay >= 0 after the move — `amount` cannot exceed the
+//     source's CURRENT `allocatedAmount`. A move can never manufacture money
+//     by driving one category negative to rescue a worse negative elsewhere;
+//     the DB CHECK (`allocatedAmount >= 0`, ADR-0037 §6) is defense-in-depth
+//     against a concurrent move racing this same check.
+//   - Deliberately does NOT touch rollover: Permoney's rollover carry-in is
+//     read-time derived (`resolveRolloverCarryIn`), not a stored column, so
+//     there is no cached chain state for a move to invalidate — one of the
+//     concrete wins of the read-derived choice over Sure's materialized one
+//     (Sure's `move_allocation!` comment explicitly warns the caller must run
+//     `Budget::RolloverCalculator` afterward, in a separate transaction, to
+//     avoid an advisory-lock/row-lock deadlock; Permoney has no such second
+//     step to forget).
+
+const moveAllocationInputSchema = z.object({
+  month: monthSchema,
+  fromCategoryId: z.string().min(1),
+  toCategoryId: z.string().min(1),
+  // Wire money string in base-currency minor units, > 0.
+  amount: z
+    .string()
+    .trim()
+    .regex(/^\d+$/, "amount must be a non-negative minor-unit integer"),
+  idempotencyKey: uuidV7Schema,
+})
+type MoveAllocationInput = z.input<typeof moveAllocationInputSchema>
+
+export interface MoveAllocationResult {
+  budgetId: string
+  from: { categoryId: string; allocatedAmount: string }
+  to: { categoryId: string; allocatedAmount: string }
+  progress: SerializedBudgetProgress
+}
+
+export async function moveBudgetAllocationForFamily({
+  data: rawData,
+  familyId,
+  userId,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  data: MoveAllocationInput
+  familyId: string
+  userId: string
+  runInTenantTransaction?: typeof scopedTenantTransaction
+}): Promise<MoveAllocationResult> {
+  const data = moveAllocationInputSchema.parse(rawData)
+
+  if (data.fromCategoryId === data.toCategoryId) {
+    throw new BudgetValidationError(
+      "Cannot move allocation to the same category"
+    )
+  }
+  const amount = decodeMoney(data.amount)
+  if (amount <= 0n) {
+    throw new BudgetValidationError("amount must be greater than zero")
+  }
+
+  const period = monthlyPeriod(data.month)
+  const requestHash = await hashCanonicalPayload({
+    month: data.month,
+    fromCategoryId: data.fromCategoryId,
+    toCategoryId: data.toCategoryId,
+    amount: data.amount,
+  })
+  const auditCtx = await createAuditContext(
+    { user: { id: userId, familyId } },
+    data.idempotencyKey
+  )
+
+  const runOnce = async () =>
+    await runInTenantTransaction(familyId, userId, async (tx) => {
+      const replay =
+        await replayIdempotentEndpointResponse<MoveAllocationResult>(tx, {
+          endpoint: MOVE_ALLOCATION_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+        })
+      if (replay) return replay
+
+      const budget = await tx.budget.findUnique({
+        where: {
+          budget_family_period_unique: {
+            familyId,
+            periodKind: PERIOD_KIND_MONTHLY,
+            periodStart: period.periodStart,
+          },
+        },
+        select: { id: true },
+      })
+      if (!budget) throw new BudgetNotFoundError()
+
+      // Sequential, not Promise.all — one pg connection per interactive tx
+      // (see the family-lookup comment in computePeriodProgress). `familyId`
+      // is redundant with `budgetId` already being family-scoped above (a
+      // `budgetId` uniquely determines its family via the composite FK), but
+      // is included explicitly as tenant-owned-reference defense-in-depth
+      // (CLAUDE.md §5A) rather than relying on RLS/FK structure alone.
+      const fromRow = await tx.budgetCategory.findFirst({
+        where: {
+          budgetId: budget.id,
+          categoryId: data.fromCategoryId,
+          familyId,
+        },
+        select: { id: true, allocatedAmount: true },
+      })
+      if (!fromRow) {
+        throw new BudgetValidationError(
+          `Category ${data.fromCategoryId} has no allocation in this period`
+        )
+      }
+      const toRow = await tx.budgetCategory.findFirst({
+        where: { budgetId: budget.id, categoryId: data.toCategoryId, familyId },
+        select: { id: true, allocatedAmount: true },
+      })
+      if (!toRow) {
+        throw new BudgetValidationError(
+          `Category ${data.toCategoryId} has no allocation in this period`
+        )
+      }
+      if (amount > fromRow.allocatedAmount) {
+        throw new BudgetValidationError(
+          "Cannot move more than the source category's current allocation"
+        )
+      }
+
+      const beforeSnapshot = {
+        from: {
+          categoryId: data.fromCategoryId,
+          allocatedAmount: fromRow.allocatedAmount.toString(),
+        },
+        to: {
+          categoryId: data.toCategoryId,
+          allocatedAmount: toRow.allocatedAmount.toString(),
+        },
+      }
+
+      // Atomic increment/decrement, never a memory-computed replace (CLAUDE.md
+      // §5A). The `allocatedAmount >= 0` DB CHECK (ADR-0037 §6) is
+      // defense-in-depth against a concurrent move racing the pre-check above.
+      const updatedFrom = await tx.budgetCategory.update({
+        where: { id: fromRow.id },
+        data: { allocatedAmount: { decrement: amount } },
+        select: { allocatedAmount: true },
+      })
+      const updatedTo = await tx.budgetCategory.update({
+        where: { id: toRow.id },
+        data: { allocatedAmount: { increment: amount } },
+        select: { allocatedAmount: true },
+      })
+
+      await auditLog(tx, auditCtx, {
+        action: "update",
+        entityType: "BudgetCategory",
+        entityId: budget.id,
+        before: beforeSnapshot,
+        after: {
+          from: {
+            categoryId: data.fromCategoryId,
+            allocatedAmount: updatedFrom.allocatedAmount.toString(),
+          },
+          to: {
+            categoryId: data.toCategoryId,
+            allocatedAmount: updatedTo.allocatedAmount.toString(),
+          },
+          amountMoved: data.amount,
+        },
+      })
+
+      const progress = await computePeriodProgress(tx, familyId, data.month)
+      const result: MoveAllocationResult = {
+        budgetId: budget.id,
+        from: {
+          categoryId: data.fromCategoryId,
+          allocatedAmount: updatedFrom.allocatedAmount.toString(),
+        },
+        to: {
+          categoryId: data.toCategoryId,
+          allocatedAmount: updatedTo.allocatedAmount.toString(),
+        },
+        progress,
+      }
+      await persistIdempotentEndpointResponse(tx, {
+        endpoint: MOVE_ALLOCATION_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+        response: result,
+      })
+      return result
+    })
+
+  try {
+    return await runOnce()
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error
+    const replay = await scopedTenantTransaction(familyId, userId, (tx) =>
+      replayIdempotentEndpointResponse<MoveAllocationResult>(tx, {
+        endpoint: MOVE_ALLOCATION_ENDPOINT,
+        familyId,
+        key: data.idempotencyKey,
+        requestHash,
+      })
+    )
+    if (!replay) throw error
+    return replay
+  }
+}
+
+export const moveBudgetAllocationFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("budget:write")])
+  .inputValidator((data: MoveAllocationInput) =>
+    moveAllocationInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await moveBudgetAllocationForFamily({
       data,
       familyId: context.familyId,
       userId: context.user.id,

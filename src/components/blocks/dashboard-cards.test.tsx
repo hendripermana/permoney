@@ -130,6 +130,9 @@ const budgetBase: SerializedBudgetProgress = {
       categoryColor: "#10b981",
       categoryIcon: "shopping-cart",
       allocatedAmount: "300000",
+      rolloverPolicy: "none",
+      rolledOverAmount: "0",
+      effectiveAllocatedAmount: "300000",
       actualAmount: "320000",
       remainingAmount: "-20000",
       isOver: true,
@@ -139,6 +142,7 @@ const budgetBase: SerializedBudgetProgress = {
   uncategorized: { actualAmount: "0", pendingCount: 0 },
   totals: {
     allocatedAmount: "300000",
+    rolledOverAmount: "0",
     actualAmount: "320000",
     remainingAmount: "-20000",
     isOver: true,

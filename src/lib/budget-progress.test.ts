@@ -3,6 +3,7 @@ import { encodeRate } from "@/lib/fx"
 import {
   calendarDateInZone,
   computeBudgetProgress,
+  foldRolloverCarry,
   transactionInPeriod,
   type BudgetLedgerRowInput,
   type BudgetPeriodInput,
@@ -340,5 +341,103 @@ describe("period membership — family-timezone calendar date", () => {
       period: JUNE,
     })
     expect(result.categories[0]?.actualAmount).toBe(40_000n)
+  })
+})
+
+// ADR-0037 §2 follow-up (PER-278) — rollover is additive: `allocatedAmount`
+// keeps reporting the raw per-period fact; `rolledOverAmount` /
+// `effectiveAllocatedAmount` / `remainingAmount` / `isOver` react to the
+// caller-resolved carry-in.
+describe("computeBudgetProgress — rolledOverAmount is additive", () => {
+  test("omitting rolledOverAmount is identical to passing 0n", () => {
+    const withoutField = computeBudgetProgress({
+      allocations: [{ categoryId: "food", allocatedAmount: 100_000n }],
+      transactions: [expense("food", -60_000n)],
+      period: JUNE,
+    })
+    const withZero = computeBudgetProgress({
+      allocations: [
+        { categoryId: "food", allocatedAmount: 100_000n, rolledOverAmount: 0n },
+      ],
+      transactions: [expense("food", -60_000n)],
+      period: JUNE,
+    })
+    expect(withoutField.categories[0]).toEqual(withZero.categories[0])
+    expect(withoutField.categories[0]?.rolledOverAmount).toBe(0n)
+    expect(withoutField.categories[0]?.effectiveAllocatedAmount).toBe(100_000n)
+  })
+
+  test("a carry-in extends effective allocation and remaining, without changing the raw allocatedAmount", () => {
+    const result = computeBudgetProgress({
+      allocations: [
+        {
+          categoryId: "food",
+          allocatedAmount: 100_000n,
+          rolledOverAmount: 50_000n,
+        },
+      ],
+      transactions: [expense("food", -120_000n)],
+      period: JUNE,
+    })
+    const food = result.categories[0]
+    expect(food?.allocatedAmount).toBe(100_000n) // raw fact, untouched
+    expect(food?.rolledOverAmount).toBe(50_000n)
+    expect(food?.effectiveAllocatedAmount).toBe(150_000n)
+    expect(food?.actualAmount).toBe(120_000n)
+    expect(food?.remainingAmount).toBe(30_000n) // 150k - 120k, not 100k - 120k
+    expect(food?.isOver).toBe(false) // would be true against the raw 100k
+    expect(result.totals.allocatedAmount).toBe(100_000n)
+    expect(result.totals.rolledOverAmount).toBe(50_000n)
+    expect(result.totals.remainingAmount).toBe(30_000n)
+    expect(result.totals.isOver).toBe(false)
+  })
+})
+
+// PER-278 / ADR-0037 §2 follow-up — verified against Sure's real
+// `Budget::RolloverCalculator#leftover_for`: only a surplus rolls forward,
+// compounding across a contiguous run of periods.
+describe("foldRolloverCarry", () => {
+  test("no prior periods carries nothing (chain seeding)", () => {
+    expect(foldRolloverCarry([])).toBe(0n)
+  })
+
+  test("a single surplus period carries its leftover forward", () => {
+    // allocated 100k, spent 60k -> 40k surplus carries in.
+    expect(
+      foldRolloverCarry([{ allocatedAmount: 100_000n, actualAmount: 60_000n }])
+    ).toBe(40_000n)
+  })
+
+  test("an overspend never carries forward as a negative", () => {
+    // allocated 100k, spent 150k -> would be -50k; clamped to 0, NOT -50k.
+    // This is the corrected behavior vs. ADR-0037's original placeholder
+    // ("an overspend carries a negative amount forward") — Sure's real
+    // production code (and YNAB) never auto-carries debt; overspend is
+    // resolved within the same period via Move Allocation.
+    expect(
+      foldRolloverCarry([{ allocatedAmount: 100_000n, actualAmount: 150_000n }])
+    ).toBe(0n)
+  })
+
+  test("surpluses compound across a contiguous carryover run", () => {
+    // Jan: 100k alloc, 60k spent -> 40k surplus.
+    // Feb: 100k alloc + 40k carry = 140k effective, 90k spent -> 50k surplus.
+    // Mar carry-in should be 50k.
+    const carry = foldRolloverCarry([
+      { allocatedAmount: 100_000n, actualAmount: 60_000n },
+      { allocatedAmount: 100_000n, actualAmount: 90_000n },
+    ])
+    expect(carry).toBe(50_000n)
+  })
+
+  test("an overspend period resets the running carry to zero mid-chain", () => {
+    // Jan: 40k surplus. Feb: 100k + 40k = 140k effective, 200k spent -> -60k,
+    // clamped to 0. Mar carry-in is 0, not a negative 60k debt, and not the
+    // stale 40k from Jan either.
+    const carry = foldRolloverCarry([
+      { allocatedAmount: 100_000n, actualAmount: 60_000n },
+      { allocatedAmount: 100_000n, actualAmount: 200_000n },
+    ])
+    expect(carry).toBe(0n)
   })
 })
