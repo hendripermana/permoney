@@ -4343,9 +4343,12 @@ const distributionProvenanceSchema = z
 const positionMoveProvenanceSchema = z
   .object({
     fromAccountId: z.string(),
-    fromAccountName: z.string(),
+    // Optional: a move recorded before this field existed has neither name
+    // snapshotted — the list falls back to a generic label rather than
+    // dropping the (still perfectly valid) event.
+    fromAccountName: z.string().optional(),
     toAccountId: z.string(),
-    toAccountName: z.string(),
+    toAccountName: z.string().optional(),
     instrumentId: z.string(),
     instrumentName: z.string(),
     movedUnitsScaled: z.string(),
@@ -5064,8 +5067,8 @@ export async function listAccountHoldingEventsForFamily({
           date: parseEventDate(payload.date, row.createdAt).toISOString(),
           recordedAt: row.createdAt.toISOString(),
           title: isSource
-            ? `${payload.instrumentName} → ${payload.toAccountName}`
-            : `${payload.instrumentName} ← ${payload.fromAccountName}`,
+            ? `${payload.instrumentName} → ${payload.toAccountName ?? "another account"}`
+            : `${payload.instrumentName} ← ${payload.fromAccountName ?? "another account"}`,
           quantity: scaledToQuantityString(BigInt(payload.movedUnitsScaled)),
           amountMinor: payload.movedCostMinor,
           realizedGainMinor: null,
