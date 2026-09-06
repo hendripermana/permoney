@@ -3824,27 +3824,51 @@ export const recordSwitchFn = createServerFn({ method: "POST" })
 //
 // A broker lets you move a fund/position from one portfolio to another
 // WITHOUT selling (Bibit "pindah portofolio", and its analogues everywhere).
-// Modeled as an in-kind move: the holding (units + cost basis) leaves the
-// source account and lands in the destination account; both accounts'
-// Σ(units × price) re-materialize; NO cash leg, NO realized gain (cost basis
-// carries over exactly). Distinct from Sell-then-Buy, which realizes gain and
-// moves cash. v1 scope (locked with the creator): whole-position move only
-// (no partial split), same-currency accounts only (cross-currency is a later
+// Modeled as an in-kind move: units + a proportional slice of cost basis
+// leave the source account and land in the destination account; both
+// accounts' Σ(units × price) re-materialize; NO cash leg, NO realized gain
+// (cost basis per unit carries over exactly). Distinct from Sell-then-Buy,
+// which realizes gain and moves cash.
+//
+// Supports a PARTIAL move: provide `quantity` (units of the source) or
+// `amount` (a Rupiah/minor-unit figure, converted to units at the holding's
+// current price — informational convenience only, never re-derives cost).
+// Omit both for the v1 default: move the ENTIRE position, which also closes
+// (deletes) the source holding — this is the only path that changes the
+// source's average cost per unit (it doesn't; a partial move leaves the
+// remaining units at the exact same average cost they always had).
+//
+// Locked scope: same-currency accounts only (cross-currency is a later
 // slice, same deferral as multi-currency trades), and no embedded move fee —
 // a broker-charged transfer fee is recorded separately via Slice 3's
 // standalone-fee path after the move, never folded into this call.
 const RECORD_POSITION_MOVE_ENDPOINT = "recordPositionMoveFn"
 
-const recordPositionMoveInputSchema = z.object({
-  // The source holding being moved OUT of its account entirely.
-  fromHoldingId: z.string().min(1),
-  // Destination account — must be a DIFFERENT valuation-tracked account in
-  // the same currency as the source account.
-  toAccountId: z.string().min(1),
-  // Back-datable (a broker-side transfer settles on its own date).
-  date: z.coerce.date().optional(),
-  idempotencyKey: uuidV7Schema,
-})
+const recordPositionMoveInputSchema = z
+  .object({
+    // The source holding being moved out of its account (fully or partly).
+    fromHoldingId: z.string().min(1),
+    // Destination account — must be a DIFFERENT valuation-tracked account in
+    // the same currency as the source account.
+    toAccountId: z.string().min(1),
+    // How much of the source holding to move. Provide AT MOST ONE of these;
+    // omitting both moves the full position (v1 default, unchanged).
+    quantity: decimalStringSchema.optional(),
+    amount: positiveMinorDigitsSchema.optional(),
+    // Back-datable (a broker-side transfer settles on its own date).
+    date: z.coerce.date().optional(),
+    idempotencyKey: uuidV7Schema,
+  })
+  .superRefine((data, ctx) => {
+    if (data.quantity !== undefined && data.amount !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["quantity"],
+        message:
+          "Provide at most one of quantity or amount — omit both to move the full position",
+      })
+    }
+  })
 type RecordPositionMoveInput = z.infer<typeof recordPositionMoveInputSchema>
 
 export interface RecordPositionMoveResult {
@@ -3853,12 +3877,12 @@ export interface RecordPositionMoveResult {
   toAccountId: string
   toHoldingId: string
   instrumentId: string
-  /** Units moved, decimal string — always the position's FULL quantity (v1: whole-position only). */
+  /** Units moved, decimal string — the full source quantity, or the requested partial amount. */
   movedQuantity: string
   /** Cost basis carried over with the move, minor units (no realized gain). */
   movedCostMinor: string
-  /** Always null in v1 — a move always closes the source position. */
-  fromHolding: null
+  /** The remaining source position after a partial move, or null when the move closed it (full move). */
+  fromHolding: SerializedHolding | null
   /** Resulting destination position after the move (averaged into an existing one, if any). */
   toHolding: SerializedHolding
   fromAccountValueAfterMinor: string
@@ -3922,26 +3946,72 @@ async function recordPositionMoveWithinTx(
     )
   }
 
-  // v1: whole-position move only. The full quantity + its exact cost basis
-  // carry over — no unit price is needed at all (this is not a sale).
-  const movedUnitsScaled = quantityToScaled(fromHolding.quantity.toFixed(8))
-  if (movedUnitsScaled <= 0n) {
+  const fromUnitsScaled = quantityToScaled(fromHolding.quantity.toFixed(8))
+  if (fromUnitsScaled <= 0n) {
     throw new HoldingError("Nothing to move — this position has zero units")
   }
+
+  // How much to move: an explicit quantity, an amount converted to units at
+  // the CURRENT price (informational only — cost basis never re-derives from
+  // it), or — when both are omitted — the entire position (v1 default).
+  let movedUnitsScaled: bigint
+  if (data.quantity !== undefined) {
+    movedUnitsScaled = quantityToScaled(data.quantity)
+  } else if (data.amount !== undefined) {
+    movedUnitsScaled = unitsFromAmountScaled(
+      BigInt(data.amount),
+      currentPriceMinor(fromHolding)
+    )
+  } else {
+    movedUnitsScaled = fromUnitsScaled
+  }
+  if (movedUnitsScaled <= 0n) {
+    throw new HoldingError("Move quantity must be greater than zero")
+  }
+  if (movedUnitsScaled > fromUnitsScaled) {
+    throw new HoldingError(
+      `Cannot move ${scaledToQuantityString(movedUnitsScaled)} units — the source position only holds ${scaledToQuantityString(fromUnitsScaled)}`
+    )
+  }
+  const isFullMove = movedUnitsScaled === fromUnitsScaled
+
+  // Cost basis carries over PROPORTIONALLY at the source's exact average unit
+  // cost — no unit price is needed for this, this is not a sale.
   const movedCostMinor = holdingCostMinor(
     movedUnitsScaled,
     fromHolding.avgUnitCostMinor
   )
 
-  // ---- Remove from source: a move always closes the position (v1: whole-position only) ----
-  await tx.holding.delete({ where: { id: fromHolding.id } })
-  await auditLog(tx, auditCtx, {
-    action: "delete",
-    entityType: "Holding",
-    entityId: fromHolding.id,
-    before: serializeHolding(fromHolding),
-    after: null,
-  })
+  // ---- Remove from source: full move closes the position; partial move just
+  // reduces its quantity — the average cost per unit is unchanged either way ----
+  let remainingFromHolding: SerializedHolding | null = null
+  if (isFullMove) {
+    await tx.holding.delete({ where: { id: fromHolding.id } })
+    await auditLog(tx, auditCtx, {
+      action: "delete",
+      entityType: "Holding",
+      entityId: fromHolding.id,
+      before: serializeHolding(fromHolding),
+      after: null,
+    })
+  } else {
+    const updatedFrom = await tx.holding.update({
+      where: { id: fromHolding.id },
+      data: {
+        quantity: scaledToQuantityString(fromUnitsScaled - movedUnitsScaled),
+        lastMutationIdempotencyKey: data.idempotencyKey,
+      },
+      include: { instrument: true },
+    })
+    await auditLog(tx, auditCtx, {
+      action: "update",
+      entityType: "Holding",
+      entityId: updatedFrom.id,
+      before: serializeHolding(fromHolding),
+      after: serializeHolding(updatedFrom),
+    })
+    remainingFromHolding = serializeHolding(updatedFrom)
+  }
 
   // ---- Add to destination: average-cost into an existing position, or create ----
   const existingTo = await tx.holding.findFirst({
@@ -4024,6 +4094,7 @@ async function recordPositionMoveWithinTx(
       instrumentName: fromHolding.instrument.name,
       movedUnitsScaled: movedUnitsScaled.toString(),
       movedCostMinor: movedCostMinor.toString(),
+      isFullMove,
     },
   })
 
@@ -4066,7 +4137,7 @@ async function recordPositionMoveWithinTx(
     instrumentId: fromHolding.instrumentId,
     movedQuantity: scaledToQuantityString(movedUnitsScaled),
     movedCostMinor: movedCostMinor.toString(),
-    fromHolding: null,
+    fromHolding: remainingFromHolding,
     toHolding: finalTo,
     fromAccountValueAfterMinor: fromAccountAfter.balance.toString(),
     toAccountValueAfterMinor: toAccountAfter.balance.toString(),
@@ -4091,6 +4162,8 @@ export async function recordPositionMoveForFamily({
     date: data.date?.toISOString() ?? null,
     fromHoldingId: data.fromHoldingId,
     toAccountId: data.toAccountId,
+    quantity: data.quantity ?? null,
+    amount: data.amount ?? null,
   })
   const auditCtx = await createAuditContext(
     { user: { id: user.id, familyId } },

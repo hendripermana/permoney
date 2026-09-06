@@ -204,6 +204,123 @@ describe("in-kind position move (PER-259 Slice 6 / ADR-0054)", () => {
   })
 
   // --------------------------------------------------------------------------
+  // PARTIAL move by quantity: the source position stays open with the exact
+  // same average cost per unit — only its unit count shrinks.
+  // --------------------------------------------------------------------------
+  test("moves a PARTIAL quantity, leaving the remainder at the same average cost", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const cash = await makeCashAccount(owner)
+    const source = await makeInvestmentAccount(owner, "Old broker")
+    const dest = await makeInvestmentAccount(owner, "New broker")
+    const a = await seedPosition(
+      owner,
+      source.id,
+      cash.id,
+      fundA,
+      "100",
+      "10000"
+    )
+
+    const result = await recordPositionMoveForFamily({
+      data: {
+        fromHoldingId: a.holdingId,
+        toAccountId: dest.id,
+        quantity: "40",
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+    expect(result.movedQuantity).toBe("40.00000000")
+    expect(result.movedCostMinor).toBe("400000")
+    expect(result.fromHolding).not.toBeNull()
+    expect(result.fromHolding?.quantity).toBe("60.00000000")
+    expect(result.fromHolding?.avgUnitCostMinor).toBe("10000")
+    expect(result.toHolding.quantity).toBe("40.00000000")
+    expect(result.toHolding.avgUnitCostMinor).toBe("10000")
+
+    // The source position stays OPEN — a partial move never closes it.
+    const stillSourceHolding = await harness.withFamily(
+      owner.family.id,
+      async (tx) => tx.holding.findFirst({ where: { id: a.holdingId } })
+    )
+    expect(stillSourceHolding).not.toBeNull()
+    expect(stillSourceHolding?.quantity.toFixed(8)).toBe("60.00000000")
+
+    const sourceAfter = await balanceOf(owner, source.id)
+    expect(sourceAfter).toBe(600_000n) // 60 x 10,000 remaining
+    const destAfter = await balanceOf(owner, dest.id)
+    expect(destAfter).toBe(400_000n) // 40 x 10,000 moved
+  })
+
+  // --------------------------------------------------------------------------
+  // PARTIAL move by Rupiah amount: converted to units at the position's
+  // current price — the same amount->units fold every trade dialog uses.
+  // --------------------------------------------------------------------------
+  test("moves a PARTIAL amount, converted to units at the current price", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const cash = await makeCashAccount(owner)
+    const source = await makeInvestmentAccount(owner, "Old broker")
+    const dest = await makeInvestmentAccount(owner, "New broker")
+    const a = await seedPosition(
+      owner,
+      source.id,
+      cash.id,
+      fundA,
+      "100",
+      "10000"
+    )
+
+    const result = await recordPositionMoveForFamily({
+      data: {
+        fromHoldingId: a.holdingId,
+        toAccountId: dest.id,
+        amount: "250000", // Rp 2,500 at a Rp 100/unit price → 25 units
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+    expect(result.movedQuantity).toBe("25.00000000")
+    expect(result.movedCostMinor).toBe("250000")
+    expect(result.fromHolding?.quantity).toBe("75.00000000")
+    expect(result.toHolding.quantity).toBe("25.00000000")
+  })
+
+  // --------------------------------------------------------------------------
+  // A partial move can never exceed the source position's held quantity.
+  // --------------------------------------------------------------------------
+  test("rejects a partial move requesting more units than the position holds", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const cash = await makeCashAccount(owner)
+    const source = await makeInvestmentAccount(owner, "Old broker")
+    const dest = await makeInvestmentAccount(owner, "New broker")
+    const a = await seedPosition(
+      owner,
+      source.id,
+      cash.id,
+      fundA,
+      "100",
+      "10000"
+    )
+
+    await expect(
+      recordPositionMoveForFamily({
+        data: {
+          fromHoldingId: a.holdingId,
+          toAccountId: dest.id,
+          quantity: "150",
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+    ).rejects.toThrow(HoldingError)
+  })
+
+  // --------------------------------------------------------------------------
   // Move into an account that already holds the SAME instrument: average-cost
   // blends exactly, mirroring the Switch buy-side blend.
   // --------------------------------------------------------------------------
