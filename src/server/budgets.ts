@@ -402,6 +402,112 @@ function dateOnlyString(date: Date): string {
  *     empty prefix before it, so its carry-in is 0 — chain seeding needs no
  *     special case.
  */
+interface RolloverChainRow {
+  categoryId: string
+  allocatedAmount: bigint
+  rolloverPolicy: string
+  budget: { periodStart: Date; periodEnd: Date }
+}
+
+interface ChainPeriod {
+  periodStart: Date
+  periodEnd: Date
+  allocatedAmount: bigint
+}
+
+interface RolloverChains {
+  chains: Map<string, ChainPeriod[]>
+  earliestStart: Date | null
+  latestEnd: Date | null
+}
+
+function groupByCategoryId(
+  rows: RolloverChainRow[]
+): Map<string, RolloverChainRow[]> {
+  const byCategory = new Map<string, RolloverChainRow[]>()
+  for (const row of rows) {
+    const list = byCategory.get(row.categoryId)
+    if (list) list.push(row)
+    else byCategory.set(row.categoryId, [row])
+  }
+  return byCategory
+}
+
+/** One category's newest→oldest rows to its oldest→newest `"carryover"`
+ * prefix, stopping at the first `"none"` row (a wall — see the caller's
+ * doc comment). Empty when the period immediately before the target isn't
+ * itself `"carryover"`. */
+function carryoverPrefix(rows: RolloverChainRow[]): ChainPeriod[] {
+  const prefix: ChainPeriod[] = []
+  for (const row of rows) {
+    if (row.rolloverPolicy !== "carryover") break
+    prefix.push({
+      periodStart: row.budget.periodStart,
+      periodEnd: row.budget.periodEnd,
+      allocatedAmount: row.allocatedAmount,
+    })
+  }
+  prefix.reverse() // oldest -> newest, ending just before the target period
+  return prefix
+}
+
+/** Builds each category's carryover chain plus the combined date span the
+ * chains cover — a single ledger fetch (by the caller) can then serve every
+ * chain's per-period actuals. */
+function buildRolloverChains(rows: RolloverChainRow[]): RolloverChains {
+  const chains = new Map<string, ChainPeriod[]>()
+  let earliestStart: Date | null = null
+  let latestEnd: Date | null = null
+
+  for (const [categoryId, categoryRows] of groupByCategoryId(rows)) {
+    const prefix = carryoverPrefix(categoryRows)
+    if (prefix.length === 0) continue
+    chains.set(categoryId, prefix)
+    const first = prefix.at(0)
+    const last = prefix.at(-1)
+    if (
+      first &&
+      (earliestStart === null || first.periodStart < earliestStart)
+    ) {
+      earliestStart = first.periodStart
+    }
+    if (last && (latestEnd === null || last.periodEnd > latestEnd)) {
+      latestEnd = last.periodEnd
+    }
+  }
+
+  return { chains, earliestStart, latestEnd }
+}
+
+/** One category's carry-in: each historical period's actual is derived fresh
+ * from `rangeRows` via the same pure engine used everywhere else (no
+ * separate accounting path), then folded per `foldRolloverCarry`. */
+function foldChainCarryIn(
+  categoryId: string,
+  chain: ChainPeriod[],
+  rangeRows: BudgetLedgerRowInput[],
+  timezone: string
+): bigint {
+  const foldInputs = chain.map((histPeriod) => {
+    const historicalProgress = computeBudgetProgress({
+      allocations: [
+        { categoryId, allocatedAmount: histPeriod.allocatedAmount },
+      ],
+      transactions: rangeRows,
+      period: {
+        start: dateOnlyString(histPeriod.periodStart),
+        end: dateOnlyString(histPeriod.periodEnd),
+        timezone,
+      },
+    })
+    return {
+      allocatedAmount: histPeriod.allocatedAmount,
+      actualAmount: historicalProgress.categories[0]?.actualAmount ?? 0n,
+    }
+  })
+  return foldRolloverCarry(foldInputs)
+}
+
 async function resolveRolloverCarryIn(
   tx: TenantTransactionClient,
   familyId: string,
@@ -434,62 +540,18 @@ async function resolveRolloverCarryIn(
     orderBy: { budget: { periodStart: "desc" } },
   })
 
-  const byCategory = new Map<string, typeof priorRows>()
-  for (const row of priorRows) {
-    const list = byCategory.get(row.categoryId)
-    if (list) list.push(row)
-    else byCategory.set(row.categoryId, [row])
-  }
-
-  interface ChainPeriod {
-    periodStart: Date
-    periodEnd: Date
-    allocatedAmount: bigint
-  }
-  const chains = new Map<string, ChainPeriod[]>()
-  let overallEarliestStart: Date | null = null
-  let overallLatestEnd: Date | null = null
-
-  for (const [categoryId, rows] of byCategory) {
-    const prefix: ChainPeriod[] = []
-    for (const row of rows) {
-      if (row.rolloverPolicy !== "carryover") break
-      prefix.push({
-        periodStart: row.budget.periodStart,
-        periodEnd: row.budget.periodEnd,
-        allocatedAmount: row.allocatedAmount,
-      })
-    }
-    if (prefix.length === 0) continue
-    prefix.reverse() // oldest -> newest, ending just before the target period
-    chains.set(categoryId, prefix)
-    const earliest = prefix[0]?.periodStart
-    const latest = prefix[prefix.length - 1]?.periodEnd
-    if (
-      earliest &&
-      (overallEarliestStart === null || earliest < overallEarliestStart)
-    ) {
-      overallEarliestStart = earliest
-    }
-    if (latest && (overallLatestEnd === null || latest > overallLatestEnd)) {
-      overallLatestEnd = latest
-    }
-  }
+  const { chains, earliestStart, latestEnd } = buildRolloverChains(priorRows)
 
   // Common case: no category has any prior "carryover" history yet — bail
   // before the ledger fetch (mirrors Sure's own "families that never enabled
   // rollover pay one query and never contend").
-  if (
-    chains.size === 0 ||
-    overallEarliestStart === null ||
-    overallLatestEnd === null
-  ) {
+  if (chains.size === 0 || earliestStart === null || latestEnd === null) {
     return result
   }
 
-  const rangeStart = new Date(overallEarliestStart)
+  const rangeStart = new Date(earliestStart)
   rangeStart.setUTCDate(rangeStart.getUTCDate() - 1)
-  const rangeEnd = new Date(overallLatestEnd)
+  const rangeEnd = new Date(latestEnd)
   rangeEnd.setUTCDate(rangeEnd.getUTCDate() + 2)
   const rangeRows = await fetchLedgerRowsInRange(
     tx,
@@ -499,24 +561,10 @@ async function resolveRolloverCarryIn(
   )
 
   for (const [categoryId, chain] of chains) {
-    const foldInputs = chain.map((histPeriod) => {
-      const historicalProgress = computeBudgetProgress({
-        allocations: [
-          { categoryId, allocatedAmount: histPeriod.allocatedAmount },
-        ],
-        transactions: rangeRows,
-        period: {
-          start: dateOnlyString(histPeriod.periodStart),
-          end: dateOnlyString(histPeriod.periodEnd),
-          timezone,
-        },
-      })
-      return {
-        allocatedAmount: histPeriod.allocatedAmount,
-        actualAmount: historicalProgress.categories[0]?.actualAmount ?? 0n,
-      }
-    })
-    result.set(categoryId, foldRolloverCarry(foldInputs))
+    result.set(
+      categoryId,
+      foldChainCarryIn(categoryId, chain, rangeRows, timezone)
+    )
   }
 
   return result

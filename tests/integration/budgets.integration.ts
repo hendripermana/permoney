@@ -703,28 +703,9 @@ describe("budgets vertical slice (PER-148)", () => {
   // Rollover / carryover (PER-278 / ADR-0037 §2 follow-up)
   // -------------------------------------------------------------------------
   describe("rollover carry-in across real period boundaries", () => {
-    const setMonth = async (
-      familyId: string,
-      userId: string,
-      month: string,
-      categoryId: string,
-      amount: string,
-      rolloverPolicy?: "none" | "carryover"
-    ) =>
-      await setBudgetAllocationsForFamily({
-        data: {
-          month,
-          allocations: [
-            { categoryId, allocatedAmount: amount, rolloverPolicy },
-          ],
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId,
-        userId,
-        runInTenantTransaction: runner(userId),
-      })
-
-    test("a category's first-ever period has zero carry-in (chain seeding)", async () => {
+    // Owner + one account + one expense category, shared by every rollover
+    // test below — only the month/spend/policy sequence differs per test.
+    const setupRolloverFixture = async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
       const account = await factories.createAccount({
         familyId: owner.family.id,
@@ -734,63 +715,86 @@ describe("budgets vertical slice (PER-148)", () => {
         type: "expense",
         name: "Food",
       })
-      await createLedgerRow(owner.family.id, owner.user.id, account.id, {
-        amount: -50_000n,
-        categoryId: food.id,
+      return { owner, account, food }
+    }
+
+    // Records one month's spend against the fixture's category, then upserts
+    // that month's allocation — the two calls every rollover scenario makes,
+    // collapsed to one line per period.
+    const spendAndBudget = async (
+      fixture: Awaited<ReturnType<typeof setupRolloverFixture>>,
+      month: string,
+      date: Date,
+      spendAmount: bigint,
+      allocatedAmount: string,
+      rolloverPolicy: "none" | "carryover"
+    ) => {
+      await createLedgerRow(
+        fixture.owner.family.id,
+        fixture.owner.user.id,
+        fixture.account.id,
+        { amount: spendAmount, categoryId: fixture.food.id, date }
+      )
+      return await setBudgetAllocationsForFamily({
+        data: {
+          month,
+          allocations: [
+            {
+              categoryId: fixture.food.id,
+              allocatedAmount,
+              rolloverPolicy,
+            },
+          ],
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: fixture.owner.family.id,
+        userId: fixture.owner.user.id,
+        runInTenantTransaction: runner(fixture.owner.user.id),
       })
-      const progress = await setMonth(
-        owner.family.id,
-        owner.user.id,
+    }
+
+    const foodRow = (
+      progress: Awaited<ReturnType<typeof spendAndBudget>>,
+      categoryId: string
+    ) => progress.categories.find((c) => c.categoryId === categoryId)
+
+    test("a category's first-ever period has zero carry-in (chain seeding)", async () => {
+      const fixture = await setupRolloverFixture()
+      const progress = await spendAndBudget(
+        fixture,
         MONTH,
-        food.id,
+        IN_JUNE,
+        -50_000n,
         "100000",
         "carryover"
       )
-      const row = progress.categories.find((c) => c.categoryId === food.id)
+      const row = foodRow(progress, fixture.food.id)
       expect(row?.rolledOverAmount).toBe("0")
       expect(row?.effectiveAllocatedAmount).toBe("100000")
       expect(row?.remainingAmount).toBe("50000")
     })
 
     test("a surplus carries forward into the next period as extra effective budget", async () => {
-      const owner = await factories.createAuthenticatedOnboardedUser()
-      const account = await factories.createAccount({
-        familyId: owner.family.id,
-      })
-      const food = await factories.createCategory({
-        familyId: owner.family.id,
-        type: "expense",
-        name: "Food",
-      })
+      const fixture = await setupRolloverFixture()
       // June: allocate 100k, spend 60k -> 40k surplus.
-      await createLedgerRow(owner.family.id, owner.user.id, account.id, {
-        amount: -60_000n,
-        categoryId: food.id,
-        date: new Date("2026-06-15T03:00:00.000Z"),
-      })
-      await setMonth(
-        owner.family.id,
-        owner.user.id,
+      await spendAndBudget(
+        fixture,
         "2026-06",
-        food.id,
+        new Date("2026-06-15T03:00:00.000Z"),
+        -60_000n,
         "100000",
         "carryover"
       )
       // July: allocate 100k, spend 120k.
-      await createLedgerRow(owner.family.id, owner.user.id, account.id, {
-        amount: -120_000n,
-        categoryId: food.id,
-        date: new Date("2026-07-15T03:00:00.000Z"),
-      })
-      const july = await setMonth(
-        owner.family.id,
-        owner.user.id,
+      const july = await spendAndBudget(
+        fixture,
         "2026-07",
-        food.id,
+        new Date("2026-07-15T03:00:00.000Z"),
+        -120_000n,
         "100000",
         "carryover"
       )
-      const row = july.categories.find((c) => c.categoryId === food.id)
+      const row = foodRow(july, fixture.food.id)
       expect(row?.rolledOverAmount).toBe("40000")
       expect(row?.effectiveAllocatedAmount).toBe("140000")
       expect(row?.allocatedAmount).toBe("100000") // raw fact untouched
@@ -800,136 +804,87 @@ describe("budgets vertical slice (PER-148)", () => {
     })
 
     test("an overspend never carries forward as a negative", async () => {
-      const owner = await factories.createAuthenticatedOnboardedUser()
-      const account = await factories.createAccount({
-        familyId: owner.family.id,
-      })
-      const food = await factories.createCategory({
-        familyId: owner.family.id,
-        type: "expense",
-        name: "Food",
-      })
+      const fixture = await setupRolloverFixture()
       // June: allocate 100k, spend 150k -> overspend, no surplus.
-      await createLedgerRow(owner.family.id, owner.user.id, account.id, {
-        amount: -150_000n,
-        categoryId: food.id,
-        date: new Date("2026-06-15T03:00:00.000Z"),
-      })
-      await setMonth(
-        owner.family.id,
-        owner.user.id,
+      await spendAndBudget(
+        fixture,
         "2026-06",
-        food.id,
+        new Date("2026-06-15T03:00:00.000Z"),
+        -150_000n,
         "100000",
         "carryover"
       )
-      const july = await setMonth(
-        owner.family.id,
-        owner.user.id,
+      const july = await spendAndBudget(
+        fixture,
         "2026-07",
-        food.id,
+        new Date("2026-07-15T03:00:00.000Z"),
+        0n,
         "100000",
         "carryover"
       )
-      const row = july.categories.find((c) => c.categoryId === food.id)
+      const row = foodRow(july, fixture.food.id)
       expect(row?.rolledOverAmount).toBe("0")
       expect(row?.effectiveAllocatedAmount).toBe("100000")
     })
 
     test("a gap month (category not budgeted) is crossed untouched, not treated as zero", async () => {
-      const owner = await factories.createAuthenticatedOnboardedUser()
-      const account = await factories.createAccount({
-        familyId: owner.family.id,
-      })
-      const food = await factories.createCategory({
-        familyId: owner.family.id,
-        type: "expense",
-        name: "Food",
-      })
+      const fixture = await setupRolloverFixture()
       // April: allocate 100k, spend 60k -> 40k surplus.
-      await createLedgerRow(owner.family.id, owner.user.id, account.id, {
-        amount: -60_000n,
-        categoryId: food.id,
-        date: new Date("2026-04-15T03:00:00.000Z"),
-      })
-      await setMonth(
-        owner.family.id,
-        owner.user.id,
+      await spendAndBudget(
+        fixture,
         "2026-04",
-        food.id,
+        new Date("2026-04-15T03:00:00.000Z"),
+        -60_000n,
         "100000",
         "carryover"
       )
       // May: the category is never budgeted at all (a real gap, not zero).
       // June: allocate 100k, spend 50k.
-      await createLedgerRow(owner.family.id, owner.user.id, account.id, {
-        amount: -50_000n,
-        categoryId: food.id,
-        date: new Date("2026-06-15T03:00:00.000Z"),
-      })
-      const june = await setMonth(
-        owner.family.id,
-        owner.user.id,
+      const june = await spendAndBudget(
+        fixture,
         "2026-06",
-        food.id,
+        new Date("2026-06-15T03:00:00.000Z"),
+        -50_000n,
         "100000",
         "carryover"
       )
-      const row = june.categories.find((c) => c.categoryId === food.id)
+      const row = foodRow(june, fixture.food.id)
       // April's 40k surplus crosses the May gap untouched into June.
       expect(row?.rolledOverAmount).toBe("40000")
       expect(row?.effectiveAllocatedAmount).toBe("140000")
     })
 
     test("a 'none' period in between breaks the chain in both directions", async () => {
-      const owner = await factories.createAuthenticatedOnboardedUser()
-      const account = await factories.createAccount({
-        familyId: owner.family.id,
-      })
-      const food = await factories.createCategory({
-        familyId: owner.family.id,
-        type: "expense",
-        name: "Food",
-      })
+      const fixture = await setupRolloverFixture()
       // April: carryover, 40k surplus.
-      await createLedgerRow(owner.family.id, owner.user.id, account.id, {
-        amount: -60_000n,
-        categoryId: food.id,
-        date: new Date("2026-04-15T03:00:00.000Z"),
-      })
-      await setMonth(
-        owner.family.id,
-        owner.user.id,
+      await spendAndBudget(
+        fixture,
         "2026-04",
-        food.id,
+        new Date("2026-04-15T03:00:00.000Z"),
+        -60_000n,
         "100000",
         "carryover"
       )
       // May: rolloverPolicy explicitly "none" — a wall. Its own surplus
       // (allocated 100k, spent 10k -> 90k) never leaves it either.
-      await createLedgerRow(owner.family.id, owner.user.id, account.id, {
-        amount: -10_000n,
-        categoryId: food.id,
-        date: new Date("2026-05-15T03:00:00.000Z"),
-      })
-      await setMonth(
-        owner.family.id,
-        owner.user.id,
+      await spendAndBudget(
+        fixture,
         "2026-05",
-        food.id,
+        new Date("2026-05-15T03:00:00.000Z"),
+        -10_000n,
         "100000",
         "none"
       )
       // June: carryover again.
-      const june = await setMonth(
-        owner.family.id,
-        owner.user.id,
+      const june = await spendAndBudget(
+        fixture,
         "2026-06",
-        food.id,
+        new Date("2026-06-15T03:00:00.000Z"),
+        0n,
         "100000",
         "carryover"
       )
-      const row = june.categories.find((c) => c.categoryId === food.id)
+      const row = foodRow(june, fixture.food.id)
       // Neither April's 40k nor May's 90k reach June — May's "none" wall
       // stops both directions.
       expect(row?.rolledOverAmount).toBe("0")
