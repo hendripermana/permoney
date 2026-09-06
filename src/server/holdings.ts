@@ -4090,6 +4090,10 @@ async function recordPositionMoveWithinTx(
       fromHoldingId: fromHolding.id,
       toAccountId: toAccount.id,
       toHoldingId,
+      // Names are SNAPSHOTTED at move time (like instrumentName above) so this
+      // audit row stays readable even if an account is renamed later.
+      fromAccountName: fromAccount.name,
+      toAccountName: toAccount.name,
       instrumentId: fromHolding.instrumentId,
       instrumentName: fromHolding.instrument.name,
       movedUnitsScaled: movedUnitsScaled.toString(),
@@ -4293,7 +4297,7 @@ const CORRECT_HOLDING_EVENT_ENDPOINT = "correctHoldingEventFn"
 /** The provenance `entityType`s a position event can be recorded under. */
 const HOLDING_EVENT_ENTITY_TYPES = ["Switch", "Distribution"] as const
 
-export type HoldingEventKind = "switch" | "dividend_reinvest"
+export type HoldingEventKind = "switch" | "dividend_reinvest" | "position_move"
 
 // The provenance payloads `recordSwitchWithinTx` / `recordDistributionWithinTx`
 // write. Validated on read (never trusted blindly); `.passthrough()` so adding
@@ -4328,6 +4332,25 @@ const distributionProvenanceSchema = z
     amountMinor: z.string(),
     unitsAddedScaled: z.string().optional(),
     unitPriceMinor: z.string().nullable().optional(),
+    date: z.string().optional(),
+  })
+  .passthrough()
+
+// PER-259 Slice 6 — Position Move provenance, read-only in the activity list
+// (never in `HOLDING_EVENT_ENTITY_TYPES`, so it's never offered for
+// edit/delete — there is no correction path for a move yet, and showing an
+// Edit button that always fails would be worse than not showing one).
+const positionMoveProvenanceSchema = z
+  .object({
+    fromAccountId: z.string(),
+    fromAccountName: z.string(),
+    toAccountId: z.string(),
+    toAccountName: z.string(),
+    instrumentId: z.string(),
+    instrumentName: z.string(),
+    movedUnitsScaled: z.string(),
+    movedCostMinor: z.string(),
+    isFullMove: z.boolean().optional(),
     date: z.string().optional(),
   })
   .passthrough()
@@ -4951,19 +4974,28 @@ export const accountHoldingEventsQuerySchema = z.object({
   limit: z.number().int().min(1).max(100).optional(),
 })
 
+// A Position Move is READ-ONLY here (never in `HOLDING_EVENT_ENTITY_TYPES`,
+// which gates what `resolveHoldingEventForCorrection` accepts) — there is no
+// edit/delete path for it yet, so it's queried and listed separately from the
+// Switch/Distribution rows so the UI can skip rendering Edit/Delete for it.
+const POSITION_ACTIVITY_ENTITY_TYPES = [
+  ...HOLDING_EVENT_ENTITY_TYPES,
+  "PositionMove",
+] as const
+
 export interface HoldingEventListItem {
   eventId: string
   kind: HoldingEventKind
   /** The user-set event date (ISO), falling back to when it was recorded. */
   date: string
   recordedAt: string
-  /** "Fund A → Fund B" for a switch; the fund name for a reinvest. */
+  /** "Fund A → Fund B" for a switch; the fund name for a reinvest; "Fund → Account" for a move. */
   title: string
-  /** Units moved, decimal string: A units switched out / units reinvested. */
+  /** Units moved, decimal string: A units switched out / units reinvested / units moved. */
   quantity: string
-  /** Proceeds moved (switch) or the reinvested amount, minor units. */
+  /** Proceeds moved (switch), the reinvested amount, or the cost basis moved (position move), minor units. */
   amountMinor: string
-  /** Switch only: realized gain/loss vs average cost, minor units, signed. */
+  /** Switch only: realized gain/loss vs average cost, minor units, signed. Null otherwise (a move never realizes gain). */
   realizedGainMinor: string | null
 }
 
@@ -4983,7 +5015,7 @@ export async function listAccountHoldingEventsForFamily({
     const rows = await tx.auditLog.findMany({
       where: {
         familyId,
-        entityType: { in: [...HOLDING_EVENT_ENTITY_TYPES] },
+        entityType: { in: [...POSITION_ACTIVITY_ENTITY_TYPES] },
         idempotencyKey: { not: null },
       },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -5016,6 +5048,27 @@ export async function listAccountHoldingEventsForFamily({
           quantity: scaledToQuantityString(BigInt(payload.fromUnitsScaled)),
           amountMinor: payload.proceedsMinor,
           realizedGainMinor: payload.realizedGainMinor,
+        })
+        continue
+      }
+      if (row.entityType === "PositionMove") {
+        const parsed = positionMoveProvenanceSchema.safeParse(row.afterJson)
+        if (!parsed.success) continue
+        const payload = parsed.data
+        const isSource = payload.fromAccountId === data.accountId
+        const isDestination = payload.toAccountId === data.accountId
+        if (!isSource && !isDestination) continue
+        items.push({
+          eventId: row.id,
+          kind: "position_move",
+          date: parseEventDate(payload.date, row.createdAt).toISOString(),
+          recordedAt: row.createdAt.toISOString(),
+          title: isSource
+            ? `${payload.instrumentName} → ${payload.toAccountName}`
+            : `${payload.instrumentName} ← ${payload.fromAccountName}`,
+          quantity: scaledToQuantityString(BigInt(payload.movedUnitsScaled)),
+          amountMinor: payload.movedCostMinor,
+          realizedGainMinor: null,
         })
         continue
       }

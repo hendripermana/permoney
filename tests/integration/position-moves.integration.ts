@@ -11,6 +11,7 @@ import { createAccountForFamily } from "@/server/accounts"
 import {
   getAccountHoldingsForFamily,
   HoldingError,
+  listAccountHoldingEventsForFamily,
   recordPositionMoveForFamily,
   recordTradeForFamily,
 } from "@/server/holdings"
@@ -318,6 +319,58 @@ describe("in-kind position move (PER-259 Slice 6 / ADR-0054)", () => {
         user: owner.user,
       })
     ).rejects.toThrow(HoldingError)
+  })
+
+  // --------------------------------------------------------------------------
+  // A move is invisible on the ledger/statement (no cash leg) but must still
+  // be traceable — it appears, read-only, in BOTH accounts' Position Activity.
+  // --------------------------------------------------------------------------
+  test("a move appears read-only in Position Activity on BOTH accounts", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const cash = await makeCashAccount(owner)
+    const source = await makeInvestmentAccount(owner, "Old broker")
+    const dest = await makeInvestmentAccount(owner, "New broker")
+    const a = await seedPosition(
+      owner,
+      source.id,
+      cash.id,
+      fundA,
+      "100",
+      "10000"
+    )
+
+    await recordPositionMoveForFamily({
+      data: {
+        fromHoldingId: a.holdingId,
+        toAccountId: dest.id,
+        quantity: "40",
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+    const sourceEvents = await listAccountHoldingEventsForFamily({
+      data: { accountId: source.id },
+      familyId: owner.family.id,
+      userId: owner.user.id,
+    })
+    const sourceMove = sourceEvents.find((e) => e.kind === "position_move")
+    expect(sourceMove).toBeDefined()
+    expect(sourceMove?.title).toBe(`${fundA.name} → New broker`)
+    expect(sourceMove?.quantity).toBe("40.00000000")
+
+    const destEvents = await listAccountHoldingEventsForFamily({
+      data: { accountId: dest.id },
+      familyId: owner.family.id,
+      userId: owner.user.id,
+    })
+    const destMove = destEvents.find((e) => e.kind === "position_move")
+    expect(destMove).toBeDefined()
+    expect(destMove?.title).toBe(`${fundA.name} ← Old broker`)
+    // Both sides describe the SAME underlying event.
+    expect(destMove?.eventId).toBe(sourceMove?.eventId)
+    expect(destMove?.realizedGainMinor).toBeNull()
   })
 
   // --------------------------------------------------------------------------

@@ -377,13 +377,15 @@ export function HoldingsPanel({
 
 // PER-259 Slice 5 (second half) / ADR-0054 — Position activity (presentational).
 //
-// A Switch and a Dividend REINVEST move units without moving cash, so they
-// create no `Transaction` and can never appear on the per-account statement —
-// which left a mistyped one unreachable. This list is their home: the
-// append-only provenance of each one, newest first, with the Edit / Delete
-// entry points the statement gives a Buy/Sell row. Buy/Sell trades and CASH
-// dividends are NOT listed here — they are ledger rows, and are corrected on
-// the statement (a cash dividend on the account it was paid into).
+// A Switch, a Dividend REINVEST, and a Position Move all move units without
+// moving cash, so they create no `Transaction` and can never appear on the
+// per-account statement — which left a mistyped Switch/Reinvest unreachable.
+// This list is their home: the append-only provenance of each one, newest
+// first. Switch/Reinvest get Edit / Delete (mirroring the statement's
+// Buy/Sell row); a Position Move is READ-ONLY (no correction path exists for
+// it yet — see PER-259 Slice 6). Buy/Sell trades and CASH dividends are NOT
+// listed here — they are ledger rows, and are corrected on the statement (a
+// cash dividend on the account it was paid into).
 export function PositionActivityPanel({
   events,
   currency,
@@ -407,7 +409,8 @@ export function PositionActivityPanel({
           Position activity
         </h2>
         <p className="text-xs text-muted-foreground">
-          Switches and reinvested dividends — they move units, not cash
+          Switches, reinvested dividends, and account moves — they move units,
+          not cash
         </p>
       </div>
 
@@ -427,44 +430,59 @@ export function PositionActivityPanel({
                       className="size-3.5 shrink-0 text-violet-600 dark:text-violet-400"
                       aria-hidden
                     />
-                  ) : (
+                  ) : event.kind === "dividend_reinvest" ? (
                     <Gift
                       className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
+                      aria-hidden
+                    />
+                  ) : (
+                    <FolderInput
+                      className="size-3.5 shrink-0 text-blue-600 dark:text-blue-400"
                       aria-hidden
                     />
                   )}
                   <p className="truncate text-sm font-medium">{event.title}</p>
                   <Badge variant="secondary" className="shrink-0">
-                    {event.kind === "switch" ? "Switch" : "Reinvest"}
+                    {event.kind === "switch"
+                      ? "Switch"
+                      : event.kind === "dividend_reinvest"
+                        ? "Reinvest"
+                        : "Move"}
                   </Badge>
                 </div>
                 <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
                   {new Date(event.date).toLocaleDateString()} · {event.quantity}{" "}
                   units
                 </p>
-                <div className="mt-1.5 flex items-center gap-1">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 px-2 text-xs"
-                    aria-label={`Edit ${event.title}`}
-                    onClick={() => onEdit(event)}
-                  >
-                    Edit
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 px-2 text-xs text-destructive hover:text-destructive"
-                    aria-label={`Delete ${event.title}`}
-                    onClick={() => onDelete(event)}
-                  >
-                    <Trash2 className="size-3.5" />
-                    Delete
-                  </Button>
-                </div>
+                {event.kind === "position_move" ? (
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    No cash moved, no gain realized — not editable here.
+                  </p>
+                ) : (
+                  <div className="mt-1.5 flex items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      aria-label={`Edit ${event.title}`}
+                      onClick={() => onEdit(event)}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs text-destructive hover:text-destructive"
+                      aria-label={`Delete ${event.title}`}
+                      onClick={() => onDelete(event)}
+                    >
+                      <Trash2 className="size-3.5" />
+                      Delete
+                    </Button>
+                  </div>
+                )}
               </div>
               <div className="shrink-0 text-right">
                 <p className="text-sm font-semibold tabular-nums">
