@@ -6,14 +6,11 @@ import {
   expect,
   test,
 } from "vite-plus/test"
-import type { AccountType } from "@/lib/accounts"
-import { createAccountForFamily } from "@/server/accounts"
 import {
   getAccountHoldingsForFamily,
   HoldingError,
   listAccountHoldingEventsForFamily,
   recordPositionMoveForFamily,
-  recordTradeForFamily,
 } from "@/server/holdings"
 import {
   createIntegrationHarness,
@@ -24,6 +21,11 @@ import {
   type AuthenticatedOnboardedUser,
   type TestFactories,
 } from "./support/factories"
+import {
+  makeCashAccount,
+  makeInvestmentAccount,
+  seedPosition,
+} from "./support/holdings-fixtures"
 
 // PER-259 Slice 6 / ADR-0054 item 13 — in-kind position move (no sale). The
 // holding (units + cost basis) leaves the source account and lands, whole, in
@@ -48,40 +50,6 @@ describe("in-kind position move (PER-259 Slice 6 / ADR-0054)", () => {
     await harness.teardown()
   })
 
-  const makeInvestmentAccount = async (
-    owner: AuthenticatedOnboardedUser,
-    name = "Reksadana",
-    currencyOverride?: string
-  ) =>
-    await createAccountForFamily({
-      data: {
-        name,
-        accountType: "TRACKED_ASSET" as AccountType,
-        accountSubtype: "brokerage",
-        openingBalance: "0",
-        ...(currencyOverride ? { currency: currencyOverride } : {}),
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
-
-  const makeCashAccount = async (
-    owner: AuthenticatedOnboardedUser,
-    name = "Checking",
-    openingBalance = "5000000"
-  ) =>
-    await createAccountForFamily({
-      data: {
-        name,
-        accountType: "DEPOSITORY" as AccountType,
-        openingBalance,
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
-
   const balanceOf = (owner: AuthenticatedOnboardedUser, accountId: string) =>
     harness.withFamily(owner.family.id, async (tx) => {
       const row = await tx.account.findUniqueOrThrow({
@@ -91,46 +59,6 @@ describe("in-kind position move (PER-259 Slice 6 / ADR-0054)", () => {
       return row.balance
     })
 
-  // Buys `quantity` units @ `unitPrice` in `investmentId`, funded from
-  // `fundingId`. `instrument` creates a brand-new Instrument row inline;
-  // pass an existing `instrumentId` instead to buy a SECOND position in the
-  // SAME instrument (e.g. seeding an existing destination holding to move
-  // into) — an inline `instrument` object is never deduplicated by name, so
-  // reusing the literal fundA/fundB constant across two calls would silently
-  // create two distinct instruments.
-  const seedPosition = async (
-    owner: AuthenticatedOnboardedUser,
-    investmentId: string,
-    fundingId: string,
-    instrument:
-      | { kind: "mutual_fund"; name: string }
-      | { instrumentId: string },
-    quantity: string,
-    unitPrice: string
-  ) => {
-    const cashAmount = (BigInt(quantity) * BigInt(unitPrice)).toString()
-    const buy = await recordTradeForFamily({
-      data: {
-        investmentAccountId: investmentId,
-        fundingAccountId: fundingId,
-        ...("instrumentId" in instrument
-          ? { instrumentId: instrument.instrumentId }
-          : { instrument }),
-        side: "buy",
-        cashAmount,
-        quantity,
-        unitPrice,
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
-    return {
-      instrumentId: buy.holding?.instrumentId ?? "",
-      holdingId: buy.holding?.id ?? "",
-    }
-  }
-
   const fundA = { kind: "mutual_fund" as const, name: "BNI-AM Dana Ardhani" }
 
   // --------------------------------------------------------------------------
@@ -139,10 +67,11 @@ describe("in-kind position move (PER-259 Slice 6 / ADR-0054)", () => {
   // --------------------------------------------------------------------------
   test("moves a whole position into a fresh account with cost basis carried over exactly", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const cash = await makeCashAccount(owner)
-    const source = await makeInvestmentAccount(owner, "Old broker")
-    const dest = await makeInvestmentAccount(owner, "New broker")
+    const cash = await makeCashAccount(factories, owner)
+    const source = await makeInvestmentAccount(factories, owner, "Old broker")
+    const dest = await makeInvestmentAccount(factories, owner, "New broker")
     const a = await seedPosition(
+      factories,
       owner,
       source.id,
       cash.id,
@@ -210,10 +139,11 @@ describe("in-kind position move (PER-259 Slice 6 / ADR-0054)", () => {
   // --------------------------------------------------------------------------
   test("moves a PARTIAL quantity, leaving the remainder at the same average cost", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const cash = await makeCashAccount(owner)
-    const source = await makeInvestmentAccount(owner, "Old broker")
-    const dest = await makeInvestmentAccount(owner, "New broker")
+    const cash = await makeCashAccount(factories, owner)
+    const source = await makeInvestmentAccount(factories, owner, "Old broker")
+    const dest = await makeInvestmentAccount(factories, owner, "New broker")
     const a = await seedPosition(
+      factories,
       owner,
       source.id,
       cash.id,
@@ -261,10 +191,11 @@ describe("in-kind position move (PER-259 Slice 6 / ADR-0054)", () => {
   // --------------------------------------------------------------------------
   test("moves a PARTIAL amount, converted to units at the current price", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const cash = await makeCashAccount(owner)
-    const source = await makeInvestmentAccount(owner, "Old broker")
-    const dest = await makeInvestmentAccount(owner, "New broker")
+    const cash = await makeCashAccount(factories, owner)
+    const source = await makeInvestmentAccount(factories, owner, "Old broker")
+    const dest = await makeInvestmentAccount(factories, owner, "New broker")
     const a = await seedPosition(
+      factories,
       owner,
       source.id,
       cash.id,
@@ -295,10 +226,11 @@ describe("in-kind position move (PER-259 Slice 6 / ADR-0054)", () => {
   // --------------------------------------------------------------------------
   test("rejects a partial move requesting more units than the position holds", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const cash = await makeCashAccount(owner)
-    const source = await makeInvestmentAccount(owner, "Old broker")
-    const dest = await makeInvestmentAccount(owner, "New broker")
+    const cash = await makeCashAccount(factories, owner)
+    const source = await makeInvestmentAccount(factories, owner, "Old broker")
+    const dest = await makeInvestmentAccount(factories, owner, "New broker")
     const a = await seedPosition(
+      factories,
       owner,
       source.id,
       cash.id,
@@ -327,10 +259,11 @@ describe("in-kind position move (PER-259 Slice 6 / ADR-0054)", () => {
   // --------------------------------------------------------------------------
   test("a move appears read-only in Position Activity on BOTH accounts", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const cash = await makeCashAccount(owner)
-    const source = await makeInvestmentAccount(owner, "Old broker")
-    const dest = await makeInvestmentAccount(owner, "New broker")
+    const cash = await makeCashAccount(factories, owner)
+    const source = await makeInvestmentAccount(factories, owner, "Old broker")
+    const dest = await makeInvestmentAccount(factories, owner, "New broker")
     const a = await seedPosition(
+      factories,
       owner,
       source.id,
       cash.id,
@@ -379,10 +312,11 @@ describe("in-kind position move (PER-259 Slice 6 / ADR-0054)", () => {
   // --------------------------------------------------------------------------
   test("moving into an account that already holds the same instrument blends average cost", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const cash = await makeCashAccount(owner)
-    const source = await makeInvestmentAccount(owner, "Old broker")
-    const dest = await makeInvestmentAccount(owner, "New broker")
+    const cash = await makeCashAccount(factories, owner)
+    const source = await makeInvestmentAccount(factories, owner, "Old broker")
+    const dest = await makeInvestmentAccount(factories, owner, "New broker")
     const a = await seedPosition(
+      factories,
       owner,
       source.id,
       cash.id,
@@ -391,6 +325,7 @@ describe("in-kind position move (PER-259 Slice 6 / ADR-0054)", () => {
       "10000"
     )
     const existing = await seedPosition(
+      factories,
       owner,
       dest.id,
       cash.id,
@@ -426,9 +361,10 @@ describe("in-kind position move (PER-259 Slice 6 / ADR-0054)", () => {
   // --------------------------------------------------------------------------
   test("rejects moving to the SAME account as the source", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const cash = await makeCashAccount(owner)
-    const source = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(factories, owner)
+    const source = await makeInvestmentAccount(factories, owner)
     const a = await seedPosition(
+      factories,
       owner,
       source.id,
       cash.id,
@@ -452,10 +388,16 @@ describe("in-kind position move (PER-259 Slice 6 / ADR-0054)", () => {
 
   test("rejects a cross-currency move", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const cash = await makeCashAccount(owner)
-    const source = await makeInvestmentAccount(owner, "IDR broker")
-    const destUsd = await makeInvestmentAccount(owner, "USD broker", "USD")
+    const cash = await makeCashAccount(factories, owner)
+    const source = await makeInvestmentAccount(factories, owner, "IDR broker")
+    const destUsd = await makeInvestmentAccount(
+      factories,
+      owner,
+      "USD broker",
+      "USD"
+    )
     const a = await seedPosition(
+      factories,
       owner,
       source.id,
       cash.id,
@@ -485,9 +427,10 @@ describe("in-kind position move (PER-259 Slice 6 / ADR-0054)", () => {
 
   test("rejects a destination account that is not holdings-tracked (balanceSource != valuation)", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const source = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const source = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner)
     const a = await seedPosition(
+      factories,
       owner,
       source.id,
       cash.id,
@@ -513,9 +456,10 @@ describe("in-kind position move (PER-259 Slice 6 / ADR-0054)", () => {
   test("a move referencing another family's holding/account is rejected", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
     const intruder = await factories.createAuthenticatedOnboardedUser()
-    const cash = await makeCashAccount(owner)
-    const source = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(factories, owner)
+    const source = await makeInvestmentAccount(factories, owner)
     const a = await seedPosition(
+      factories,
       owner,
       source.id,
       cash.id,
@@ -523,7 +467,11 @@ describe("in-kind position move (PER-259 Slice 6 / ADR-0054)", () => {
       "100",
       "10000"
     )
-    const intruderDest = await makeInvestmentAccount(intruder, "Intruder dest")
+    const intruderDest = await makeInvestmentAccount(
+      factories,
+      intruder,
+      "Intruder dest"
+    )
 
     await expect(
       recordPositionMoveForFamily({
@@ -548,10 +496,11 @@ describe("in-kind position move (PER-259 Slice 6 / ADR-0054)", () => {
   // --------------------------------------------------------------------------
   test("replaying the same key returns the same result and does not double-move", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const cash = await makeCashAccount(owner)
-    const source = await makeInvestmentAccount(owner, "Old broker")
-    const dest = await makeInvestmentAccount(owner, "New broker")
+    const cash = await makeCashAccount(factories, owner)
+    const source = await makeInvestmentAccount(factories, owner, "Old broker")
+    const dest = await makeInvestmentAccount(factories, owner, "New broker")
     const a = await seedPosition(
+      factories,
       owner,
       source.id,
       cash.id,
@@ -602,10 +551,11 @@ describe("in-kind position move (PER-259 Slice 6 / ADR-0054)", () => {
   // --------------------------------------------------------------------------
   test("both accounts' holdings views reflect the move", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const cash = await makeCashAccount(owner)
-    const source = await makeInvestmentAccount(owner, "Old broker")
-    const dest = await makeInvestmentAccount(owner, "New broker")
+    const cash = await makeCashAccount(factories, owner)
+    const source = await makeInvestmentAccount(factories, owner, "Old broker")
+    const dest = await makeInvestmentAccount(factories, owner, "New broker")
     const a = await seedPosition(
+      factories,
       owner,
       source.id,
       cash.id,

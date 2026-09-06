@@ -278,6 +278,27 @@ function currentPriceMinor(holding: Holding): bigint {
   return holding.lastPriceMinor ?? holding.avgUnitCostMinor
 }
 
+// Blend added units + cost into an EXISTING destination holding's average
+// cost. Shared by Switch's buy-side (Slice 4) and a Position Move landing on
+// an account that already holds the instrument (Slice 6) — both need the
+// exact same "average the incoming units into whatever's already there" math.
+function blendedQuantityAndAvgCost(
+  existingTo: Holding,
+  addedUnitsScaled: bigint,
+  addedCostMinor: bigint
+): { quantity: string; avgUnitCostMinor: bigint } {
+  const oldUnitsScaled = quantityToScaled(existingTo.quantity.toFixed(8))
+  const oldCost = holdingCostMinor(oldUnitsScaled, existingTo.avgUnitCostMinor)
+  const newUnitsScaled = oldUnitsScaled + addedUnitsScaled
+  return {
+    quantity: scaledToQuantityString(newUnitsScaled),
+    avgUnitCostMinor: averageUnitCostMinor(
+      oldCost + addedCostMinor,
+      newUnitsScaled
+    ),
+  }
+}
+
 function serializeHolding(holding: HoldingWithInstrument): SerializedHolding {
   const quantityScaled = quantityToScaled(quantityToFixedString(holding))
   const value = holdingValueMinor(quantityScaled, currentPriceMinor(holding))
@@ -3603,21 +3624,16 @@ async function recordSwitchWithinTx(
 
   let toHoldingId: string
   if (existingTo) {
-    const oldToUnitsScaled = quantityToScaled(existingTo.quantity.toFixed(8))
-    const oldToCost = holdingCostMinor(
-      oldToUnitsScaled,
-      existingTo.avgUnitCostMinor
-    )
-    const newToUnitsScaled = oldToUnitsScaled + addedToUnitsScaled
-    const newToAvg = averageUnitCostMinor(
-      oldToCost + proceedsMinor,
-      newToUnitsScaled
+    const blended = blendedQuantityAndAvgCost(
+      existingTo,
+      addedToUnitsScaled,
+      proceedsMinor
     )
     const updatedTo = await tx.holding.update({
       where: { id: existingTo.id },
       data: {
-        quantity: scaledToQuantityString(newToUnitsScaled),
-        avgUnitCostMinor: newToAvg,
+        quantity: blended.quantity,
+        avgUnitCostMinor: blended.avgUnitCostMinor,
         // PER-259 Slice 5 — stamp the "latest" identity marker (buy side).
         lastMutationIdempotencyKey: data.idempotencyKey,
       },
@@ -4025,21 +4041,16 @@ async function recordPositionMoveWithinTx(
 
   let toHoldingId: string
   if (existingTo) {
-    const oldToUnitsScaled = quantityToScaled(existingTo.quantity.toFixed(8))
-    const oldToCost = holdingCostMinor(
-      oldToUnitsScaled,
-      existingTo.avgUnitCostMinor
-    )
-    const newToUnitsScaled = oldToUnitsScaled + movedUnitsScaled
-    const newToAvg = averageUnitCostMinor(
-      oldToCost + movedCostMinor,
-      newToUnitsScaled
+    const blended = blendedQuantityAndAvgCost(
+      existingTo,
+      movedUnitsScaled,
+      movedCostMinor
     )
     const updatedTo = await tx.holding.update({
       where: { id: existingTo.id },
       data: {
-        quantity: scaledToQuantityString(newToUnitsScaled),
-        avgUnitCostMinor: newToAvg,
+        quantity: blended.quantity,
+        avgUnitCostMinor: blended.avgUnitCostMinor,
         // PER-259 Slice 5 — stamp the "latest" identity marker.
         lastMutationIdempotencyKey: data.idempotencyKey,
       },
