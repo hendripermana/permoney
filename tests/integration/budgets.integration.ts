@@ -12,6 +12,7 @@ import {
   archiveBudgetForFamily,
   getBudgetForPeriodForFamily,
   listBudgetsForFamily,
+  moveBudgetAllocationForFamily,
   setBudgetAllocationsForFamily,
 } from "@/server/budgets"
 import { IdempotencyConflictError } from "@/server/idempotency"
@@ -696,5 +697,519 @@ describe("budgets vertical slice (PER-148)", () => {
     expect(roleCan("admin", "budget:write")).toBe(true)
     expect(roleCan("member", "budget:write")).toBe(true)
     expect(roleCan("viewer", "budget:write")).toBe(false)
+  })
+
+  // -------------------------------------------------------------------------
+  // Rollover / carryover (PER-278 / ADR-0037 §2 follow-up)
+  // -------------------------------------------------------------------------
+  describe("rollover carry-in across real period boundaries", () => {
+    const setMonth = async (
+      familyId: string,
+      userId: string,
+      month: string,
+      categoryId: string,
+      amount: string,
+      rolloverPolicy?: "none" | "carryover"
+    ) =>
+      await setBudgetAllocationsForFamily({
+        data: {
+          month,
+          allocations: [
+            { categoryId, allocatedAmount: amount, rolloverPolicy },
+          ],
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId,
+        userId,
+        runInTenantTransaction: runner(userId),
+      })
+
+    test("a category's first-ever period has zero carry-in (chain seeding)", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await factories.createAccount({
+        familyId: owner.family.id,
+      })
+      const food = await factories.createCategory({
+        familyId: owner.family.id,
+        type: "expense",
+        name: "Food",
+      })
+      await createLedgerRow(owner.family.id, owner.user.id, account.id, {
+        amount: -50_000n,
+        categoryId: food.id,
+      })
+      const progress = await setMonth(
+        owner.family.id,
+        owner.user.id,
+        MONTH,
+        food.id,
+        "100000",
+        "carryover"
+      )
+      const row = progress.categories.find((c) => c.categoryId === food.id)
+      expect(row?.rolledOverAmount).toBe("0")
+      expect(row?.effectiveAllocatedAmount).toBe("100000")
+      expect(row?.remainingAmount).toBe("50000")
+    })
+
+    test("a surplus carries forward into the next period as extra effective budget", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await factories.createAccount({
+        familyId: owner.family.id,
+      })
+      const food = await factories.createCategory({
+        familyId: owner.family.id,
+        type: "expense",
+        name: "Food",
+      })
+      // June: allocate 100k, spend 60k -> 40k surplus.
+      await createLedgerRow(owner.family.id, owner.user.id, account.id, {
+        amount: -60_000n,
+        categoryId: food.id,
+        date: new Date("2026-06-15T03:00:00.000Z"),
+      })
+      await setMonth(
+        owner.family.id,
+        owner.user.id,
+        "2026-06",
+        food.id,
+        "100000",
+        "carryover"
+      )
+      // July: allocate 100k, spend 120k.
+      await createLedgerRow(owner.family.id, owner.user.id, account.id, {
+        amount: -120_000n,
+        categoryId: food.id,
+        date: new Date("2026-07-15T03:00:00.000Z"),
+      })
+      const july = await setMonth(
+        owner.family.id,
+        owner.user.id,
+        "2026-07",
+        food.id,
+        "100000",
+        "carryover"
+      )
+      const row = july.categories.find((c) => c.categoryId === food.id)
+      expect(row?.rolledOverAmount).toBe("40000")
+      expect(row?.effectiveAllocatedAmount).toBe("140000")
+      expect(row?.allocatedAmount).toBe("100000") // raw fact untouched
+      expect(row?.actualAmount).toBe("120000")
+      expect(row?.remainingAmount).toBe("20000") // would be -20000 without rollover
+      expect(row?.isOver).toBe(false)
+    })
+
+    test("an overspend never carries forward as a negative", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await factories.createAccount({
+        familyId: owner.family.id,
+      })
+      const food = await factories.createCategory({
+        familyId: owner.family.id,
+        type: "expense",
+        name: "Food",
+      })
+      // June: allocate 100k, spend 150k -> overspend, no surplus.
+      await createLedgerRow(owner.family.id, owner.user.id, account.id, {
+        amount: -150_000n,
+        categoryId: food.id,
+        date: new Date("2026-06-15T03:00:00.000Z"),
+      })
+      await setMonth(
+        owner.family.id,
+        owner.user.id,
+        "2026-06",
+        food.id,
+        "100000",
+        "carryover"
+      )
+      const july = await setMonth(
+        owner.family.id,
+        owner.user.id,
+        "2026-07",
+        food.id,
+        "100000",
+        "carryover"
+      )
+      const row = july.categories.find((c) => c.categoryId === food.id)
+      expect(row?.rolledOverAmount).toBe("0")
+      expect(row?.effectiveAllocatedAmount).toBe("100000")
+    })
+
+    test("a gap month (category not budgeted) is crossed untouched, not treated as zero", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await factories.createAccount({
+        familyId: owner.family.id,
+      })
+      const food = await factories.createCategory({
+        familyId: owner.family.id,
+        type: "expense",
+        name: "Food",
+      })
+      // April: allocate 100k, spend 60k -> 40k surplus.
+      await createLedgerRow(owner.family.id, owner.user.id, account.id, {
+        amount: -60_000n,
+        categoryId: food.id,
+        date: new Date("2026-04-15T03:00:00.000Z"),
+      })
+      await setMonth(
+        owner.family.id,
+        owner.user.id,
+        "2026-04",
+        food.id,
+        "100000",
+        "carryover"
+      )
+      // May: the category is never budgeted at all (a real gap, not zero).
+      // June: allocate 100k, spend 50k.
+      await createLedgerRow(owner.family.id, owner.user.id, account.id, {
+        amount: -50_000n,
+        categoryId: food.id,
+        date: new Date("2026-06-15T03:00:00.000Z"),
+      })
+      const june = await setMonth(
+        owner.family.id,
+        owner.user.id,
+        "2026-06",
+        food.id,
+        "100000",
+        "carryover"
+      )
+      const row = june.categories.find((c) => c.categoryId === food.id)
+      // April's 40k surplus crosses the May gap untouched into June.
+      expect(row?.rolledOverAmount).toBe("40000")
+      expect(row?.effectiveAllocatedAmount).toBe("140000")
+    })
+
+    test("a 'none' period in between breaks the chain in both directions", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await factories.createAccount({
+        familyId: owner.family.id,
+      })
+      const food = await factories.createCategory({
+        familyId: owner.family.id,
+        type: "expense",
+        name: "Food",
+      })
+      // April: carryover, 40k surplus.
+      await createLedgerRow(owner.family.id, owner.user.id, account.id, {
+        amount: -60_000n,
+        categoryId: food.id,
+        date: new Date("2026-04-15T03:00:00.000Z"),
+      })
+      await setMonth(
+        owner.family.id,
+        owner.user.id,
+        "2026-04",
+        food.id,
+        "100000",
+        "carryover"
+      )
+      // May: rolloverPolicy explicitly "none" — a wall. Its own surplus
+      // (allocated 100k, spent 10k -> 90k) never leaves it either.
+      await createLedgerRow(owner.family.id, owner.user.id, account.id, {
+        amount: -10_000n,
+        categoryId: food.id,
+        date: new Date("2026-05-15T03:00:00.000Z"),
+      })
+      await setMonth(
+        owner.family.id,
+        owner.user.id,
+        "2026-05",
+        food.id,
+        "100000",
+        "none"
+      )
+      // June: carryover again.
+      const june = await setMonth(
+        owner.family.id,
+        owner.user.id,
+        "2026-06",
+        food.id,
+        "100000",
+        "carryover"
+      )
+      const row = june.categories.find((c) => c.categoryId === food.id)
+      // Neither April's 40k nor May's 90k reach June — May's "none" wall
+      // stops both directions.
+      expect(row?.rolledOverAmount).toBe("0")
+      expect(row?.effectiveAllocatedAmount).toBe("100000")
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Move allocation — "roll with the punches" reallocation (PER-278)
+  // -------------------------------------------------------------------------
+  describe("moveBudgetAllocationForFamily", () => {
+    const setup = async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const food = await factories.createCategory({
+        familyId: owner.family.id,
+        type: "expense",
+        name: "Food",
+      })
+      const fun = await factories.createCategory({
+        familyId: owner.family.id,
+        type: "expense",
+        name: "Fun",
+      })
+      await setBudgetAllocationsForFamily({
+        data: {
+          month: MONTH,
+          allocations: [
+            { categoryId: food.id, allocatedAmount: "50000" },
+            { categoryId: fun.id, allocatedAmount: "100000" },
+          ],
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        userId: owner.user.id,
+        runInTenantTransaction: runner(owner.user.id),
+      })
+      return { owner, food, fun }
+    }
+
+    test("moves allocation from one category to another in the same period", async () => {
+      const { owner, food, fun } = await setup()
+      const result = await moveBudgetAllocationForFamily({
+        data: {
+          month: MONTH,
+          fromCategoryId: fun.id,
+          toCategoryId: food.id,
+          amount: "30000",
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        userId: owner.user.id,
+        runInTenantTransaction: runner(owner.user.id),
+      })
+      expect(result.from.allocatedAmount).toBe("70000")
+      expect(result.to.allocatedAmount).toBe("80000")
+      const foodRow = result.progress.categories.find(
+        (c) => c.categoryId === food.id
+      )
+      const funRow = result.progress.categories.find(
+        (c) => c.categoryId === fun.id
+      )
+      expect(foodRow?.allocatedAmount).toBe("80000")
+      expect(funRow?.allocatedAmount).toBe("70000")
+    })
+
+    test("cannot move more than the source category's current allocation (source stays >= 0)", async () => {
+      const { owner, food, fun } = await setup()
+      await expect(
+        moveBudgetAllocationForFamily({
+          data: {
+            month: MONTH,
+            fromCategoryId: food.id, // only has 50000
+            toCategoryId: fun.id,
+            amount: "50001",
+            idempotencyKey: factories.createIdempotencyKey(),
+          },
+          familyId: owner.family.id,
+          userId: owner.user.id,
+          runInTenantTransaction: runner(owner.user.id),
+        })
+      ).rejects.toBeInstanceOf(BudgetValidationError)
+    })
+
+    test("moving the exact remaining balance drives the source to exactly zero, never negative", async () => {
+      const { owner, food, fun } = await setup()
+      const result = await moveBudgetAllocationForFamily({
+        data: {
+          month: MONTH,
+          fromCategoryId: food.id,
+          toCategoryId: fun.id,
+          amount: "50000",
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        userId: owner.user.id,
+        runInTenantTransaction: runner(owner.user.id),
+      })
+      expect(result.from.allocatedAmount).toBe("0")
+      expect(result.to.allocatedAmount).toBe("150000")
+    })
+
+    test("cannot move to the same category", async () => {
+      const { owner, food } = await setup()
+      await expect(
+        moveBudgetAllocationForFamily({
+          data: {
+            month: MONTH,
+            fromCategoryId: food.id,
+            toCategoryId: food.id,
+            amount: "1000",
+            idempotencyKey: factories.createIdempotencyKey(),
+          },
+          familyId: owner.family.id,
+          userId: owner.user.id,
+          runInTenantTransaction: runner(owner.user.id),
+        })
+      ).rejects.toBeInstanceOf(BudgetValidationError)
+    })
+
+    test("a non-positive amount is rejected", async () => {
+      const { owner, food, fun } = await setup()
+      await expect(
+        moveBudgetAllocationForFamily({
+          data: {
+            month: MONTH,
+            fromCategoryId: food.id,
+            toCategoryId: fun.id,
+            amount: "0",
+            idempotencyKey: factories.createIdempotencyKey(),
+          },
+          familyId: owner.family.id,
+          userId: owner.user.id,
+          runInTenantTransaction: runner(owner.user.id),
+        })
+      ).rejects.toBeInstanceOf(BudgetValidationError)
+    })
+
+    test("a category with no allocation in this period is rejected", async () => {
+      const { owner, food } = await setup()
+      const other = await factories.createCategory({
+        familyId: owner.family.id,
+        type: "expense",
+        name: "Other",
+      })
+      await expect(
+        moveBudgetAllocationForFamily({
+          data: {
+            month: MONTH,
+            fromCategoryId: food.id,
+            toCategoryId: other.id, // never budgeted this period
+            amount: "1000",
+            idempotencyKey: factories.createIdempotencyKey(),
+          },
+          familyId: owner.family.id,
+          userId: owner.user.id,
+          runInTenantTransaction: runner(owner.user.id),
+        })
+      ).rejects.toBeInstanceOf(BudgetValidationError)
+    })
+
+    test("a period with no budget at all is rejected as not found", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const food = await factories.createCategory({
+        familyId: owner.family.id,
+        type: "expense",
+      })
+      const fun = await factories.createCategory({
+        familyId: owner.family.id,
+        type: "expense",
+      })
+      await expect(
+        moveBudgetAllocationForFamily({
+          data: {
+            month: MONTH,
+            fromCategoryId: food.id,
+            toCategoryId: fun.id,
+            amount: "1000",
+            idempotencyKey: factories.createIdempotencyKey(),
+          },
+          familyId: owner.family.id,
+          userId: owner.user.id,
+          runInTenantTransaction: runner(owner.user.id),
+        })
+      ).rejects.toBeInstanceOf(BudgetNotFoundError)
+    })
+
+    test("cannot move using another family's categoryId (tenant isolation)", async () => {
+      const { owner: familyA, food: aFood } = await setup()
+      const familyB = await factories.createAuthenticatedOnboardedUser()
+      const bCategory = await factories.createCategory({
+        familyId: familyB.family.id,
+        type: "expense",
+      })
+      await setBudgetAllocationsForFamily({
+        data: {
+          month: MONTH,
+          allocations: [{ categoryId: bCategory.id, allocatedAmount: "1000" }],
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: familyB.family.id,
+        userId: familyB.user.id,
+        runInTenantTransaction: runner(familyB.user.id),
+      })
+      await expect(
+        moveBudgetAllocationForFamily({
+          data: {
+            month: MONTH,
+            fromCategoryId: aFood.id,
+            toCategoryId: bCategory.id, // belongs to family B, not A
+            amount: "1000",
+            idempotencyKey: factories.createIdempotencyKey(),
+          },
+          familyId: familyA.family.id,
+          userId: familyA.user.id,
+          runInTenantTransaction: runner(familyA.user.id),
+        })
+      ).rejects.toBeInstanceOf(BudgetValidationError)
+    })
+
+    test("writes an append-only audit row with before/after allocations on both categories", async () => {
+      const { owner, food, fun } = await setup()
+      await moveBudgetAllocationForFamily({
+        data: {
+          month: MONTH,
+          fromCategoryId: fun.id,
+          toCategoryId: food.id,
+          amount: "30000",
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        userId: owner.user.id,
+        runInTenantTransaction: runner(owner.user.id),
+      })
+      const audits = await harness.withMember(
+        owner.family.id,
+        owner.user.id,
+        (tx) =>
+          tx.auditLog.findMany({
+            where: { entityType: "BudgetCategory", action: "update" },
+          })
+      )
+      expect(audits).toHaveLength(1)
+      const before = audits[0]?.beforeJson as {
+        from?: { allocatedAmount?: string }
+        to?: { allocatedAmount?: string }
+      } | null
+      const after = audits[0]?.afterJson as {
+        from?: { allocatedAmount?: string }
+        to?: { allocatedAmount?: string }
+      } | null
+      expect(before?.from?.allocatedAmount).toBe("100000")
+      expect(before?.to?.allocatedAmount).toBe("50000")
+      expect(after?.from?.allocatedAmount).toBe("70000")
+      expect(after?.to?.allocatedAmount).toBe("80000")
+    })
+
+    test("replaying the same idempotency key does not double-move", async () => {
+      const { owner, food, fun } = await setup()
+      const key = factories.createIdempotencyKey()
+      const payload = {
+        month: MONTH,
+        fromCategoryId: fun.id,
+        toCategoryId: food.id,
+        amount: "30000",
+        idempotencyKey: key,
+      }
+      await moveBudgetAllocationForFamily({
+        data: payload,
+        familyId: owner.family.id,
+        userId: owner.user.id,
+        runInTenantTransaction: runner(owner.user.id),
+      })
+      const second = await moveBudgetAllocationForFamily({
+        data: payload,
+        familyId: owner.family.id,
+        userId: owner.user.id,
+        runInTenantTransaction: runner(owner.user.id),
+      })
+      expect(second.from.allocatedAmount).toBe("70000") // not moved twice
+      expect(second.to.allocatedAmount).toBe("80000")
+    })
   })
 })

@@ -107,6 +107,117 @@ allocation is durable, audited metadata; progress is a rebuildable projection.**
   **compounds**, and chain seeding. Building a half-correct carryover now is
   worse than reserving it (AGENTS.md: design the invariant, don't simplify).
 
+  > **Superseded by §2a (PER-278).** The "an overspend carries a negative
+  > amount forward" clause above was an unverified placeholder, written before
+  > any reference implementation was inspected. PER-278 checked it against
+  > Sure's actual production `Budget::RolloverCalculator` and found the real
+  > algorithm does the opposite — see §2a. The open questions (gaps, chain
+  > seeding) are also resolved there.
+
+### 2a. Rollover / carryover — resolved algorithm (PER-278)
+
+Implemented in `src/lib/budget-progress.ts` (`foldRolloverCarry`, pure) and
+`src/server/budgets.ts` (`resolveRolloverCarryIn`, the chain-walk query
+orchestration). Verified against Sure's real
+`app/models/budget/rollover_calculator.rb` and `app/models/budget_category.rb`
+(`we-promise/sure`), not the §2 paraphrase above.
+
+- **Only a surplus rolls forward; an overspend never carries as debt.**
+  `carryOut(P) = max(0, allocatedAmount(P) + carryIn(P) − actualAmount(P))`.
+  This corrects §2's placeholder — Sure's own code comment is explicit: _"v1
+  only carries a surplus, a negative balance stops at the month it happened
+  in."_ This also matches YNAB's real "Roll With the Punches" behavior: an
+  overspend is a same-period problem the household resolves by moving
+  allocation from a category with a surplus (§2b, Move Allocation), never an
+  automatically-carried debt on next month.
+- **Read-time derived, not materialized.** Sure stores `rolled_over_amount` as
+  a column and recomputes a forward chain (under a `pg_advisory_xact_lock`
+  keyed per budget chain) whenever a budget is bootstrapped or an allocation
+  changes. Permoney deliberately does **not** copy this: the whole point of
+  §4's "progress is computed, never stored" design is that editing a
+  transaction in a closed historical month retroactively and automatically
+  corrects that month's actual/remaining with no explicit rebuild step. A
+  materialized carry would drift the moment a past transaction changes unless
+  every transaction-mutation path also re-triggered a chain recompute for
+  every category it touches — real coupling into the transaction mutation hot
+  path (AGENTS.md §5's core ledger boundary) that this slice does not need.
+  The accepted cost: a budget read walks up to O(chain depth) historical
+  periods per `"carryover"` category instead of O(1). Budget reads are
+  already low-frequency (§9); rollover is opt-in per category. If this ever
+  becomes a hot path, materializing per Sure's design is the natural
+  follow-up — `foldRolloverCarry`'s math does not change either way.
+- **A category's chain is its own periods, walked newest → oldest from the
+  period immediately before the one being read, collecting a contiguous
+  prefix while `rolloverPolicy = "carryover"`.** The walk stops (excludes) at
+  the first period whose `rolloverPolicy` is `"none"` — mirroring Sure's
+  "switching the toggle off stops the money in both directions": that
+  period's own surplus never left it, so nothing before it can reach the
+  target period either.
+- **Gaps are crossed untouched, never treated as zero.** A month the family
+  never budgeted for a category (no `Budget` row, or no `BudgetCategory` row
+  for that category) is absent from the chain-walk query result and the walk
+  simply continues past it — same semantics as Sure's `initialized_budgets`
+  scope.
+- **Chain seeding.** The first period a category was ever budgeted with
+  `"carryover"` has an empty prefix before it, so its carry-in is `0` — no
+  special case needed.
+- **Compounding.** A run of surpluses accumulates period over period (the
+  point of an envelope), matching Sure's forward chain pass.
+- **No budget-level rollover**, only per-category — matches the schema (there
+  is no whole-`Budget` rollover flag) and Sure's own per-`BudgetCategory`
+  toggle.
+- **Toggling `rolloverPolicy` on a past period is a live input, not a
+  snapshot.** Since the chain is walked fresh on every read from the current
+  stored `rolloverPolicy` values, changing a _past_ period's policy
+  retroactively changes what the chain-walk computes from that point forward
+  (consistent with "trivially correct under reclassification," §4).
+  Changing the _current or a future_ period's policy only ever affects that
+  period's own computation onward — it cannot rewrite periods strictly before
+  it, since those are already-fixed history the walk reads, not writes.
+- **`SerializedBudgetCategoryProgress` additions (additive, non-breaking):**
+  `rolloverPolicy`, `rolledOverAmount` (carry-in, "0" when policy is
+  `"none"`), `effectiveAllocatedAmount` (`allocatedAmount + rolledOverAmount`
+  — the number a rollover-aware UI should show as "available"). `remainingAmount`
+  and `isOver` are computed against the effective amount; `allocatedAmount`
+  itself keeps reporting the raw per-period fact, unchanged.
+- **Deliberately simpler than Sure in one respect:** Sure's chain-fold also
+  ring-fences parent/subcategory allocations when computing leftover. Permoney
+  has no budget category rollup this slice (§3.3), so that entire branch does
+  not exist here — nothing to port.
+
+### 2b. Move Allocation — "Roll With the Punches" reallocation (PER-278)
+
+`moveBudgetAllocationFn` (`src/server/budgets.ts`) moves `amount` of
+`allocatedAmount` from one `BudgetCategory` to another. Verified against
+Sure's real `BudgetCategory.move_allocation!` (same source), minus the
+parent/subcategory ring-fencing Permoney's model does not have (§3.3):
+
+- Amount must be `> 0`.
+- Both categories must belong to the **same** `Budget` (period) — a move never
+  crosses periods. Different-period reallocation is not offered; "next
+  month's budget" is a fresh upsert per §1, and letting a move reach into a
+  different period's allocation would break that period's own stable
+  historical fact.
+- Not the same category.
+- **The source must stay `>= 0` after the move.** `amount` cannot exceed the
+  source's _current_ `allocatedAmount` — a move can never manufacture money by
+  driving one category negative to rescue a worse negative elsewhere. The
+  existing `allocatedAmount >= 0` DB CHECK (§6) is defense-in-depth against a
+  concurrent move racing the pre-check.
+- Obeys the full ledger-adjacent mutation boundary (AGENTS.md §5A): one tenant
+  transaction, `familyId`-scoped tenant-owned-reference validation on both
+  categories, atomic `{ increment }`/`{ decrement }` (never a memory-computed
+  replace), an idempotency key, and an append-only `AuditLog` row
+  (`entityType: "BudgetCategory"`) with before/after `allocatedAmount` on
+  **both** categories in the same transaction.
+- **Does not touch rollover.** Because rollover is read-time derived (§2a),
+  there is no materialized chain state for a move to invalidate — one concrete
+  win of the read-derived choice over Sure's materialized one: Sure's
+  `move_allocation!` comment explicitly warns the caller to run
+  `Budget::RolloverCalculator` afterward, in a _separate_ transaction, to avoid
+  an advisory-lock/row-lock deadlock. Permoney has no such second step to
+  forget.
+
 ### 3. Budget scope — what counts as "actual"
 
 The progress engine counts a ledger row toward a `BudgetCategory` iff **all** of:
@@ -355,8 +466,11 @@ primitives, `cn()`, `lucide-react`, no `useEffect`, no `any`.
 
 ### Negative / costs
 
-- Carryover is reserved, not delivered; users who expect rollover must wait for
-  the follow-up (the semantics are at least locked).
+- ~~Carryover is reserved, not delivered~~ **Resolved by PER-278 (§2a/§2b):**
+  read-time-derived per-category rollover plus a Move Allocation mutation for
+  same-period reallocation. Left for a further follow-up: materializing the
+  chain if read-time walking ever proves too slow (§2a), and any UI surface
+  for either feature (this PR is server-only, per its own scope).
 - Per-period rows mean "set next month" is a fresh upsert (a future "copy from
   last month" convenience is out of scope).
 - Budget actuals depend on FX projections being current; FX-pending rows are
@@ -387,6 +501,10 @@ primitives, `cn()`, `lucide-react`, no `useEffect`, no `any`.
 ## References
 
 - PER-148 (P1 — Budgets vertical slice); supersedes PER-112.
+- PER-278 (rollover + Move Allocation — resolves §2's deferred contract; adds
+  §2a/§2b). Reference implementation checked against Sure's
+  `app/models/budget/rollover_calculator.rb` and `app/models/budget_category.rb`
+  (`we-promise/sure`).
 - PER-156 (R3 — Dashboard realization; consumes budget progress).
 - ADR-0008 (Core domain model and ledger boundaries — amended §3/§7).
 - ADR-0035 (Currency, FX snapshots — base-currency projection consumed here).
