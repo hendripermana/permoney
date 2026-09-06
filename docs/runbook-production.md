@@ -143,6 +143,46 @@ upload attempt is normal (an R2/S3-compatibility gap on some operations);
 `rclone`'s built-in retry succeeds on attempt 2 without intervention. Only
 worth investigating if all 3 retry attempts fail.
 
+## Market data refresh (PER-237 / ADR-0050 §4)
+
+Daily via cron — same mechanism as the backup job above (no serverless cron
+on this self-hosted VM per ADR-0047) — calling the app's own internal
+endpoint over loopback:
+
+```cron
+5 11 * * * cd /home/ubuntu/permoney-prod && set -a && . ./.env && set +a && ./deploy/refresh-market-data.sh >> /var/log/permoney_prod_market_data_refresh.log 2>&1
+```
+
+Runs at **11:05 UTC (~18:05 WIB)** — after Indonesian Stock Exchange close and
+after gold-desk / reksadana NAV prices for the day are typically published.
+**This assumes the VM's crontab runs in UTC** — verify with `date -u` vs
+`date` on the box before relying on it, and adjust the hour if the crontab's
+local time differs. One daily run covers every feed: the router
+(`ingestAllInstrumentsOnce`, ADR-0052) discovers and prices the WHOLE
+`MarketInstrument` catalog (gold today; reksadana funds once linked; any
+future provider) in a single call, so no per-feed cron entries are needed.
+
+Requires `MARKET_DATA_REFRESH_SECRET` set identically in the app's `.env`
+(picked up by `docker-compose.prod.yml`) and in this cron's `.env` — the SAME
+file works for both, since the app's own `.env` already has it (see
+`.env.example`). Unset on either side = the app's
+`/api/internal/market-data-refresh` route rejects every request (fails
+closed) rather than running unauthenticated.
+
+**Health / alerting.** No email/push infrastructure exists in this codebase
+(the same gap ADR-0043's "Notify" section documents). A run that DEGRADES —
+one provider group failed but others still ingested — still exits `0` (the
+pipeline's own per-provider isolation, ADR-0050 §4, already contained it) but
+logs `"degraded":true` in the JSON summary; a run that CRASHES (endpoint
+unreachable, wrong/missing secret, an unexpected 500) exits non-zero via
+`curl -f`. Until a real notification channel is chosen for the project,
+treat this the same way the backup log is treated today: periodically
+`grep '"degraded":true'` or check for a non-zero cron exit in
+`/var/log/permoney_prod_market_data_refresh.log` (or configure `MAILTO` in
+the crontab to get cron's own failure emails). Wiring an actual push/email
+alert is a follow-up ticket once a notification channel exists — this runbook
+entry is intentionally NOT inventing one.
+
 ## Restore (tested, non-negotiable)
 
 **Monthly**, and immediately after any schema-changing migration, run the

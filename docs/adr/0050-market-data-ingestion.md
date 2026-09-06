@@ -395,3 +395,81 @@ Files: `src/lib/market-data.ts` (generalized parser + exact per-gram
 normalization); `src/server/market-data.server.ts` (`GOLD_SOURCE_CHAIN`,
 chained `LogamMuliaGoldProvider`); unit (`src/lib/market-data.test.ts`) +
 real-Postgres (`tests/integration/gold-price-feed.integration.ts`) tests.
+
+## Implementation notes (PER-237, Slice 5 — scheduled refresh worker)
+
+Slice 5 closes the gap every prior slice's "Deferred" note named: something
+must actually CALL `ingestAllInstrumentsOnce` on a schedule. Prod is confirmed
+a self-hosted Docker VM (ADR-0047) — no serverless cron is available to the
+main app (the reksadana-nav/gold worker infra is separate, manually-deployed
+Cloudflare Workers infra, not the app itself). §4's own wording ("systemd timer
+invoking a `createServerFn`-guarded refresh") is realized as:
+
+- **Trigger = an internal HTTP route, not a standalone CLI.** A host
+  systemd timer / cron entry (`deploy/refresh-market-data.sh`,
+  `docs/runbook-production.md` "Market data refresh") calls
+  `POST /api/internal/market-data-refresh` over loopback
+  (`127.0.0.1:3005`, never exposed through Caddy/Cloudflare). This reuses the
+  already-running app process's single Prisma pool/connection budget instead
+  of spinning up a second Node process with its own `DATABASE_URL` — the same
+  reason `GET /api/health` is a route, not a separate script. All logic lives
+  in `handleInternalMarketDataRefreshRequest`
+  (`src/server/market-data.server.ts`); the route file itself
+  (`src/routes/api/internal/market-data-refresh.ts`) is a one-line delegation,
+  so the trigger path is fully testable without booting the router.
+
+- **Auth = a shared secret, not a session.** Cron has no browser cookie, so
+  `createServerFn`'s session-based auth doesn't apply. A shared secret header
+  (`x-market-data-refresh-secret`, checked against `MARKET_DATA_REFRESH_SECRET`
+  via `isAuthorizedInternalRefreshRequest`, constant-time compare) gates the
+  route. **Fails closed**: an unset/empty secret rejects every request rather
+  than falling back to "no auth" — a misconfigured deploy must never
+  accidentally expose an anonymous global-ingest trigger.
+
+- **Zero ingestion/provider logic touched.** The scheduled-refresh path
+  (`runScheduledMarketDataRefresh`) calls the SAME two existing, already-
+  idempotent functions the manual "Refresh prices" button's
+  `syncMarketPricesOnce` calls — `ensureBsiGoldInstrument` then
+  `ingestAllInstrumentsOnce` — so the daily tick and the manual button share
+  one tested code path. It reads the _unwrapped_ `IngestAllSummary` (per-
+  provider detail) rather than `syncMarketPricesOnce`'s UI-shaped collapsed
+  result, so a scheduled run's log line names WHICH provider group degraded.
+
+- **Health/alerting = structured logs, not a new channel.** No email/push
+  infrastructure exists anywhere in this codebase (confirmed absent — see
+  this ADR's own "Deferred" notes and the finding recorded in ADR-0043 §"3.
+  Notify"). Rather than inventing a notification channel unprompted, a
+  scheduled run always logs one structured line
+  (`console.error` when `degraded`, else `console.log`) that ops can grep in
+  `docker compose logs` / journald / the cron log file. A run that CRASHES
+  (not just degrades) returns HTTP 500, which the cron script's `curl -f`
+  turns into a non-zero exit — cron's own failure surfacing (redirected log,
+  optional `MAILTO`). A follow-up ticket can wire a real
+  email/Slack/webhook alert once a channel is chosen for the project; this
+  slice deliberately does not guess one.
+
+- **Schedule = once daily, ~18:05 WIB (11:05 UTC), assumed UTC crontab.**
+  §4 says "an interval appropriate to each kind" without naming an hour; this
+  slice picks one fixed daily run shortly after Indonesian market close /
+  typical NAV publication, documented (with the UTC-crontab assumption
+  flagged explicitly for the operator to verify) in
+  `docs/runbook-production.md` rather than hidden in an opaque cron
+  expression. Because the router polls the WHOLE catalog in one call, adding
+  a second daily run (or a different cadence per kind, once volatile feeds
+  like securities/crypto land) is a one-line crontab change, not a code
+  change.
+
+- **No tenant/RLS context.** The whole trigger path — route, auth check,
+  `runScheduledMarketDataRefresh` — never opens a family-scoped transaction or
+  reads `app.family_id`; it calls straight into the existing global-only
+  `ingestAllInstrumentsOnce` (ADR-0050 §6), consistent with `MarketInstrument`/
+  `MarketQuote` being family-neutral, non-RLS tables.
+
+Files: `src/server/market-data.server.ts`
+(`isAuthorizedInternalRefreshRequest`, `runScheduledMarketDataRefresh`,
+`handleInternalMarketDataRefreshRequest`);
+`src/routes/api/internal/market-data-refresh.ts` (route delegation);
+`deploy/refresh-market-data.sh` + `docs/runbook-production.md` "Market data
+refresh" (the cron trigger); `docker-compose.prod.yml` +
+`.env.example` (`MARKET_DATA_REFRESH_SECRET`); real-Postgres
+(`tests/integration/market-data-scheduled-refresh.integration.ts`) tests.
