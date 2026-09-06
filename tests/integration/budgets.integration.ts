@@ -924,123 +924,101 @@ describe("budgets vertical slice (PER-148)", () => {
       return { owner, food, fun }
     }
 
-    test("moves allocation from one category to another in the same period", async () => {
-      const { owner, food, fun } = await setup()
-      const result = await moveBudgetAllocationForFamily({
+    // Every scenario below is the same call shape (month/from/to/amount for
+    // one family) — this collapses it to one line and lets a test pass its
+    // own idempotencyKey when replay is the thing under test.
+    const move = (
+      fixture: { owner: Awaited<ReturnType<typeof setup>>["owner"] },
+      params: { from: string; to: string; amount: string; key?: string }
+    ) =>
+      moveBudgetAllocationForFamily({
         data: {
           month: MONTH,
-          fromCategoryId: fun.id,
-          toCategoryId: food.id,
-          amount: "30000",
-          idempotencyKey: factories.createIdempotencyKey(),
+          fromCategoryId: params.from,
+          toCategoryId: params.to,
+          amount: params.amount,
+          idempotencyKey: params.key ?? factories.createIdempotencyKey(),
         },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-        runInTenantTransaction: runner(owner.user.id),
+        familyId: fixture.owner.family.id,
+        userId: fixture.owner.user.id,
+        runInTenantTransaction: runner(fixture.owner.user.id),
+      })
+
+    test("moves allocation from one category to another in the same period", async () => {
+      const fixture = await setup()
+      const result = await move(fixture, {
+        from: fixture.fun.id,
+        to: fixture.food.id,
+        amount: "30000",
       })
       expect(result.from.allocatedAmount).toBe("70000")
       expect(result.to.allocatedAmount).toBe("80000")
       const foodRow = result.progress.categories.find(
-        (c) => c.categoryId === food.id
+        (c) => c.categoryId === fixture.food.id
       )
       const funRow = result.progress.categories.find(
-        (c) => c.categoryId === fun.id
+        (c) => c.categoryId === fixture.fun.id
       )
       expect(foodRow?.allocatedAmount).toBe("80000")
       expect(funRow?.allocatedAmount).toBe("70000")
     })
 
     test("cannot move more than the source category's current allocation (source stays >= 0)", async () => {
-      const { owner, food, fun } = await setup()
+      const fixture = await setup()
       await expect(
-        moveBudgetAllocationForFamily({
-          data: {
-            month: MONTH,
-            fromCategoryId: food.id, // only has 50000
-            toCategoryId: fun.id,
-            amount: "50001",
-            idempotencyKey: factories.createIdempotencyKey(),
-          },
-          familyId: owner.family.id,
-          userId: owner.user.id,
-          runInTenantTransaction: runner(owner.user.id),
+        move(fixture, {
+          from: fixture.food.id, // only has 50000
+          to: fixture.fun.id,
+          amount: "50001",
         })
       ).rejects.toBeInstanceOf(BudgetValidationError)
     })
 
     test("moving the exact remaining balance drives the source to exactly zero, never negative", async () => {
-      const { owner, food, fun } = await setup()
-      const result = await moveBudgetAllocationForFamily({
-        data: {
-          month: MONTH,
-          fromCategoryId: food.id,
-          toCategoryId: fun.id,
-          amount: "50000",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-        runInTenantTransaction: runner(owner.user.id),
+      const fixture = await setup()
+      const result = await move(fixture, {
+        from: fixture.food.id,
+        to: fixture.fun.id,
+        amount: "50000",
       })
       expect(result.from.allocatedAmount).toBe("0")
       expect(result.to.allocatedAmount).toBe("150000")
     })
 
     test("cannot move to the same category", async () => {
-      const { owner, food } = await setup()
+      const fixture = await setup()
       await expect(
-        moveBudgetAllocationForFamily({
-          data: {
-            month: MONTH,
-            fromCategoryId: food.id,
-            toCategoryId: food.id,
-            amount: "1000",
-            idempotencyKey: factories.createIdempotencyKey(),
-          },
-          familyId: owner.family.id,
-          userId: owner.user.id,
-          runInTenantTransaction: runner(owner.user.id),
+        move(fixture, {
+          from: fixture.food.id,
+          to: fixture.food.id,
+          amount: "1000",
         })
       ).rejects.toBeInstanceOf(BudgetValidationError)
     })
 
     test("a non-positive amount is rejected", async () => {
-      const { owner, food, fun } = await setup()
+      const fixture = await setup()
       await expect(
-        moveBudgetAllocationForFamily({
-          data: {
-            month: MONTH,
-            fromCategoryId: food.id,
-            toCategoryId: fun.id,
-            amount: "0",
-            idempotencyKey: factories.createIdempotencyKey(),
-          },
-          familyId: owner.family.id,
-          userId: owner.user.id,
-          runInTenantTransaction: runner(owner.user.id),
+        move(fixture, {
+          from: fixture.food.id,
+          to: fixture.fun.id,
+          amount: "0",
         })
       ).rejects.toBeInstanceOf(BudgetValidationError)
     })
 
     test("a category with no allocation in this period is rejected", async () => {
-      const { owner, food } = await setup()
+      const fixture = await setup()
       const other = await factories.createCategory({
-        familyId: owner.family.id,
+        familyId: fixture.owner.family.id,
         type: "expense",
         name: "Other",
       })
       await expect(
-        moveBudgetAllocationForFamily({
-          data: {
-            month: MONTH,
-            fromCategoryId: food.id,
-            toCategoryId: other.id, // never budgeted this period
-            amount: "1000",
-            idempotencyKey: factories.createIdempotencyKey(),
-          },
-          familyId: owner.family.id,
-          userId: owner.user.id,
-          runInTenantTransaction: runner(owner.user.id),
+        move(fixture, {
+          from: fixture.food.id,
+          to: other.id, // never budgeted this period
+          amount: "1000",
         })
       ).rejects.toBeInstanceOf(BudgetValidationError)
     })
@@ -1056,23 +1034,12 @@ describe("budgets vertical slice (PER-148)", () => {
         type: "expense",
       })
       await expect(
-        moveBudgetAllocationForFamily({
-          data: {
-            month: MONTH,
-            fromCategoryId: food.id,
-            toCategoryId: fun.id,
-            amount: "1000",
-            idempotencyKey: factories.createIdempotencyKey(),
-          },
-          familyId: owner.family.id,
-          userId: owner.user.id,
-          runInTenantTransaction: runner(owner.user.id),
-        })
+        move({ owner }, { from: food.id, to: fun.id, amount: "1000" })
       ).rejects.toBeInstanceOf(BudgetNotFoundError)
     })
 
     test("cannot move using another family's categoryId (tenant isolation)", async () => {
-      const { owner: familyA, food: aFood } = await setup()
+      const fixture = await setup()
       const familyB = await factories.createAuthenticatedOnboardedUser()
       const bCategory = await factories.createCategory({
         familyId: familyB.family.id,
@@ -1089,38 +1056,24 @@ describe("budgets vertical slice (PER-148)", () => {
         runInTenantTransaction: runner(familyB.user.id),
       })
       await expect(
-        moveBudgetAllocationForFamily({
-          data: {
-            month: MONTH,
-            fromCategoryId: aFood.id,
-            toCategoryId: bCategory.id, // belongs to family B, not A
-            amount: "1000",
-            idempotencyKey: factories.createIdempotencyKey(),
-          },
-          familyId: familyA.family.id,
-          userId: familyA.user.id,
-          runInTenantTransaction: runner(familyA.user.id),
+        move(fixture, {
+          from: fixture.food.id,
+          to: bCategory.id, // belongs to family B, not A
+          amount: "1000",
         })
       ).rejects.toBeInstanceOf(BudgetValidationError)
     })
 
     test("writes an append-only audit row with before/after allocations on both categories", async () => {
-      const { owner, food, fun } = await setup()
-      await moveBudgetAllocationForFamily({
-        data: {
-          month: MONTH,
-          fromCategoryId: fun.id,
-          toCategoryId: food.id,
-          amount: "30000",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-        runInTenantTransaction: runner(owner.user.id),
+      const fixture = await setup()
+      await move(fixture, {
+        from: fixture.fun.id,
+        to: fixture.food.id,
+        amount: "30000",
       })
       const audits = await harness.withMember(
-        owner.family.id,
-        owner.user.id,
+        fixture.owner.family.id,
+        fixture.owner.user.id,
         (tx) =>
           tx.auditLog.findMany({
             where: { entityType: "BudgetCategory", action: "update" },
@@ -1142,27 +1095,16 @@ describe("budgets vertical slice (PER-148)", () => {
     })
 
     test("replaying the same idempotency key does not double-move", async () => {
-      const { owner, food, fun } = await setup()
+      const fixture = await setup()
       const key = factories.createIdempotencyKey()
-      const payload = {
-        month: MONTH,
-        fromCategoryId: fun.id,
-        toCategoryId: food.id,
+      const params = {
+        from: fixture.fun.id,
+        to: fixture.food.id,
         amount: "30000",
-        idempotencyKey: key,
+        key,
       }
-      await moveBudgetAllocationForFamily({
-        data: payload,
-        familyId: owner.family.id,
-        userId: owner.user.id,
-        runInTenantTransaction: runner(owner.user.id),
-      })
-      const second = await moveBudgetAllocationForFamily({
-        data: payload,
-        familyId: owner.family.id,
-        userId: owner.user.id,
-        runInTenantTransaction: runner(owner.user.id),
-      })
+      await move(fixture, params)
+      const second = await move(fixture, params)
       expect(second.from.allocatedAmount).toBe("70000") // not moved twice
       expect(second.to.allocatedAmount).toBe("80000")
     })
