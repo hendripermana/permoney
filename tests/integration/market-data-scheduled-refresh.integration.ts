@@ -33,7 +33,7 @@ import {
 // a provider failure degrades gracefully rather than crashing the endpoint.
 // =============================================================================
 
-const REFRESH_URL = "http://internal.test/api/internal/market-data-refresh"
+const REFRESH_URL = "https://internal.test/api/internal/market-data-refresh"
 const SECRET = "test-shared-secret-0123456789"
 
 // `runScheduledMarketDataRefresh` always calls `ensureBsiGoldInstrument`
