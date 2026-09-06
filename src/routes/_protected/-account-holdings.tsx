@@ -5,7 +5,6 @@ import {
   Coins,
   FolderInput,
   Gift,
-  History,
   PiggyBank,
   Plus,
   Receipt,
@@ -375,132 +374,111 @@ export function HoldingsPanel({
   )
 }
 
-// PER-259 Slice 5 (second half) / ADR-0054 — Position activity (presentational).
+// PER-259 Slice 5/6 / ADR-0054 — a unit-only event row (presentational).
 //
 // A Switch, a Dividend REINVEST, and a Position Move all move units without
 // moving cash, so they create no `Transaction` and can never appear on the
-// per-account statement — which left a mistyped Switch/Reinvest unreachable.
-// This list is their home: the append-only provenance of each one, newest
-// first. Switch/Reinvest get Edit / Delete (mirroring the statement's
-// Buy/Sell row); a Position Move is READ-ONLY (no correction path exists for
-// it yet — see PER-259 Slice 6). Buy/Sell trades and CASH dividends are NOT
-// listed here — they are ledger rows, and are corrected on the statement (a
-// cash dividend on the account it was paid into).
-export function PositionActivityPanel({
-  events,
+// per-account statement as a normal row. Rather than a SEPARATE list the user
+// has to remember to also check (an earlier version of this did exactly
+// that, and it was rightly called out as splitting "what happened to my
+// money" across two places) — this row renders INLINE, interleaved by date,
+// in the SAME statement the account's real transactions live in
+// (accounts.$accountId.tsx merges `HoldingEventRecord[]` into
+// `AccountStatementRow[]` alongside `TransactionRecord[]`). Switch/Reinvest
+// get Edit / Delete (mirroring the statement's Buy/Sell row); a Position Move
+// is READ-ONLY (no correction path exists for it yet — see PER-259 Slice 6).
+// Buy/Sell trades and CASH dividends are NOT rendered here at all — they
+// already ARE ordinary `Transaction` rows, corrected via the statement's own
+// row (a cash dividend, on the account it was paid into).
+export function HoldingEventRow({
+  event,
   currency,
-  isLoading,
   onEdit,
   onDelete,
 }: Readonly<{
-  events: ReadonlyArray<HoldingEventRecord>
+  event: HoldingEventRecord
   currency: string
-  isLoading: boolean
   onEdit: (event: HoldingEventRecord) => void
   onDelete: (event: HoldingEventRecord) => void
 }>) {
-  if (!isLoading && events.length === 0) return null
-
   return (
-    <div className="rounded-2xl border p-4">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-          <History className="size-3.5" aria-hidden />
-          Position activity
-        </h2>
-        <p className="text-xs text-muted-foreground">
-          Switches, reinvested dividends, and account moves — they move units,
-          not cash
+    <div className="flex items-start justify-between gap-3 border-b px-3 py-3 last:border-b-0">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          {event.kind === "switch" ? (
+            <ArrowRightLeft
+              className="size-3.5 shrink-0 text-violet-600 dark:text-violet-400"
+              aria-hidden
+            />
+          ) : event.kind === "dividend_reinvest" ? (
+            <Gift
+              className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
+              aria-hidden
+            />
+          ) : (
+            <FolderInput
+              className="size-3.5 shrink-0 text-blue-600 dark:text-blue-400"
+              aria-hidden
+            />
+          )}
+          <p className="truncate text-sm font-medium">{event.title}</p>
+          <Badge variant="secondary" className="shrink-0">
+            {event.kind === "switch"
+              ? "Switch"
+              : event.kind === "dividend_reinvest"
+                ? "Reinvest"
+                : "Move"}
+          </Badge>
+          <Badge variant="outline" className="shrink-0 text-[10px]">
+            No cash impact
+          </Badge>
+        </div>
+        <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+          {event.quantity} units
         </p>
-      </div>
-
-      {isLoading ? (
-        <div className="h-16 animate-pulse rounded-xl bg-muted" />
-      ) : (
-        <ul className="divide-y" aria-label="Position activity">
-          {events.map((event) => (
-            <li
-              key={event.eventId}
-              className="flex items-start justify-between gap-3 py-3"
+        {event.kind === "position_move" ? (
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            No gain realized — not editable here.
+          </p>
+        ) : (
+          <div className="mt-1.5 flex items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              aria-label={`Edit ${event.title}`}
+              onClick={() => onEdit(event)}
             >
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  {event.kind === "switch" ? (
-                    <ArrowRightLeft
-                      className="size-3.5 shrink-0 text-violet-600 dark:text-violet-400"
-                      aria-hidden
-                    />
-                  ) : event.kind === "dividend_reinvest" ? (
-                    <Gift
-                      className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
-                      aria-hidden
-                    />
-                  ) : (
-                    <FolderInput
-                      className="size-3.5 shrink-0 text-blue-600 dark:text-blue-400"
-                      aria-hidden
-                    />
-                  )}
-                  <p className="truncate text-sm font-medium">{event.title}</p>
-                  <Badge variant="secondary" className="shrink-0">
-                    {event.kind === "switch"
-                      ? "Switch"
-                      : event.kind === "dividend_reinvest"
-                        ? "Reinvest"
-                        : "Move"}
-                  </Badge>
-                </div>
-                <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
-                  {new Date(event.date).toLocaleDateString()} · {event.quantity}{" "}
-                  units
-                </p>
-                {event.kind === "position_move" ? (
-                  <p className="mt-1.5 text-xs text-muted-foreground">
-                    No cash moved, no gain realized — not editable here.
-                  </p>
-                ) : (
-                  <div className="mt-1.5 flex items-center gap-1">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 px-2 text-xs"
-                      aria-label={`Edit ${event.title}`}
-                      onClick={() => onEdit(event)}
-                    >
-                      Edit
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 px-2 text-xs text-destructive hover:text-destructive"
-                      aria-label={`Delete ${event.title}`}
-                      onClick={() => onDelete(event)}
-                    >
-                      <Trash2 className="size-3.5" />
-                      Delete
-                    </Button>
-                  </div>
-                )}
-              </div>
-              <div className="shrink-0 text-right">
-                <p className="text-sm font-semibold tabular-nums">
-                  {formatCurrency(event.amountMinor, currency)}
-                </p>
-                {event.realizedGainMinor !== null ? (
-                  <GainText
-                    gainMinor={event.realizedGainMinor}
-                    returnPct={null}
-                    currency={currency}
-                    className="mt-0.5 text-xs font-medium"
-                  />
-                ) : null}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+              Edit
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs text-destructive hover:text-destructive"
+              aria-label={`Delete ${event.title}`}
+              onClick={() => onDelete(event)}
+            >
+              <Trash2 className="size-3.5" />
+              Delete
+            </Button>
+          </div>
+        )}
+      </div>
+      <div className="shrink-0 text-right">
+        <p className="text-sm font-semibold tabular-nums">
+          {formatCurrency(event.amountMinor, currency)}
+        </p>
+        {event.realizedGainMinor !== null ? (
+          <GainText
+            gainMinor={event.realizedGainMinor}
+            returnPct={null}
+            currency={currency}
+            className="mt-0.5 text-xs font-medium"
+          />
+        ) : null}
+      </div>
     </div>
   )
 }

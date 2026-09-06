@@ -71,8 +71,8 @@ test.describe("switch fund UI (PER-259 Slice 4)", () => {
     await expect(page.getByRole("dialog")).toHaveCount(0)
 
     // A's position closed — its row is gone from the HOLDINGS list. (Scoped:
-    // the Position activity list below records the switch as "A → B", so an
-    // unscoped text match would still find A's name there — PER-259 Slice 5.)
+    // the account statement also records the switch as "A → B", so an
+    // unscoped text match would still find A's name there — PER-259 Slice 5/6.)
     const holdingsList = page.getByRole("list", { name: "Holdings" })
     await expect(holdingsList.getByText(fundAName)).toHaveCount(0)
 
