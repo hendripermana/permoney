@@ -236,7 +236,7 @@ describe("scheduled market-data refresh trigger (PER-237 / ADR-0050 §4)", () =>
 
   test("authorized end-to-end HTTP call returns the summary and writes real quotes", async () => {
     const previousUrl = process.env.LOGAM_MULIA_API_URL
-    process.env.LOGAM_MULIA_API_URL = "http://gold.internal-test"
+    process.env.LOGAM_MULIA_API_URL = "https://gold.internal-test"
     try {
       await withSecretEnv(SECRET, async () => {
         // handleInternalMarketDataRefreshRequest calls runScheduledMarketDataRefresh()
