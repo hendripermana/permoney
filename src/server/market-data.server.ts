@@ -30,6 +30,7 @@
  */
 
 import type { Prisma, PrismaClient } from "@prisma/client"
+import { timingSafeEqual } from "node:crypto"
 import {
   BSI_GOLD_QUOTE_CURRENCY,
   BSI_GOLD_SYMBOL,
@@ -1411,5 +1412,154 @@ export async function syncMarketPricesOnce(
       ingested: 0,
       error: error instanceof Error ? error.message : "market sync failed",
     }
+  }
+}
+
+// =============================================================================
+// Scheduled refresh trigger (PER-237 / ADR-0050 §4) — self-hosted, no
+// serverless cron
+// =============================================================================
+//
+// Prod is a self-hosted Docker VM (ADR-0047) — there is no Cloudflare Workers
+// Cron Trigger available to the MAIN app (only the separate, manually-deployed
+// reksadana-nav/gold worker infra runs on Workers). The scheduler is therefore a
+// host systemd timer / cron job (see docs/runbook-production.md "Market data
+// refresh") that calls the internal HTTP route
+// `POST /api/internal/market-data-refresh` over loopback. That route is a thin
+// shell (`src/routes/api/internal/market-data-refresh.ts`) delegating entirely
+// to `handleInternalMarketDataRefreshRequest` below, so the real logic is
+// testable with NO router bootstrap.
+//
+// This section touches ZERO ingestion/provider logic — it only calls the
+// existing, already-idempotent `ensureBsiGoldInstrument` + the router
+// (`ingestAllInstrumentsOnce`), the SAME functions `syncMarketPricesOnce` uses
+// for the manual "Refresh prices" button. A cron-triggered call has no user
+// session, so it cannot go through `createServerFn`'s session-based auth —
+// instead it presents a shared secret header, checked here.
+//
+// GLOBAL ingest only (ADR-0050 §6): no family/tenant context is created,
+// required, or read. `MarketInstrument` / `MarketQuote` are family-neutral, not
+// RLS-scoped, so this scheduler needs none and must not accidentally introduce
+// any.
+
+/** Header the scheduler presents the shared secret in. */
+export const INTERNAL_MARKET_DATA_REFRESH_HEADER =
+  "x-market-data-refresh-secret"
+
+/**
+ * Constant-time check of the scheduler's shared secret against
+ * `MARKET_DATA_REFRESH_SECRET`, read at CALL time (never module scope, per the
+ * `.server.ts` convention). FAILS CLOSED: an unset/empty secret means the
+ * endpoint accepts NOTHING — a misconfigured deploy must never accidentally
+ * expose an anonymous global-ingest trigger, even though the ingest itself
+ * cannot touch the ledger.
+ */
+export function isAuthorizedInternalRefreshRequest(request: Request): boolean {
+  const configured = process.env.MARKET_DATA_REFRESH_SECRET
+  if (typeof configured !== "string" || configured.trim().length === 0) {
+    return false
+  }
+  const provided = request.headers.get(INTERNAL_MARKET_DATA_REFRESH_HEADER)
+  if (typeof provided !== "string" || provided.length === 0) return false
+
+  const expected = Buffer.from(configured)
+  const actual = Buffer.from(provided)
+  // Length must match BEFORE calling timingSafeEqual (it throws on mismatched
+  // lengths); comparing against a fixed-length buffer keeps this branch itself
+  // cheap and non-secret-dependent.
+  if (expected.length !== actual.length) return false
+  return timingSafeEqual(expected, actual)
+}
+
+/** One scheduled-refresh cycle's outcome — shaped for logging and the HTTP response. */
+export interface ScheduledMarketDataRefreshResult {
+  startedAt: string
+  finishedAt: string
+  durationMs: number
+  totalIngested: number
+  perProvider: ProviderIngestSummary[]
+  skipped: SkippedInstrument[]
+  /** True when ANY provider group degraded — the signal worth a human look. */
+  degraded: boolean
+}
+
+/**
+ * Run one scheduled market-data refresh cycle: ensure the always-relevant
+ * BSI-gold instrument exists (idempotent, so a fresh install is priceable on
+ * the very first scheduled tick, mirroring `syncMarketPricesOnce`), then
+ * ingest the WHOLE `MarketInstrument` catalog through the router
+ * (`ingestAllInstrumentsOnce` — unchanged; per-provider failure isolation +
+ * keep-last-good already proven). Never throws on a provider failure — that
+ * degradation is the router's job. A structured summary is ALWAYS logged
+ * (`console.error` when degraded, `console.log` otherwise) because no
+ * email/push alerting infrastructure exists in this codebase (see ADR-0043's
+ * "Notify" finding) — `docker compose logs` / journald grepped for
+ * `degraded=true` is the health signal until a real notification channel is
+ * chosen for the project.
+ *
+ * Accepts the same options as `ingestAllInstrumentsOnce` (a custom `registry`
+ * / `gold` / `reksadana` passthrough, plus `db`) so tests can inject a
+ * fixture registry or fetch — the production HTTP entrypoint
+ * (`handleInternalMarketDataRefreshRequest`) calls this with NO overrides,
+ * always the real default registry reading real env config.
+ */
+export async function runScheduledMarketDataRefresh(
+  options?: IngestAllOptions
+): Promise<ScheduledMarketDataRefreshResult> {
+  const db = options?.db
+  const startedAt = new Date()
+  await ensureBsiGoldInstrument(db)
+  const summary = await ingestAllInstrumentsOnce(options)
+  const finishedAt = new Date()
+  const degraded = summary.perProvider.some(
+    (group) => group.error !== undefined
+  )
+
+  const result: ScheduledMarketDataRefreshResult = {
+    startedAt: startedAt.toISOString(),
+    finishedAt: finishedAt.toISOString(),
+    durationMs: finishedAt.getTime() - startedAt.getTime(),
+    totalIngested: summary.totalIngested,
+    perProvider: summary.perProvider,
+    skipped: summary.skipped,
+    degraded,
+  }
+
+  const logLine = `[market-data-refresh] degraded=${degraded} ingested=${result.totalIngested}`
+  if (degraded) {
+    console.error(logLine, JSON.stringify(result))
+  } else {
+    console.log(logLine, JSON.stringify(result))
+  }
+
+  return result
+}
+
+/**
+ * HTTP entrypoint the `/api/internal/market-data-refresh` route delegates to.
+ * Kept here (not in the route file) so it is directly unit/integration
+ * testable with no router bootstrap — construct a `Request` and call it.
+ *
+ * Auth-gated by a shared secret (see `isAuthorizedInternalRefreshRequest`);
+ * this endpoint is invoked by a host cron/systemd timer with NO user session.
+ * A degraded run (one provider group failed, others still ingested) is still
+ * an HTTP 200 — the pipeline's own per-provider isolation already handled it,
+ * see `ScheduledMarketDataRefreshResult.degraded` in the body for the signal.
+ * Only an unexpected crash (e.g. a database error outside the router's own
+ * try/catch) returns 500, which IS worth cron treating as a hard failure.
+ */
+export async function handleInternalMarketDataRefreshRequest(
+  request: Request
+): Promise<Response> {
+  if (!isAuthorizedInternalRefreshRequest(request)) {
+    return Response.json({ error: "unauthorized" }, { status: 401 })
+  }
+  try {
+    const result = await runScheduledMarketDataRefresh()
+    return Response.json(result)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "refresh failed"
+    console.error("[market-data-refresh] crashed", message)
+    return Response.json({ error: message }, { status: 500 })
   }
 }
