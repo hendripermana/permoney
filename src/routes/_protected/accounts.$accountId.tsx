@@ -64,6 +64,10 @@ import {
   SwitchDialog,
   type SwitchDialogState,
 } from "@/components/blocks/switch-dialog"
+import {
+  MovePositionDialog,
+  type MovePositionDialogState,
+} from "@/components/blocks/move-position-dialog"
 import { HoldingEventCorrectionDialog } from "@/components/blocks/holding-event-correction-dialog"
 import { TradeCorrectionDialog } from "@/components/blocks/trade-correction-dialog"
 import { PendingBalanceCorrectionBanner } from "@/components/blocks/pending-balance-correction-banner"
@@ -110,8 +114,8 @@ import {
   syncMarketPricesFn,
 } from "@/server/holdings"
 import {
+  HoldingEventRow,
   HoldingsPanel,
-  PositionActivityPanel,
   type HoldingEventRecord,
   type HoldingRecord,
 } from "./-account-holdings"
@@ -152,9 +156,15 @@ import { toast } from "sonner"
 
 // Flat virtual rows for the per-account statement (date header + transaction),
 // mirroring the /transactions ledger so the two lists render identically.
+// `holding_event` (Switch/Reinvest/Move) is interleaved by date alongside
+// real transactions — see the `statementRows` memo below for why: a earlier
+// version rendered these in a SEPARATE panel, which the creator correctly
+// called out as splitting "what happened to my money" across two lists the
+// user had to remember to check independently.
 type AccountStatementRow =
   | { kind: "header"; dateKey: string; subtotal: Money }
   | { kind: "transaction"; trx: TransactionRecord }
+  | { kind: "holding_event"; event: HoldingEventRecord }
 
 export const Route = createFileRoute("/_protected/accounts/$accountId")({
   // TanStack DB collections are client-only; SSR would hang (CLAUDE.md §5B).
@@ -208,6 +218,9 @@ function AccountDetailPage() {
   // PER-259 Slice 4 — switch dialog (atomic sell-A + buy-B, one account).
   const [switchDialog, setSwitchDialog] =
     React.useState<SwitchDialogState | null>(null)
+  // PER-259 Slice 6 — move a whole position to another account (no sale).
+  const [moveDialog, setMoveDialog] =
+    React.useState<MovePositionDialogState | null>(null)
   // PER-241 — the per-account statement now shares the /transactions row, so it
   // gets the same singleton edit modal + inline delete.
   const [editingTrx, setEditingTrx] =
@@ -297,14 +310,11 @@ function AccountDetailPage() {
     enabled: tracked,
   })
 
-  // PER-259 Slice 5 (second half) / ADR-0054 — position activity: the Switch
-  // and Dividend-reinvest events that moved units without moving cash, so they
-  // never reach the statement. Declarative fetch (no useEffect), tracked-only.
-  const {
-    data: holdingEvents,
-    isLoading: holdingEventsLoading,
-    refetch: refetchHoldingEvents,
-  } = useQuery({
+  // PER-259 Slice 5/6 / ADR-0054 — the Switch, Dividend-reinvest, and
+  // Position Move events that moved units without moving cash, so they never
+  // reach `statement` on their own; merged INTO the statement rows below.
+  // Declarative fetch (no useEffect), tracked-only.
+  const { data: holdingEvents, refetch: refetchHoldingEvents } = useQuery({
     queryKey: ["account_holding_events", accountId],
     queryFn: async () =>
       await listAccountHoldingEventsFn({ data: { accountId } }),
@@ -608,28 +618,75 @@ function AccountDetailPage() {
     [cashLike, ledger, accountId, currentBalance]
   )
 
-  // PER-241 — collapse the ordered statement into flat virtual rows (date
-  // header + transactions), mirroring /transactions. `statement` is already
-  // ordered newest-first, so a single pass preserves day grouping and order.
+  // PER-241 / PER-259 Slice 6 — collapse the ordered statement into flat
+  // virtual rows (date header + entries), mirroring /transactions.
+  // `holdingEvents` (Switch/Reinvest/Move — unit-only, no cash leg) is merged
+  // IN, interleaved by date with real transactions, rather than living in a
+  // separate list: it's the same "what happened to this account" history to
+  // the person reading it, even though only `statement` entries move cash and
+  // count toward the day subtotal. Hidden under an active type filter
+  // (Income/Expense/Transfer) since none of those labels apply to a unit-only
+  // event, and filtered by the same search query, reusing `matchesQuery`'s
+  // description-matching shape.
+  const visibleHoldingEvents = React.useMemo(
+    () =>
+      types.length === 0
+        ? (holdingEvents ?? []).filter((event) =>
+            matchesQuery({ description: event.title }, query)
+          )
+        : [],
+    [holdingEvents, types, query]
+  )
+
   const statementRows = React.useMemo<Array<AccountStatementRow>>(() => {
-    const groups: Array<{ day: string; txns: Array<TransactionRecord> }> = []
-    for (const trx of statement) {
-      const day = format(new Date(trx.date), "yyyy-MM-dd")
+    type MergedEntry =
+      | { date: number; row: { kind: "transaction"; trx: TransactionRecord } }
+      | {
+          date: number
+          row: { kind: "holding_event"; event: HoldingEventRecord }
+        }
+
+    const merged: Array<MergedEntry> = [
+      ...statement.map(
+        (trx): MergedEntry => ({
+          date: new Date(trx.date).getTime(),
+          row: { kind: "transaction", trx },
+        })
+      ),
+      ...visibleHoldingEvents.map(
+        (event): MergedEntry => ({
+          date: new Date(event.date).getTime(),
+          row: { kind: "holding_event", event },
+        })
+      ),
+    ]
+    // Newest first, matching /transactions — a stable sort keeps same-day
+    // transactions and events in their original (already-ordered) relative
+    // order instead of shuffling them.
+    merged.sort((a, b) => b.date - a.date)
+
+    const groups: Array<{ day: string; entries: Array<MergedEntry> }> = []
+    for (const entry of merged) {
+      const day = format(new Date(entry.date), "yyyy-MM-dd")
       const last = groups[groups.length - 1]
-      if (last && last.day === day) last.txns.push(trx)
-      else groups.push({ day, txns: [trx] })
+      if (last && last.day === day) last.entries.push(entry)
+      else groups.push({ day, entries: [entry] })
     }
+
     const rows: Array<AccountStatementRow> = []
     for (const g of groups) {
+      const txns = g.entries.flatMap((e) =>
+        e.row.kind === "transaction" ? [e.row.trx] : []
+      )
       rows.push({
         kind: "header",
         dateKey: g.day,
-        subtotal: dailyNet(g.txns, { kind: "account", accountId }),
+        subtotal: dailyNet(txns, { kind: "account", accountId }),
       })
-      for (const trx of g.txns) rows.push({ kind: "transaction", trx })
+      for (const entry of g.entries) rows.push(entry.row)
     }
     return rows
-  }, [statement, accountId])
+  }, [statement, visibleHoldingEvents, accountId])
 
   const statementScrollRef = React.useRef<HTMLDivElement>(null)
   // Sticky date headers — same model as /transactions.
@@ -910,19 +967,9 @@ function AccountDetailPage() {
               onFeeHolding={(holding) => setFeeDialog({ holding })}
               onSwitch={() => setSwitchDialog({})}
               onSwitchHolding={(holding) => setSwitchDialog({ holding })}
+              onMoveHolding={(holding) => setMoveDialog({ holding })}
               onRefreshPrices={handleRefreshPrices}
               refreshingPrices={refreshingPrices}
-            />
-          ) : null}
-          {tracked ? (
-            <PositionActivityPanel
-              events={holdingEvents ?? []}
-              currency={currency}
-              isLoading={holdingEventsLoading}
-              onEdit={(event) =>
-                setHoldingEventDialog({ eventId: event.eventId })
-              }
-              onDelete={handleDeleteHoldingEvent}
             />
           ) : null}
           {health ? <AccountHealthPanel health={health} /> : null}
@@ -984,7 +1031,11 @@ function AccountDetailPage() {
           <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-medium text-muted-foreground">
-                Transactions ({statement.length})
+                Transactions ({statement.length}
+                {visibleHoldingEvents.length > 0
+                  ? ` + ${visibleHoldingEvents.length} move${visibleHoldingEvents.length === 1 ? "" : "s"}`
+                  : ""}
+                )
               </h2>
               <div className="flex items-center gap-2">
                 <div className="relative">
@@ -1019,7 +1070,7 @@ function AccountDetailPage() {
               ))}
             </div>
 
-            {statement.length === 0 ? (
+            {statement.length === 0 && visibleHoldingEvents.length === 0 ? (
               <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed py-12 text-center">
                 <Receipt className="size-6 text-muted-foreground" />
                 <p className="text-sm text-muted-foreground">
@@ -1033,6 +1084,8 @@ function AccountDetailPage() {
               // /transactions, in the denser "statement" variant (PER-241).
               <div
                 ref={statementScrollRef}
+                role="region"
+                aria-label="Transactions"
                 className="overflow-auto rounded-2xl border"
                 style={{ height: "min(60vh, 720px)", minHeight: "320px" }}
               >
@@ -1080,6 +1133,15 @@ function AccountDetailPage() {
                             dateKey={row.dateKey}
                             subtotal={row.subtotal}
                             currency={currency}
+                          />
+                        ) : row.kind === "holding_event" ? (
+                          <HoldingEventRow
+                            event={row.event}
+                            currency={currency}
+                            onEdit={(event) =>
+                              setHoldingEventDialog({ eventId: event.eventId })
+                            }
+                            onDelete={handleDeleteHoldingEvent}
                           />
                         ) : (
                           <TransactionListRow
@@ -1230,6 +1292,21 @@ function AccountDetailPage() {
           onSaved={async () => {
             await refreshHoldings()
             setSwitchDialog(null)
+          }}
+        />
+      ) : null}
+
+      {moveDialog ? (
+        <MovePositionDialog
+          // Remount per open so the form re-initializes cleanly.
+          key={`move-${moveDialog.holding.id}`}
+          state={moveDialog}
+          investmentAccountId={accountId}
+          currency={currency}
+          onClose={() => setMoveDialog(null)}
+          onSaved={async () => {
+            await refreshHoldings()
+            setMoveDialog(null)
           }}
         />
       ) : null}

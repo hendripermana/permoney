@@ -178,7 +178,7 @@ export function computeRunningBalances(
  * range extraction. Pure so both routes derive it identically.
  */
 export function headerRowIndexes(
-  rows: ReadonlyArray<{ kind: "header" | "transaction" }>
+  rows: ReadonlyArray<{ kind: string }>
 ): number[] {
   const out: number[] = []
   for (let i = 0; i < rows.length; i++) {

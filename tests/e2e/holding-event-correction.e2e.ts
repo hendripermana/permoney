@@ -4,13 +4,16 @@ import { onboard, waitForHydration } from "./support/onboarding"
 // PER-259 Slice 5 (second half) / ADR-0054 — correcting a SWITCH and a
 // DIVIDEND REINVEST from the real UI.
 //
-// Neither event creates a `Transaction` (a switch is fund→fund, a reinvest
-// creates units from the distribution itself), so neither can ever appear on
-// the per-account statement — before this slice a mistyped one was
-// unreachable. The "Position activity" list is their entry point: onboard →
-// Tracked Asset account → seed fund A → switch ALL of A into a new fund B →
-// the switch shows up as activity → Edit it down to half the units → Delete
-// it and watch fund A come back whole.
+// Neither event moves cash (a switch is fund→fund, a reinvest creates units
+// from the distribution itself), so neither drives a balance the way a
+// Buy/Sell trade does — but both are interleaved, by date, INTO the same
+// account statement every real transaction lives in (PER-259 Slice 6 folded
+// the earlier standalone "Position activity" panel into this one list, since
+// a separate panel meant the user had to remember to check two places for
+// "what happened to my money"). Flow: onboard → Tracked Asset account → seed
+// fund A → switch ALL of A into a new fund B → the switch shows up in the
+// statement → Edit it down to half the units → Delete it and watch fund A
+// come back whole.
 //
 // \s (not literal spaces) — formatCurrency uses a non-breaking space.
 
@@ -59,9 +62,10 @@ test.describe("position-event correction UI (PER-259 Slice 5)", () => {
     await dialog.getByRole("button", { name: "Record switch" }).click()
     await expect(page.getByRole("dialog")).toHaveCount(0)
 
-    // The switch is now reachable: it appears as position activity, which the
-    // statement could never show (no cash moved, so there is no ledger row).
-    const activity = page.getByRole("list", { name: "Position activity" })
+    // The switch is now reachable: it appears interleaved in the account's
+    // statement, tagged "No cash impact" — even though no cash moved and it
+    // never becomes a real `Transaction` row.
+    const activity = page.getByRole("region", { name: "Transactions" })
     const switchTitle = `${fundAName} → ${fundBName}`
     await expect(activity.getByText(switchTitle)).toBeVisible()
     await expect(activity.getByText("2.00000000 units")).toBeVisible()
@@ -98,10 +102,11 @@ test.describe("position-event correction UI (PER-259 Slice 5)", () => {
       .getByRole("button", { name: `Delete ${switchTitle}`, exact: true })
       .click()
 
-    // Fund B is gone, fund A is whole again at 2 units, activity list empty.
+    // Fund B is gone, fund A is whole again at 2 units, the switch entry
+    // itself is gone from the statement.
     await expect(holdings.getByText(fundBName)).toHaveCount(0)
     await expect(holdings.getByText("2.00000000")).toBeVisible()
-    await expect(page.getByText("Position activity")).toHaveCount(0)
+    await expect(activity.getByText(switchTitle)).toHaveCount(0)
     expect(
       await page.getByText(/Rp\s2,000,000\.00/).count()
     ).toBeGreaterThanOrEqual(2)
@@ -149,7 +154,7 @@ test.describe("position-event correction UI (PER-259 Slice 5)", () => {
     await expect(page.getByRole("dialog")).toHaveCount(0)
     await expect(page.getByText(/Rp\s3,000,000\.00/).first()).toBeVisible()
 
-    const activity = page.getByRole("list", { name: "Position activity" })
+    const activity = page.getByRole("region", { name: "Transactions" })
     await expect(activity.getByText(fundName)).toBeVisible()
 
     // EDIT: it was really Rp 500,000 reinvested → +0.5 units (cost 2,500,000).
