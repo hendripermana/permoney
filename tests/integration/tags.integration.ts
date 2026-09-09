@@ -20,11 +20,17 @@ import {
   createIntegrationHarness,
   type IntegrationHarness,
 } from "./support/database"
-import { createTestFactories, type TestFactories } from "./support/factories"
+import {
+  createTestFactories,
+  type AuthenticatedOnboardedUser,
+  type TestFactories,
+} from "./support/factories"
 
 // PER-145 — free-form, family-scoped Tags on Transaction. Mirrors the
 // Merchant/Category quick-create test shape (same tenant-owned taxonomy
 // contract), plus setTransactionTagsForFamily's own attach/detach semantics.
+
+const byId = (a: string, b: string) => a.localeCompare(b)
 
 describe("Tags (PER-145)", () => {
   let harness: IntegrationHarness
@@ -43,18 +49,50 @@ describe("Tags (PER-145)", () => {
     await harness.teardown()
   })
 
+  // Shared setup helpers — every test below was independently repeating this
+  // exact boilerplate (flagged as duplication); factored out once here.
+  const makeTag = (
+    actor: AuthenticatedOnboardedUser,
+    name: string,
+    color?: string
+  ) =>
+    createTagForFamily({
+      data: { name, color, idempotencyKey: factories.createIdempotencyKey() },
+      familyId: actor.family.id,
+      userId: actor.user.id,
+    })
+
+  const seedTransaction = async (actor: AuthenticatedOnboardedUser) => {
+    const account = await factories.createAccount({
+      familyId: actor.family.id,
+    })
+    return factories.createTransaction({
+      familyId: actor.family.id,
+      accountId: account.id,
+      userId: actor.user.id,
+    })
+  }
+
+  const applyTags = (
+    actor: AuthenticatedOnboardedUser,
+    transactionId: string,
+    tagIds: string[]
+  ) =>
+    setTransactionTagsForFamily({
+      data: {
+        transactionId,
+        tagIds,
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: actor.family.id,
+      userId: actor.user.id,
+    })
+
   describe("createTagForFamily", () => {
     test("creates a tag with a default color and writes an audit row", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
 
-      const created = await createTagForFamily({
-        data: {
-          name: "Reimbursable",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
+      const created = await makeTag(owner, "Reimbursable")
 
       expect(created.name).toBe("Reimbursable")
       expect(created.color).toBe("#6172F3")
@@ -77,15 +115,7 @@ describe("Tags (PER-145)", () => {
     test("trims the name and respects an explicit color", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
 
-      const created = await createTagForFamily({
-        data: {
-          name: "  Trip: Bali  ",
-          color: "#e07a5f",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
+      const created = await makeTag(owner, "  Trip: Bali  ", "#e07a5f")
 
       expect(created.name).toBe("Trip: Bali")
       expect(created.color).toBe("#e07a5f")
@@ -93,25 +123,11 @@ describe("Tags (PER-145)", () => {
 
     test("rejects a case/whitespace-insensitive duplicate name within the family", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
-      await createTagForFamily({
-        data: {
-          name: "Tax Deductible",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
+      await makeTag(owner, "Tax Deductible")
 
       let captured: unknown
       try {
-        await createTagForFamily({
-          data: {
-            name: "  tax deductible  ",
-            idempotencyKey: factories.createIdempotencyKey(),
-          },
-          familyId: owner.family.id,
-          userId: owner.user.id,
-        })
+        await makeTag(owner, "  tax deductible  ")
         expect.fail("Expected DuplicateNameError")
       } catch (error) {
         captured = error
@@ -127,23 +143,9 @@ describe("Tags (PER-145)", () => {
     test("the same name is allowed across different families", async () => {
       const familyA = await factories.createAuthenticatedOnboardedUser()
       const familyB = await factories.createAuthenticatedOnboardedUser()
-      await createTagForFamily({
-        data: {
-          name: "Groceries Split",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: familyA.family.id,
-        userId: familyA.user.id,
-      })
+      await makeTag(familyA, "Groceries Split")
 
-      const created = await createTagForFamily({
-        data: {
-          name: "Groceries Split",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: familyB.family.id,
-        userId: familyB.user.id,
-      })
+      const created = await makeTag(familyB, "Groceries Split")
       expect(created.name).toBe("Groceries Split")
     })
 
@@ -173,14 +175,7 @@ describe("Tags (PER-145)", () => {
         const owner = await factories.createAuthenticatedOnboardedUser()
         const intruder = await factories.createAuthenticatedOnboardedUser()
 
-        const created = await createTagForFamily({
-          data: {
-            name: "Owner-only Tag",
-            idempotencyKey: factories.createIdempotencyKey(),
-          },
-          familyId: owner.family.id,
-          userId: owner.user.id,
-        })
+        const created = await makeTag(owner, "Owner-only Tag")
 
         const visibleToIntruder = await harness.withFamily(
           intruder.family.id,
@@ -194,14 +189,7 @@ describe("Tags (PER-145)", () => {
   describe("renameTagForFamily", () => {
     test("renames a tag and writes an audit row with before/after", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
-      const tag = await createTagForFamily({
-        data: {
-          name: "Old Name",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
+      const tag = await makeTag(owner, "Old Name")
 
       const renamed = await renameTagForFamily({
         data: {
@@ -224,22 +212,8 @@ describe("Tags (PER-145)", () => {
 
     test("rejects renaming to a name colliding with another tag in the same family", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
-      await createTagForFamily({
-        data: {
-          name: "Taken",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
-      const tag = await createTagForFamily({
-        data: {
-          name: "Original",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
+      await makeTag(owner, "Taken")
+      const tag = await makeTag(owner, "Original")
 
       let captured: unknown
       try {
@@ -262,14 +236,7 @@ describe("Tags (PER-145)", () => {
     test("rejects renaming another family's tag (tenant-owned reference)", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
       const intruder = await factories.createAuthenticatedOnboardedUser()
-      const victimTag = await createTagForFamily({
-        data: {
-          name: "Victim",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
+      const victimTag = await makeTag(owner, "Victim")
 
       let captured: unknown
       try {
@@ -298,14 +265,7 @@ describe("Tags (PER-145)", () => {
   describe("archiveTagForFamily", () => {
     test("archives a tag and writes an audit row", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
-      const tag = await createTagForFamily({
-        data: {
-          name: "To Archive",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
+      const tag = await makeTag(owner, "To Archive")
 
       const archived = await archiveTagForFamily({
         data: { id: tag.id, idempotencyKey: factories.createIdempotencyKey() },
@@ -324,14 +284,7 @@ describe("Tags (PER-145)", () => {
 
     test("archiving an already-archived tag is a no-op, not a second audit row", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
-      const tag = await createTagForFamily({
-        data: {
-          name: "Double Archive",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
+      const tag = await makeTag(owner, "Double Archive")
       await archiveTagForFamily({
         data: { id: tag.id, idempotencyKey: factories.createIdempotencyKey() },
         familyId: owner.family.id,
@@ -357,40 +310,11 @@ describe("Tags (PER-145)", () => {
   describe("setTransactionTagsForFamily", () => {
     test("attaches tags to a transaction and writes an audit row", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
-      const account = await factories.createAccount({
-        familyId: owner.family.id,
-      })
-      const trx = await factories.createTransaction({
-        familyId: owner.family.id,
-        accountId: account.id,
-        userId: owner.user.id,
-      })
-      const tagA = await createTagForFamily({
-        data: {
-          name: "Tag A",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
-      const tagB = await createTagForFamily({
-        data: {
-          name: "Tag B",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
+      const trx = await seedTransaction(owner)
+      const tagA = await makeTag(owner, "Tag A")
+      const tagB = await makeTag(owner, "Tag B")
 
-      const result = await setTransactionTagsForFamily({
-        data: {
-          transactionId: trx.id,
-          tagIds: [tagA.id, tagB.id],
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
+      const result = await applyTags(owner, trx.id, [tagA.id, tagB.id])
 
       expect(result.tags.map((t) => t.name)).toEqual(["Tag A", "Tag B"])
       const rows = await harness.withFamily(owner.family.id, async (tx) =>
@@ -407,41 +331,11 @@ describe("Tags (PER-145)", () => {
 
     test("re-attaching the exact same set is idempotent — no duplicate rows, no new audit row", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
-      const account = await factories.createAccount({
-        familyId: owner.family.id,
-      })
-      const trx = await factories.createTransaction({
-        familyId: owner.family.id,
-        accountId: account.id,
-        userId: owner.user.id,
-      })
-      const tag = await createTagForFamily({
-        data: {
-          name: "Solo Tag",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
+      const trx = await seedTransaction(owner)
+      const tag = await makeTag(owner, "Solo Tag")
 
-      await setTransactionTagsForFamily({
-        data: {
-          transactionId: trx.id,
-          tagIds: [tag.id],
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
-      await setTransactionTagsForFamily({
-        data: {
-          transactionId: trx.id,
-          tagIds: [tag.id],
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
+      await applyTags(owner, trx.id, [tag.id])
+      await applyTags(owner, trx.id, [tag.id])
 
       const rows = await harness.withFamily(owner.family.id, async (tx) =>
         tx.transactionTag.findMany({ where: { transactionId: trx.id } })
@@ -461,105 +355,32 @@ describe("Tags (PER-145)", () => {
 
     test("a full-replace call removes tags no longer in the set and adds new ones", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
-      const account = await factories.createAccount({
-        familyId: owner.family.id,
-      })
-      const trx = await factories.createTransaction({
-        familyId: owner.family.id,
-        accountId: account.id,
-        userId: owner.user.id,
-      })
-      const tagA = await createTagForFamily({
-        data: {
-          name: "Keep",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
-      const tagB = await createTagForFamily({
-        data: {
-          name: "Remove Me",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
-      const tagC = await createTagForFamily({
-        data: {
-          name: "Newly Added",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
+      const trx = await seedTransaction(owner)
+      const tagA = await makeTag(owner, "Keep")
+      const tagB = await makeTag(owner, "Remove Me")
+      const tagC = await makeTag(owner, "Newly Added")
 
-      await setTransactionTagsForFamily({
-        data: {
-          transactionId: trx.id,
-          tagIds: [tagA.id, tagB.id],
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
+      await applyTags(owner, trx.id, [tagA.id, tagB.id])
+      const result = await applyTags(owner, trx.id, [tagA.id, tagC.id])
 
-      const result = await setTransactionTagsForFamily({
-        data: {
-          transactionId: trx.id,
-          tagIds: [tagA.id, tagC.id],
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
-
-      expect(result.tags.map((t) => t.id).sort()).toEqual(
-        [tagA.id, tagC.id].sort()
+      expect(result.tags.map((t) => t.id).sort(byId)).toEqual(
+        [tagA.id, tagC.id].sort(byId)
       )
       const rows = await harness.withFamily(owner.family.id, async (tx) =>
         tx.transactionTag.findMany({ where: { transactionId: trx.id } })
       )
-      expect(rows.map((r) => r.tagId).sort()).toEqual([tagA.id, tagC.id].sort())
+      expect(rows.map((r) => r.tagId).sort(byId)).toEqual(
+        [tagA.id, tagC.id].sort(byId)
+      )
     })
 
     test("an empty tagIds array clears every attached tag", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
-      const account = await factories.createAccount({
-        familyId: owner.family.id,
-      })
-      const trx = await factories.createTransaction({
-        familyId: owner.family.id,
-        accountId: account.id,
-        userId: owner.user.id,
-      })
-      const tag = await createTagForFamily({
-        data: {
-          name: "Only Tag",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
-      await setTransactionTagsForFamily({
-        data: {
-          transactionId: trx.id,
-          tagIds: [tag.id],
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
+      const trx = await seedTransaction(owner)
+      const tag = await makeTag(owner, "Only Tag")
+      await applyTags(owner, trx.id, [tag.id])
 
-      const result = await setTransactionTagsForFamily({
-        data: {
-          transactionId: trx.id,
-          tagIds: [],
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
+      const result = await applyTags(owner, trx.id, [])
 
       expect(result.tags).toHaveLength(0)
       const rows = await harness.withFamily(owner.family.id, async (tx) =>
@@ -570,22 +391,8 @@ describe("Tags (PER-145)", () => {
 
     test("replaying the same idempotency key does not double-attach", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
-      const account = await factories.createAccount({
-        familyId: owner.family.id,
-      })
-      const trx = await factories.createTransaction({
-        familyId: owner.family.id,
-        accountId: account.id,
-        userId: owner.user.id,
-      })
-      const tag = await createTagForFamily({
-        data: {
-          name: "Replay Attach",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
+      const trx = await seedTransaction(owner)
+      const tag = await makeTag(owner, "Replay Attach")
       const key = factories.createIdempotencyKey()
       const payload = {
         data: { transactionId: trx.id, tagIds: [tag.id], idempotencyKey: key },
@@ -606,34 +413,12 @@ describe("Tags (PER-145)", () => {
     test("rejects a tagId belonging to another family (tenant-owned reference)", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
       const intruder = await factories.createAuthenticatedOnboardedUser()
-      const account = await factories.createAccount({
-        familyId: owner.family.id,
-      })
-      const trx = await factories.createTransaction({
-        familyId: owner.family.id,
-        accountId: account.id,
-        userId: owner.user.id,
-      })
-      const intruderTag = await createTagForFamily({
-        data: {
-          name: "Foreign Tag",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: intruder.family.id,
-        userId: intruder.user.id,
-      })
+      const trx = await seedTransaction(owner)
+      const intruderTag = await makeTag(intruder, "Foreign Tag")
 
       let captured: unknown
       try {
-        await setTransactionTagsForFamily({
-          data: {
-            transactionId: trx.id,
-            tagIds: [intruderTag.id],
-            idempotencyKey: factories.createIdempotencyKey(),
-          },
-          familyId: owner.family.id,
-          userId: owner.user.id,
-        })
+        await applyTags(owner, trx.id, [intruderTag.id])
         expect.fail("Expected TagNotFoundError")
       } catch (error) {
         captured = error
@@ -649,34 +434,12 @@ describe("Tags (PER-145)", () => {
     test("rejects a transactionId belonging to another family (tenant-owned reference)", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
       const intruder = await factories.createAuthenticatedOnboardedUser()
-      const intruderAccount = await factories.createAccount({
-        familyId: intruder.family.id,
-      })
-      const intruderTrx = await factories.createTransaction({
-        familyId: intruder.family.id,
-        accountId: intruderAccount.id,
-        userId: intruder.user.id,
-      })
-      const tag = await createTagForFamily({
-        data: {
-          name: "Owner Tag",
-          idempotencyKey: factories.createIdempotencyKey(),
-        },
-        familyId: owner.family.id,
-        userId: owner.user.id,
-      })
+      const intruderTrx = await seedTransaction(intruder)
+      const tag = await makeTag(owner, "Owner Tag")
 
       let captured: unknown
       try {
-        await setTransactionTagsForFamily({
-          data: {
-            transactionId: intruderTrx.id,
-            tagIds: [tag.id],
-            idempotencyKey: factories.createIdempotencyKey(),
-          },
-          familyId: owner.family.id,
-          userId: owner.user.id,
-        })
+        await applyTags(owner, intruderTrx.id, [tag.id])
         expect.fail("Expected TagTransactionNotFoundError")
       } catch (error) {
         captured = error
@@ -694,69 +457,46 @@ describe("Tags (PER-145)", () => {
     // transaction row is live, never silently orphaned on a superseded one.
     // -------------------------------------------------------------------
     describe("surviving a transaction edit (row replacement)", () => {
-      const expenseUpdatePayload = (opts: {
-        id: string
-        accountId: string
-        categoryId: string
-      }) => ({
-        id: opts.id,
-        idempotencyKey: factories.createIdempotencyKey(),
-        accountId: opts.accountId,
-        amount: 20_000n,
-        categoryId: opts.categoryId,
-        date: new Date("2026-02-01T00:00:00.000Z"),
-        description: "Edited description",
-        currency: "IDR",
-        isSplit: false,
-        status: "CLEARED" as const,
-        type: "expense" as const,
-      })
+      const editTransaction = (
+        actor: AuthenticatedOnboardedUser,
+        opts: { id: string; accountId: string; categoryId: string }
+      ) =>
+        updateTransactionForFamily({
+          data: {
+            id: opts.id,
+            idempotencyKey: factories.createIdempotencyKey(),
+            accountId: opts.accountId,
+            amount: 20_000n,
+            categoryId: opts.categoryId,
+            date: new Date("2026-02-01T00:00:00.000Z"),
+            description: "Edited description",
+            currency: "IDR",
+            isSplit: false,
+            status: "CLEARED" as const,
+            type: "expense" as const,
+          },
+          familyId: actor.family.id,
+          user: { id: actor.user.id, familyId: actor.family.id },
+        }) as Promise<{ id: string }>
 
       test("tags attached BEFORE an edit are carried forward onto the replacement row", async () => {
         const owner = await factories.createAuthenticatedOnboardedUser()
-        const account = await factories.createAccount({
-          familyId: owner.family.id,
-        })
         const category = await factories.createCategory({
           familyId: owner.family.id,
           type: "expense",
         })
-        const trx = await factories.createTransaction({
-          familyId: owner.family.id,
-          accountId: account.id,
-          userId: owner.user.id,
-        })
-        const tag = await createTagForFamily({
-          data: {
-            name: "Survives Edit",
-            idempotencyKey: factories.createIdempotencyKey(),
-          },
-          familyId: owner.family.id,
-          userId: owner.user.id,
-        })
+        const trx = await seedTransaction(owner)
+        const tag = await makeTag(owner, "Survives Edit")
 
         // 1. Attach the tag to the ORIGINAL row.
-        await setTransactionTagsForFamily({
-          data: {
-            transactionId: trx.id,
-            tagIds: [tag.id],
-            idempotencyKey: factories.createIdempotencyKey(),
-          },
-          familyId: owner.family.id,
-          userId: owner.user.id,
-        })
+        await applyTags(owner, trx.id, [tag.id])
 
         // 2. Edit the transaction — this replaces the row.
-        const updateResult = await updateTransactionForFamily({
-          data: expenseUpdatePayload({
-            id: trx.id,
-            accountId: account.id,
-            categoryId: category.id,
-          }),
-          familyId: owner.family.id,
-          user: { id: owner.user.id, familyId: owner.family.id },
+        const { id: newTransactionId } = await editTransaction(owner, {
+          id: trx.id,
+          accountId: trx.accountId,
+          categoryId: category.id,
         })
-        const newTransactionId = (updateResult as { id: string }).id
         expect(newTransactionId).not.toBe(trx.id)
 
         // 3. The tag now lives on the NEW row, not the superseded one.
@@ -775,50 +515,23 @@ describe("Tags (PER-145)", () => {
 
       test("attaching tags via a since-superseded transactionId resolves onto the current live row", async () => {
         const owner = await factories.createAuthenticatedOnboardedUser()
-        const account = await factories.createAccount({
-          familyId: owner.family.id,
-        })
         const category = await factories.createCategory({
           familyId: owner.family.id,
           type: "expense",
         })
-        const trx = await factories.createTransaction({
-          familyId: owner.family.id,
-          accountId: account.id,
-          userId: owner.user.id,
-        })
-        const tag = await createTagForFamily({
-          data: {
-            name: "Late Attach",
-            idempotencyKey: factories.createIdempotencyKey(),
-          },
-          familyId: owner.family.id,
-          userId: owner.user.id,
-        })
+        const trx = await seedTransaction(owner)
+        const tag = await makeTag(owner, "Late Attach")
 
         // 1. Edit FIRST — the original id is now soft-deleted/superseded.
-        const updateResult = await updateTransactionForFamily({
-          data: expenseUpdatePayload({
-            id: trx.id,
-            accountId: account.id,
-            categoryId: category.id,
-          }),
-          familyId: owner.family.id,
-          user: { id: owner.user.id, familyId: owner.family.id },
+        const { id: newTransactionId } = await editTransaction(owner, {
+          id: trx.id,
+          accountId: trx.accountId,
+          categoryId: category.id,
         })
-        const newTransactionId = (updateResult as { id: string }).id
 
         // 2. The client (unaware the replace already happened) still
         // attaches tags using the ORIGINAL, now-stale id.
-        const result = await setTransactionTagsForFamily({
-          data: {
-            transactionId: trx.id,
-            tagIds: [tag.id],
-            idempotencyKey: factories.createIdempotencyKey(),
-          },
-          familyId: owner.family.id,
-          userId: owner.user.id,
-        })
+        const result = await applyTags(owner, trx.id, [tag.id])
 
         // 3. It resolves onto the CURRENT live transaction, not a rejection.
         expect(result.transactionId).toBe(newTransactionId)

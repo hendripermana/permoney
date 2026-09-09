@@ -489,7 +489,7 @@ async function validateTenantOwnedTags(
   const byId = new Map(tags.map((tag) => [tag.id, tag]))
   for (const tagId of tagIds) {
     const tag = byId.get(tagId)
-    if (!tag || tag.familyId !== familyId) throw new TagNotFoundError(tagId)
+    if (tag?.familyId !== familyId) throw new TagNotFoundError(tagId)
   }
 }
 

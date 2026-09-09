@@ -2071,14 +2071,14 @@ function TagsField({
   setSelectedTagIds,
   onCreateTag,
   isLoading,
-}: {
+}: Readonly<{
   isEditMode: boolean
   tags: Array<TagMultiSelectItem>
   selectedTagIds: Array<string>
   setSelectedTagIds: (ids: Array<string>) => void
   onCreateTag: (name: string) => Promise<TagMultiSelectItem>
   isLoading: boolean
-}) {
+}>) {
   if (!isEditMode) return null
 
   return (
