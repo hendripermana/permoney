@@ -772,6 +772,8 @@ function TransactionsPage() {
                 // edited split transaction loses its category rows entirely.
                 isSplit: editingTrx.isSplit,
                 splitEntries: editingTrx.splitEntries,
+                // PER-145 — carry the tag selection through to the modal.
+                tags: editingTrx.tags,
               }}
               onClose={() => setEditingTrx(null)}
               customTrigger={<span className="hidden" />}

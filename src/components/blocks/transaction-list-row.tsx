@@ -74,6 +74,8 @@ export function transactionToEditData(
         categoryId: e.categoryId ?? undefined,
         merchantId: e.merchantId ?? undefined,
       })) ?? [],
+    // PER-145 — seeds the tag picker's initial selection on open.
+    tags: trx.tags,
   }
 }
 
@@ -445,6 +447,26 @@ function PrimaryBlock({
             {statusBadge.label}
           </span>
         )}
+
+        {/* PER-145 — free-form tag chips, orthogonal to the category/status
+            badges above. */}
+        {trx.tags?.map((tag) => (
+          <span
+            key={tag.id}
+            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+            style={{
+              backgroundColor: `${tag.color}1a`,
+              color: tag.color,
+            }}
+          >
+            <span
+              className="size-1.5 rounded-full"
+              style={{ backgroundColor: tag.color }}
+              aria-hidden
+            />
+            {tag.name}
+          </span>
+        ))}
 
         {trx.attachmentUrl && (
           <a

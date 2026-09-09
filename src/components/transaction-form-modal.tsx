@@ -24,9 +24,14 @@ import { cn } from "@/lib/utils"
 import { getTransactionFormData } from "@/server/transactions"
 import { createMerchantFn } from "@/server/merchants"
 import { createCategoryFn } from "@/server/categories"
+import { createTagFn, setTransactionTagsFn } from "@/server/tags"
 import { getAccountHoldingsFn } from "@/server/holdings"
 import { DialogLoadingOrError } from "@/components/blocks/dialog-loading-state"
 import { TradeDialog } from "@/components/blocks/trade-dialog"
+import {
+  TagMultiSelect,
+  type TagMultiSelectItem,
+} from "@/components/blocks/tag-multi-select"
 import {
   decodeMoney,
   toDisplayNumber,
@@ -62,6 +67,7 @@ type TransactionFormData = Awaited<ReturnType<typeof getTransactionFormData>>
 type FormAccount = TransactionFormData["accounts"][number]
 type FormCategory = TransactionFormData["categories"][number]
 type FormMerchant = TransactionFormData["merchants"][number]
+type FormTag = TransactionFormData["tags"][number]
 
 import { accountCollection } from "@/lib/account-collections"
 import {
@@ -206,6 +212,10 @@ interface TransactionFormModalProps {
         splitEntries?: Array<
           Omit<SplitEntryValue, "amount"> & { amount: EditAmount }
         >
+        // PER-145 — the transaction's currently-attached tags (hydrated from
+        // `findLedgerTransactionsForFamily`), used only to seed
+        // `selectedTagIds` on open. Absent for a brand-new transaction.
+        tags?: Array<{ id: string; name: string; color: string }>
       })
     | null
   customTrigger?: React.ReactNode
@@ -2046,6 +2056,50 @@ function AttachmentField({ form }: Pick<TransactionFormSectionProps, "form">) {
   )
 }
 
+// PER-145 — free-form tags. Unlike NotesField/AttachmentField above, this is
+// NOT a `form.Field` — tags are a many-to-many relation living outside the
+// TanStack Form instance (see `selectedTagIds` in the controller hook), so
+// this takes its state as plain props instead of binding into the form's Zod
+// schema. Edit-mode only: a brand-new transaction's id is a client-generated
+// optimistic id the server hasn't created yet, so `setTransactionTagsFn`
+// (which needs a real, already-persisted `transactionId`) has nothing to
+// attach to until the create-mode save round-trips — see the save handler.
+function TagsField({
+  isEditMode,
+  tags,
+  selectedTagIds,
+  setSelectedTagIds,
+  onCreateTag,
+  isLoading,
+}: {
+  isEditMode: boolean
+  tags: Array<TagMultiSelectItem>
+  selectedTagIds: Array<string>
+  setSelectedTagIds: (ids: Array<string>) => void
+  onCreateTag: (name: string) => Promise<TagMultiSelectItem>
+  isLoading: boolean
+}) {
+  if (!isEditMode) return null
+
+  return (
+    <div className="space-y-2">
+      <Label htmlFor="transaction-tags">Tags (Optional)</Label>
+      <TagMultiSelect
+        id="transaction-tags"
+        items={tags}
+        value={selectedTagIds}
+        onChange={setSelectedTagIds}
+        onCreate={onCreateTag}
+        disabled={isLoading}
+        placeholder="Add tag"
+        searchPlaceholder="Search or create a tag..."
+        emptyLabel="No tags yet."
+        createLabel={(query) => `Create "${query}"`}
+      />
+    </div>
+  )
+}
+
 function TransactionActionBar({
   activeTab,
   form,
@@ -2168,6 +2222,15 @@ function useTransactionFormModalController({
     editData?.kind === "reimbursement"
   )
 
+  // PER-145 — free-form tags. Lives OUTSIDE the TanStack Form instance (same
+  // reasoning as isSplit/isReimbursement above): tags are a many-to-many
+  // relation, not a scalar field the form's Zod schema validates. Only
+  // meaningful in edit mode — see the save handler below for why a
+  // brand-new (not-yet-persisted) transaction can't take tags in this slice.
+  const [selectedTagIds, setSelectedTagIds] = React.useState<Array<string>>(
+    editData?.tags?.map((tag) => tag.id) ?? []
+  )
+
   useHotkeys([
     {
       hotkey: "Shift+N",
@@ -2189,6 +2252,7 @@ function useTransactionFormModalController({
     accounts: Array<FormAccount>
     categories: Array<FormCategory>
     merchants: Array<FormMerchant>
+    tags: Array<FormTag>
   }>({
     queryKey: ["transactionFormData"],
     queryFn: () => getTransactionFormData(),
@@ -2233,6 +2297,24 @@ function useTransactionFormModalController({
       return { id: created.id, label: created.name }
     },
     [activeTab, isReimbursement, queryClient]
+  )
+
+  // PER-145 — quick-create a tag from the picker, same contract as
+  // createCategoryOption/createMerchantOption above: the canonical
+  // `createTagFn` owns tenant scoping, audit, idempotency, and duplicate-name
+  // rejection; invalidating `transactionFormData` makes the new tag
+  // immediately selectable.
+  const createTagOption = React.useCallback(
+    async (name: string): Promise<TagMultiSelectItem> => {
+      const created = await createTagFn({
+        data: { name, idempotencyKey: createUuidV7() },
+      })
+      await queryClient.invalidateQueries({
+        queryKey: ["transactionFormData"],
+      })
+      return { id: created.id, name: created.name, color: created.color }
+    },
+    [queryClient]
   )
 
   const defaultFormValues: TransactionFormValues = isEditMode
@@ -2616,6 +2698,35 @@ function useTransactionFormModalController({
             relationDraft.isSplit = payload.isSplit
             relationDraft.splitEntries = payload.splitEntries
           })
+
+          // PER-145 — tags are a many-to-many relation, so they ride a direct
+          // call to `setTransactionTagsFn` rather than the optimistic
+          // collection draft above (which only models scalar/relation
+          // fields the ledger mutation itself owns). `editData.id` is
+          // already a persisted Transaction row here (this is the edit-mode
+          // branch), so there's no race with the async optimistic INSERT the
+          // way there would be for a brand-new transaction — see the
+          // create-mode branch below, which intentionally skips tags for
+          // exactly that reason (a client-generated id the server hasn't
+          // created yet). Full-replace is naturally idempotent, so this is
+          // safe to call even when the tag selection didn't change.
+          try {
+            await setTransactionTagsFn({
+              data: {
+                transactionId: editData.id,
+                tagIds: selectedTagIds,
+                idempotencyKey: createUuidV7(),
+              },
+            })
+            await transactionCollection.utils.refetch()
+          } catch (tagError: unknown) {
+            console.error("Failed to save tags", tagError)
+            setFormError(
+              tagError instanceof Error
+                ? `Transaction saved, but tags failed to save: ${tagError.message}`
+                : "Transaction saved, but tags failed to save."
+            )
+          }
         } else {
           // 1. Generate Client-Side ID untuk Sinkronisasi Optimistic ke Database
           const optimisticId = createUuidV7()
@@ -2654,6 +2765,11 @@ function useTransactionFormModalController({
             // splitEntries di optimistic payload adalah versi ringkas (tanpa relasi Prisma)
             splitEntries:
               payload.splitEntries as TransactionRecord["splitEntries"],
+            // PER-145 — a brand-new transaction can't carry tags yet (see the
+            // TagsField/save-handler comments on why tagging is edit-mode
+            // only); the post-mutation refetch is what would ever populate
+            // this for real.
+            tags: [],
           })
         }
 
@@ -2776,6 +2892,7 @@ function useTransactionFormModalController({
     activeTab,
     createCategoryOption,
     createMerchantOption,
+    createTagOption,
     finishTradeRedirect,
     form,
     formData,
@@ -2788,9 +2905,11 @@ function useTransactionFormModalController({
     isOpen,
     isReimbursement,
     isSplit,
+    selectedTagIds,
     setActiveTab,
     setIsReimbursement,
     setIsSplit,
+    setSelectedTagIds,
     setSplitEntries,
     setTradeRedirect,
     splitEntries,
@@ -2809,6 +2928,7 @@ export function TransactionFormModal({
     activeTab,
     createCategoryOption,
     createMerchantOption,
+    createTagOption,
     finishTradeRedirect,
     form,
     formData,
@@ -2821,9 +2941,11 @@ export function TransactionFormModal({
     isOpen,
     isReimbursement,
     isSplit,
+    selectedTagIds,
     setActiveTab,
     setIsReimbursement,
     setIsSplit,
+    setSelectedTagIds,
     setSplitEntries,
     setTradeRedirect,
     splitEntries,
@@ -2957,6 +3079,14 @@ export function TransactionFormModal({
               splitEntries={splitEntries}
             />
             <StatusField form={form} />
+            <TagsField
+              isEditMode={isEditMode}
+              tags={formData?.tags ?? []}
+              selectedTagIds={selectedTagIds}
+              setSelectedTagIds={setSelectedTagIds}
+              onCreateTag={createTagOption}
+              isLoading={isLoading}
+            />
             <NotesField activeTab={activeTab} form={form} />
             <AttachmentField form={form} />
             <TransactionActionBar
