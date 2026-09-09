@@ -55,16 +55,17 @@ test.describe("free-form tags on a transaction (PER-145)", () => {
     await page.getByLabel("Tags (Optional)").click()
     await page.getByPlaceholder("Search or create a tag...").fill(tagName)
     await page.getByRole("option", { name: `Create "${tagName}"` }).click()
-    // Close the popover (Escape) before asserting — while it's open, the
-    // newly created tag's text is visible TWICE (the trigger's chip AND the
-    // still-open option list showing it checked), which is a strict-mode
-    // violation for an exact-text locator.
-    await page.keyboard.press("Escape")
-    // The chip renders in the picker's trigger area immediately (optimistic).
+    // Quick-create is async (createTagFn round-trips before the picker's
+    // `onChange` fires) — MUST wait for it to actually land in
+    // `selectedTagIds` before saving, or "Update Changes" can fire first and
+    // save with zero tags selected. Scope to the trigger's own chip badge
+    // (`data-slot="badge"`), not a generic text match — the popover's own
+    // "checked" option ALSO renders this text while still open, and its
+    // close timing proved environment-dependent, so this must stay correct
+    // regardless of whether the popover has visually closed yet.
     await expect(
-      page.getByRole("dialog").getByText(tagName, { exact: true })
+      page.locator('[data-slot="badge"]').getByText(tagName, { exact: true })
     ).toBeVisible()
-
     await page.getByRole("button", { name: "Update Changes" }).click()
     await expect(page.getByRole("dialog")).toHaveCount(0)
 
