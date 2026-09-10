@@ -90,6 +90,7 @@ import {
   IdleCashNote,
   PerformancePanel,
   RangeSelector,
+  RecurringNote,
   SafeToSpendPanel,
 } from "./-account-analytics"
 import {
@@ -99,6 +100,7 @@ import {
 } from "@/lib/account-reserve"
 import { computeAccountRunway } from "@/lib/account-runway"
 import { computeIdleCash } from "@/lib/account-idle-cash"
+import { detectRecurringSeries } from "@/lib/account-recurring"
 import { computeAccountPerformance } from "@/lib/account-performance"
 import { sortAccountOptions } from "@/lib/holdings"
 import { getAccountOpeningValueFn } from "@/server/valuations"
@@ -571,6 +573,16 @@ function AccountDetailPage() {
     [cashLike, ledger, currentBalance, account?.reserveBalance, accountId]
   )
 
+  // PER-225 Slice 4a — recurring/bill detection: cash-like only, same reach as
+  // runway/idle-cash/health above. Pure client heuristic over the full
+  // per-account ledger (account-recurring.ts); no server model, no calendar,
+  // no confirm/dismiss UX yet — a narrow first tracer bullet of the PER-225
+  // milestone (its own ticket flags "needs its own grill / 2+ slices").
+  const recurring = React.useMemo(
+    () => (cashLike ? detectRecurringSeries(ledger) : []),
+    [cashLike, ledger]
+  )
+
   const kpi = React.useMemo(() => {
     let inflow: Money = ZERO_MONEY
     let outflow: Money = ZERO_MONEY
@@ -988,6 +1000,9 @@ function AccountDetailPage() {
           ) : null}
           {idleCash && account.accountSubtype !== "savings" ? (
             <IdleCashNote insight={idleCash} currency={currency} />
+          ) : null}
+          {recurring.length > 0 ? (
+            <RecurringNote series={recurring} currency={currency} />
           ) : null}
           <div className="grid grid-cols-2 gap-3">
             <MiniStat

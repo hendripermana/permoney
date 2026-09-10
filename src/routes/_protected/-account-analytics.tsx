@@ -3,6 +3,7 @@ import {
   Activity,
   Check,
   PiggyBank,
+  Repeat,
   ShieldCheck,
   TrendingDown,
   TrendingUp,
@@ -29,6 +30,10 @@ import {
 } from "@/lib/account-reserve"
 import { type AccountRunway } from "@/lib/account-runway"
 import { type IdleCashInsight } from "@/lib/account-idle-cash"
+import {
+  type RecurringCadence,
+  type RecurringSeries,
+} from "@/lib/account-recurring"
 import { type AccountPerformance } from "@/lib/account-performance"
 import {
   type AccountHealth,
@@ -495,6 +500,65 @@ export function IdleCashNote({
         the last {insight.windowDays}+ days — consider moving it somewhere it
         earns.
       </p>
+    </div>
+  )
+}
+
+const CADENCE_LABEL: Record<RecurringCadence, string> = {
+  weekly: "Weekly",
+  biweekly: "Biweekly",
+  monthly: "Monthly",
+}
+
+// PER-225 Slice 4a — "recurring" detection: a short, ambient, READ-ONLY list of
+// merchant/description series clustered by cadence + amount stability (see
+// account-recurring.ts for the heuristic). No edit/confirm/dismiss UI yet —
+// that, a calendar view, and recurring-aware runway are explicit later slices
+// on the PER-225 milestone. Renders nothing when nothing was detected, so the
+// caller can mount it unconditionally (same pattern as IdleCashNote).
+export function RecurringNote({
+  series,
+  currency,
+}: Readonly<{ series: ReadonlyArray<RecurringSeries>; currency: string }>) {
+  if (series.length === 0) return null
+  return (
+    <div className="rounded-2xl border p-4">
+      <p className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+        <Repeat className="size-3.5" aria-hidden />
+        Recurring
+      </p>
+      <ul className="mt-2 flex flex-col gap-2.5">
+        {series.map((s) => (
+          <li
+            key={s.key}
+            className="flex items-center justify-between gap-3 text-sm"
+          >
+            <div className="flex min-w-0 flex-col">
+              <span className="truncate font-medium text-foreground">
+                {s.label}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                {CADENCE_LABEL[s.cadence]} · next{" "}
+                {s.nextExpected.toLocaleDateString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                })}
+              </span>
+            </div>
+            <span
+              className={cn(
+                "shrink-0 font-semibold tabular-nums",
+                s.direction === "in"
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-foreground"
+              )}
+            >
+              {s.direction === "in" ? "+" : "−"}
+              {formatCurrency(s.typicalAmountMinor.toString(), currency)}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
