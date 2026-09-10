@@ -1,5 +1,9 @@
 import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
+import {
+  applySmartRules,
+  normalizeImportDescription,
+} from "../lib/import-staging"
 import { auditLog, createAuditContext } from "./middleware/audit"
 import {
   familyMiddleware,
@@ -144,4 +148,59 @@ export const deleteSmartRuleFn = createServerFn({ method: "POST" })
       familyId: context.familyId,
       user: context.user,
     })
+  })
+
+/**
+ * 4. SUGGEST — PER-253 (Tier 4): "Auto-apply Smart Rules on create". The
+ * import flow (`src/server/imports.ts`) already runs every staged row through
+ * `applySmartRules`; this is the same tenant-scoped rule set and the same
+ * pure matcher, exposed as a thin read-only lookup for the manual "New
+ * Transaction" form so a user typing a description gets the identical
+ * suggestion contract as a bank-statement import — advisory only, the caller
+ * decides whether to apply it and never writes anything here.
+ *
+ * `familyMiddleware` (not `requireCapability`) matches `getSmartRulesFn`
+ * above: this is a read, not a mutation, so it only needs tenant scoping.
+ */
+const suggestSmartRuleSchema = z.object({ description: z.string() })
+
+export const suggestSmartRuleFn = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .inputValidator((data: z.infer<typeof suggestSmartRuleSchema>) =>
+    suggestSmartRuleSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    const normalizedDescription = normalizeImportDescription(data.description)
+    // Same empty/near-empty guard as the import matcher's own keyword check
+    // (ADR-0039 §8): a description this short can never meaningfully contain
+    // a keyword, so skip the query rather than round-tripping for a
+    // guaranteed no-match.
+    if (normalizedDescription.length < 3) {
+      return {
+        suggestedCategoryId: null,
+        suggestedMerchantId: null,
+        matchedSmartRuleId: null,
+      }
+    }
+
+    return scopedTenantTransaction(
+      context.familyId,
+      context.user.id,
+      async (tx) => {
+        // Same query shape as `getSmartRulesFn` — tenant-scoped by
+        // `familyId` and RLS GUC (set by `scopedTenantTransaction`), so the
+        // rules fed into `applySmartRules` can never leak across tenants.
+        const rules = await tx.smartRule.findMany({
+          where: { familyId: context.familyId },
+          select: {
+            id: true,
+            keyword: true,
+            categoryId: true,
+            merchantId: true,
+            createdAt: true,
+          },
+        })
+        return applySmartRules(rules, normalizedDescription)
+      }
+    )
   })
