@@ -27,13 +27,22 @@ updates:
           - "@types/*"
       dev-tooling:
         patterns:
-          - vite-plus
-          - vite
           - vitest
           - "@vitest/*"
           - "@vitejs/*"
           - "@rsbuild/*"
           - "@testing-library/*"
+        exclude-patterns:
+          # vite-plus (and its `vite` alias override) must NEVER be grouped
+          # with routine dev-tooling bumps: a 2026-08-30 upgrade of this exact
+          # package broke production with an ARM64-only SSR crash invisible to
+          # x86_64 CI (see docs/adr's dependency-upgrade-hazards notes), and a
+          # grouped PR silently re-bundling it recurred on 2026-09-10. Any
+          # vite-plus bump must land as its own isolated, individually-Reviewed
+          # PR, verified with a native ARM64 build+boot test on the prod VM
+          # before merging — never auto-merged as part of a routine group.
+          - vite-plus
+          - vite
       better-auth:
         patterns:
           - better-auth
