@@ -48,6 +48,7 @@ model Family {
   accounts     Account[]
   merchants    Merchant[]
   categories   Category[]
+  tags         Tag[]
   smartRules   SmartRule[]
   transactions Transaction[]
   idempotencyRecords IdempotencyRecord[]
@@ -282,6 +283,59 @@ model Merchant {
   @@index([familyId])
 }
 
+// PER-145 — free-form, family-scoped tags. Orthogonal to Category: a category
+// answers "what kind of spend", a tag answers an independent question ("is
+// this reimbursable", "is this for trip X") and a transaction can carry
+// several. Modeled as a plain tenant-owned taxonomy row (mirrors Merchant —
+// no isSystem split, no parent hierarchy) + a join table, NOT a polymorphic
+// Sure-style `Tagging` (Permoney only needs Transaction-level tags today;
+// generalizing further would be premature abstraction — CLAUDE.md).
+model Tag {
+  id       String @id @default(cuid())
+  familyId String
+  family   Family @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  name     String
+  color    String @default("#6172F3")
+
+  // Soft "delete" (mirrors Account/Transaction's soft-delete convention): an
+  // archived tag disappears from the picker but stays attached to whatever
+  // history already carries it — a tag on a past transaction is ledger-
+  // adjacent evidence, not disposable UI state.
+  archivedAt DateTime?
+
+  taggings TransactionTag[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  // Composite-FK target for TransactionTag (ADR-0010 tenant-safe FK pattern).
+  @@unique([id, familyId], map: "Tag_id_familyId_key")
+  // Case/whitespace-insensitive per-family name uniqueness — a functional
+  // UNIQUE INDEX (familyId, lower(btrim(name))) is created in raw SQL
+  // (migration `tags`), mirroring `merchant_category_name_dedup`. Prisma
+  // cannot express a functional index in the schema DSL.
+  @@index([familyId])
+  @@index([familyId, archivedAt])
+}
+
+// Join table: which tags are attached to which transaction. `@@unique` on
+// (transactionId, tagId) makes re-attaching the same tag a no-op via upsert
+// rather than a duplicate row — the "attach/detach idempotency" contract.
+model TransactionTag {
+  id            String      @id @default(cuid())
+  familyId      String // denormalized for the composite tenant FK + RLS
+  transactionId String
+  transaction   Transaction @relation(fields: [transactionId, familyId], references: [id, familyId], onDelete: Cascade, onUpdate: Cascade, map: "TransactionTag_transactionId_familyId_fkey")
+  tagId         String
+  tag           Tag         @relation(fields: [tagId, familyId], references: [id, familyId], onDelete: Cascade, onUpdate: Cascade, map: "TransactionTag_tagId_familyId_fkey")
+
+  createdAt DateTime @default(now())
+
+  @@unique([transactionId, tagId], map: "transaction_tag_unique")
+  @@index([familyId])
+  @@index([tagId])
+}
+
 model Category {
   id   String @id @default(cuid())
   name String
@@ -422,6 +476,10 @@ model Transaction {
   isSplit      Boolean      @default(false)
   splitEntries SplitEntry[]
 
+  // PER-145 — free-form tags (orthogonal to Category), set via
+  // `setTransactionTagsFn`'s full-replace mutation.
+  tags TransactionTag[]
+
   // Strategic indexes (see ADR-0003). Prisma's SQLite/libSQL provider does
   // NOT auto-index foreign-key columns, so these are not redundant.
   // Main list query (`getTransactionsFn`): filter on deletedAt IS NULL,
@@ -435,6 +493,9 @@ model Transaction {
   @@index([categoryId])
   @@index([merchantId])
   @@unique([familyId, idempotencyKey], name: "tx_family_idempotency", map: "tx_family_idempotency")
+  // PER-145 — composite-FK target (ADR-0010 pattern) for TransactionTag, the
+  // same tenant-safe shape Account/Merchant/Budget already expose.
+  @@unique([id, familyId], map: "Transaction_id_familyId_key")
 }
 
 model IdempotencyRecord {

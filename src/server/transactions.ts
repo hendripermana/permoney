@@ -87,7 +87,7 @@ export const getTransactionFormData = createServerFn({ method: "GET" })
       context.familyId,
       context.user.id,
       async (tx) => {
-        const [accounts, categories, merchants, holdingAccounts] =
+        const [accounts, categories, merchants, holdingAccounts, tags] =
           await runTenantTransactionQueriesInOrder([
             () =>
               tx.account.findMany({
@@ -118,6 +118,15 @@ export const getTransactionFormData = createServerFn({ method: "GET" })
                 select: { accountId: true },
                 distinct: ["accountId"],
               }),
+            // PER-145 — active tags for the transaction form's tag picker.
+            // Archived tags are excluded (they stay attached to whatever
+            // history already carries them, but disappear from the picker).
+            () =>
+              tx.tag.findMany({
+                where: { familyId: context.familyId, archivedAt: null },
+                orderBy: { name: "asc" },
+                select: { id: true, name: true, color: true },
+              }),
           ] as const)
         const holdingsAccountIds = new Set(
           holdingAccounts.map((holding) => holding.accountId)
@@ -129,6 +138,7 @@ export const getTransactionFormData = createServerFn({ method: "GET" })
           })),
           categories,
           merchants,
+          tags,
         }
       }
     )
@@ -582,7 +592,7 @@ export async function findLedgerTransactionsForFamily(
     }
   }
 
-  const [accounts, categories, merchants] =
+  const [accounts, categories, merchants, transactionTags] =
     await runTenantTransactionQueriesInOrder([
       () =>
         accountIds.size > 0
@@ -605,6 +615,23 @@ export async function findLedgerTransactionsForFamily(
               select: { id: true, name: true, logoUrl: true },
             })
           : Promise.resolve([]),
+      // PER-145 — tags attached to any transaction in this page, joined with
+      // the Tag row so the list can render chips without a second round-trip.
+      // Archived tags are NOT excluded here — a tag on a past transaction is
+      // ledger-adjacent evidence and stays visible on that row even after the
+      // tag itself is archived from the picker.
+      () =>
+        transactionIds.length > 0
+          ? tx.transactionTag.findMany({
+              where: { transactionId: { in: transactionIds } },
+              select: {
+                transactionId: true,
+                tag: {
+                  select: { id: true, name: true, color: true },
+                },
+              },
+            })
+          : Promise.resolve([]),
     ] as const)
 
   const accountsById = indexById(accounts)
@@ -615,6 +642,15 @@ export async function findLedgerTransactionsForFamily(
     const current = splitEntriesByTransactionId.get(splitEntry.transactionId)
     if (current) current.push(splitEntry)
     else splitEntriesByTransactionId.set(splitEntry.transactionId, [splitEntry])
+  }
+  const tagsByTransactionId = new Map<
+    string,
+    Array<{ id: string; name: string; color: string }>
+  >()
+  for (const row of transactionTags) {
+    const current = tagsByTransactionId.get(row.transactionId)
+    if (current) current.push(row.tag)
+    else tagsByTransactionId.set(row.transactionId, [row.tag])
   }
 
   return transactions.map((transaction) => {
@@ -633,6 +669,11 @@ export async function findLedgerTransactionsForFamily(
 
     return {
       ...transaction,
+      // PER-145 — tags attached to this transaction (sorted for a stable
+      // chip order regardless of attach order).
+      tags: (tagsByTransactionId.get(transaction.id) ?? [])
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name)),
       // PER-247: contextual money-movement fields (null for non-transfers).
       // The fee amount is wire-encoded as a positive magnitude string (the
       // same boundary convention as serializeTransaction).
@@ -4099,6 +4140,26 @@ async function replaceTransactionWithinTenantTransaction(
       data: { deletedAt },
     })
     if (feeUpdate.count !== 1) throw new TransactionGoneError()
+  }
+
+  // PER-145 — carry any Tags forward onto the replacement row(s). Unlike
+  // `SplitEntry` above (recreated fresh from `data.splitEntries` on every
+  // edit — it IS part of this payload), `TransactionTag` is attached
+  // out-of-band via `setTransactionTagsFn` and never touches this function's
+  // input at all, so nothing else here re-establishes it on the new row. A
+  // RE-POINT (never a delete + recreate) preserves each tagging's original
+  // `createdAt`. Only the two user-editable legs can carry a tag today (the
+  // TagsField in the form binds to a single opened transaction id); the fee
+  // leg has no tag UI surface, so it's intentionally not handled here.
+  await tx.transactionTag.updateMany({
+    where: { transactionId: oldTx.id },
+    data: { transactionId: resultTransaction.id },
+  })
+  if (oldInflowTx && createdInflowTx) {
+    await tx.transactionTag.updateMany({
+      where: { transactionId: oldInflowTx.id },
+      data: { transactionId: createdInflowTx.id },
+    })
   }
 
   const [
