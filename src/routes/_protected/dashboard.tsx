@@ -88,33 +88,62 @@ function DashboardPage() {
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
 
-  // Anchor the defaults once per mount so the query keys (and thus the fetched
-  // range) stay stable across renders: last 6 months ending today.
-  const [defaults] = React.useState(() => {
+  // PER-263: `from`/`to` are sent to the server ONLY when the user explicitly
+  // picked a range via the date-range picker (`search.from`/`search.to`).
+  // Left unset, `getCashFlowReportFn`/`getNetWorthSeriesFn` resolve "last 6
+  // months ending today" SERVER-SIDE in the FAMILY's timezone — mirroring how
+  // `getBudgetForPeriodFn` resolves its own default month. Anchoring the
+  // default to the browser's local clock here would make it disagree with
+  // the family timezone used to classify every row (a transaction dated
+  // "today" in the family's timezone can already be "tomorrow", or still
+  // "yesterday", relative to the browser's calendar), which is exactly the
+  // bug that made the Cash Flow widget show zero for a family whose only
+  // transactions were dated "today".
+  //
+  // `displayDefaults` is anchored once per mount purely so the date-range
+  // picker has something concrete to show before the user opens it — it
+  // never reaches the server as an implicit "today".
+  const [displayDefaults] = React.useState(() => {
     const now = new Date()
     const fromDate = new Date(now)
     fromDate.setMonth(fromDate.getMonth() - 6)
     return { from: toDateOnly(fromDate), to: toDateOnly(now) }
   })
 
-  const from = search.from ?? defaults.from
-  const to = search.to ?? defaults.to
+  const from = search.from
+  const to = search.to
+  const displayFrom = from ?? displayDefaults.from
+  const displayTo = to ?? displayDefaults.to
   const interval: Interval = search.interval ?? "month"
-  // Budget periods are monthly; track the month the selected range ends in.
-  const month = to.slice(0, 7)
+  // Budget periods are monthly. Only override the server's family-tz "current
+  // month" default (`currentMonthInZone`) when the user explicitly picked an
+  // end date — otherwise let getBudgetForPeriodFn resolve it the same way.
+  const month = to?.slice(0, 7)
 
   const netWorth = useQuery({
-    queryKey: ["dashboard", "net-worth", from, to, interval],
+    queryKey: [
+      "dashboard",
+      "net-worth",
+      from ?? "default",
+      to ?? "default",
+      interval,
+    ],
     queryFn: async () =>
       await getNetWorthSeriesFn({ data: { from, to, interval } }),
   })
   const cashFlow = useQuery({
-    queryKey: ["dashboard", "cash-flow", from, to, interval],
+    queryKey: [
+      "dashboard",
+      "cash-flow",
+      from ?? "default",
+      to ?? "default",
+      interval,
+    ],
     queryFn: async () =>
       await getCashFlowReportFn({ data: { from, to, interval } }),
   })
   const budget = useQuery({
-    queryKey: ["dashboard", "budget", month],
+    queryKey: ["dashboard", "budget", month ?? "default"],
     queryFn: async () => await getBudgetForPeriodFn({ data: { month } }),
   })
   const categories = useQuery({
@@ -164,8 +193,8 @@ function DashboardPage() {
                     <Label>Period</Label>
                     <PermoneyDateRangePicker
                       date={{
-                        from: parseDateOnly(from),
-                        to: parseDateOnly(to),
+                        from: parseDateOnly(displayFrom),
+                        to: parseDateOnly(displayTo),
                       }}
                       onUpdate={(range) => {
                         if (!range?.from || !range?.to) return

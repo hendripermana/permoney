@@ -13,6 +13,7 @@ import {
   type CashFlowInterval,
   type CashFlowReport,
 } from "@/lib/cash-flow"
+import { calendarDateInZone } from "@/lib/budget-progress"
 import { getFamilyBaseCurrency } from "./fx"
 import {
   familyMiddleware,
@@ -44,13 +45,84 @@ const dateOnlySchema = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD")
 
+// PER-263 — the caller may omit `from`/`to` entirely to ask for "the default
+// range ending today," but "today" and "6 months ago" must be resolved in the
+// FAMILY's timezone, never the caller's browser-local clock. This mirrors how
+// `getBudgetForPeriodFn` resolves its own default period via
+// `currentMonthInZone` (`src/server/budgets.ts`): the two must agree on what
+// "today" means for the same family, or two report widgets fold the exact
+// same rows into different totals depending on which endpoint answered.
+// `from`/`to` must be provided together or omitted together — a partial pair
+// has no well-defined default.
+function bothOrNeitherRangeBounds(
+  data: { from?: string; to?: string },
+  ctx: z.RefinementCtx
+): boolean {
+  if ((data.from === undefined) === (data.to === undefined)) return true
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: "from and to must both be provided, or both omitted",
+  })
+  return false
+}
+
+/** "Today" (YYYY-MM-DD) as seen in `timezone` — the default range's `to`. */
+function defaultReportingTo(timezone: string): string {
+  return calendarDateInZone(new Date(), timezone)
+}
+
+/**
+ * `dateOnly` minus `months` calendar months, clamping the day to the target
+ * month's last day (e.g. 2026-08-31 minus 6 months => 2026-02-28). Pure
+ * calendar arithmetic on the Y-M-D components — `Date.UTC` is used only as a
+ * calendar calculator here, never to represent a real wall-clock instant, so
+ * it carries no timezone risk (same technique as `stepDate` in cash-flow.ts).
+ */
+function subtractCalendarMonths(dateOnly: string, months: number): string {
+  const [year, month, day] = dateOnly.split("-").map(Number)
+  const totalMonths = year * 12 + (month - 1) - months
+  const targetYear = Math.floor(totalMonths / 12)
+  const targetMonth = ((totalMonths % 12) + 12) % 12
+  const lastDayOfTargetMonth = new Date(
+    Date.UTC(targetYear, targetMonth + 1, 0)
+  ).getUTCDate()
+  const clampedDay = Math.min(day, lastDayOfTargetMonth)
+  return `${targetYear}-${String(targetMonth + 1).padStart(2, "0")}-${String(clampedDay).padStart(2, "0")}`
+}
+
+/** The default "last 6 months ending today" range, resolved in `timezone`. */
+export function defaultReportingRange(timezone: string): {
+  from: string
+  to: string
+} {
+  const to = defaultReportingTo(timezone)
+  return { from: subtractCalendarMonths(to, 6), to }
+}
+
+/**
+ * The effective `[from, to]` for a report request: the caller's explicit pair
+ * when given, otherwise the family-tz default range. Never mixes a caller
+ * value with a resolved one (the schema already rejects a partial pair).
+ */
+function resolveDateRange(
+  data: { from?: string; to?: string },
+  timezone: string
+): { from: string; to: string } {
+  if (data.from !== undefined && data.to !== undefined) {
+    return { from: data.from, to: data.to }
+  }
+  return defaultReportingRange(timezone)
+}
+
 export const getNetWorthSeriesInputSchema = z
   .object({
-    from: dateOnlySchema,
-    to: dateOnlySchema,
+    from: dateOnlySchema.optional(),
+    to: dateOnlySchema.optional(),
     interval: z.enum(["day", "week", "month"]),
   })
   .superRefine((data, ctx) => {
+    if (!bothOrNeitherRangeBounds(data, ctx)) return
+    if (data.from === undefined || data.to === undefined) return // resolved server-side
     // Reuse the single source of truth for bounds (from ≤ to, ≤ MAX points).
     try {
       generateSampleDates(data.from, data.to, data.interval)
@@ -122,11 +194,15 @@ export async function getNetWorthSeriesForFamily({
   runInTenantTransaction?: RunInTenantTransaction
 }): Promise<NetWorthSeriesResult> {
   const data = getNetWorthSeriesInputSchema.parse(rawData)
-  const upperBound = queryUpperBound(data.to)
 
   return await runInTenantTransaction(familyId, userId, async (tx) => {
     const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
     const timezone = await getFamilyTimezone(tx, familyId)
+
+    // Resolve the default range (when the caller omitted from/to) in the
+    // FAMILY's timezone — never the caller's browser-local clock (PER-263).
+    const { from, to } = resolveDateRange(data, timezone)
+    const upperBound = queryUpperBound(to)
 
     // Four queries total — never one per sample date (ADR-0038 §7).
     const [accounts, valuations, transactions, snapshots] = await Promise.all([
@@ -171,8 +247,8 @@ export async function getNetWorthSeriesForFamily({
     const points = buildNetWorthSeries({
       baseCurrency,
       timezone,
-      from: data.from,
-      to: data.to,
+      from,
+      to,
       interval: data.interval,
       accounts,
       valuations: valuations.map((row) => ({
@@ -199,8 +275,8 @@ export async function getNetWorthSeriesForFamily({
     return {
       baseCurrency,
       timezone,
-      from: data.from,
-      to: data.to,
+      from,
+      to,
       interval: data.interval,
       points: points.map(serializePoint),
     }
@@ -255,11 +331,13 @@ export const getNetWorthSeriesFn = createServerFn({ method: "GET" })
 
 export const getCashFlowReportInputSchema = z
   .object({
-    from: dateOnlySchema,
-    to: dateOnlySchema,
+    from: dateOnlySchema.optional(),
+    to: dateOnlySchema.optional(),
     interval: z.enum(["day", "week", "month"]),
   })
   .superRefine((data, ctx) => {
+    if (!bothOrNeitherRangeBounds(data, ctx)) return
+    if (data.from === undefined || data.to === undefined) return // resolved server-side
     // Reuse the single source of truth for bounds (from ≤ to, ≤ MAX buckets).
     try {
       generateCashFlowBuckets(data.from, data.to, data.interval)
@@ -372,11 +450,15 @@ export async function getCashFlowReportForFamily({
   runInTenantTransaction?: RunInTenantTransaction
 }): Promise<CashFlowReportResult> {
   const data = getCashFlowReportInputSchema.parse(rawData)
-  const range = queryRange(data.from, data.to)
 
   return await runInTenantTransaction(familyId, userId, async (tx) => {
     const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
     const timezone = await getFamilyTimezone(tx, familyId)
+
+    // Resolve the default range (when the caller omitted from/to) in the
+    // FAMILY's timezone — never the caller's browser-local clock (PER-263).
+    const { from, to } = resolveDateRange(data, timezone)
+    const range = queryRange(from, to)
 
     // One query — the flow rows. Transfers are excluded by `type`; `excluded`
     // and soft-deleted rows never count (ADR-0037 / budget-engine parity).
@@ -405,8 +487,8 @@ export async function getCashFlowReportForFamily({
     })
 
     const report = computeCashFlowReport({
-      from: data.from,
-      to: data.to,
+      from,
+      to,
       interval: data.interval,
       timezone,
       transactions: transactions.map((row) => ({
@@ -431,8 +513,8 @@ export async function getCashFlowReportForFamily({
     return serializeCashFlowReport(report, {
       baseCurrency,
       timezone,
-      from: data.from,
-      to: data.to,
+      from,
+      to,
       interval: data.interval,
     })
   })
