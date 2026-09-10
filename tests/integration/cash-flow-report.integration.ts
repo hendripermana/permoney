@@ -5,6 +5,7 @@ import {
   describe,
   expect,
   test,
+  vi,
 } from "vite-plus/test"
 import type { AccountType } from "@/lib/accounts"
 import { convertMinor, encodeRate } from "@/lib/fx"
@@ -392,5 +393,65 @@ describe("cash-flow report (PER-155 / R2)", () => {
     const r = await report(ownerB)
     expect(r.totals.income).toBe("42000")
     expect(r.totals.expense).toBe("0")
+  })
+
+  // ---- default range resolution (PER-263) ------------------------------------
+  //
+  // Root cause: the Dashboard defaulted its "today" boundary to the BROWSER's
+  // local calendar and sent it as an explicit `to`, while every transaction is
+  // classified by its calendar date in the FAMILY's timezone (ADR-0037). When
+  // those disagreed about what day it was — which happens whenever the family
+  // timezone isn't the browser's — a transaction genuinely dated "today" in
+  // the family's timezone fell after the stale `to` and was excluded from the
+  // WHOLE period, zeroing every figure for a family whose only transactions
+  // were dated "today". The fix lets the caller omit `from`/`to`; the server
+  // then resolves "last 6 months ending today" in the family's own timezone
+  // (`defaultReportingRange`, src/server/reporting.ts), the same way
+  // `getBudgetForPeriodFn` resolves its default month via `currentMonthInZone`.
+
+  test("omitted from/to resolves 'today' in the FAMILY's timezone, not UTC, and includes the row (PER-263)", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    const wallet = await account(owner, "Wallet")
+    const food = await factories.createCategory({
+      familyId: owner.family.id,
+      type: "expense",
+      name: "Food",
+    })
+
+    // 2026-06-15T20:00:00Z is still June 15th in UTC, but already
+    // 2026-06-16T03:00 in Asia/Jakarta (UTC+7) — one calendar day ahead. A
+    // browser-local `to` computed from this same instant (any zone at or
+    // behind UTC) would read "the 15th" and wrongly exclude a transaction
+    // dated exactly now, even though it is genuinely "today" (the 16th) for
+    // the family. `toFake: ["Date"]` freezes only `Date`/`now()` — the real
+    // Postgres round trip below runs on real timers.
+    const now = new Date("2026-06-15T20:00:00.000Z")
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(now)
+    try {
+      await create(owner, {
+        type: "expense",
+        amount: 180_500n,
+        currency: "IDR",
+        accountId: wallet.id,
+        categoryId: food.id,
+        description: "dinner, dated 'now'",
+        date: now,
+      })
+
+      // No from/to — mirrors the dashboard's default request.
+      const r = await getCashFlowReportForFamily({
+        data: { interval: "month" },
+        familyId: owner.family.id,
+        userId: owner.user.id,
+      })
+
+      expect(r.to).toBe("2026-06-16") // family-tz "today", not UTC's 15th
+      expect(r.totals.expense).toBe("180500")
+      expect(cat(r, food.id)?.expense).toBe("180500")
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

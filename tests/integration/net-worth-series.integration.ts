@@ -5,6 +5,7 @@ import {
   describe,
   expect,
   test,
+  vi,
 } from "vite-plus/test"
 import type { AccountType } from "@/lib/accounts"
 import { convertMinor, encodeRate } from "@/lib/fx"
@@ -617,5 +618,40 @@ describe("net-worth time series (PER-154 / ADR-0038)", () => {
 
     const result = await series(ownerB, "2026-01-01", "2026-01-01", "day")
     expect(pointAt(result.points, "2026-01-01").netWorth).toBe("42000")
+  })
+
+  // ---- default range resolution (PER-263) ------------------------------------
+
+  test("omitted from/to resolves 'today' in the FAMILY's timezone, not UTC", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    await makeAccount(owner, {
+      name: "Wallet",
+      openingBalance: "100000",
+      openingDate: "2026-01-01",
+    })
+
+    // 2026-06-15T20:00:00Z is still June 15th in UTC, but already
+    // 2026-06-16T03:00 in Asia/Jakarta (UTC+7) — the exact PER-263 edge: a
+    // browser-local "today" (the 15th) would resolve a stale upper bound and
+    // silently miss a transaction genuinely dated "today" (the 16th) in the
+    // family's own timezone. `toFake: ["Date"]` freezes only `Date`/`now()`;
+    // real timers (and the real Postgres round trip below) are untouched.
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date("2026-06-15T20:00:00.000Z"))
+    try {
+      const result = await getNetWorthSeriesForFamily({
+        data: { interval: "day" },
+        familyId: owner.family.id,
+        userId: owner.user.id,
+      })
+
+      // The resolved range must end on the family's calendar day (the 16th),
+      // not the UTC instant's calendar day (the 15th).
+      expect(result.to).toBe("2026-06-16")
+      expect(pointAt(result.points, "2026-06-16").netWorth).toBe("100000")
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
