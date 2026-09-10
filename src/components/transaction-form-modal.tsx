@@ -25,6 +25,8 @@ import { getTransactionFormData } from "@/server/transactions"
 import { createMerchantFn } from "@/server/merchants"
 import { createCategoryFn } from "@/server/categories"
 import { createTagFn, setTransactionTagsFn } from "@/server/tags"
+import { suggestSmartRuleFn } from "@/server/smart-rules"
+import { normalizeImportDescription } from "@/lib/import-staging"
 import { getAccountHoldingsFn } from "@/server/holdings"
 import { DialogLoadingOrError } from "@/components/blocks/dialog-loading-state"
 import { TradeDialog } from "@/components/blocks/trade-dialog"
@@ -58,6 +60,7 @@ import {
   type BalanceOverrideReason,
 } from "@/lib/balance-override"
 import { getLatestGroundTruthAnchorFn } from "@/server/valuations"
+import { useMountEffect } from "@/hooks/use-mount-effect"
 import {
   EntityCombobox,
   type EntityComboboxItem,
@@ -434,7 +437,14 @@ function FormErrorBanner({ formError }: { formError: string | null }) {
 function DescriptionField({
   activeTab,
   form,
-}: Pick<TransactionFormSectionProps, "activeTab" | "form">) {
+  onDescriptionInput,
+}: Pick<TransactionFormSectionProps, "activeTab" | "form"> & {
+  // PER-253 (Tier 4): notified on every keystroke (in addition to the normal
+  // form field update) so the controller can debounce a Smart Rule
+  // suggestion lookup. Edit mode omits real work here — see
+  // `useTransactionFormModalController`'s `handleDescriptionInput`.
+  onDescriptionInput?: (value: string) => void
+}) {
   return (
     <form.Field
       name="description"
@@ -457,7 +467,10 @@ function DescriptionField({
             }
             value={field.state.value}
             onBlur={field.handleBlur}
-            onChange={(e) => field.handleChange(e.target.value)}
+            onChange={(e) => {
+              field.handleChange(e.target.value)
+              onDescriptionInput?.(e.target.value)
+            }}
             aria-invalid={field.state.meta.errors.length > 0}
             aria-describedby={
               field.state.meta.errors.length > 0
@@ -1540,8 +1553,13 @@ function MerchantField({
   formData,
   isLoading,
   onCreateMerchant,
+  onManualChange,
 }: TransactionFormSectionProps & {
   onCreateMerchant: (name: string) => Promise<EntityComboboxItem>
+  // PER-253 (Tier 4): fires on any user-driven change (pick, clear, or
+  // quick-create) so the controller stops re-suggesting a Smart Rule
+  // merchant match over a value the user chose themselves.
+  onManualChange?: () => void
 }) {
   if (activeTab === "transfer") return null
 
@@ -1557,7 +1575,10 @@ function MerchantField({
             id={field.name}
             items={items}
             value={field.state.value ?? ""}
-            onChange={field.handleChange}
+            onChange={(id) => {
+              field.handleChange(id)
+              onManualChange?.()
+            }}
             onCreate={onCreateMerchant}
             disabled={isLoading}
             placeholder={
@@ -1706,10 +1727,13 @@ function CategoryField({
   isReimbursement,
   isSplit,
   onCreateCategory,
+  onManualChange,
 }: TransactionFormSectionProps & {
   isReimbursement: boolean
   isSplit: boolean
   onCreateCategory: (name: string) => Promise<EntityComboboxItem>
+  // PER-253 (Tier 4): see the matching comment on MerchantField.
+  onManualChange?: () => void
 }) {
   if (activeTab === "transfer" || isSplit) return null
 
@@ -1742,7 +1766,10 @@ function CategoryField({
             id={field.name}
             items={items}
             value={field.state.value ?? ""}
-            onChange={field.handleChange}
+            onChange={(id) => {
+              field.handleChange(id)
+              onManualChange?.()
+            }}
             onCreate={onCreateCategory}
             disabled={isLoading}
             placeholder={isLoading ? "Loading..." : "Select Category"}
@@ -2211,6 +2238,62 @@ function useTransactionFormModalController({
     setIsSplit(false)
     setSplitEntries([createBlankSplitEntry(), createBlankSplitEntry()])
   }, [])
+
+  // === PER-253 (Tier 4) — AUTO-SUGGEST SMART RULES ON CREATE ===
+  // SmartRule keywords already suggest a category/merchant during CSV import
+  // (`applySmartRules` in src/server/imports.ts); they were never applied on
+  // the manual "New Transaction" path, so the same automation only ever
+  // helped bank-statement imports. Mirrors the import flow's UX contract
+  // exactly: suggestion, not silent mutation — the user can always overwrite
+  // it, and once they've manually touched a field this session, a later
+  // suggestion never fights that choice.
+  //
+  // Lives as refs (not state) because nothing here needs to trigger a
+  // re-render: the values are only ever read inside the async debounce
+  // callback below, the same shape as `searchTimerRef` in transactions.tsx.
+  const categoryTouchedRef = React.useRef(false)
+  const merchantTouchedRef = React.useRef(false)
+  const smartRuleTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  )
+  // Guards against an in-flight lookup for a STALE description resolving
+  // after a newer one and clobbering a since-typed value — the same
+  // out-of-order-response risk any debounced fetch has once more than one
+  // request can be in flight at once.
+  const smartRuleRequestIdRef = React.useRef(0)
+
+  // `useMountEffect` (no-use-effect Rule 4): the ONLY job here is a
+  // cleanup that runs once when the modal unmounts, matching the documented
+  // escape-hatch use on the transactions route's own typing-debounce.
+  useMountEffect(() => {
+    return () => {
+      if (smartRuleTimerRef.current) {
+        clearTimeout(smartRuleTimerRef.current)
+        smartRuleTimerRef.current = null
+      }
+    }
+  })
+
+  const resetSmartRuleSuggestionState = React.useCallback(() => {
+    categoryTouchedRef.current = false
+    merchantTouchedRef.current = false
+    if (smartRuleTimerRef.current) {
+      clearTimeout(smartRuleTimerRef.current)
+      smartRuleTimerRef.current = null
+    }
+  }, [])
+
+  const markCategoryTouched = React.useCallback(() => {
+    categoryTouchedRef.current = true
+  }, [])
+
+  const markMerchantTouched = React.useCallback(() => {
+    merchantTouchedRef.current = true
+  }, [])
+
+  // `handleDescriptionInput` (the part of this PER-253 slice that reads
+  // `form.setFieldValue`) is defined further below, once `form` itself
+  // exists — see the comment there.
 
   // === REIMBURSEMENT/REFUND TOGGLE (PER-260 / ADR-0055) ===
   // Income-tab-only. OFF (default) is byte-for-byte today's behavior: the
@@ -2804,6 +2887,10 @@ function useTransactionFormModalController({
           // PER-260: same reasoning — the reimbursement toggle lives outside
           // the form too.
           setIsReimbursement(false)
+          // PER-253: same reasoning — the touched-flags and any pending
+          // suggestion lookup live outside the form too, and must not carry
+          // over into the next fresh transaction.
+          resetSmartRuleSuggestionState()
         }
       } catch (error: unknown) {
         console.error("Failed to save transaction:", error)
@@ -2815,6 +2902,45 @@ function useTransactionFormModalController({
       }
     },
   })
+
+  // PER-253 (Tier 4) continued — the debounced lookup itself. Defined here
+  // (rather than alongside the touched-refs above) because it needs `form`,
+  // which only exists once `useForm` has run. 300ms matches the existing
+  // typing-debounce convention (transactions.tsx search-box). Fires on every
+  // description keystroke; only the LAST scheduled timer within that window
+  // actually reaches the network.
+  const handleDescriptionInput = React.useCallback(
+    (value: string) => {
+      // Edit mode already has real, user-confirmed values — re-suggesting
+      // over them is a different, unasked-for behavior change (PER-253
+      // explicitly scopes this to create only).
+      if (isEditMode) return
+      if (smartRuleTimerRef.current) clearTimeout(smartRuleTimerRef.current)
+      smartRuleTimerRef.current = setTimeout(() => {
+        // Same guard as the import matcher's own empty-keyword check
+        // (ADR-0039 §8) — mirrored client-side so a one- or two-character
+        // description never round-trips for a guaranteed no-match.
+        if (normalizeImportDescription(value).length < 3) return
+        const requestId = ++smartRuleRequestIdRef.current
+        suggestSmartRuleFn({ data: { description: value } })
+          .then((suggestion) => {
+            if (smartRuleRequestIdRef.current !== requestId) return
+            if (!suggestion.matchedSmartRuleId) return
+            if (!categoryTouchedRef.current && suggestion.suggestedCategoryId) {
+              form.setFieldValue("categoryId", suggestion.suggestedCategoryId)
+            }
+            if (!merchantTouchedRef.current && suggestion.suggestedMerchantId) {
+              form.setFieldValue("merchantId", suggestion.suggestedMerchantId)
+            }
+          })
+          .catch(() => {
+            // Advisory only: a failed lookup must never block typing or
+            // surface an error — the user can always categorize manually.
+          })
+      }, 300)
+    },
+    [form, isEditMode]
+  )
 
   // FUNGSI DELETE
   const handleDelete = async () => {
@@ -2854,6 +2980,10 @@ function useTransactionFormModalController({
       // (e.g. the user toggled Split on, then closed the dialog).
       resetSplitState()
       setIsReimbursement(false)
+      // PER-253: same reasoning — a touched-flag or pending suggestion from
+      // a previous, abandoned "New Transaction" open must not survive into
+      // this one.
+      resetSmartRuleSuggestionState()
     }
   }
 
@@ -2899,12 +3029,15 @@ function useTransactionFormModalController({
     formError,
     handleCancel,
     handleDelete,
+    handleDescriptionInput,
     handleOpenChange,
     isEditMode,
     isLoading,
     isOpen,
     isReimbursement,
     isSplit,
+    markCategoryTouched,
+    markMerchantTouched,
     selectedTagIds,
     setActiveTab,
     setIsReimbursement,
@@ -2935,12 +3068,15 @@ export function TransactionFormModal({
     formError,
     handleCancel,
     handleDelete,
+    handleDescriptionInput,
     handleOpenChange,
     isEditMode,
     isLoading,
     isOpen,
     isReimbursement,
     isSplit,
+    markCategoryTouched,
+    markMerchantTouched,
     selectedTagIds,
     setActiveTab,
     setIsReimbursement,
@@ -2998,7 +3134,11 @@ export function TransactionFormModal({
             className="mt-4 space-y-4"
           >
             <FormErrorBanner formError={formError} />
-            <DescriptionField activeTab={activeTab} form={form} />
+            <DescriptionField
+              activeTab={activeTab}
+              form={form}
+              onDescriptionInput={handleDescriptionInput}
+            />
             <AmountAccountFields
               activeTab={activeTab}
               form={form}
@@ -3040,6 +3180,7 @@ export function TransactionFormModal({
               formData={formData}
               isLoading={isLoading}
               onCreateMerchant={createMerchantOption}
+              onManualChange={markMerchantTouched}
             />
             <SplitModeToggle
               activeTab={activeTab}
@@ -3069,6 +3210,7 @@ export function TransactionFormModal({
               isReimbursement={isReimbursement}
               isSplit={isSplit}
               onCreateCategory={createCategoryOption}
+              onManualChange={markCategoryTouched}
             />
             <SplitEntriesPanel
               activeTab={activeTab}
