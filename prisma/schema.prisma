@@ -450,6 +450,13 @@ model Transaction {
   accountId String
   account   Account @relation("FromAccount", fields: [accountId, familyId], references: [id, familyId], onDelete: Restrict, onUpdate: Cascade, map: "Transaction_accountId_familyId_fkey")
 
+  // PER-253 Tier 3: for type="transfer", accountId and toAccountId must be
+  // DIFFERENT accounts (a same-account transfer nets to zero but still posts
+  // two garbage legs). Enforced by the app-level guard in
+  // `assertManualTransactionKindShape` (src/server/transactions.ts) AND, as
+  // defense-in-depth, the `transaction_transfer_distinct_accounts` DB CHECK
+  // (migration 20260911120000) — Prisma has no native way to express an
+  // arbitrary cross-column CHECK, so it is not modeled here.
   toAccountId String?
   toAccount   Account? @relation("ToAccount", fields: [toAccountId, familyId], references: [id, familyId], onDelete: Restrict, onUpdate: Cascade, map: "Transaction_toAccountId_familyId_fkey")
 

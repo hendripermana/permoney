@@ -665,7 +665,23 @@ function TransferAccountFields({
               name={field.name}
               className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-1 aria-[invalid=true]:ring-destructive/30"
               value={field.state.value}
-              onChange={(e) => field.handleChange(e.target.value)}
+              onChange={(e) => {
+                const nextAccountId = e.target.value
+                field.handleChange(nextAccountId)
+                // PER-253 Tier 3 same-account guard: the destination
+                // <select>'s disabled-option only blocks picking the SAME
+                // account when the source is already set — it does nothing
+                // when the user later changes the SOURCE to match an
+                // already-picked destination. Clear the now-conflicting
+                // destination instead of leaving that stale, invalid pair
+                // submittable.
+                if (
+                  nextAccountId &&
+                  form.getFieldValue("toAccountId") === nextAccountId
+                ) {
+                  form.setFieldValue("toAccountId", "")
+                }
+              }}
               disabled={isLoading}
               aria-invalid={field.state.meta.errors.length > 0}
               aria-describedby={

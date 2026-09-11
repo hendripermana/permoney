@@ -1142,7 +1142,31 @@ export class TransactionGoneError extends Error {
   }
 }
 
+// PER-253 Tier 3 "same-account/round-trip guards": a transfer whose source and
+// destination are the SAME account is not a real money movement — it nets to
+// zero but still posts two ledger rows on that one account (a fabricated
+// outflow + inflow), corrupting its statement and violating every other
+// invariant that assumes a transfer's two legs land on DISTINCT accounts
+// (per-account direction inference, `deriveTransferKindForAccounts`, the
+// `Transfer` row's own outflow/inflow pairing). Raised by
+// `assertManualTransactionKindShape`, the single choke point both
+// `createTransactionForFamily` (create) and
+// `replaceTransactionWithinTenantTransaction` (edit / reversal-and-replace)
+// call before any balance delta or ledger row is written — see the
+// `transaction_transfer_distinct_accounts` DB CHECK for the defense-in-depth
+// backstop against any path that bypasses this function.
+export class SameAccountTransferError extends Error {
+  override readonly name = "SameAccountTransferError"
+  readonly statusCode = 422
+  constructor(
+    message = "A transfer must move money between two different accounts"
+  ) {
+    super(message)
+  }
+}
+
 function assertManualTransactionKindShape(data: {
+  accountId: string
   kind: string
   toAccountId?: string | null
   type: "expense" | "income" | "transfer"
@@ -1152,6 +1176,9 @@ function assertManualTransactionKindShape(data: {
   if (data.type === "transfer") {
     if (data.kind !== "standard") {
       throw new Error("Transfer kind is derived from account direction")
+    }
+    if (data.toAccountId && data.accountId === data.toAccountId) {
+      throw new SameAccountTransferError()
     }
     return
   }
