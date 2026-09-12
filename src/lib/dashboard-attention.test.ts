@@ -53,6 +53,7 @@ function account(
     name: overrides.id,
     currency: "IDR",
     accountClass: "ASSET",
+    accountType: "DEPOSITORY",
     balanceSource: "transaction_flow",
     balance: "1000000",
     reserveBalance: null,
@@ -181,5 +182,44 @@ describe("computeDashboardAttention", () => {
     // The already-below-reserve account must sort first regardless of the
     // four other alerting accounts competing for the capped slots.
     expect(result.attention[0]?.accountId).toBe("acc-below")
+  })
+
+  // Real production regression (2026-09-12): the dashboard flagged three
+  // zero-balance e-wallets/top-up cards as "Below reserve" purely because
+  // they never had a reserve configured — reserveBalance defaults to 0,
+  // which a $0 balance trivially satisfies. That is not a real alert.
+  test("does NOT flag a liquid account with no configured reserve, even at a zero/negative balance", () => {
+    const acc = account({
+      id: "acc-no-reserve",
+      balance: "0",
+      reserveBalance: null,
+    })
+
+    const result = computeDashboardAttention([acc], [], { now: NOW })
+
+    expect(result.attention).toEqual([])
+  })
+
+  // Real production regression (2026-09-12): the dashboard nudged the user
+  // to move money OUT of "Dana Darurat Family" (an emergency-fund mutual
+  // fund) and "BMT HSI Simpanan Wajib" (a mandatory cooperative deposit) —
+  // both accountType=INVESTMENT, transaction_flow (not yet opted into
+  // holdings tracking). accountSubtype alone ("mutual_fund",
+  // "cooperative_share" — neither literally "savings") wasn't a safe filter;
+  // the fix gates on accountType via accountSupportsReserve instead.
+  test("excludes an INVESTMENT-type account from both attention and idle opportunities", () => {
+    const acc = account({
+      id: "acc-investment",
+      accountType: "INVESTMENT",
+      accountSubtype: "mutual_fund",
+      balance: "10000000",
+      reserveBalance: "500000",
+    })
+    const txns = [income(acc.id, 10_000_000n, 90)]
+
+    const result = computeDashboardAttention([acc], txns, { now: NOW })
+
+    expect(result.attention).toEqual([])
+    expect(result.idleOpportunities).toEqual([])
   })
 })

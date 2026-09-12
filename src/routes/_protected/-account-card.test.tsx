@@ -118,6 +118,13 @@ describe("AccountCard drift badge", () => {
 })
 
 describe("AccountCard runway badge (PER-222)", () => {
+  // PER-226 fast-follow: the badge only means anything once the user has
+  // actually configured a reserve — see -account-card.tsx's `hasReserve` gate.
+  const accountWithReserve: AccountRecord = {
+    ...account,
+    reserveBalance: "50000",
+  }
+
   function runway(over: Partial<AccountRunway>): AccountRunway {
     return {
       status: "healthy",
@@ -132,11 +139,14 @@ describe("AccountCard runway badge (PER-222)", () => {
     }
   }
 
-  function renderWithRunway(r?: AccountRunway) {
+  function renderWithRunway(
+    r?: AccountRunway,
+    acc: AccountRecord = accountWithReserve
+  ) {
     render(
       <TooltipProvider>
         <AccountCard
-          account={account}
+          account={acc}
           drift={[]}
           busy={false}
           onEdit={noop}
@@ -169,5 +179,13 @@ describe("AccountCard runway badge (PER-222)", () => {
   it("shows no runway badge when no runway is provided", () => {
     renderWithRunway(undefined)
     expect(screen.queryByText(/to reserve/i)).toBeNull()
+  })
+
+  it("shows no runway badge without a configured reserve, even when alerting (PER-226 regression)", () => {
+    // A zero-balance e-wallet with NO reserve configured trivially satisfies
+    // "below its (unset, implicit-zero) floor" — that is noise, not a real
+    // alert. The account fixture's default reserveBalance is null.
+    renderWithRunway(runway({ status: "below", daysToReserve: 0 }), account)
+    expect(screen.queryByText(/below reserve/i)).toBeNull()
   })
 })

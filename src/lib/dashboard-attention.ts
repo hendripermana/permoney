@@ -1,5 +1,6 @@
 import type { AnalyticsTxn } from "./account-analytics"
 import { computeIdleCash, type IdleCashInsight } from "./account-idle-cash"
+import { accountSupportsReserve, hasReserve } from "./account-reserve"
 import {
   computeAccountRunway,
   isRunwayAlerting,
@@ -53,6 +54,7 @@ export interface DashboardAttentionAccountInput {
   name: string
   currency: string
   accountClass: string
+  accountType: string
   balanceSource: string
   balance: string
   reserveBalance: string | null
@@ -99,17 +101,21 @@ export function computeDashboardAttention<
 
   for (const account of accounts) {
     if (account.status !== "active") continue
-    if (
-      account.accountClass !== "ASSET" ||
-      account.balanceSource !== "transaction_flow"
-    ) {
-      continue
-    }
+    // PER-226 fast-follow: `accountSupportsReserve` requires a genuinely
+    // liquid cash type (checking/e-wallet/cash), NOT merely
+    // balanceSource==="transaction_flow" — an INVESTMENT account (mutual
+    // fund, cooperative deposit) can be transaction_flow too, and flagging
+    // it here would nudge the user to move money OUT of a savings/investment
+    // vehicle whose whole purpose is to hold that money. See the doc comment
+    // on accountSupportsReserve for the real production report that found
+    // this.
+    if (!accountSupportsReserve(account)) continue
 
     const currentBalance = BigInt(account.balance)
-    const reserveMinor = account.reserveBalance
+    const reserveMinorRaw = account.reserveBalance
       ? BigInt(account.reserveBalance)
-      : 0n
+      : null
+    const reserveMinor = reserveMinorRaw ?? 0n
     const ledger = applyFilters(allTransactions, { accounts: [account.id] })
 
     const runway = computeAccountRunway(
@@ -119,7 +125,11 @@ export function computeDashboardAttention<
       account.id,
       { now: opts?.now }
     )
-    if (isRunwayAlerting(runway.status)) {
+    // An account with NO configured reserve trivially reads as "below" its
+    // implicit zero floor the instant its balance touches zero — noise for
+    // an e-wallet the user tops up on demand, not a real alert. Only surface
+    // once the user has actually set a reserve.
+    if (isRunwayAlerting(runway.status) && hasReserve(reserveMinorRaw)) {
       attention.push({
         accountId: account.id,
         accountName: account.name,

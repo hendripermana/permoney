@@ -30,7 +30,10 @@ import {
   isLiabilityAccountType,
   type AccountType,
 } from "@/lib/accounts"
-import { accountSupportsReserve } from "@/lib/account-reserve"
+import {
+  accountSupportsReserve,
+  isLiquidCashAccountType,
+} from "@/lib/account-reserve"
 import type { AccountRecord } from "@/lib/account-collections"
 import { CURRENCY_OPTIONS } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
@@ -144,11 +147,14 @@ export function AccountFormDialog({
   // Derived, pure: the class and balance source preview track the chosen type.
   const previewClass = getAccountClassForType(accountType)
   const previewCashLike = isCashLikeAccount(accountType)
-  // PER-217 — a reserve only makes sense on a cash-like ASSET account. On create
-  // this tracks the chosen type; on edit it reflects the (fixed) account.
+  // PER-217 / PER-226 fast-follow — a reserve only makes sense on a LIQUID
+  // cash-like ASSET account (checking/e-wallet/cash), not e.g. an INVESTMENT
+  // account that happens to be transaction_flow — see accountSupportsReserve's
+  // doc comment. On create this tracks the chosen type; on edit it reflects
+  // the (fixed) account.
   const supportsReserve = editing
     ? accountSupportsReserve(editing)
-    : previewClass === "ASSET" && previewCashLike
+    : previewClass === "ASSET" && isLiquidCashAccountType(accountType)
   // PER-272 — credit/loan product fields only apply to CREDIT/LOAN (liability)
   // accounts. On create this tracks the chosen type; on edit it reflects the
   // (fixed) account.

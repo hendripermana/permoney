@@ -284,6 +284,14 @@ function AccountDetailPage() {
 
   const currency = account?.currency ?? "IDR"
   const cashLike = account?.balanceSource === "transaction_flow"
+  // PER-226 fast-follow: reserve/runway/idle-cash signals only ever apply to
+  // genuinely liquid cash (checking/e-wallet/cash) — a broader `cashLike`
+  // (transaction_flow) account like an INVESTMENT-typed mutual fund still
+  // gets its statement/reconcile/recurring-detection treatment, just not
+  // these three. See accountSupportsReserve's doc comment.
+  const supportsReserveSignals = account
+    ? accountSupportsReserve(account)
+    : false
   const tracked = account?.balanceSource === "valuation"
   const currentBalance = account ? BigInt(account.balance) : 0n
 
@@ -561,10 +569,11 @@ function AccountDetailPage() {
   )
 
   // PER-222 — runway to reserve, from the full per-account ledger (trailing net
-  // daily flow). Only meaningful for cash-like accounts.
+  // daily flow). Only meaningful for LIQUID cash-like accounts (not e.g. an
+  // INVESTMENT account — see supportsReserveSignals above).
   const runway = React.useMemo(
     () =>
-      cashLike
+      supportsReserveSignals
         ? computeAccountRunway(
             ledger,
             currentBalance,
@@ -572,14 +581,21 @@ function AccountDetailPage() {
             accountId
           )
         : null,
-    [cashLike, ledger, currentBalance, account?.reserveBalance, accountId]
+    [
+      supportsReserveSignals,
+      ledger,
+      currentBalance,
+      account?.reserveBalance,
+      accountId,
+    ]
   )
 
-  // PER-223 — idle-cash opportunity (cash-like only; a "savings" account is
-  // meant to hold idle cash, so it's excluded from the nudge at render time).
+  // PER-223 — idle-cash opportunity (liquid cash-like only; a "savings"
+  // account is meant to hold idle cash, so it's excluded from the nudge at
+  // render time).
   const idleCash = React.useMemo(
     () =>
-      cashLike
+      supportsReserveSignals
         ? computeIdleCash(
             ledger,
             currentBalance,
@@ -587,7 +603,13 @@ function AccountDetailPage() {
             accountId
           )
         : null,
-    [cashLike, ledger, currentBalance, account?.reserveBalance, accountId]
+    [
+      supportsReserveSignals,
+      ledger,
+      currentBalance,
+      account?.reserveBalance,
+      accountId,
+    ]
   )
 
   // PER-225 Slice 4a — recurring/bill detection: cash-like only, same reach as
@@ -1085,7 +1107,10 @@ function AccountDetailPage() {
               currency={currency}
             />
           ) : null}
-          {runway ? (
+          {runway &&
+          hasReserve(
+            account.reserveBalance ? BigInt(account.reserveBalance) : null
+          ) ? (
             <AccountRunwayNote runway={runway} currency={currency} />
           ) : null}
           {idleCash && account.accountSubtype !== "savings" ? (
