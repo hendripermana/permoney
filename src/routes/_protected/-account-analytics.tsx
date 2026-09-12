@@ -38,6 +38,7 @@ import {
   reserveLockedFraction,
 } from "@/lib/account-reserve"
 import { type IdleCashInsight } from "@/lib/account-idle-cash"
+import { type RunwayStatus } from "@/lib/account-runway"
 import {
   type AccountCashFlowForecast,
   type AccountCashFlowForecastPoint,
@@ -502,10 +503,21 @@ function shortDateLabel(date: Date): string {
 
 export function describeForecastHeadline(
   forecast: AccountCashFlowForecast,
-  opts: { hasReserveConfigured: boolean; currency: string }
+  opts: {
+    hasReserveConfigured: boolean
+    currency: string
+    runwayStatus: RunwayStatus
+  }
 ): string {
-  if (!forecast.hasRecurringSignal) {
-    return "Not enough recurring history yet — showing plain runway"
+  // Too few transactions OVERALL to trust any forecast, recurring-aware or
+  // not — distinct from "no recurring PATTERN was found" (hasRecurringSignal
+  // below, which still trusts the runway average, just can't attribute a dip
+  // to a specific bill). Kept as the exact copy the old AccountRunwayNote
+  // used for this same runway status, since a real e2e assertion
+  // (account-detail.e2e.ts, a freshly created account with only an
+  // opening-balance anchor and zero posted transactions) depends on it.
+  if (opts.runwayStatus === "insufficient_data") {
+    return "Not enough recent activity to forecast runway"
   }
 
   // Already at/under the floor RIGHT NOW — a present-state fact, not a fresh
@@ -581,12 +593,14 @@ export function AccountCashFlowForecastPanel({
   hasReserveConfigured,
   reserveMinor,
   currency,
+  runwayStatus,
 }: Readonly<{
   series: ReadonlyArray<BalancePoint>
   forecast: AccountCashFlowForecast
   hasReserveConfigured: boolean
   reserveMinor: bigint
   currency: string
+  runwayStatus: RunwayStatus
 }>) {
   const chartData = React.useMemo(
     () => buildCashFlowChartData(series, forecast, currency),
@@ -605,8 +619,12 @@ export function AccountCashFlowForecastPanel({
   )
   const headline = React.useMemo(
     () =>
-      describeForecastHeadline(forecast, { hasReserveConfigured, currency }),
-    [forecast, hasReserveConfigured, currency]
+      describeForecastHeadline(forecast, {
+        hasReserveConfigured,
+        currency,
+        runwayStatus,
+      }),
+    [forecast, hasReserveConfigured, currency, runwayStatus]
   )
   // Urgent styling for a genuinely NEW forecasted dip, or for being ALREADY
   // below a reserve the user actually configured — but not for a no-reserve

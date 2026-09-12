@@ -1141,6 +1141,7 @@ function AccountDetailPage() {
                 account.reserveBalance ? BigInt(account.reserveBalance) : 0n
               }
               currency={currency}
+              runwayStatus={runway?.status ?? "insufficient_data"}
             />
           ) : null}
           {idleCash && account.accountSubtype !== "savings" ? (

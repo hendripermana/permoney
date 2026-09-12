@@ -8,10 +8,16 @@ import { onboard, waitForHydration } from "./support/onboarding"
 // slice deliberately defers). Seed three same-description, same-amount
 // expenses spaced one calendar month apart (the 1st of three consecutive
 // months, so the gap is always 28–31 days regardless of which day of the
-// real month the suite runs on) and assert the ambient "Recurring" card on
-// the account detail page surfaces the detected series — merchant/
-// description, cadence, and typical amount — with no edit/confirm/dismiss
+// real month the suite runs on) and assert the detected series surfaces in
+// the account detail page's Cash Flow Forecast panel's "Upcoming" list —
+// merchant/description and typical amount — with no edit/confirm/dismiss
 // affordance (this slice is read-only surfacing only).
+//
+// PER-263 fast-follow: the old, dedicated "Recurring" card was replaced by
+// AccountCashFlowForecastPanel's "Upcoming" section (recurring detection now
+// feeds the causal forecast headline + chart too, not just a standalone
+// list) — updated here to match, without weakening what's actually proven:
+// the series still detects and its description/amount still render.
 
 function isoLocal(d: Date): string {
   const y = d.getFullYear()
@@ -76,9 +82,9 @@ test.describe("recurring detection (PER-225 Slice 4a)", () => {
     await page.getByRole("button", { name: `Open ${accountName}` }).click()
     await page.waitForURL(/\/accounts\/[^/]+$/, { timeout: 15000 })
 
-    // Before any recurring pattern exists, the card must not render at all
-    // (ambient-signals philosophy — no empty-state clutter).
-    await expect(page.getByText("Recurring", { exact: true })).toHaveCount(0)
+    // Before any recurring pattern exists, the "Upcoming" list must not
+    // render at all (ambient-signals philosophy — no empty-state clutter).
+    await expect(page.getByText("Upcoming", { exact: true })).toHaveCount(0)
 
     const monthsAgo = [2, 1, 0]
     for (let i = 0; i < monthsAgo.length; i++) {
@@ -110,14 +116,13 @@ test.describe("recurring detection (PER-225 Slice 4a)", () => {
       page.getByRole("heading", { name: "Transactions (3)" })
     ).toBeVisible()
 
-    // The Recurring card renders once the third occurrence lands, showing the
-    // merchant/description label, the "Monthly" cadence, and the typical
-    // amount — read-only, no edit/confirm/dismiss control on the card.
-    await expect(page.getByText("Recurring", { exact: true })).toBeVisible()
+    // The "Upcoming" list renders once the third occurrence lands, showing
+    // the merchant/description label and the typical amount — read-only, no
+    // edit/confirm/dismiss control.
+    await expect(page.getByText("Upcoming", { exact: true })).toBeVisible()
     // `description` also appears once per statement row (3 rows) — the
-    // Recurring card's own entry renders first in DOM order (left column).
+    // Upcoming list's own entry renders first in DOM order (left column).
     await expect(page.getByText(description).first()).toBeVisible()
-    await expect(page.getByText(/Monthly · next/)).toBeVisible()
     await expect(page.getByText("−Rp 150,000.00").first()).toBeVisible()
   })
 })

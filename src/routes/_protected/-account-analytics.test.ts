@@ -4,6 +4,7 @@ import {
   type AccountCashFlowForecast,
   type ForecastEvent,
 } from "@/lib/account-cash-flow-forecast"
+import { type RunwayStatus } from "@/lib/account-runway"
 
 // PER-263 fast-follow — narrative headline copy is exactly the kind of thing
 // that reads fine to the author and wrong to the user (see the PER-226
@@ -56,20 +57,49 @@ function incomeEvent(overrides: Partial<ForecastEvent> = {}): ForecastEvent {
   }
 }
 
+/** Default opts for a "healthy runway" scenario — override per test. */
+function headlineOpts(
+  overrides: Partial<{
+    hasReserveConfigured: boolean
+    currency: string
+    runwayStatus: RunwayStatus
+  }> = {}
+) {
+  return {
+    hasReserveConfigured: true,
+    currency: "IDR",
+    runwayStatus: "healthy" as RunwayStatus,
+    ...overrides,
+  }
+}
+
 describe("describeForecastHeadline", () => {
-  test("no recurring signal defers to plain runway framing", () => {
+  // A real e2e regression caught in review: a freshly created account with
+  // only an opening-balance anchor (zero posted transactions) has
+  // runway.status === "insufficient_data" — a genuinely distinct epistemic
+  // state ("not enough history to trust ANY forecast") from
+  // `!hasRecurringSignal` ("trusted the runway average, just found no
+  // repeating bill to explain a dip with"). Collapsing the two into one
+  // generic message broke account-detail.e2e.ts, which depends on this
+  // exact copy (inherited unchanged from the superseded AccountRunwayNote).
+  test("insufficient runway data takes priority over every other framing", () => {
     const headline = describeForecastHeadline(
       forecastFixture({ hasRecurringSignal: false }),
-      { hasReserveConfigured: true, currency: "IDR" }
+      headlineOpts({ runwayStatus: "insufficient_data" })
     )
-    expect(headline).toMatch(/plain runway/i)
+    expect(headline).toBe("Not enough recent activity to forecast runway")
+  })
+
+  test("no recurring signal, but enough runway data, still reports the real trend", () => {
+    const headline = describeForecastHeadline(
+      forecastFixture({ hasRecurringSignal: false }),
+      headlineOpts()
+    )
+    expect(headline).toMatch(/trending up/i)
   })
 
   test("no dip projected reads as trending up", () => {
-    const headline = describeForecastHeadline(forecastFixture(), {
-      hasReserveConfigured: true,
-      currency: "IDR",
-    })
+    const headline = describeForecastHeadline(forecastFixture(), headlineOpts())
     expect(headline).toMatch(/trending up/i)
   })
 
@@ -92,10 +122,7 @@ describe("describeForecastHeadline", () => {
         },
       ],
     })
-    const headline = describeForecastHeadline(forecast, {
-      hasReserveConfigured: true,
-      currency: "IDR",
-    })
+    const headline = describeForecastHeadline(forecast, headlineOpts())
     expect(headline).toMatch(/dips below reserve/i)
     expect(headline).toMatch(/credit card/i)
     expect(headline).toMatch(/salary/i)
@@ -105,10 +132,10 @@ describe("describeForecastHeadline", () => {
     const forecast = forecastFixture({
       projectedReserveBreachDate: daysFromNow(18),
     })
-    const headline = describeForecastHeadline(forecast, {
-      hasReserveConfigured: false,
-      currency: "IDR",
-    })
+    const headline = describeForecastHeadline(
+      forecast,
+      headlineOpts({ hasReserveConfigured: false })
+    )
     expect(headline).toMatch(/reaches zero/i)
     expect(headline).not.toMatch(/reserve/i)
   })
@@ -120,10 +147,10 @@ describe("describeForecastHeadline", () => {
       projectedReserveBreachDate: null,
       projectedRecoveryDate: null,
     })
-    const headline = describeForecastHeadline(forecast, {
-      hasReserveConfigured: false,
-      currency: "IDR",
-    })
+    const headline = describeForecastHeadline(
+      forecast,
+      headlineOpts({ hasReserveConfigured: false })
+    )
     expect(headline).toMatch(/sitting at zero/i)
     expect(headline).not.toMatch(/reaches zero/i)
   })
@@ -134,10 +161,7 @@ describe("describeForecastHeadline", () => {
       alreadyAtOrBelowFloor: true,
       projectedRecoveryDate: recovery,
     })
-    const headline = describeForecastHeadline(forecast, {
-      hasReserveConfigured: true,
-      currency: "IDR",
-    })
+    const headline = describeForecastHeadline(forecast, headlineOpts())
     expect(headline).toMatch(/already below your reserve/i)
     expect(headline).toMatch(/recovers/i)
   })
@@ -147,10 +171,7 @@ describe("describeForecastHeadline", () => {
       alreadyAtOrBelowFloor: true,
       projectedRecoveryDate: null,
     })
-    const headline = describeForecastHeadline(forecast, {
-      hasReserveConfigured: true,
-      currency: "IDR",
-    })
+    const headline = describeForecastHeadline(forecast, headlineOpts())
     expect(headline).toMatch(/already below your reserve/i)
     expect(headline).toMatch(/no recovery expected/i)
   })
