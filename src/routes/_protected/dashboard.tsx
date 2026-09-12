@@ -75,12 +75,14 @@ const dashboardSearchSchema = z.object({
 type DashboardSearch = z.infer<typeof dashboardSearchSchema>
 
 export const Route = createFileRoute("/_protected/dashboard")({
-  ssr: false,
-  staticData: { title: "Dashboard" },
+  // Property order here is inference-sensitive (TanStack Router's
+  // create-route-property-order rule): validateSearch before ssr before
+  // loader — see transactions.tsx for the same convention.
   validateSearch: (search: Record<string, unknown>): DashboardSearch => {
     const parsed = dashboardSearchSchema.safeParse(search)
     return parsed.success ? parsed.data : {}
   },
+  ssr: false,
   // PER-226 — mandatory preload for the two collections the attention strip's
   // useLiveQuery calls read (see the file header comment above).
   loader: async () => {
@@ -90,6 +92,7 @@ export const Route = createFileRoute("/_protected/dashboard")({
     ])
     return null
   },
+  staticData: { title: "Dashboard" },
   component: DashboardPage,
 })
 
