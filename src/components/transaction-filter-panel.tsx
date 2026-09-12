@@ -11,6 +11,7 @@ import {
   IconCash,
   IconBuildingStore,
   IconSearch,
+  IconCircleCheck,
 } from "@tabler/icons-react"
 import { useQuery } from "@tanstack/react-query"
 import { getTransactionFormData } from "@/server/transactions"
@@ -51,6 +52,10 @@ const FILTER_CATEGORIES = [
   { id: "categories", label: "Category", icon: IconCategory },
   { id: "merchants", label: "Merchant", icon: IconBuildingStore },
   { id: "amount", label: "Amount", icon: IconCash },
+  // PER-83 Slice 1 — reconciliation status (also doubles as the
+  // "unreconciled" filter: select Pending + Cleared to see everything not
+  // yet reconciled).
+  { id: "status", label: "Status", icon: IconCircleCheck },
 ] as const
 
 type FilterCategoryId = (typeof FILTER_CATEGORIES)[number]["id"]
@@ -71,6 +76,13 @@ const TYPE_OPTIONS = [
   { value: "expense", label: "Expense" },
   { value: "income", label: "Income" },
   { value: "transfer", label: "Transfer" },
+] as const
+
+// Status siklus hidup transaksi (PER-83 Slice 1)
+const STATUS_OPTIONS = [
+  { value: "PENDING", label: "Pending" },
+  { value: "CLEARED", label: "Cleared" },
+  { value: "RECONCILED", label: "Reconciled" },
 ] as const
 
 interface TransactionFilterPanelProps {
@@ -126,6 +138,7 @@ export function TransactionFilterPanel({
     if (filters.accounts?.length) count++
     if (filters.categories?.length) count++
     if (filters.merchants?.length) count++
+    if (filters.status?.length) count++
     if (filters.amountMin != null || filters.amountMax != null) count++
     return count
   }, [filters])
@@ -147,6 +160,8 @@ export function TransactionFilterPanel({
         return draft.categories?.length ?? 0
       case "merchants":
         return draft.merchants?.length ?? 0
+      case "status":
+        return draft.status?.length ?? 0
       case "amount":
         return (
           (draft.amountMin != null ? 1 : 0) + (draft.amountMax != null ? 1 : 0)
@@ -178,6 +193,7 @@ export function TransactionFilterPanel({
       accounts: undefined,
       categories: undefined,
       merchants: undefined,
+      status: undefined,
       amountMin: undefined,
       amountMax: undefined,
       q: filters.q, //preserve search query
@@ -186,7 +202,7 @@ export function TransactionFilterPanel({
 
   // Toggle item dalam array filter (account, category, merchant, type)
   const toggleArrayItem = (
-    field: "type" | "accounts" | "categories" | "merchants",
+    field: "type" | "accounts" | "categories" | "merchants" | "status",
     value: string
   ) => {
     setDraft((prev) => {
@@ -358,6 +374,24 @@ export function TransactionFilterPanel({
                 <Checkbox
                   checked={draft.type?.includes(opt.value) ?? false}
                   onCheckedChange={() => toggleArrayItem("type", opt.value)}
+                />
+                <span className="text-sm">{opt.label}</span>
+              </label>
+            ))}
+          </div>
+        )
+
+      case "status":
+        return (
+          <div className="space-y-3">
+            {STATUS_OPTIONS.map((opt) => (
+              <label
+                key={opt.value}
+                className="flex cursor-pointer items-center gap-3"
+              >
+                <Checkbox
+                  checked={draft.status?.includes(opt.value) ?? false}
+                  onCheckedChange={() => toggleArrayItem("status", opt.value)}
                 />
                 <span className="text-sm">{opt.label}</span>
               </label>

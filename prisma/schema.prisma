@@ -115,6 +115,8 @@ model User {
   memberships   FamilyMember[] @relation("FamilyMembership")
   invitedMembers FamilyMember[] @relation("FamilyMemberInvitedBy")
   transactions  Transaction[]
+  // PER-83 Slice 1 — reverse relation for `Transaction.reconciledById`.
+  reconciledTransactions Transaction[] @relation("TransactionReconciledBy")
   sessions      Session[]
   emailVerified Boolean       @default(false)
   image         String?
@@ -390,6 +392,27 @@ model Transaction {
 
   // Transaction Lifecycle Status: PENDING (gantung), CLEARED (selesai), RECONCILED (dicocokkan)
   status String @default("CLEARED")
+
+  // PER-83 Slice 1 — transaction-level reconciliation (line-by-line match
+  // against a real bank statement). Orthogonal to the account-level
+  // ground_truth anchor mechanism (ADR-0043, `Valuation`) — that reconciles
+  // an ACCOUNT'S overall balance; this marks an individual TRANSACTION as
+  // ticked off against a statement. Set/cleared ONLY together, and ONLY by
+  // `setTransactionReconciledFn` (src/server/transaction-reconciliation.ts),
+  // never by the generic create/update path — reconciling never touches
+  // `amount`/balances, so it never goes through
+  // `replaceTransactionWithinTenantTransaction`. `reconciledById` is a plain
+  // FK (mirrors `userId` above) with `onDelete: SetNull`: a deleted user
+  // must not corrupt or cascade-delete ledger history, it just anonymizes
+  // "who reconciled this" going forward. Invariants enforced by the
+  // `transaction_reconciled_fields_together` and
+  // `transaction_reconciled_only_when_status_reconciled` CHECK constraints
+  // (migration `transaction_reconciliation`) — see that file for why the
+  // "which prior status may transition" rule lives in the server-fn instead
+  // of a third CHECK (a CHECK validates row state, not the transition).
+  reconciledAt   DateTime?
+  reconciledById String?
+  reconciledBy   User?     @relation("TransactionReconciledBy", fields: [reconciledById], references: [id], onDelete: SetNull, onUpdate: Cascade)
 
   // Multi-Currency Transfer Support (Implied Rate Architecture)
   // User menginput nominal yang benar-benar masuk ke akun tujuan, bukan hanya tebakan kurs API.

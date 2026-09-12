@@ -123,6 +123,20 @@ export interface TransactionListRowProps {
     isSelected: boolean
     onSelect: (value: boolean) => void
   }
+  /**
+   * PER-83 Slice 1 — "Reconcile mode" on the per-account statement. Renders
+   * in the SAME left checkbox slot as `selection` (the two are mutually
+   * exclusive UI modes — only one is ever passed at a time). Only a
+   * `CLEARED` or already-`RECONCILED` row gets a checkbox; a `PENDING` row
+   * renders no checkbox at all (it cannot be reconciled against a statement
+   * that already includes it as cleared money — see
+   * `TransactionNotClearedError`), so there is never an ambiguous
+   * disabled-but-clickable-looking control.
+   */
+  reconcile?: {
+    checked: boolean
+    onToggle: (checked: boolean) => void
+  }
   /** Inline edit action. Omit to hide the edit button. */
   onEdit?: (editData: TransactionEditData) => void
   /** Inline delete action. Omit to hide the delete button. */
@@ -136,6 +150,7 @@ export function TransactionListRow({
   hideAccountColumn = false,
   runningBalance,
   selection,
+  reconcile,
   onEdit,
   onDelete,
 }: TransactionListRowProps) {
@@ -202,9 +217,30 @@ export function TransactionListRow({
       <div
         className={cn("flex w-full items-start", compact ? "py-1.5" : "py-3")}
       >
-        {/* Checkbox column (bulk select — ledger only) */}
+        {/* Checkbox column (bulk select, OR PER-83 reconcile mode) */}
         <div className="flex w-12 shrink-0 justify-center pt-0.5">
-          {selection ? (
+          {reconcile ? (
+            trx.status === "PENDING" ? (
+              // Visibly excluded, not merely disabled — a pending row cannot
+              // be reconciled at all, so no checkbox renders for it.
+              <span
+                className="text-[10px] text-muted-foreground italic"
+                title="Pending transactions can't be reconciled yet"
+              >
+                —
+              </span>
+            ) : (
+              <Checkbox
+                checked={reconcile.checked}
+                onCheckedChange={(val) => reconcile.onToggle(!!val)}
+                aria-label={
+                  trx.status === "RECONCILED"
+                    ? "Unreconcile transaction"
+                    : "Reconcile transaction"
+                }
+              />
+            )
+          ) : selection ? (
             <Checkbox
               checked={selection.isSelected}
               onCheckedChange={(val) => selection.onSelect(!!val)}
