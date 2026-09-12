@@ -2852,6 +2852,12 @@ function useTransactionFormModalController({
             // transactions never carry one.
             externalProvider: null,
             externalId: null,
+            // PER-83 Slice 1 — a brand-new transaction is never reconciled
+            // (only `setTransactionReconciledFn`, called from the per-account
+            // statement's reconcile mode, ever sets these — see
+            // src/server/transaction-reconciliation.ts).
+            reconciledAt: null,
+            reconciledById: null,
             // PER-247: the fee leg is posted server-side as its own row; the
             // post-mutation refetch surfaces it + the resolved purpose.
             transferFee: null,

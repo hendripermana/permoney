@@ -6,8 +6,10 @@ import { useVirtualizer } from "@tanstack/react-virtual"
 import { format } from "date-fns"
 import {
   ArrowLeft,
+  CheckCircle2,
   Download,
   ExternalLink,
+  ListChecks,
   Pencil,
   Plus,
   Receipt,
@@ -135,7 +137,10 @@ import {
 } from "@/lib/account-analytics"
 import { ACCOUNT_TYPE_LABEL } from "./-account-card"
 import { formatCurrency } from "@/lib/currency"
-import { toMoney, ZERO_MONEY, type Money } from "@/lib/money"
+import { toMoney, ZERO_MONEY, parseMoneyInput, type Money } from "@/lib/money"
+import { MoneyInput } from "@/components/blocks/money-input"
+import type { CurrencyCode } from "@/lib/data/currencies"
+import { setTransactionReconciledFn } from "@/server/transaction-reconciliation"
 import {
   TransactionListRow,
   type TransactionEditData,
@@ -239,6 +244,18 @@ function AccountDetailPage() {
   } | null>(null)
   // PER-241 — persisted compact ↔ comfortable density, shared with the ledger.
   const [density, setDensity] = useTransactionDensity()
+  // PER-83 Slice 1 — TRANSACTION-LEVEL "Reconcile mode" (line-by-line match
+  // against a real bank statement). Orthogonal to `detailDialog === "valuation"`
+  // above, which reconciles the account's OVERALL balance via a ground_truth
+  // anchor (ADR-0043) — this instead ticks off individual rows.
+  const [reconcileMode, setReconcileMode] = React.useState(false)
+  const [statementBalanceInput, setStatementBalanceInput] = React.useState("")
+  // Optimistic overlay for a checkbox that's mid-flight to the server —
+  // `undefined` means "trust `trx.status === 'RECONCILED'`" (the source of
+  // truth once `transactionCollection` has resynced).
+  const [optimisticReconciled, setOptimisticReconciled] = React.useState<
+    Record<string, boolean>
+  >({})
 
   const { data: accounts } = useLiveQuery((q) =>
     q.from({ a: accountCollection })
@@ -700,6 +717,79 @@ function AccountDetailPage() {
     return rows
   }, [statement, visibleHoldingEvents, accountId])
 
+  // PER-83 Slice 1 — is this row currently "checked" in reconcile mode? An
+  // in-flight optimistic toggle wins over the persisted status; otherwise the
+  // checkbox mirrors the durable truth (`status === "RECONCILED"`) directly —
+  // there is no separate "session" checklist state, so leaving and
+  // re-entering reconcile mode always shows exactly what's actually
+  // reconciled, matching a paper statement you can put down and pick up.
+  const isRowReconciled = React.useCallback(
+    (trx: TransactionRecord) =>
+      optimisticReconciled[trx.id] ?? trx.status === "RECONCILED",
+    [optimisticReconciled]
+  )
+
+  // PER-83 Slice 1 — running total of every currently-checked row's SIGNED
+  // amount from this account's perspective, over the visible (filtered)
+  // statement — the same rows the person is looking at while ticking them
+  // off. `PENDING` rows are never eligible (no checkbox renders for them).
+  const reconcileSummary = React.useMemo(() => {
+    let total = 0n
+    let checkedCount = 0
+    for (const trx of statement) {
+      if (trx.status === "PENDING") continue
+      if (isRowReconciled(trx)) {
+        total += signedDeltaForAccount(trx, accountId)
+        checkedCount++
+      }
+    }
+    return { total: toMoney(total), checkedCount }
+  }, [statement, isRowReconciled, accountId])
+
+  const enteredStatementBalance =
+    statementBalanceInput.trim() === ""
+      ? null
+      : parseMoneyInput(statementBalanceInput, currency as CurrencyCode)
+  const reconcileDifference =
+    enteredStatementBalance === null
+      ? null
+      : toMoney(enteredStatementBalance - reconcileSummary.total)
+
+  // PER-83 Slice 1 — toggle a row's reconciled state. Calls the dedicated
+  // `setTransactionReconciledFn` DIRECTLY (never `transactionCollection.update`,
+  // which routes through `updateTransactionFn`'s reversal-and-replace path —
+  // reconciling must never touch amount/balance or replace the row). Each
+  // click is its own persisted action (no separate "save" step, matching the
+  // mental model of physically ticking off a paper statement).
+  async function handleToggleReconcile(trx: TransactionRecord, next: boolean) {
+    setOptimisticReconciled((prev) => ({ ...prev, [trx.id]: next }))
+    try {
+      await setTransactionReconciledFn({
+        data: {
+          transactionId: trx.id,
+          reconciled: next,
+          idempotencyKey: createUuidV7(),
+        },
+      })
+      // WAJIB: sync the ledger collection so `trx.status` reflects the
+      // server's truth (CLAUDE.md §5B) — this also covers the "last
+      // reconciliation wins" refreshed timestamp on a re-reconcile.
+      await transactionCollection.utils.refetch()
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to update reconciliation status"
+      )
+    } finally {
+      setOptimisticReconciled((prev) => {
+        const rest = { ...prev }
+        delete rest[trx.id]
+        return rest
+      })
+    }
+  }
+
   const statementScrollRef = React.useRef<HTMLDivElement>(null)
   // Sticky date headers — same model as /transactions.
   const statementHeaderIndexes = React.useMemo(
@@ -1067,6 +1157,20 @@ function AccountDetailPage() {
                   density={density}
                   onChange={setDensity}
                 />
+                {/* PER-83 Slice 1 — enter/exit reconcile mode. Exiting is
+                    just leaving this off; nothing to "save" since every
+                    checkbox click already persisted. */}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={reconcileMode ? "default" : "outline"}
+                  className="h-9"
+                  aria-pressed={reconcileMode}
+                  onClick={() => setReconcileMode((prev) => !prev)}
+                >
+                  <ListChecks className="size-4" />
+                  Reconcile mode
+                </Button>
               </div>
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -1084,6 +1188,57 @@ function AccountDetailPage() {
                 </Button>
               ))}
             </div>
+
+            {reconcileMode ? (
+              <div className="flex flex-wrap items-end gap-4 rounded-xl border bg-muted/20 p-3">
+                <div className="flex flex-col gap-1.5">
+                  <label
+                    htmlFor="reconcile-statement-balance"
+                    className="text-xs font-medium text-muted-foreground"
+                  >
+                    Statement ending balance
+                  </label>
+                  <MoneyInput
+                    id="reconcile-statement-balance"
+                    value={statementBalanceInput}
+                    onChange={setStatementBalanceInput}
+                    currency={currency as CurrencyCode}
+                    placeholder="0"
+                    className="w-48"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    Checked ({reconcileSummary.checkedCount})
+                  </span>
+                  <span className="text-sm font-semibold tabular-nums">
+                    {formatCurrency(reconcileSummary.total, currency)}
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    Difference
+                  </span>
+                  {enteredStatementBalance === null ? (
+                    <span className="text-sm text-muted-foreground italic">
+                      Enter the statement balance
+                    </span>
+                  ) : reconcileDifference === 0n ? (
+                    <span className="flex items-center gap-1 text-sm font-semibold text-emerald-600 dark:text-emerald-400">
+                      <CheckCircle2 className="size-4" />
+                      Matched
+                    </span>
+                  ) : (
+                    <span className="text-sm font-semibold text-amber-600 tabular-nums dark:text-amber-400">
+                      {formatCurrency(
+                        reconcileDifference ?? ZERO_MONEY,
+                        currency
+                      )}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ) : null}
 
             {statement.length === 0 && visibleHoldingEvents.length === 0 ? (
               <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed py-12 text-center">
@@ -1173,6 +1328,15 @@ function AccountDetailPage() {
                                     currency,
                                   }
                                 : null
+                            }
+                            reconcile={
+                              reconcileMode
+                                ? {
+                                    checked: isRowReconciled(row.trx),
+                                    onToggle: (checked) =>
+                                      handleToggleReconcile(row.trx, checked),
+                                  }
+                                : undefined
                             }
                             onEdit={(editData) =>
                               handleRowEdit(row.trx, editData)
