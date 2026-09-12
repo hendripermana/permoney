@@ -1,6 +1,7 @@
 import * as React from "react"
 import { createFileRoute, Link } from "@tanstack/react-router"
 import { useQuery } from "@tanstack/react-query"
+import { useLiveQuery } from "@tanstack/react-db"
 import { z } from "zod"
 import {
   LayoutDashboard,
@@ -29,12 +30,16 @@ import { PermoneyDateRangePicker } from "@/components/ui/date-range-picker"
 import {
   BudgetProgressCard,
   CashFlowCard,
+  DashboardAttentionStrip,
   NetWorthCard,
   TopCategoriesCard,
 } from "@/components/blocks/dashboard-cards"
 import { getCashFlowReportFn, getNetWorthSeriesFn } from "@/server/reporting"
 import { getBudgetForPeriodFn, listExpenseCategoriesFn } from "@/server/budgets"
 import { getAccountsFn } from "@/server/accounts"
+import { accountCollection } from "@/lib/account-collections"
+import { transactionCollection } from "@/lib/collections"
+import { computeDashboardAttention } from "@/lib/dashboard-attention"
 
 // =============================================================================
 // PER-156 / R3 — Dashboard realization (rendering layer only).
@@ -44,9 +49,17 @@ import { getAccountsFn } from "@/server/accounts"
 // truth for every card. The selection (`from` / `to` / `interval`) lives in the
 // TanStack Router search params, so the view is persistent on reload and
 // shareable by URL. `ssr: false` — these reads call server fns from the client
-// via TanStack Query, mirroring the budgets route; no TanStack DB collection is
-// touched here, so no loader preload is required. Budget progress is monthly, so
-// it tracks the month of the period's end date.
+// via TanStack Query, mirroring the budgets route. Budget progress is monthly,
+// so it tracks the month of the period's end date.
+//
+// PER-226 — the "Needs a look" ambient-intelligence strip is the one card here
+// that reads a TanStack DB collection (`accountCollection`/
+// `transactionCollection`, the same ones the accounts pages preload) instead
+// of a server-fn `useQuery`, because it reuses the already-shipped per-account
+// runway/idle-cash pure helpers (`computeDashboardAttention`), which expect
+// the full in-memory ledger the way those pages already assemble it. Per
+// CLAUDE.md §5B, any route touching `useLiveQuery` MUST preload its
+// collection(s) in the loader — done below.
 // =============================================================================
 
 const intervalSchema = z.enum(["day", "week", "month"])
@@ -67,6 +80,15 @@ export const Route = createFileRoute("/_protected/dashboard")({
   validateSearch: (search: Record<string, unknown>): DashboardSearch => {
     const parsed = dashboardSearchSchema.safeParse(search)
     return parsed.success ? parsed.data : {}
+  },
+  // PER-226 — mandatory preload for the two collections the attention strip's
+  // useLiveQuery calls read (see the file header comment above).
+  loader: async () => {
+    await Promise.all([
+      accountCollection.preload(),
+      transactionCollection.preload(),
+    ])
+    return null
   },
   component: DashboardPage,
 })
@@ -160,6 +182,25 @@ function DashboardPage() {
   })
   const hasNoAccounts = accountsQuery.data?.length === 0
 
+  // PER-226 — "Needs a look" ambient-intelligence strip. Same collections and
+  // computation shape as the accounts list page (accounts.index.tsx), reused
+  // here rather than re-fetched via a plain server-fn query so this stays a
+  // pure aggregation over the same live ledger every other account view sees.
+  const { data: attentionAccounts } = useLiveQuery((q) =>
+    q.from({ a: accountCollection })
+  )
+  const { data: attentionTransactions } = useLiveQuery((q) =>
+    q.from({ t: transactionCollection })
+  )
+  const attentionSummary = React.useMemo(
+    () =>
+      computeDashboardAttention(
+        attentionAccounts ?? [],
+        attentionTransactions ?? []
+      ),
+    [attentionAccounts, attentionTransactions]
+  )
+
   return (
     <TooltipProvider>
       <SidebarProvider
@@ -235,6 +276,8 @@ function DashboardPage() {
               <DashboardEmptyState />
             ) : (
               <>
+                <DashboardAttentionStrip summary={attentionSummary} />
+
                 <Section
                   query={netWorth}
                   skeletonHeight="h-[300px]"

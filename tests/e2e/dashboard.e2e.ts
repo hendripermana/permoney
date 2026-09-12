@@ -45,5 +45,47 @@ test.describe("dashboard route", () => {
 
     // Not stuck loading / not errored.
     await expect(page.getByText(/Couldn't load/)).toHaveCount(0)
+
+    // PER-226 — a brand-new fixture with only an opening-balance transaction
+    // has no burn history to alert on, so the ambient "Needs a look" strip
+    // must render nothing here (proves the empty case doesn't clutter the
+    // golden path — see feedback-validate-ux-before-full-build memory).
+    await expect(page.getByText("Needs a look")).toHaveCount(0)
+  })
+
+  // PER-226 — account intelligence, slice 5: bring the per-account
+  // runway/idle-cash signals to the dashboard so a below-reserve account is
+  // visible without opening it. Drives the real path: create an account whose
+  // opening balance already sits under its own reserve floor (the one runway
+  // status that needs no transaction history to trigger — see
+  // computeAccountRunway's `available <= 0` branch), then confirms the
+  // dashboard surfaces it and the row navigates to that account.
+  test("an account below its reserve appears in the dashboard's attention strip", async ({
+    page,
+  }) => {
+    await onboard(page)
+
+    await page.goto("/accounts")
+    await waitForHydration(page)
+    await page.getByRole("button", { name: "New account" }).click()
+    await page.getByLabel("Name").fill("E2E Below Reserve")
+    await page.getByLabel(/Opening balance/).fill("400000")
+    await page.getByLabel(/Reserve.*minimum balance/).fill("500000")
+    await page.getByRole("button", { name: "Create" }).click()
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+
+    await page.goto("/dashboard")
+    await waitForHydration(page)
+
+    await expect(page.getByText("Needs a look")).toBeVisible()
+    const attentionRow = page.getByRole("link", { name: /E2E Below Reserve/ })
+    await expect(attentionRow).toBeVisible()
+    await expect(attentionRow).toContainText("Below reserve")
+
+    await attentionRow.click()
+    await expect(page).toHaveURL(/\/accounts\/[^/]+$/)
+    await expect(
+      page.getByRole("heading", { name: /Transactions \(/ })
+    ).toBeVisible()
   })
 })
