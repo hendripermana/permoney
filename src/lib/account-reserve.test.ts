@@ -3,6 +3,7 @@ import {
   accountSupportsReserve,
   availableAfterReserve,
   hasReserve,
+  isLiquidCashAccountType,
   reserveHealth,
   reserveLockedFraction,
 } from "./account-reserve"
@@ -70,12 +71,33 @@ describe("hasReserve", () => {
   })
 })
 
+describe("isLiquidCashAccountType", () => {
+  test("true for checking/e-wallet/cash", () => {
+    expect(isLiquidCashAccountType("DEPOSITORY")).toBe(true)
+    expect(isLiquidCashAccountType("E_WALLET")).toBe(true)
+    expect(isLiquidCashAccountType("CASH")).toBe(true)
+  })
+
+  // Real production regression (2026-09-12, PER-226 fast-follow): an
+  // INVESTMENT account (mutual fund, cooperative deposit) is often
+  // transaction_flow too, but holding money there is the whole POINT — it
+  // must never be treated as spendable/idle cash.
+  test("false for INVESTMENT and other non-liquid types", () => {
+    expect(isLiquidCashAccountType("INVESTMENT")).toBe(false)
+    expect(isLiquidCashAccountType("TRACKED_ASSET")).toBe(false)
+    expect(isLiquidCashAccountType("CREDIT")).toBe(false)
+    expect(isLiquidCashAccountType("LOAN")).toBe(false)
+    expect(isLiquidCashAccountType("RECEIVABLE")).toBe(false)
+  })
+})
+
 describe("accountSupportsReserve", () => {
-  test("true only for cash-like ASSET", () => {
+  test("true only for liquid cash-like ASSET", () => {
     expect(
       accountSupportsReserve({
         accountClass: "ASSET",
         balanceSource: "transaction_flow",
+        accountType: "DEPOSITORY",
       })
     ).toBe(true)
   })
@@ -85,12 +107,24 @@ describe("accountSupportsReserve", () => {
       accountSupportsReserve({
         accountClass: "ASSET",
         balanceSource: "valuation",
+        accountType: "TRACKED_ASSET",
       })
     ).toBe(false)
     expect(
       accountSupportsReserve({
         accountClass: "LIABILITY",
         balanceSource: "transaction_flow",
+        accountType: "CREDIT",
+      })
+    ).toBe(false)
+  })
+
+  test("false for a transaction_flow INVESTMENT account (not liquid cash)", () => {
+    expect(
+      accountSupportsReserve({
+        accountClass: "ASSET",
+        balanceSource: "transaction_flow",
+        accountType: "INVESTMENT",
       })
     ).toBe(false)
   })

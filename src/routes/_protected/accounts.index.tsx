@@ -61,6 +61,7 @@ import {
 import { transactionCollection } from "@/lib/collections"
 import { applyFilters } from "@/lib/transaction-filters"
 import { computeAccountRunway, type AccountRunway } from "@/lib/account-runway"
+import { accountSupportsReserve } from "@/lib/account-reserve"
 import {
   ACCOUNT_TYPE_VALUES,
   type AccountClass,
@@ -202,18 +203,15 @@ function AccountsPage() {
     return map
   }, [driftRows])
 
-  // PER-222 — per-account runway forecast (cash-like ASSET only), using the SAME
-  // applyFilters lens as the detail page so the badge and the detail panel agree.
+  // PER-222 — per-account runway forecast (liquid cash-like ASSET only — see
+  // accountSupportsReserve's doc comment for why INVESTMENT is excluded even
+  // though it is `transaction_flow`), using the SAME applyFilters lens as the
+  // detail page so the badge and the detail panel agree.
   const runwayByAccount = React.useMemo(() => {
     const map = new Map<string, AccountRunway>()
     if (!allTransactions) return map
     for (const a of listedAccounts) {
-      if (
-        a.accountClass !== "ASSET" ||
-        a.balanceSource !== "transaction_flow"
-      ) {
-        continue
-      }
+      if (!accountSupportsReserve(a)) continue
       const ledger = applyFilters(allTransactions, { accounts: [a.id] })
       map.set(
         a.id,

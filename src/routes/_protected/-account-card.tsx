@@ -29,6 +29,7 @@ import {
 import { AccountVisual } from "@/components/blocks/account-visual"
 import { ACCOUNT_TYPE_LABEL, type AccountType } from "@/lib/accounts"
 import { isRunwayAlerting, type AccountRunway } from "@/lib/account-runway"
+import { hasReserve } from "@/lib/account-reserve"
 import type { AccountRecord, DriftRecord } from "@/lib/account-collections"
 import { selectDriftBadge } from "@/lib/account-drift-presentation"
 import { formatCurrency } from "@/lib/currency"
@@ -114,7 +115,16 @@ export function AccountCard({
 }) {
   const archived = account.status !== "active"
   const cashLike = account.balanceSource === "transaction_flow"
-  const runwayBadge = runway && isRunwayAlerting(runway.status) ? runway : null
+  // PER-226 fast-follow: an account with no CONFIGURED reserve trivially
+  // reads as "below" its (implicit, unset) zero floor the moment its balance
+  // touches zero — an e-wallet the user tops up on demand, not a real
+  // alert. Only surface the badge once the user has actually set a reserve.
+  const runwayBadge =
+    runway &&
+    isRunwayAlerting(runway.status) &&
+    hasReserve(account.reserveBalance ? BigInt(account.reserveBalance) : null)
+      ? runway
+      : null
   // `daysToReserve` is non-null for watch/critical from computeAccountRunway, but
   // the type allows null (a future server path could) — guard so we never render
   // "~nulld to reserve".
