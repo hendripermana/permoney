@@ -11,7 +11,14 @@ import {
   setTransactionReconciledForFamily,
   TransactionNotClearedError,
 } from "@/server/transaction-reconciliation"
-import { updateTransactionForFamily } from "@/server/transactions"
+import {
+  bulkDeleteTransactionsForFamily,
+  createTransactionForFamily,
+  deleteTransactionForFamily,
+  ReconciledStatusNotDirectlyEditableError,
+  ReconciledTransactionLockedError,
+  updateTransactionForFamily,
+} from "@/server/transactions"
 import {
   createIntegrationHarness,
   type IntegrationHarness,
@@ -359,6 +366,156 @@ describe("Transaction reconciliation (PER-83 Slice 1)", () => {
       expect(result.transactionId).toBe(newTransactionId)
       const row = await readTransaction(owner, newTransactionId)
       expect(row.status).toBe("RECONCILED")
+    })
+  })
+
+  describe("PER-279 — the generic manual form cannot bypass the audit trail", () => {
+    test("createTransactionForFamily rejects status: RECONCILED before writing anything", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await factories.createAccount({
+        familyId: owner.family.id,
+      })
+
+      await expect(
+        createTransactionForFamily({
+          data: {
+            accountId: account.id,
+            amount: 10_000n,
+            currency: "IDR",
+            date: new Date("2026-02-01T00:00:00.000Z"),
+            description: "Attempted direct reconcile via create",
+            idempotencyKey: factories.createIdempotencyKey(),
+            isSplit: false,
+            status: "RECONCILED",
+            type: "expense",
+          },
+          familyId: owner.family.id,
+          user: owner.user,
+        })
+      ).rejects.toBeInstanceOf(ReconciledStatusNotDirectlyEditableError)
+
+      const transactions = await harness.withFamily(owner.family.id, (tx) =>
+        tx.transaction.findMany()
+      )
+      expect(transactions).toHaveLength(0)
+    })
+
+    test("updateTransactionForFamily rejects an edit that sets status: RECONCILED", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const category = await factories.createCategory({
+        familyId: owner.family.id,
+        type: "expense",
+      })
+      const { trx } = await seedTransaction(owner, { status: "CLEARED" })
+
+      await expect(
+        updateTransactionForFamily({
+          data: {
+            accountId: trx.accountId,
+            amount: 20_000n,
+            categoryId: category.id,
+            currency: "IDR",
+            date: new Date("2026-02-01T00:00:00.000Z"),
+            description: "Attempted direct reconcile via edit",
+            id: trx.id,
+            idempotencyKey: factories.createIdempotencyKey(),
+            isSplit: false,
+            status: "RECONCILED",
+            type: "expense",
+          },
+          familyId: owner.family.id,
+          user: { id: owner.user.id, familyId: owner.family.id },
+        })
+      ).rejects.toBeInstanceOf(ReconciledStatusNotDirectlyEditableError)
+
+      const row = await readTransaction(owner, trx.id)
+      expect(row.status).toBe("CLEARED")
+      expect(row.deletedAt).toBeNull()
+      expect(row.supersededBy).toBeNull()
+    })
+
+    test("updateTransactionForFamily locks any edit of an already-RECONCILED transaction", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const category = await factories.createCategory({
+        familyId: owner.family.id,
+        type: "expense",
+      })
+      const { trx } = await seedTransaction(owner, { status: "RECONCILED" })
+
+      // Deliberately sends status: "CLEARED" (never "RECONCILED") — this
+      // isolates the OTHER guard: even an edit that never touches status at
+      // all must still be blocked because the row it targets is ALREADY
+      // reconciled, since reversal-and-replace would silently drop the
+      // audit trail on the new row otherwise (see
+      // `ReconciledTransactionLockedError`'s doc comment).
+      await expect(
+        updateTransactionForFamily({
+          data: {
+            accountId: trx.accountId,
+            amount: 12_345n,
+            categoryId: category.id,
+            currency: "IDR",
+            date: new Date("2026-02-01T00:00:00.000Z"),
+            description: "Only the description changed",
+            id: trx.id,
+            idempotencyKey: factories.createIdempotencyKey(),
+            isSplit: false,
+            status: "CLEARED",
+            type: "expense",
+          },
+          familyId: owner.family.id,
+          user: { id: owner.user.id, familyId: owner.family.id },
+        })
+      ).rejects.toBeInstanceOf(ReconciledTransactionLockedError)
+
+      // Unreplaced: the reconciled row is untouched, not superseded.
+      const row = await readTransaction(owner, trx.id)
+      expect(row.status).toBe("RECONCILED")
+      expect(row.deletedAt).toBeNull()
+      expect(row.supersededBy).toBeNull()
+    })
+
+    test("deleteTransactionForFamily locks an already-RECONCILED transaction", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const { trx } = await seedTransaction(owner, { status: "RECONCILED" })
+
+      await expect(
+        deleteTransactionForFamily({
+          id: trx.id,
+          idempotencyKey: factories.createIdempotencyKey(),
+          familyId: owner.family.id,
+          user: { id: owner.user.id, familyId: owner.family.id },
+        })
+      ).rejects.toBeInstanceOf(ReconciledTransactionLockedError)
+
+      const row = await readTransaction(owner, trx.id)
+      expect(row.deletedAt).toBeNull()
+    })
+
+    test("bulkDeleteTransactionsForFamily rolls back the whole batch when one target is RECONCILED", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const { trx: clearedTrx } = await seedTransaction(owner, {
+        status: "CLEARED",
+      })
+      const { trx: reconciledTrx } = await seedTransaction(owner, {
+        status: "RECONCILED",
+      })
+
+      await expect(
+        bulkDeleteTransactionsForFamily({
+          ids: [clearedTrx.id, reconciledTrx.id],
+          idempotencyKey: factories.createIdempotencyKey(),
+          familyId: owner.family.id,
+          user: { id: owner.user.id, familyId: owner.family.id },
+        })
+      ).rejects.toBeInstanceOf(ReconciledTransactionLockedError)
+
+      // Atomic: the CLEARED sibling processed earlier in the loop must not
+      // have been deleted either — one bad target fails the whole batch.
+      const clearedRow = await readTransaction(owner, clearedTrx.id)
+      const reconciledRow = await readTransaction(owner, reconciledTrx.id)
+      expect(clearedRow.deletedAt).toBeNull()
+      expect(reconciledRow.deletedAt).toBeNull()
     })
   })
 

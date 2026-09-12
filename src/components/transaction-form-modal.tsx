@@ -262,8 +262,14 @@ interface TransactionFormSectionProps {
   isLoading: boolean
 }
 
+// PER-279: "Reconciled" is deliberately absent here. It may only be set via
+// the audited `setTransactionReconciledFn` (Reconcile mode on the account
+// statement) — never through this generic picker, which has no audit trail.
+// A transaction that is already reconciled is shown via
+// `ReconciledLockBanner` instead and the whole form is locked (see
+// `TransactionFormModal`), so this list never needs to represent that state.
 const transactionStatusOptions: Array<{
-  value: TransactionStatus
+  value: Exclude<TransactionStatus, "RECONCILED">
   label: string
   icon: string
   activeClass: string
@@ -281,13 +287,6 @@ const transactionStatusOptions: Array<{
     icon: "✓",
     activeClass:
       "border-emerald-400 bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400",
-  },
-  {
-    value: "RECONCILED",
-    label: "Reconciled",
-    icon: "⊙",
-    activeClass:
-      "border-blue-400 bg-blue-100 text-blue-700 dark:bg-blue-950/50 dark:text-blue-400",
   },
 ]
 
@@ -430,6 +429,27 @@ function FormErrorBanner({ formError }: { formError: string | null }) {
         ⚠
       </span>
       <span className="flex-1">{formError}</span>
+    </div>
+  )
+}
+
+// PER-279: shown instead of letting the generic form silently edit/delete an
+// already-reconciled transaction (which would either be rejected server-side
+// by `ReconciledTransactionLockedError` or, worse, silently drop the audit
+// trail — see that error's doc comment in src/server/transactions.ts).
+function ReconciledLockBanner() {
+  return (
+    <div
+      role="status"
+      className="flex items-start gap-2 rounded-md border border-blue-400/30 bg-blue-500/10 px-3 py-2 text-sm text-blue-700 dark:bg-blue-500/20 dark:text-blue-300"
+    >
+      <span aria-hidden="true" className="mt-0.5">
+        ⊙
+      </span>
+      <span className="flex-1">
+        This transaction is reconciled and locked. Un-reconcile it in Reconcile
+        mode on the account statement before editing or deleting.
+      </span>
     </div>
   )
 }
@@ -2148,6 +2168,7 @@ function TransactionActionBar({
   form,
   isEditMode,
   isSplit,
+  locked = false,
   onCancel,
   onDelete,
   splitEntries,
@@ -2156,6 +2177,7 @@ function TransactionActionBar({
   form: TransactionFormInstance
   isEditMode: boolean
   isSplit: boolean
+  locked?: boolean
   onCancel: () => void
   onDelete: () => void | Promise<void>
   splitEntries: SplitEntryState
@@ -2166,7 +2188,7 @@ function TransactionActionBar({
         const splitTotal = splitEntries.reduce((s, e) => s + e.amount, 0)
         const remaining = parentAmount - splitTotal
         const isSaveDisabled =
-          isSplit && activeTab !== "transfer" && remaining !== 0
+          locked || (isSplit && activeTab !== "transfer" && remaining !== 0)
 
         return (
           <div className="mt-6 flex items-center justify-between border-t pt-4">
@@ -2175,8 +2197,9 @@ function TransactionActionBar({
                 <Button
                   type="button"
                   variant="destructive"
+                  disabled={locked}
                   onClick={onDelete}
-                  className="bg-red-500/10 text-red-600 hover:bg-red-500/20"
+                  className="bg-red-500/10 text-red-600 hover:bg-red-500/20 disabled:opacity-50"
                 >
                   <IconTrash className="mr-2 size-4" /> Delete
                 </Button>
@@ -3111,6 +3134,11 @@ export function TransactionFormModal({
     tradeRedirect,
   } = useTransactionFormModalController({ editData, onClose, defaultAccountId })
 
+  // PER-279: lock the entire edit form once a transaction is reconciled —
+  // see `ReconciledLockBanner` and `ReconciledTransactionLockedError` for why
+  // this can't be a narrower, per-field restriction.
+  const isReconciledLocked = isEditMode && editData?.status === "RECONCILED"
+
   return (
     <>
       {/* The trade flow replaces this form while it is open — one dialog at a
@@ -3156,108 +3184,115 @@ export function TransactionFormModal({
             className="mt-4 space-y-4"
           >
             <FormErrorBanner formError={formError} />
-            <DescriptionField
-              activeTab={activeTab}
-              form={form}
-              onDescriptionInput={handleDescriptionInput}
-            />
-            <AmountAccountFields
-              activeTab={activeTab}
-              form={form}
-              formData={formData}
-              isLoading={isLoading}
-            />
-            <TransferAccountFields
-              activeTab={activeTab}
-              form={form}
-              formData={formData}
-              isLoading={isLoading}
-            />
-            <HoldingsTransferNotice
-              activeTab={activeTab}
-              form={form}
-              formData={formData}
-              onStartTrade={startTradeRedirect}
-            />
-            <DestinationAmountField
-              activeTab={activeTab}
-              form={form}
-              formData={formData}
-            />
-            <NewValuationValueField
-              activeTab={activeTab}
-              form={form}
-              formData={formData}
-            />
-            <TransferContextFields
-              activeTab={activeTab}
-              form={form}
-              formData={formData}
-            />
-            <DateTimeFields form={form} />
-            <BackdatedAnchorBanner activeTab={activeTab} form={form} />
-            <MerchantField
-              activeTab={activeTab}
-              form={form}
-              formData={formData}
-              isLoading={isLoading}
-              onCreateMerchant={createMerchantOption}
-              onManualChange={markMerchantTouched}
-            />
-            <SplitModeToggle
-              activeTab={activeTab}
-              isSplit={isSplit}
-              setIsReimbursement={setIsReimbursement}
-              setIsSplit={setIsSplit}
-            />
-            <ReimbursementToggle
-              activeTab={activeTab}
-              formData={formData}
-              isLoading={isLoading}
-              isReimbursement={isReimbursement}
-              isSplit={isSplit}
-              setIsReimbursement={(checked) => {
-                setIsReimbursement(checked)
-                // The picker's source (income <-> expense categories) flips
-                // with this toggle in either direction; a stale selection
-                // from the other list would silently ride along otherwise.
-                form.setFieldValue("categoryId", "")
-              }}
-            />
-            <CategoryField
-              activeTab={activeTab}
-              form={form}
-              formData={formData}
-              isLoading={isLoading}
-              isReimbursement={isReimbursement}
-              isSplit={isSplit}
-              onCreateCategory={createCategoryOption}
-              onManualChange={markCategoryTouched}
-            />
-            <SplitEntriesPanel
-              activeTab={activeTab}
-              form={form}
-              formData={formData}
-              isSplit={isSplit}
-              setSplitEntries={setSplitEntries}
-              splitEntries={splitEntries}
-            />
-            <StatusField form={form} />
-            <TagsField
-              isEditMode={isEditMode}
-              tags={formData?.tags ?? []}
-              selectedTagIds={selectedTagIds}
-              setSelectedTagIds={setSelectedTagIds}
-              onCreateTag={createTagOption}
-              isLoading={isLoading}
-            />
-            <NotesField activeTab={activeTab} form={form} />
-            <AttachmentField form={form} />
+            {isReconciledLocked && <ReconciledLockBanner />}
+            <fieldset
+              disabled={isReconciledLocked}
+              className="contents space-y-4"
+            >
+              <DescriptionField
+                activeTab={activeTab}
+                form={form}
+                onDescriptionInput={handleDescriptionInput}
+              />
+              <AmountAccountFields
+                activeTab={activeTab}
+                form={form}
+                formData={formData}
+                isLoading={isLoading}
+              />
+              <TransferAccountFields
+                activeTab={activeTab}
+                form={form}
+                formData={formData}
+                isLoading={isLoading}
+              />
+              <HoldingsTransferNotice
+                activeTab={activeTab}
+                form={form}
+                formData={formData}
+                onStartTrade={startTradeRedirect}
+              />
+              <DestinationAmountField
+                activeTab={activeTab}
+                form={form}
+                formData={formData}
+              />
+              <NewValuationValueField
+                activeTab={activeTab}
+                form={form}
+                formData={formData}
+              />
+              <TransferContextFields
+                activeTab={activeTab}
+                form={form}
+                formData={formData}
+              />
+              <DateTimeFields form={form} />
+              <BackdatedAnchorBanner activeTab={activeTab} form={form} />
+              <MerchantField
+                activeTab={activeTab}
+                form={form}
+                formData={formData}
+                isLoading={isLoading}
+                onCreateMerchant={createMerchantOption}
+                onManualChange={markMerchantTouched}
+              />
+              <SplitModeToggle
+                activeTab={activeTab}
+                isSplit={isSplit}
+                setIsReimbursement={setIsReimbursement}
+                setIsSplit={setIsSplit}
+              />
+              <ReimbursementToggle
+                activeTab={activeTab}
+                formData={formData}
+                isLoading={isLoading}
+                isReimbursement={isReimbursement}
+                isSplit={isSplit}
+                setIsReimbursement={(checked) => {
+                  setIsReimbursement(checked)
+                  // The picker's source (income <-> expense categories) flips
+                  // with this toggle in either direction; a stale selection
+                  // from the other list would silently ride along otherwise.
+                  form.setFieldValue("categoryId", "")
+                }}
+              />
+              <CategoryField
+                activeTab={activeTab}
+                form={form}
+                formData={formData}
+                isLoading={isLoading}
+                isReimbursement={isReimbursement}
+                isSplit={isSplit}
+                onCreateCategory={createCategoryOption}
+                onManualChange={markCategoryTouched}
+              />
+              <SplitEntriesPanel
+                activeTab={activeTab}
+                form={form}
+                formData={formData}
+                isSplit={isSplit}
+                setSplitEntries={setSplitEntries}
+                splitEntries={splitEntries}
+              />
+              <StatusField form={form} />
+              <TagsField
+                isEditMode={isEditMode}
+                tags={formData?.tags ?? []}
+                selectedTagIds={selectedTagIds}
+                setSelectedTagIds={setSelectedTagIds}
+                onCreateTag={createTagOption}
+                isLoading={isLoading}
+              />
+              <NotesField activeTab={activeTab} form={form} />
+              <AttachmentField form={form} />
+            </fieldset>
             <TransactionActionBar
               activeTab={activeTab}
               form={form}
               isEditMode={isEditMode}
               isSplit={isSplit}
+              locked={isReconciledLocked}
               onCancel={handleCancel}
               onDelete={handleDelete}
               splitEntries={splitEntries}

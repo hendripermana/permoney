@@ -1165,14 +1165,58 @@ export class SameAccountTransferError extends Error {
   }
 }
 
+// PER-279: "RECONCILED" may only ever be written by the audited
+// `setTransactionReconciledFn` (src/server/transaction-reconciliation.ts),
+// which stamps `reconciledAt`/`reconciledById` in the same write. The
+// generic manual create/edit path has no such audit trail, so a client
+// sending status="RECONCILED" here would silently produce a row that CLAIMS
+// to be reconciled with no record of who/when — the exact gap PER-83's DB
+// CHECKs (row-shape only) cannot close on their own, since they never
+// require reconciledAt to be non-null.
+export class ReconciledStatusNotDirectlyEditableError extends Error {
+  override readonly name = "ReconciledStatusNotDirectlyEditableError"
+  readonly statusCode = 422
+  constructor() {
+    super(
+      'Status "Reconciled" can only be set via Reconcile mode, not the transaction form'
+    )
+  }
+}
+
+// PER-279: once a transaction is RECONCILED, editing it through the generic
+// reversal-and-replace path is a second, more insidious route to the same
+// audit-trail gap — the replaced row never carries `reconciledAt`/
+// `reconciledById` forward (only `setTransactionReconciledFn` ever writes
+// them), so ANY edit of a reconciled row's unrelated field (notes, category,
+// …) would silently produce a new row that is still `status="RECONCILED"`
+// but has lost its audit trail. Locking edits (and deletes, for the same
+// reason) until the transaction is un-reconciled via Reconcile mode is the
+// standard behavior real reconciliation tools use, and it is the only way
+// to guarantee "status=RECONCILED implies it was actually audited" stays
+// true after this row is touched again.
+export class ReconciledTransactionLockedError extends Error {
+  override readonly name = "ReconciledTransactionLockedError"
+  readonly statusCode = 409
+  constructor() {
+    super(
+      "This transaction is reconciled and locked. Un-reconcile it in Reconcile mode before editing or deleting."
+    )
+  }
+}
+
 function assertManualTransactionKindShape(data: {
   accountId: string
   kind: string
+  status: string
   toAccountId?: string | null
   type: "expense" | "income" | "transfer"
   feeAmount?: bigint | null
   transferPurpose?: string | null
 }): void {
+  if (data.status === "RECONCILED") {
+    throw new ReconciledStatusNotDirectlyEditableError()
+  }
+
   if (data.type === "transfer") {
     if (data.kind !== "standard") {
       throw new Error("Transfer kind is derived from account direction")
@@ -3360,10 +3404,19 @@ export async function softDeleteTransactionWithinTenantTransaction(
     auditCtx,
     familyId,
     id,
+    // PER-279: user-initiated single/bulk delete must respect the same
+    // reconciled-lock as edits (see `ReconciledTransactionLockedError`).
+    // Defaults to false because this same helper is also the shared
+    // primitive for account-deletion cascade (src/server/accounts.ts) and
+    // ledger-cleanup.ts, where the whole account/history is going away
+    // regardless of any individual row's reconciliation state — those
+    // callers must NOT be blocked by a reconciled transaction underneath.
+    enforceReconciledLock = false,
   }: {
     auditCtx: AuditContext
     familyId: string
     id: string
+    enforceReconciledLock?: boolean
   }
 ): Promise<void> {
   // 1. Cari transaksi lama beserta relasi transfernya dan split entries.
@@ -3373,6 +3426,10 @@ export async function softDeleteTransactionWithinTenantTransaction(
 
   if (oldTx.deletedAt !== null) {
     throw new TransactionGoneError()
+  }
+
+  if (enforceReconciledLock && oldTx.status === "RECONCILED") {
+    throw new ReconciledTransactionLockedError()
   }
 
   // PER-196 / ADR-0048 §4: a valuation-linked transfer's ONE Transaction leg
@@ -3660,6 +3717,7 @@ export async function deleteTransactionForFamily({
           auditCtx,
           familyId,
           id: data.id,
+          enforceReconciledLock: true,
         })
 
         const response = { success: true }
@@ -3751,6 +3809,9 @@ async function replaceTransactionWithinTenantTransaction(
 
   if (!oldTx) throw new Error("Original transaction not found")
   if (oldTx.deletedAt !== null) throw new TransactionGoneError()
+  if (oldTx.status === "RECONCILED") {
+    throw new ReconciledTransactionLockedError()
+  }
 
   // PER-196 / ADR-0048 §4: editing a valuation-linked transfer's one
   // Transaction leg is not yet supported — the reversal/replace logic below
@@ -4494,6 +4555,7 @@ export async function bulkDeleteTransactionsForFamily({
             auditCtx,
             familyId,
             id,
+            enforceReconciledLock: true,
           })
         }
 
