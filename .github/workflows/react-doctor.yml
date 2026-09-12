@@ -17,7 +17,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
-      - uses: millionco/react-doctor@fd23edca7eaa76b7f2b66795cfc829cc1967b7f3
+      - uses: millionco/react-doctor@45c0df3fd764583d048e86e374cb4b053b522ac8
         with:
           # `token` is not a recognized input for this action (valid inputs:
           # directory/project/scope/blocking/comment/review-comments/
