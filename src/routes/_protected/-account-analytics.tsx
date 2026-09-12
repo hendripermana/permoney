@@ -1,4 +1,13 @@
-import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts"
+import * as React from "react"
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ReferenceDot,
+  ReferenceLine,
+  XAxis,
+  YAxis,
+} from "recharts"
 import {
   Activity,
   Check,
@@ -28,12 +37,13 @@ import {
   reserveHealth,
   reserveLockedFraction,
 } from "@/lib/account-reserve"
-import { type AccountRunway } from "@/lib/account-runway"
 import { type IdleCashInsight } from "@/lib/account-idle-cash"
+import { type RunwayStatus } from "@/lib/account-runway"
 import {
-  type RecurringCadence,
-  type RecurringSeries,
-} from "@/lib/account-recurring"
+  type AccountCashFlowForecast,
+  type AccountCashFlowForecastPoint,
+  type ForecastEvent,
+} from "@/lib/account-cash-flow-forecast"
 import { type AccountPerformance } from "@/lib/account-performance"
 import {
   type AccountHealth,
@@ -41,6 +51,8 @@ import {
   type HealthBand,
 } from "@/lib/account-health"
 import { formatCurrency } from "@/lib/currency"
+import { toDisplayNumber } from "@/lib/money"
+import { type CurrencyCode } from "@/lib/data/currencies"
 import { cn } from "@/lib/utils"
 
 // PER-218 — presentational analytics for the account detail page. Pure props
@@ -394,88 +406,6 @@ export function SafeToSpendPanel({
   )
 }
 
-// PER-222 — "runway to reserve" note: forecasts when the account dips below its
-// reserve floor from its trailing net daily flow. Pure props in; the math is the
-// unit-tested computeAccountRunway. Calm by default, urgent only when it matters.
-export function AccountRunwayNote({
-  runway,
-  currency,
-}: Readonly<{ runway: AccountRunway; currency: string }>) {
-  const { status } = runway
-  const dateLabel = runway.reserveDate
-    ? runway.reserveDate.toLocaleDateString(undefined, {
-        month: "short",
-        day: "numeric",
-      })
-    : null
-  const burnLabel =
-    runway.dailyBurnMinor !== null
-      ? `${formatCurrency(runway.dailyBurnMinor.toString(), currency)}/day`
-      : null
-
-  const urgent = status === "below" || status === "critical"
-
-  let icon = <TrendingDown className="size-3.5" aria-hidden />
-  let headline: string
-  let detail: string | null = null
-
-  if (status === "insufficient_data") {
-    icon = <TriangleAlert className="size-3.5" aria-hidden />
-    headline = "Not enough recent activity to forecast runway"
-  } else if (status === "growing") {
-    icon = <TrendingUp className="size-3.5" aria-hidden />
-    headline = "Trending up — no dip below your reserve expected"
-  } else if (status === "below") {
-    icon = <TriangleAlert className="size-3.5" aria-hidden />
-    headline = "You're below your reserve now"
-    detail = burnLabel ? `Burning about ${burnLabel}.` : null
-  } else {
-    // critical / watch / healthy — a real runway forecast.
-    const days = runway.daysToReserve ?? 0
-    headline = `About ${days} ${days === 1 ? "day" : "days"} of runway`
-    detail = [
-      dateLabel ? `reaches your reserve around ${dateLabel}` : null,
-      burnLabel ? `at ~${burnLabel}` : null,
-    ]
-      .filter(Boolean)
-      .join(" ")
-  }
-
-  return (
-    <div
-      className={cn(
-        "rounded-2xl border p-4",
-        urgent ? "border-destructive/40 bg-destructive/5" : undefined
-      )}
-    >
-      <div className="flex items-center justify-between gap-2">
-        <p className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-          {icon}
-          Runway
-        </p>
-        {runway.lowConfidence && status !== "insufficient_data" ? (
-          <span className="text-[10px] font-medium text-muted-foreground">
-            Low confidence
-          </span>
-        ) : null}
-      </div>
-      <p
-        className={cn(
-          "mt-1 text-lg font-semibold",
-          urgent ? "text-destructive" : undefined
-        )}
-      >
-        {headline}
-      </p>
-      {detail ? (
-        <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
-          {detail}
-        </p>
-      ) : null}
-    </div>
-  )
-}
-
 // PER-223 — "idle cash" opportunity: cash that has sat above the reserve,
 // untouched, all window. Opportunity tone (emerald), not an alarm. Renders
 // nothing unless there is a material surplus, so the caller can mount it freely.
@@ -504,61 +434,434 @@ export function IdleCashNote({
   )
 }
 
-const CADENCE_LABEL: Record<RecurringCadence, string> = {
-  weekly: "Weekly",
-  biweekly: "Biweekly",
-  monthly: "Monthly",
+// PER-263 fast-follow — "cash-flow forecast": ONE causal panel replacing the
+// separate Runway (AccountRunwayNote) + Recurring (RecurringNote) panels on
+// the account detail page. All the math (double-counting avoidance, overdue
+// clamping, reserve-breach projection) lives in the pure, unit-tested
+// account-cash-flow-forecast.ts; this section only draws it — pure headline
+// copy is still kept out of JSX (describeForecastHeadline), matching the
+// codebase's "pure logic, thin JSX" convention.
+const forecastChartConfig = {
+  historicalBalance: { label: "Balance", color: "var(--chart-2)" },
+  forecastBalance: { label: "Forecast", color: "var(--chart-2)" },
+} satisfies ChartConfig
+
+interface CashFlowChartPoint {
+  date: string
+  historicalBalance: number | null
+  forecastBalance: number | null
+  events: ForecastEvent[]
 }
 
-// PER-225 Slice 4a — "recurring" detection: a short, ambient, READ-ONLY list of
-// merchant/description series clustered by cadence + amount stability (see
-// account-recurring.ts for the heuristic). No edit/confirm/dismiss UI yet —
-// that, a calendar view, and recurring-aware runway are explicit later slices
-// on the PER-225 milestone. Renders nothing when nothing was detected, so the
-// caller can mount it unconditionally (same pattern as IdleCashNote).
-export function RecurringNote({
+function localIsoDayFor(date: Date): string {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, "0")
+  const d = String(date.getDate()).padStart(2, "0")
+  return `${y}-${m}-${d}`
+}
+
+function buildCashFlowChartData(
+  series: ReadonlyArray<BalancePoint>,
+  forecast: AccountCashFlowForecast,
+  currency: string
+): CashFlowChartPoint[] {
+  const historical: CashFlowChartPoint[] = series.map((p) => ({
+    date: p.date,
+    historicalBalance: p.balance,
+    forecastBalance: null,
+    events: [],
+  }))
+  // Bridge point: the last historical point ("today") also seeds the
+  // forecast line so the dashed segment visually continues from the solid
+  // one instead of starting from a gap.
+  const last = historical[historical.length - 1]
+  if (last) last.forecastBalance = last.historicalBalance
+
+  const forecastPoints: CashFlowChartPoint[] = forecast.points.map((p) => ({
+    date: localIsoDayFor(p.date),
+    historicalBalance: null,
+    forecastBalance: toDisplayNumber(
+      p.projectedBalanceMinor,
+      currency as CurrencyCode
+    ),
+    events: p.events,
+  }))
+  return [...historical, ...forecastPoints]
+}
+
+/**
+ * Pure headline copy for the forecast panel. Never frames a dip as a "reserve
+ * breach" unless the caller confirms a reserve is actually configured
+ * (`hasReserveConfigured`) — see account-cash-flow-forecast.ts's file header
+ * for why that gate lives here, in the presentation layer, and not baked into
+ * `projectedReserveBreachDate` itself (the PR #341 bug this deliberately does
+ * NOT repeat).
+ */
+function shortDateLabel(date: Date): string {
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+}
+
+export function describeForecastHeadline(
+  forecast: AccountCashFlowForecast,
+  opts: {
+    hasReserveConfigured: boolean
+    currency: string
+    runwayStatus: RunwayStatus
+  }
+): string {
+  // Too few transactions OVERALL to trust any forecast, recurring-aware or
+  // not — distinct from "no recurring PATTERN was found" (hasRecurringSignal
+  // below, which still trusts the runway average, just can't attribute a dip
+  // to a specific bill). Kept as the exact copy the old AccountRunwayNote
+  // used for this same runway status, since a real e2e assertion
+  // (account-detail.e2e.ts, a freshly created account with only an
+  // opening-balance anchor and zero posted transactions) depends on it.
+  if (opts.runwayStatus === "insufficient_data") {
+    return "Not enough recent activity to forecast runway"
+  }
+
+  // Already at/under the floor RIGHT NOW — a present-state fact, not a fresh
+  // forecast finding (see account-cash-flow-forecast.ts's doc comment on
+  // `alreadyAtOrBelowFloor`: without this branch, a zero-balance,
+  // no-reserve-configured wallet would say "reaches zero tomorrow" every
+  // single day it's opened, since it never meaningfully leaves that state —
+  // the exact false-alarm pattern PR #341 already fixed once, recurring here
+  // in a new feature if left unhandled).
+  if (forecast.alreadyAtOrBelowFloor) {
+    const recovery = forecast.projectedRecoveryDate
+    if (!opts.hasReserveConfigured) {
+      return recovery
+        ? `Sitting at zero — recovers around ${shortDateLabel(recovery)}`
+        : `Sitting at zero, with no recovery expected in the next ${forecast.horizonDays} days`
+    }
+    return recovery
+      ? `Already below your reserve — recovers around ${shortDateLabel(recovery)}`
+      : `Already below your reserve, with no recovery expected in the next ${forecast.horizonDays} days`
+  }
+
+  const breachDate = forecast.projectedReserveBreachDate
+  if (breachDate === null) {
+    return `Trending up — no dip expected in the next ${forecast.horizonDays} days`
+  }
+  const breachMs = breachDate.getTime()
+  const dateLabel = shortDateLabel(breachDate)
+
+  if (!opts.hasReserveConfigured) {
+    return `Reaches zero around ${dateLabel} at this pace`
+  }
+
+  // Causal detail: the single biggest expense landing at/before the breach —
+  // the thing "mainly" responsible for it — and the next inflow after it (if
+  // any within the horizon) that would recover the balance.
+  const eventsUpToBreach = forecast.points
+    .filter((p) => p.date.getTime() <= breachMs)
+    .flatMap((p) => p.events)
+  const biggestExpense = eventsUpToBreach
+    .filter((e) => e.direction === "out")
+    .sort((a, b) =>
+      b.amountMinor > a.amountMinor ? 1 : b.amountMinor < a.amountMinor ? -1 : 0
+    )[0]
+
+  if (!biggestExpense) {
+    return `Dips below reserve around ${dateLabel} at this pace`
+  }
+
+  const nextInflow = forecast.points
+    .filter((p) => p.date.getTime() > breachMs)
+    .flatMap((p) => p.events.map((event) => ({ event, date: p.date })))
+    .find(({ event }) => event.direction === "in")
+
+  const expenseLabel = `${biggestExpense.label} (${formatCurrency(biggestExpense.amountMinor, opts.currency)})`
+  const inflowClause = nextInflow
+    ? `, before ${nextInflow.event.label} lands ${shortDateLabel(nextInflow.date)}`
+    : ""
+
+  return `Dips below reserve around ${dateLabel}, mainly your ${expenseLabel}${inflowClause}`
+}
+
+function eventDotColor(events: ReadonlyArray<ForecastEvent>): string {
+  const allIn = events.every((e) => e.direction === "in")
+  if (allIn) return "var(--color-emerald-500)"
+  const allOut = events.every((e) => e.direction === "out")
+  if (allOut) return "var(--color-destructive)"
+  return "var(--color-muted-foreground)"
+}
+
+export function AccountCashFlowForecastPanel({
   series,
+  forecast,
+  hasReserveConfigured,
+  reserveMinor,
   currency,
-}: Readonly<{ series: ReadonlyArray<RecurringSeries>; currency: string }>) {
-  if (series.length === 0) return null
+  runwayStatus,
+}: Readonly<{
+  series: ReadonlyArray<BalancePoint>
+  forecast: AccountCashFlowForecast
+  hasReserveConfigured: boolean
+  reserveMinor: bigint
+  currency: string
+  runwayStatus: RunwayStatus
+}>) {
+  const chartData = React.useMemo(
+    () => buildCashFlowChartData(series, forecast, currency),
+    [series, forecast, currency]
+  )
+  const eventPoints = React.useMemo<AccountCashFlowForecastPoint[]>(
+    () => forecast.points.filter((p) => p.events.length > 0),
+    [forecast]
+  )
+  const upcoming = React.useMemo(
+    () =>
+      eventPoints
+        .flatMap((p) => p.events.map((event) => ({ event, date: p.date })))
+        .slice(0, 5),
+    [eventPoints]
+  )
+  const headline = React.useMemo(
+    () =>
+      describeForecastHeadline(forecast, {
+        hasReserveConfigured,
+        currency,
+        runwayStatus,
+      }),
+    [forecast, hasReserveConfigured, currency, runwayStatus]
+  )
+  // Urgent styling for a genuinely NEW forecasted dip, or for being ALREADY
+  // below a reserve the user actually configured — but not for a no-reserve
+  // account already sitting at zero (its normal, expected resting state; see
+  // describeForecastHeadline's "already at/below the floor" branch).
+  const breach =
+    forecast.projectedReserveBreachDate !== null ||
+    (hasReserveConfigured && forecast.alreadyAtOrBelowFloor)
+  const lowConfidence = forecast.points[0]?.lowConfidence ?? false
+
   return (
-    <div className="rounded-2xl border p-4">
-      <p className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-        <Repeat className="size-3.5" aria-hidden />
-        Recurring
-      </p>
-      <ul className="mt-2 flex flex-col gap-2.5">
-        {series.map((s) => (
-          <li
-            key={s.key}
-            className="flex items-center justify-between gap-3 text-sm"
-          >
-            <div className="flex min-w-0 flex-col">
-              <span className="truncate font-medium text-foreground">
-                {s.label}
-              </span>
-              <span className="text-xs text-muted-foreground">
-                {CADENCE_LABEL[s.cadence]} · next{" "}
-                {s.nextExpected.toLocaleDateString(undefined, {
-                  month: "short",
-                  day: "numeric",
-                })}
-              </span>
-            </div>
-            <span
-              className={cn(
-                "shrink-0 font-semibold tabular-nums",
-                s.direction === "in"
-                  ? "text-emerald-600 dark:text-emerald-400"
-                  : "text-foreground"
-              )}
-            >
-              {s.direction === "in" ? "+" : "−"}
-              {formatCurrency(s.typicalAmountMinor.toString(), currency)}
+    <div className="flex flex-col gap-4">
+      <div
+        className={cn(
+          "rounded-2xl border p-4",
+          breach ? "border-destructive/40 bg-destructive/5" : undefined
+        )}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <p className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+            {breach ? (
+              <TriangleAlert className="size-3.5" aria-hidden />
+            ) : (
+              <TrendingUp className="size-3.5" aria-hidden />
+            )}
+            Cash flow forecast
+          </p>
+          {lowConfidence ? (
+            <span className="text-[10px] font-medium text-muted-foreground">
+              Low confidence
             </span>
-          </li>
-        ))}
-      </ul>
+          ) : null}
+        </div>
+        <p
+          className={cn(
+            "mt-1 text-sm font-medium",
+            breach ? "text-destructive" : "text-foreground"
+          )}
+        >
+          {headline}
+        </p>
+
+        {chartData.length > 0 ? (
+          <ChartContainer
+            config={forecastChartConfig}
+            className="mt-3 aspect-auto h-[200px] w-full"
+          >
+            <AreaChart data={chartData as Array<CashFlowChartPoint>}>
+              <defs>
+                <linearGradient
+                  id="fillCashFlowHistorical"
+                  x1="0"
+                  y1="0"
+                  x2="0"
+                  y2="1"
+                >
+                  <stop
+                    offset="5%"
+                    stopColor="var(--color-historicalBalance)"
+                    stopOpacity={0.8}
+                  />
+                  <stop
+                    offset="95%"
+                    stopColor="var(--color-historicalBalance)"
+                    stopOpacity={0.1}
+                  />
+                </linearGradient>
+                <linearGradient
+                  id="fillCashFlowForecast"
+                  x1="0"
+                  y1="0"
+                  x2="0"
+                  y2="1"
+                >
+                  <stop
+                    offset="5%"
+                    stopColor="var(--color-forecastBalance)"
+                    stopOpacity={0.35}
+                  />
+                  <stop
+                    offset="95%"
+                    stopColor="var(--color-forecastBalance)"
+                    stopOpacity={0.02}
+                  />
+                </linearGradient>
+              </defs>
+              <CartesianGrid vertical={false} />
+              <XAxis
+                dataKey="date"
+                tickLine={false}
+                axisLine={false}
+                tickMargin={8}
+                minTickGap={40}
+                tickFormatter={formatChartDay}
+              />
+              <YAxis
+                width={44}
+                tickLine={false}
+                axisLine={false}
+                tickFormatter={compactAxisNumber}
+              />
+              <ChartTooltip
+                cursor={false}
+                content={
+                  <ChartTooltipContent
+                    labelFormatter={(value) => formatChartDay(value as string)}
+                    formatter={(value, _name, _item, _index, payload) => {
+                      if (value === null || value === undefined) return null
+                      const point = payload as unknown as CashFlowChartPoint
+                      return (
+                        <div className="flex w-full flex-col gap-1">
+                          <div className="flex w-full items-center justify-between gap-2">
+                            <span className="text-muted-foreground">
+                              Balance
+                            </span>
+                            <span className="font-mono font-medium text-foreground tabular-nums">
+                              {formatCurrency(Number(value), currency)}
+                            </span>
+                          </div>
+                          {point.events.map((e) => (
+                            <div
+                              key={`${e.seriesKey}-${e.dateConfidence}`}
+                              className="flex items-center justify-between gap-2 text-xs"
+                            >
+                              <span
+                                className={
+                                  e.direction === "in"
+                                    ? "text-emerald-600 dark:text-emerald-400"
+                                    : "text-foreground"
+                                }
+                              >
+                                {e.label}
+                                {e.dateConfidence === "overdue"
+                                  ? " (overdue)"
+                                  : ""}
+                              </span>
+                              <span className="font-mono tabular-nums">
+                                {e.direction === "in" ? "+" : "−"}
+                                {formatCurrency(e.amountMinor, currency)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )
+                    }}
+                    indicator="dot"
+                  />
+                }
+              />
+              {hasReserveConfigured ? (
+                <ReferenceLine
+                  y={toDisplayNumber(reserveMinor, currency as CurrencyCode)}
+                  stroke="var(--color-destructive)"
+                  strokeDasharray="4 4"
+                  strokeOpacity={0.6}
+                />
+              ) : null}
+              <Area
+                dataKey="historicalBalance"
+                type="natural"
+                fill="url(#fillCashFlowHistorical)"
+                stroke="var(--color-historicalBalance)"
+              />
+              <Area
+                dataKey="forecastBalance"
+                type="natural"
+                fill="url(#fillCashFlowForecast)"
+                stroke="var(--color-forecastBalance)"
+                strokeDasharray="5 5"
+              />
+              {eventPoints.map((p) => {
+                const x = localIsoDayFor(p.date)
+                const y = toDisplayNumber(
+                  p.projectedBalanceMinor,
+                  currency as CurrencyCode
+                )
+                return (
+                  <ReferenceDot
+                    key={`${x}-${p.events.map((e) => e.seriesKey).join(",")}`}
+                    x={x}
+                    y={y}
+                    r={4}
+                    fill={eventDotColor(p.events)}
+                    stroke="var(--background)"
+                    strokeWidth={1.5}
+                  />
+                )
+              })}
+            </AreaChart>
+          </ChartContainer>
+        ) : null}
+      </div>
+
+      {upcoming.length > 0 ? (
+        <div className="rounded-2xl border p-4">
+          <p className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+            <Repeat className="size-3.5" aria-hidden />
+            Upcoming
+          </p>
+          <ul className="mt-2 flex flex-col gap-2.5">
+            {upcoming.map(({ event, date }, i) => (
+              <li
+                key={`${event.seriesKey}-${i}`}
+                className="flex items-center justify-between gap-3 text-sm"
+              >
+                <div className="flex min-w-0 flex-col">
+                  <span className="truncate font-medium text-foreground">
+                    {event.label}
+                    {event.dateConfidence === "overdue" ? (
+                      <span className="ml-1.5 text-[10px] font-medium text-destructive">
+                        Overdue
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {date.toLocaleDateString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                    })}
+                  </span>
+                </div>
+                <span
+                  className={cn(
+                    "shrink-0 font-semibold tabular-nums",
+                    event.direction === "in"
+                      ? "text-emerald-600 dark:text-emerald-400"
+                      : "text-foreground"
+                  )}
+                >
+                  {event.direction === "in" ? "+" : "−"}
+                  {formatCurrency(event.amountMinor, currency)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   )
 }

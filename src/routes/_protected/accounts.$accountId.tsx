@@ -85,14 +85,13 @@ import {
 } from "@/lib/collections"
 import { applyFilters } from "@/lib/transaction-filters"
 import {
+  AccountCashFlowForecastPanel,
   AccountHealthPanel,
-  AccountRunwayNote,
   BalanceTrendChart,
   CategoryBreakdown,
   IdleCashNote,
   PerformancePanel,
   RangeSelector,
-  RecurringNote,
   SafeToSpendPanel,
 } from "./-account-analytics"
 import {
@@ -103,6 +102,7 @@ import {
 import { computeAccountRunway } from "@/lib/account-runway"
 import { computeIdleCash } from "@/lib/account-idle-cash"
 import { detectRecurringSeries } from "@/lib/account-recurring"
+import { computeAccountCashFlowForecast } from "@/lib/account-cash-flow-forecast"
 import { computeAccountPerformance } from "@/lib/account-performance"
 import { sortAccountOptions } from "@/lib/holdings"
 import { getAccountOpeningValueFn } from "@/server/valuations"
@@ -622,6 +622,29 @@ function AccountDetailPage() {
     [cashLike, ledger]
   )
 
+  // PER-263 fast-follow — cash-flow forecast: fuses runway + recurring into
+  // one causal day-by-day projection (see account-cash-flow-forecast.ts).
+  // Same reach as runway/idle-cash/health above: liquid cash-like accounts
+  // only, never an INVESTMENT-type account.
+  const cashFlowForecast = React.useMemo(
+    () =>
+      supportsReserveSignals && runway
+        ? computeAccountCashFlowForecast(
+            currentBalance,
+            account?.reserveBalance ? BigInt(account.reserveBalance) : 0n,
+            runway,
+            recurring
+          )
+        : null,
+    [
+      supportsReserveSignals,
+      runway,
+      currentBalance,
+      account?.reserveBalance,
+      recurring,
+    ]
+  )
+
   const kpi = React.useMemo(() => {
     let inflow: Money = ZERO_MONEY
     let outflow: Money = ZERO_MONEY
@@ -1107,17 +1130,22 @@ function AccountDetailPage() {
               currency={currency}
             />
           ) : null}
-          {runway &&
-          hasReserve(
-            account.reserveBalance ? BigInt(account.reserveBalance) : null
-          ) ? (
-            <AccountRunwayNote runway={runway} currency={currency} />
+          {cashFlowForecast ? (
+            <AccountCashFlowForecastPanel
+              series={series}
+              forecast={cashFlowForecast}
+              hasReserveConfigured={hasReserve(
+                account.reserveBalance ? BigInt(account.reserveBalance) : null
+              )}
+              reserveMinor={
+                account.reserveBalance ? BigInt(account.reserveBalance) : 0n
+              }
+              currency={currency}
+              runwayStatus={runway?.status ?? "insufficient_data"}
+            />
           ) : null}
           {idleCash && account.accountSubtype !== "savings" ? (
             <IdleCashNote insight={idleCash} currency={currency} />
-          ) : null}
-          {recurring.length > 0 ? (
-            <RecurringNote series={recurring} currency={currency} />
           ) : null}
           <div className="grid grid-cols-2 gap-3">
             <MiniStat
