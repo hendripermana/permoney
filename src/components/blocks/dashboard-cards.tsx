@@ -1,4 +1,5 @@
 import * as React from "react"
+import { Link } from "@tanstack/react-router"
 import {
   PiggyBank,
   Tags,
@@ -26,7 +27,9 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import type { CurrencyCode } from "@/lib/data/currencies"
+import { formatCurrency } from "@/lib/currency"
 import { decodeMoney, formatMoney, toDisplayNumber } from "@/lib/money"
+import type { DashboardAttentionSummary } from "@/lib/dashboard-attention"
 import type {
   CashFlowReportResult,
   NetWorthSeriesResult,
@@ -561,6 +564,94 @@ export function BudgetProgressCard({
             ))}
           </ul>
         )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// =============================================================================
+// PER-226 — Account intelligence, slice 5: "ambient intelligence on the
+// dashboard". Pure presentation over `computeDashboardAttention`'s already-
+// aggregated output (src/lib/dashboard-attention.ts) — no analytics math here,
+// same layering as every other card in this file.
+//
+// Deliberately renders NOTHING when both lists are empty: a permanent "all
+// clear" section a user scrolls past every single day is worse than no
+// section at all (see feedback-validate-ux-before-full-build memory).
+// =============================================================================
+
+const RUNWAY_STATUS_LABEL: Record<string, string> = {
+  below: "Below reserve",
+  critical: "Critical",
+  watch: "Watch",
+}
+
+/** Compact "what needs a look" strip: below-reserve/low-runway + idle cash. */
+export function DashboardAttentionStrip({
+  summary,
+}: {
+  summary: DashboardAttentionSummary
+}) {
+  const { attention, idleOpportunities } = summary
+  if (attention.length === 0 && idleOpportunities.length === 0) return null
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <TriangleAlert className="size-4 text-amber-500" aria-hidden />
+          Needs a look
+        </CardTitle>
+        <CardDescription>
+          Accounts that are trending toward their reserve, or sitting on cash
+          that could be put to work.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2">
+        {attention.map((item) => (
+          <Link
+            key={item.accountId}
+            to="/accounts/$accountId"
+            params={{ accountId: item.accountId }}
+            className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm transition-colors hover:bg-muted/50"
+          >
+            <span className="flex items-center gap-2 font-medium">
+              <TrendingDown className="size-3.5 text-destructive" aria-hidden />
+              {item.accountName}
+            </span>
+            <Badge
+              variant={
+                item.runway.status === "watch" ? "outline" : "destructive"
+              }
+              className={cn(
+                item.runway.status === "watch" &&
+                  "border-amber-500/50 text-amber-600 dark:text-amber-400"
+              )}
+            >
+              {item.runway.status === "below"
+                ? RUNWAY_STATUS_LABEL.below
+                : item.runway.daysToReserve !== null
+                  ? `~${item.runway.daysToReserve}d to reserve`
+                  : RUNWAY_STATUS_LABEL[item.runway.status]}
+            </Badge>
+          </Link>
+        ))}
+        {idleOpportunities.map((item) => (
+          <Link
+            key={item.accountId}
+            to="/accounts/$accountId"
+            params={{ accountId: item.accountId }}
+            className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm transition-colors hover:bg-muted/50"
+          >
+            <span className="flex items-center gap-2 font-medium">
+              <PiggyBank className="size-3.5 text-emerald-600" aria-hidden />
+              {item.accountName}
+            </span>
+            <span className="text-muted-foreground tabular-nums">
+              {formatCurrency(item.idle.idleSurplusMinor, item.currency)} idle
+            </span>
+          </Link>
+        ))}
       </CardContent>
     </Card>
   )
