@@ -120,6 +120,9 @@ importers:
       date-fns:
         specifier: ^4.4.0
         version: 4.4.0
+      hijri-converter:
+        specifier: ^1.1.1
+        version: 1.1.1
       lucide-react:
         specifier: ^1.43.0
         version: 1.43.0(react@19.2.8)
@@ -4724,6 +4727,9 @@ packages:
   hasown@2.0.4:
     resolution: {integrity: sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==}
     engines: {node: '>= 0.4'}
+
+  hijri-converter@1.1.1:
+    resolution: {integrity: sha512-uY2oDZllg7wcgvY7rdrM1VUE5iEqNjKGtrBUJlzniAsY73FuC5mb0kzdqLE/bU9Q50Iwhn6b9/Udw8SUIXHlhQ==}
 
   hono@4.13.7:
     resolution: {integrity: sha512-c8/gF9ac8Y78/agExVocyLevgR+JlpNB444Py0FSX8pJoPdYUfUzRcXtYEYGwt6l19qIlVZPN5Mfsw9jFShmQQ==}
@@ -10124,6 +10130,10 @@ snapshots:
     optionalDependencies:
       srvx: 0.11.17
 
+  crossws@0.4.6(srvx@0.11.22):
+    optionalDependencies:
+      srvx: 0.11.22
+
   css-tree@3.2.1:
     dependencies:
       mdn-data: 2.27.1
@@ -10303,10 +10313,10 @@ snapshots:
 
   env-runner@0.1.14:
     dependencies:
-      crossws: 0.4.6(srvx@0.11.17)
+      crossws: 0.4.6(srvx@0.11.22)
       exsolve: 1.1.0
       httpxy: 0.5.3
-      srvx: 0.11.17
+      srvx: 0.11.22
 
   error-ex@1.3.4:
     dependencies:
@@ -10762,7 +10772,7 @@ snapshots:
   h3@2.0.1-rc.22(crossws@0.4.6(srvx@0.11.17)):
     dependencies:
       rou3: 0.8.1
-      srvx: 0.11.17
+      srvx: 0.11.22
     optionalDependencies:
       crossws: 0.4.6(srvx@0.11.17)
 
@@ -10773,6 +10783,8 @@ snapshots:
   hasown@2.0.4:
     dependencies:
       function-bind: 1.1.2
+
+  hijri-converter@1.1.1: {}
 
   hono@4.13.7: {}
 

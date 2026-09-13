@@ -61,6 +61,9 @@ model Family {
   instruments  Instrument[]
   holdings     Holding[]
   pendingBalanceCorrections PendingBalanceCorrection[]
+  // ADR-0056 — Zakat Maal calculator.
+  zakatSettings ZakatSettings?
+  zakatPayers   ZakatPayer[]
 }
 
 // ADR-0036: first-class family membership + role authorization.
@@ -123,6 +126,9 @@ model User {
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
   authaccounts  AuthAccount[]
+  // ADR-0056 — forward-compatible hook for the deferred multi-user
+  // "claim your tagged accounts" flow. Unused (never set) in Slice 1.
+  zakatPayerLink ZakatPayer? @relation("ZakatPayerLinkedUser")
 
   @@map("User")
 }
@@ -219,6 +225,29 @@ model Account {
   counterpartyMerchantId String?
   counterpartyMerchant   Merchant? @relation("AccountCounterparty", fields: [counterpartyMerchantId, familyId], references: [id, familyId], onDelete: Restrict, onUpdate: Cascade, map: "account_counterparty_merchant_fkey")
 
+  // ADR-0056 — Zakat Maal calculator: which ZakatPayer(s) this account's
+  // wealth economically belongs to, for per-payer attribution (NEVER pooled
+  // — see the ADR's "why pooling by default is a real fiqh error" section).
+  // NULL is a valid, common state: a family with zero or one ZakatPayer needs
+  // no tagging at all (every account implicitly belongs 100% to that one
+  // payer); an untagged account only matters once a SECOND payer exists, at
+  // which point it is excluded from every payer's total rather than guessed
+  // (see `unattributedAccountIds` in src/lib/zakat-calculation.ts).
+  // `zakatJointPayerId` is the SECOND owner of a jointly-held account;
+  // `zakatJointSharePercent` is THAT payer's share (1-99 — see the CHECK
+  // constraints in this migration), defaulting to 50 in the UI (never
+  // silently assumed server-side). Both composite FKs are tenant-safe
+  // (Pattern A, ADR-0010) and `onDelete: SetNull` so deleting a ZakatPayer
+  // un-tags the account instead of touching ledger data. Prisma's DSL cannot
+  // express it, but the raw migration SQL scopes the SET NULL to just the
+  // owner column (`ON DELETE SET NULL ("zakatPayerId")`, PG 15+) — a bare
+  // composite SET NULL would also null `familyId`, which is NOT NULL.
+  zakatPayerId           String?
+  zakatPayer             ZakatPayer? @relation("AccountZakatPayer", fields: [zakatPayerId, familyId], references: [id, familyId], onDelete: SetNull, onUpdate: Cascade, map: "account_zakat_payer_fkey")
+  zakatJointPayerId      String?
+  zakatJointPayer        ZakatPayer? @relation("AccountZakatJointPayer", fields: [zakatJointPayerId, familyId], references: [id, familyId], onDelete: SetNull, onUpdate: Cascade, map: "account_zakat_joint_payer_fkey")
+  zakatJointSharePercent Int?
+
   familyId String
   family   Family @relation(fields: [familyId], references: [id])
 
@@ -238,6 +267,8 @@ model Account {
   @@index([familyId, deletedAt])
   @@index([familyId, externalProvider, externalAccountId])
   @@index([counterpartyMerchantId])
+  @@index([zakatPayerId])
+  @@index([zakatJointPayerId])
 }
 
 model Merchant {
@@ -1379,4 +1410,58 @@ model RawMarketDataFetch {
   quotes MarketQuote[]
 
   @@index([provider, fetchedAt(sort: Desc)])
+}
+
+// =============================================================================
+// ADR-0056 — Zakat Maal calculator.
+// =============================================================================
+
+// Per-family Zakat methodology settings. Deliberately configurable, not
+// hard-coded: the ADR found real, longstanding scholarly disagreement on
+// nisabBasis and haulRule (see ADR-0056 "Research summary"). One row per
+// family — created lazily on first save (`upsertZakatSettingsFn`), so a
+// family that never opens Zakat settings has none, and the server/lib layer
+// falls back to the documented defaults ("gold" / "jumhur_continuous").
+model ZakatSettings {
+  id       String @id @default(cuid())
+  familyId String @unique
+
+  // "gold" (default, Maliki/Shafi'i/Hanbali) | "silver" (Hanafi / Qaradawi's
+  // precautionary recommendation) — domain-constrained by a DB CHECK.
+  nisabBasis String @default("gold")
+  // "jumhur_continuous" (default — majority position, nisab held EVERY day of
+  // the Hawl) | "hanafi_start_end" (only the start/end values matter) —
+  // domain-constrained by a DB CHECK.
+  haulRule String @default("jumhur_continuous")
+  // When the household's Hijri Hawl clock began. NULL until the user sets
+  // one (or accepts Permoney's suggested "first crossed nisab" date).
+  hawlStartDate DateTime?
+
+  family Family @relation(fields: [familyId], references: [id], onDelete: Cascade)
+}
+
+// A lightweight, family-scoped "who does this wealth belong to" fact —
+// deliberately NOT a FamilyMember and NOT a User, so it carries zero auth
+// implications and needs no login to exist (ADR-0056 "the real architectural
+// gap"). A family with zero or one row needs no per-account tagging at all;
+// tagging only matters once a SECOND payer exists (see `Account.zakatPayerId`
+// doc comment). `linkedUserId` is a forward-compatible hook for the deferred
+// multi-user "claim your tagged accounts" flow — left unset in Slice 1.
+model ZakatPayer {
+  id          String @id @default(cuid())
+  familyId    String
+  displayName String
+
+  linkedUserId String? @unique
+  linkedUser   User?   @relation("ZakatPayerLinkedUser", fields: [linkedUserId], references: [id], onDelete: SetNull)
+
+  family Family @relation(fields: [familyId], references: [id], onDelete: Cascade)
+
+  primaryAccounts Account[] @relation("AccountZakatPayer")
+  jointAccounts   Account[] @relation("AccountZakatJointPayer")
+
+  // Tenant-safe composite FK target for Account.zakatPayerId/zakatJointPayerId
+  // (Pattern A, ADR-0010).
+  @@unique([id, familyId], map: "ZakatPayer_id_familyId_key")
+  @@index([familyId])
 }

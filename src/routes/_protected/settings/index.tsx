@@ -10,6 +10,7 @@ import {
   Coins,
   FileSpreadsheet,
   ChevronRight,
+  HandCoins,
   type LucideIcon,
 } from "lucide-react"
 
@@ -59,6 +60,12 @@ const FAMILY_LINKS: SettingsLink[] = [
     to: "/settings/rules",
     icon: Wand2,
   },
+  {
+    title: "Zakat Maal",
+    description: "Nisab basis, Hawl rule, and who each account belongs to.",
+    to: "/settings/zakat",
+    icon: HandCoins,
+  },
 ]
 
 const PERSONAL_LINKS: SettingsLink[] = [
@@ -82,6 +89,12 @@ const RELATED_LINKS: SettingsLink[] = [
     description: "Import CSV / QIF statements and review staged rows.",
     to: "/import",
     icon: FileSpreadsheet,
+  },
+  {
+    title: "Zakat calculator",
+    description: "See each payer's Hawl status and amount owed.",
+    to: "/zakat",
+    icon: HandCoins,
   },
 ]
 
