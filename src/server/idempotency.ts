@@ -19,6 +19,13 @@ export async function hashCanonicalPayload(payload: unknown): Promise<string> {
   ).join("")
 }
 
+// NOTE: deliberately NOT the same function as `safeJsonCanonicalize` in
+// middleware/audit.ts. This one SORTS object keys so two request payloads that
+// differ only in key order produce the same hash; the audit variant preserves
+// order and redacts sensitive keys instead. They look similar but have
+// different contracts — merging them would either leak secrets into AuditLog
+// (losing redaction) or make idempotency hashes key-order-dependent (losing
+// conflict detection). See the mirror note in audit.ts.
 export function toCanonicalJson(value: unknown): unknown {
   if (value === null || value === undefined) return null
   if (typeof value === "bigint") return value.toString()

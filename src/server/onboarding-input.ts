@@ -1,14 +1,10 @@
 import { z } from "zod"
 import { CURRENCIES } from "@/lib/data/currencies"
+import { uuidV7Schema } from "./mutation-kit"
 
-export const onboardingIdempotencyKeySchema = z
-  .string()
-  .trim()
-  .regex(
-    /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-    "idempotencyKey must be a UUIDv7"
-  )
-  .transform((value) => value.toLowerCase())
+// The idempotency-key contract is the shared UUIDv7 schema from mutation-kit
+// (trimmed, v7 + variant nibbles enforced, lower-cased). The onboarding input
+// used to carry a second copy of the same regex/message.
 
 // Base reporting currency for the new family. Chosen ONCE at onboarding and
 // immutable thereafter (ADR-0035): it is the anchor of every historical report
@@ -23,7 +19,7 @@ export const onboardingCurrencySchema = z
   })
 
 export const initializeOnboardingInputSchema = z.object({
-  idempotencyKey: onboardingIdempotencyKeySchema,
+  idempotencyKey: uuidV7Schema,
   currency: onboardingCurrencySchema,
 })
 
