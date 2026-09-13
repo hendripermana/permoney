@@ -133,7 +133,7 @@ export interface ZakatPayerResult {
 export interface ComputeZakatParams {
   settings: ZakatSettingsInput
   /**
-   * MUST be non-empty. The server synthesizes an implicit single "Saya"
+   * MUST be non-empty. The server synthesizes an implicit single "Me"
    * payer when the family has never created a real `ZakatPayer` row
    * (ADR-0056: "a family with zero or one ZakatPayer row needs no tagging
    * at all"). Passing `payers.length <= 1` puts every account in
@@ -530,7 +530,7 @@ export function suggestHawlStartDate(params: {
   now?: Date
 }): { hawlStartDate: string; approximate: boolean } | null {
   const { accounts, nisabValueMinor, now = new Date() } = params
-  const payer: ZakatPayerRef = { id: "__implicit__", displayName: "Saya" }
+  const payer: ZakatPayerRef = { id: "__implicit__", displayName: "Me" }
   const singlePayerMode = true
 
   const relevant = resolveRelevantAccounts(accounts, payer, singlePayerMode)
@@ -607,7 +607,7 @@ export function computeZakatForPayers(
   if (payers.length === 0) {
     throw new Error(
       "computeZakatForPayers: at least one payer is required — the server " +
-        "synthesizes an implicit 'Saya' payer when the family has never " +
+        "synthesizes an implicit 'Me' payer when the family has never " +
         "created a real ZakatPayer row (ADR-0056 default-behavior rule)."
     )
   }

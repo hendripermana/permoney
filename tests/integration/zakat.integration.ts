@@ -427,7 +427,7 @@ describe("Zakat Maal calculator (ADR-0056)", () => {
     test("jumhur_continuous: the dip breaks the Hawl — not eligible", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
       await setHawl(owner, { haulRule: "jumhur_continuous" })
-      const p1 = await addPayer(owner, "Saya")
+      const p1 = await addPayer(owner, "Me")
       const { account, dipDate } = await buildDipThenRecover(owner)
       await tag(owner, account.id, p1.id)
 
@@ -442,7 +442,7 @@ describe("Zakat Maal calculator (ADR-0056)", () => {
     test("hanafi_start_end: the SAME dip is irrelevant — eligible", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
       await setHawl(owner, { haulRule: "hanafi_start_end" })
-      const p1 = await addPayer(owner, "Saya")
+      const p1 = await addPayer(owner, "Me")
       const { account } = await buildDipThenRecover(owner)
       await tag(owner, account.id, p1.id)
 
@@ -458,7 +458,7 @@ describe("Zakat Maal calculator (ADR-0056)", () => {
     test("a NEW Hawl starting from the broken date computes correctly on a subsequent call", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
       await setHawl(owner, { haulRule: "jumhur_continuous" })
-      const p1 = await addPayer(owner, "Saya")
+      const p1 = await addPayer(owner, "Me")
       const { dipDate, recoverDate } = await buildDipThenRecover(owner)
 
       const first = await compute(owner, AFTER_ANNIVERSARY)
@@ -644,7 +644,7 @@ describe("Zakat Maal calculator (ADR-0056)", () => {
     test("enabled: false returns disabled regardless of a fully configured Hawl", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
       await setHawl(owner, { enabled: false })
-      await addPayer(owner, "Saya")
+      await addPayer(owner, "Me")
       const result = await compute(owner, AFTER_ANNIVERSARY)
       expect(result.status).toBe("disabled")
     })
@@ -705,7 +705,7 @@ describe("Zakat Maal calculator (ADR-0056)", () => {
     test("settings and payer changes are recorded in AuditLog", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
       await setHawl(owner)
-      await addPayer(owner, "Saya")
+      await addPayer(owner, "Me")
 
       const audits = await harness.withFamily(owner.family.id, (tx) =>
         tx.auditLog.findMany({

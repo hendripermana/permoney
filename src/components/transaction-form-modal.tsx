@@ -157,14 +157,14 @@ const transactionSchema = z.object({
   // client-side as latest ∓ amount (see NewValuationValueField), editable.
   // Left undefined, the server computes the same prefill from fresher data.
   newValuationValue: z.number().optional(),
-  // PER-267 / ADR-0043's PER-264 amendment — the "ubah saldo juga" override.
-  // Undefined (the default) = "Catat (saldo tetap)": submit normally, no
+  // PER-267 / ADR-0043's PER-264 amendment — the "also update balance" override.
+  // Undefined (the default) = "Record (balance unchanged)": submit normally, no
   // balance-override intent at all. Present only when the user explicitly
   // opted in via BackdatedAnchorBanner; the server re-verifies the gating
   // condition independently (see `applyBalanceOverride`,
   // src/server/transactions.ts) rather than trusting this flag alone.
   balanceOverride: balanceOverrideInputSchema.optional(),
-  // Enterprise: Proof of Purchase (URL struk dari S3/R2)
+  // Enterprise: Proof of Purchase (receipt URL from S3/R2)
   attachmentUrl: z.string().optional(),
 })
 
@@ -1424,10 +1424,11 @@ function BackdatedAnchorBannerInner({
       role="status"
     >
       <p>
-        Transaksi ini tetap tercatat untuk riwayat, kategori, dan anggaran —
-        tapi <span className="font-semibold">tidak mengubah saldo</span> akun
-        ini, karena sudah direkonsiliasi pada{" "}
-        <span className="font-medium">{anchorDateLabel}</span> ke{" "}
+        This transaction is still recorded for history, category, and budget —
+        but it{" "}
+        <span className="font-semibold">won&apos;t change the balance</span> of
+        this account, because it was already reconciled on{" "}
+        <span className="font-medium">{anchorDateLabel}</span> to{" "}
         <span className="font-medium">{anchorValueLabel}</span>.
       </p>
 
@@ -1438,7 +1439,7 @@ function BackdatedAnchorBannerInner({
           size="sm"
           onClick={resetOverride}
         >
-          Catat (saldo tetap)
+          Record (balance unchanged)
         </Button>
         <Button
           type="button"
@@ -1447,7 +1448,7 @@ function BackdatedAnchorBannerInner({
           aria-expanded={isExpanded}
           onClick={() => (isExpanded ? resetOverride() : setIsExpanded(true))}
         >
-          Ubah saldo juga
+          Also update balance
         </Button>
       </div>
 
@@ -1456,7 +1457,7 @@ function BackdatedAnchorBannerInner({
           className="flex flex-col gap-2 rounded-md border border-amber-500/30 bg-background/60 p-2"
           data-testid="balance-override-reasons"
         >
-          <p className="text-xs text-muted-foreground">Pilih alasan:</p>
+          <p className="text-xs text-muted-foreground">Choose a reason:</p>
           <div className="flex flex-wrap gap-1.5">
             {BALANCE_OVERRIDE_REASONS.map((option) => (
               <Button
@@ -1475,8 +1476,8 @@ function BackdatedAnchorBannerInner({
           </div>
           {selectedReason === OTHER_BALANCE_OVERRIDE_REASON && (
             <Input
-              placeholder="Ceritakan singkat…"
-              aria-label="Alasan lainnya"
+              placeholder="Briefly explain…"
+              aria-label="Other reason"
               value={otherNote}
               onChange={(e) =>
                 pickReason(OTHER_BALANCE_OVERRIDE_REASON, e.target.value)
@@ -1488,8 +1489,8 @@ function BackdatedAnchorBannerInner({
               !committed ? (
                 <p className="text-xs text-amber-700 dark:text-amber-400">
                   {selectedReason === null
-                    ? "Pilih salah satu alasan untuk melanjutkan."
-                    : "Tulis alasan singkat untuk melanjutkan."}
+                    ? "Choose a reason to continue."
+                    : "Write a brief reason to continue."}
                 </p>
               ) : null
             }

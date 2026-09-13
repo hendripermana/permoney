@@ -1351,7 +1351,7 @@ async function applyBalanceOverride(
     auditCtx,
     "ground_truth",
     // PER-267 acceptance criteria: the reason chip (and free text for
-    // "Lainnya") must be queryable from the audit trail. Folded into this
+    // "Other") must be queryable from the audit trail. Folded into this
     // Valuation's own `AuditLog.after` payload — see `createValuationWithinTx`.
     {
       ticketRef: "PER-267",

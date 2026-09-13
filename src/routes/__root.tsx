@@ -15,12 +15,12 @@ import { useMountEffect } from "@/hooks/use-mount-effect"
 
 import appCss from "../styles.css?url"
 
-// 1. Inisialisasi Markas Besar Cache - Menggunakan Factory Singleton
+// 1. Initialize the shared query client cache - singleton factory
 const queryClient = getQueryClient()
 
 // 1.5. Config Devtools Lazy Loading (Standard TanStack Best Practice)
-// Memastikan DevTools hanya diload di mode development (tidak mengotori bundle production)
-// DevTools untuk Router dilepas sementara untuk resolusi dependensi
+// Ensures DevTools is only loaded in development mode (doesn't pollute the production bundle)
+// Router DevTools temporarily removed pending dependency resolution
 // const TanStackRouterDevtools = ...
 const ReactQueryDevtools = import.meta.env.PROD
   ? () => null
@@ -39,15 +39,13 @@ export const Route = createRootRoute({
     ],
     links: [{ rel: "stylesheet", href: appCss }],
   }),
-  // 2. KUNCI ARSITEKTURNYA DI SINI: Kita kasih tahu router untuk pakai RootComponent
+  // 2. The key architectural decision is here: tell the router to use RootComponent
   component: RootComponent,
-  // 🚀 BEST PRACTICE: Halaman 404 resmi kita
+  // 🚀 BEST PRACTICE: our official 404 page
   notFoundComponent: () => (
     <div className="flex min-h-screen flex-col items-center justify-center p-4 text-center">
       <h1 className="text-4xl font-semibold text-red-500">404</h1>
-      <p className="text-lg text-gray-600">
-        Bro, halamannya nggak ada (Not Found)!
-      </p>
+      <p className="text-lg text-gray-600">This page doesn't exist.</p>
     </div>
   ),
   // 🛡️ Last-resort ErrorBoundary for the entire route tree.
@@ -81,10 +79,10 @@ function RootErrorComponent({ error, reset }: ErrorComponentProps) {
   return (
     <RootDocument>
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
-        <h1 className="text-3xl font-semibold">Ada yang salah 😵</h1>
+        <h1 className="text-3xl font-semibold">Something went wrong 😵</h1>
         <p className="max-w-prose text-muted-foreground">
-          Aplikasi mengalami error tak terduga. Tim sudah otomatis dapat
-          notifikasi. Coba reset, atau refresh halaman.
+          The app ran into an unexpected error. Try resetting, or reload the
+          page.
         </p>
         <pre className="max-w-prose rounded-md bg-muted p-3 text-left text-sm whitespace-pre-wrap">
           {message}
@@ -97,7 +95,7 @@ function RootErrorComponent({ error, reset }: ErrorComponentProps) {
               window.location.href = "/"
             }}
           >
-            Ke beranda
+            Go home
           </Button>
         </div>
       </div>
@@ -116,7 +114,7 @@ function RootComponent() {
 
   return (
     <RootDocument>
-      {/* 3. BUNGKUS APLIKASIMU DENGAN PROVIDER */}
+      {/* 3. Wrap the app with providers */}
       <QueryClientProvider client={queryClient}>
         {/* next-themes drives the `.dark` class on <html>; the user's persisted
             choice (User.theme) is restored client-side via the profile pane.
@@ -132,7 +130,7 @@ function RootComponent() {
               toast.success/error across the app (import, smart rules, settings)
               is a silent no-op. */}
           <Toaster richColors closeButton />
-          {/* Render lazy devtools hanya di dev environment */}
+          {/* Render lazy devtools only in the dev environment */}
           <React.Suspense fallback={null}>
             {/* <TanStackRouterDevtools position="bottom-right" /> */}
             <ReactQueryDevtools />

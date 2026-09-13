@@ -62,7 +62,8 @@ const FAMILY_LINKS: SettingsLink[] = [
   },
   {
     title: "Zakat Maal",
-    description: "Nisab basis, Hawl rule, and who each account belongs to.",
+    description:
+      "Nisab (zakat threshold) basis, Hawl (holding-period) rule, and who each account belongs to.",
     to: "/settings/zakat",
     icon: HandCoins,
   },

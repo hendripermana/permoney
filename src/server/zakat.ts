@@ -1156,7 +1156,7 @@ export async function computeZakatForFamily({
     const payers =
       payerRows.length > 0
         ? payerRows.map(serializeZakatPayer)
-        : [{ id: "__implicit__", displayName: "Saya", linkedUserId: null }]
+        : [{ id: "__implicit__", displayName: "Me", linkedUserId: null }]
 
     const calculationAccounts = await loadCalculationAccountsForFamily(
       tx,

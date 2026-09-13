@@ -163,9 +163,9 @@ test.describe("backdated transaction vs. ground_truth anchor banner (PER-267)", 
     await pickTransactionDate(dialog, twoMonthsAgoIso(), 2)
 
     await expect(dialog.getByTestId("backdated-anchor-banner")).toBeVisible()
-    await dialog.getByRole("button", { name: "Ubah saldo juga" }).click()
+    await dialog.getByRole("button", { name: "Also update balance" }).click()
     await expect(dialog.getByTestId("balance-override-reasons")).toBeVisible()
-    await dialog.getByRole("button", { name: "Lupa dicatat" }).click()
+    await dialog.getByRole("button", { name: "Forgot to log it" }).click()
 
     await dialog.getByRole("button", { name: "Save Transaction" }).click()
     await expect(page.getByRole("dialog")).toHaveCount(0)
