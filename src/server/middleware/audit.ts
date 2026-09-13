@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client"
+import { getTrustedClientIp } from "./request-ip"
 
 export type AuditAction = "create" | "update" | "soft_delete" | "delete"
 
@@ -92,10 +93,7 @@ export async function createAuditContext(
     userAgent = req.headers.get("user-agent")
     requestId = req.headers.get("x-request-id")
 
-    ip =
-      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-      req.headers.get("x-real-ip") ||
-      null
+    ip = getTrustedClientIp(req.headers)
   } catch {
     // Abaikan jika tidak berjalan dalam context HTTP request (misalnya unit test)
   }

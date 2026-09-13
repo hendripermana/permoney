@@ -1,5 +1,6 @@
 import { Ratelimit } from "@upstash/ratelimit"
 import { Redis } from "@upstash/redis"
+import { getTrustedClientIp } from "./request-ip"
 
 export class RateLimitError extends Error {
   public remaining: number
@@ -114,8 +115,7 @@ export async function checkRateLimit(
   _key?: string,
   type: "login" | "signup" = "login"
 ): Promise<void> {
-  const ip =
-    request.headers.get("x-forwarded-for")?.split(",")[0] || "127.0.0.1"
+  const ip = getTrustedClientIp(request.headers) || "127.0.0.1"
   const identifier = _key ? `${ip}:${_key}` : ip
 
   const limiter = type === "signup" ? signupLimiter : loginLimiter
