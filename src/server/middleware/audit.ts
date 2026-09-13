@@ -30,6 +30,12 @@ const SENSITIVE_KEY_PATTERN = /password|token|secret/i
  * Mengonversi nilai secara aman ke format yang kompatibel dengan JSON (tidak ada BigInt),
  * menangani Date, undefined, serta menyensor data sensitif (password, token, dll).
  */
+// NOTE: deliberately NOT the same function as `toCanonicalJson` in
+// server/idempotency.ts, despite the similar value-conversion skeleton. Audit
+// snapshots must REDACT sensitive keys and preserve insertion order; the
+// idempotency variant sorts keys for stable payload hashing instead. Merging
+// them would either leak secrets into AuditLog or make idempotency hashes
+// key-order-dependent. See the mirror note in idempotency.ts.
 export function safeJsonCanonicalize(val: unknown): unknown {
   if (val === null || val === undefined) {
     return null
