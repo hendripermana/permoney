@@ -100,6 +100,11 @@ interface CreateTransactionInput {
 }
 
 export interface TestFactories {
+  authenticateUser: (user: User) => Promise<{
+    request: Request
+    serverContext: AuthenticatedServerContext
+    session: Session
+  }>
   createAccount: (input: CreateAccountInput) => Promise<Account>
   createAuthenticatedOnboardedUser: () => Promise<AuthenticatedOnboardedUser>
   createAuthenticatedUserWithoutFamily: () => Promise<AuthenticatedUserWithoutFamily>
@@ -320,6 +325,7 @@ export function createTestFactories(
   }
 
   return {
+    authenticateUser,
     createAccount,
     createAuthenticatedOnboardedUser,
     createAuthenticatedUserWithoutFamily,

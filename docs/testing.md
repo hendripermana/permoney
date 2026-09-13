@@ -12,7 +12,16 @@ vp run test:unit:coverage    # unit suite plus M2 finance-domain coverage gate
 vp run test:integration      # real Postgres integration suite
 vp run test:e2e              # Playwright browser E2E suite
 vp run test:ci               # CI-safe unit + integration gate
+vp run test:all              # the full CI gate, run locally in one command
 ```
+
+`test:all` chains the same five jobs CI runs — `check`, `test:unit:coverage`,
+`test:integration`, `test:e2e`, and `build` — so a developer can reproduce the
+merge gate before pushing. It is the broadest local command, not the fastest:
+it needs the local Postgres (`vp run db:up`), a Playwright Chromium install
+(`vp exec playwright install chromium`), and the same
+`PERMONEY_TEST_ADMIN_PASSWORD` the integration/E2E suites use. `test:ci` keeps
+its narrower unit+integration scope for tooling that depends on it.
 
 Unit tests must keep importing Vitest utilities from `vite-plus/test`.
 Integration tests use their own config at `vitest.integration.config.ts` and
@@ -107,11 +116,26 @@ the UI and verify the canonical onboarding contract: signup creates an
 authenticated user without a family, guided onboarding creates the family, and
 protected routes redirect until onboarding is complete.
 
-The suite fails if the browser emits console/page errors containing known
-server-client boundary regressions such as `SECURITY BREACH`,
-`PrismaClient is unable to run in this browser`, `renderRouterToString`,
-`node:stream/web`, `react-dom/server.browser.js`, or
-`Calling 'require' for '.prisma/client/index-browser'`.
+### What the browser error gate does and does not guarantee
+
+Every spec using `tests/e2e/support/fixtures.ts` fails on:
+
+- **any uncaught page exception** (`pageerror`), regardless of message — an
+  unexpected throw is treated as a regression by itself; and
+- **`console.error` text containing a known server/client boundary fragment**
+  (`SECURITY BREACH`, `PrismaClient is unable to run in this browser`,
+  `renderRouterToString`, `node:stream/web`, `react-dom/server.browser.js`,
+  `Calling 'require' for '.prisma/client/index-browser'`, hydration-mismatch
+  text, and the PER-187 `reading '_nonReactive'` symptom).
+
+What it does **not** guarantee: a silent leak that neither throws nor logs a
+denylisted phrase (e.g. server-only data reaching the bundle without being
+executed, or a `console.log`/`console.warn` leak). Console text is matched
+against a fixed fragment list, so new wording for a known class of bug is only
+caught if it throws. Treat this gate as a strong regression net for the failures
+Permoney has actually hit, not as a general proof that the client bundle is
+clean; bundle/import-boundary correctness is enforced at build time by the
+TanStack Start server-only import fence and the `*.server.ts` convention.
 
 ## Postgres Integration Harness
 

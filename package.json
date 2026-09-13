@@ -12,6 +12,7 @@
     "test:integration": "vp test run --config vitest.integration.config.ts",
     "test:e2e": "vp exec playwright test",
     "test:ci": "vp run test:unit:coverage && vp run test:integration",
+    "test:all": "vp run check && vp run test:unit:coverage && vp run test:integration && vp run test:e2e && vp run build",
     "test:watch": "vp test watch",
     "test:related": "vp test related",
     "lint": "vp lint",
