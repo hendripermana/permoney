@@ -387,21 +387,48 @@ export async function createImportBatchForFamily({
   const seenFingerprints = new Set<string>()
   const prepared: Prisma.RawImportedTransactionCreateManyInput[] = []
 
-  for (const row of data.rows) {
-    const currency = currencyByAccount.get(row.accountId) ?? "IDR"
-    const signedAmount = signImportAmount(row.type as ImportRowType, row.amount)
-    const day = importCalendarDay(row.date, timezone)
-    const normalizedDescription = normalizeImportDescription(row.description)
-    const fingerprint = await computeRowFingerprint({
-      familyId,
-      accountId: row.accountId,
-      calendarDay: day,
-      signedAmountMinorUnits: signedAmount,
-      currency,
-      normalizedDescription,
-      externalId: row.externalId ?? null,
+  // Fingerprints are pure Web-Crypto SHA-256 hashes with no shared mutable
+  // state, so hash every row concurrently and await once, instead of awaiting
+  // one digest per row serially. The classification loop below stays
+  // sequential and in row order — that ordering is what makes the in-batch
+  // `seenFingerprints` dedup deterministic.
+  const classifiedRows = await Promise.all(
+    data.rows.map(async (row) => {
+      const currency = currencyByAccount.get(row.accountId) ?? "IDR"
+      const signedAmount = signImportAmount(
+        row.type as ImportRowType,
+        row.amount
+      )
+      const day = importCalendarDay(row.date, timezone)
+      const normalizedDescription = normalizeImportDescription(row.description)
+      const fingerprint = await computeRowFingerprint({
+        familyId,
+        accountId: row.accountId,
+        calendarDay: day,
+        signedAmountMinorUnits: signedAmount,
+        currency,
+        normalizedDescription,
+        externalId: row.externalId ?? null,
+      })
+      return {
+        row,
+        currency,
+        signedAmount,
+        day,
+        normalizedDescription,
+        fingerprint,
+      }
     })
+  )
 
+  for (const {
+    row,
+    currency,
+    signedAmount,
+    day,
+    normalizedDescription,
+    fingerprint,
+  } of classifiedRows) {
     // Dedup verdict (ADR-0039 §4, amended by PER-199 §1). Provider identity
     // (externalId) is a stronger, exact signal than the content-tuple
     // fingerprint — a row that already has a durable binding to a live-or-
@@ -549,16 +576,24 @@ async function loadCanonicalDedupIndex(
 
   const fingerprintToTxnId = new Map<string, string>()
   const coarseToTxnId = new Map<string, string>()
-  for (const txn of existing) {
-    const day = importCalendarDay(txn.date, timezone)
-    const fingerprint = await computeRowFingerprint({
-      familyId,
-      accountId: txn.accountId,
-      calendarDay: day,
-      signedAmountMinorUnits: txn.amount,
-      currency: txn.currency,
-      normalizedDescription: normalizeImportDescription(txn.description),
+  // Same parallel-hash treatment as the staging pass: compute every existing
+  // row's fingerprint concurrently, then fill the maps sequentially so the
+  // documented "first row wins" behaviour is unchanged.
+  const hashedExisting = await Promise.all(
+    existing.map(async (txn) => {
+      const day = importCalendarDay(txn.date, timezone)
+      const fingerprint = await computeRowFingerprint({
+        familyId,
+        accountId: txn.accountId,
+        calendarDay: day,
+        signedAmountMinorUnits: txn.amount,
+        currency: txn.currency,
+        normalizedDescription: normalizeImportDescription(txn.description),
+      })
+      return { txn, day, fingerprint }
     })
+  )
+  for (const { txn, day, fingerprint } of hashedExisting) {
     if (!fingerprintToTxnId.has(fingerprint))
       fingerprintToTxnId.set(fingerprint, txn.id)
     const coarse = coarseKey(txn.accountId, day, txn.amount)
