@@ -1,3 +1,0 @@
-ancestorEntries = []
-ourEntries = ["docs/adr/0056-zakat-maal-calculator.md"]
-theirEntries = ["docs/adr/0056-zakat-maal-calculator.md"]
