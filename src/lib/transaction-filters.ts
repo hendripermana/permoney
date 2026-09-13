@@ -184,6 +184,42 @@ export function applyFilters<T extends FilterableTransaction>(
 
   return result
 }
+
+// === PER-ACCOUNT INDEX ===
+// One pass building accountId -> transactions, so consumers that need the
+// per-account ledger never re-run applyFilters() over the whole list once per
+// account (O(accounts × transactions)).
+
+/**
+ * Index `transactions` by every account they touch, in ONE pass: the source
+ * `accountId` and, for transfers, the destination `toAccountId` — the same
+ * "either leg" rule as `applyFilters`. A transaction whose two legs point at
+ * the same account is indexed once per account, and each bucket preserves the
+ * input order, so `index.get(id)` is element-for-element identical to
+ * `applyFilters(transactions, { accounts: [id] })`, just computed once for all
+ * accounts instead of once per account.
+ */
+export function indexTransactionsByAccount<T extends FilterableTransaction>(
+  transactions: Array<T>
+): Map<string, T[]> {
+  const byAccount = new Map<string, T[]>()
+  const append = (accountId: string, transaction: T) => {
+    const bucket = byAccount.get(accountId)
+    if (bucket) bucket.push(transaction)
+    else byAccount.set(accountId, [transaction])
+  }
+  for (const transaction of transactions) {
+    append(transaction.accountId, transaction)
+    if (
+      transaction.toAccountId != null &&
+      transaction.toAccountId !== transaction.accountId
+    ) {
+      append(transaction.toAccountId, transaction)
+    }
+  }
+  return byAccount
+}
+
 // === SEARCH FUNCTION ===
 // Mencari di description, merchant name, dan notes (case-insensitive)
 

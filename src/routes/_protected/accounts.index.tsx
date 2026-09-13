@@ -59,7 +59,7 @@ import {
   type DriftRecord,
 } from "@/lib/account-collections"
 import { transactionCollection } from "@/lib/collections"
-import { applyFilters } from "@/lib/transaction-filters"
+import { indexTransactionsByAccount } from "@/lib/transaction-filters"
 import { computeAccountRunway, type AccountRunway } from "@/lib/account-runway"
 import { accountSupportsReserve } from "@/lib/account-reserve"
 import {
@@ -205,14 +205,17 @@ function AccountsPage() {
 
   // PER-222 — per-account runway forecast (liquid cash-like ASSET only — see
   // accountSupportsReserve's doc comment for why INVESTMENT is excluded even
-  // though it is `transaction_flow`), using the SAME applyFilters lens as the
-  // detail page so the badge and the detail panel agree.
+  // though it is `transaction_flow`), using the SAME per-account ledger lens as
+  // the detail page so the badge and the detail panel agree. The ledger is
+  // indexed by account ONCE (not re-filtered per account) — see
+  // indexTransactionsByAccount for the equivalence with `applyFilters`.
   const runwayByAccount = React.useMemo(() => {
     const map = new Map<string, AccountRunway>()
     if (!allTransactions) return map
+    const ledgerByAccount = indexTransactionsByAccount(allTransactions)
     for (const a of listedAccounts) {
       if (!accountSupportsReserve(a)) continue
-      const ledger = applyFilters(allTransactions, { accounts: [a.id] })
+      const ledger = ledgerByAccount.get(a.id) ?? []
       map.set(
         a.id,
         computeAccountRunway(
