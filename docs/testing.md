@@ -116,11 +116,26 @@ the UI and verify the canonical onboarding contract: signup creates an
 authenticated user without a family, guided onboarding creates the family, and
 protected routes redirect until onboarding is complete.
 
-The suite fails if the browser emits console/page errors containing known
-server-client boundary regressions such as `SECURITY BREACH`,
-`PrismaClient is unable to run in this browser`, `renderRouterToString`,
-`node:stream/web`, `react-dom/server.browser.js`, or
-`Calling 'require' for '.prisma/client/index-browser'`.
+### What the browser error gate does and does not guarantee
+
+Every spec using `tests/e2e/support/fixtures.ts` fails on:
+
+- **any uncaught page exception** (`pageerror`), regardless of message — an
+  unexpected throw is treated as a regression by itself; and
+- **`console.error` text containing a known server/client boundary fragment**
+  (`SECURITY BREACH`, `PrismaClient is unable to run in this browser`,
+  `renderRouterToString`, `node:stream/web`, `react-dom/server.browser.js`,
+  `Calling 'require' for '.prisma/client/index-browser'`, hydration-mismatch
+  text, and the PER-187 `reading '_nonReactive'` symptom).
+
+What it does **not** guarantee: a silent leak that neither throws nor logs a
+denylisted phrase (e.g. server-only data reaching the bundle without being
+executed, or a `console.log`/`console.warn` leak). Console text is matched
+against a fixed fragment list, so new wording for a known class of bug is only
+caught if it throws. Treat this gate as a strong regression net for the failures
+Permoney has actually hit, not as a general proof that the client bundle is
+clean; bundle/import-boundary correctness is enforced at build time by the
+TanStack Start server-only import fence and the `*.server.ts` convention.
 
 ## Postgres Integration Harness
 
