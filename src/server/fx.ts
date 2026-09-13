@@ -419,6 +419,75 @@ export const getFxOverviewFn = createServerFn({ method: "GET" })
   })
 
 // =============================================================================
+// LIST LATEST FX RATE SNAPSHOTS (one row per directed pair)
+// =============================================================================
+
+/**
+ * Latest-only variant of `getFxOverviewForFamily`, for consumers that need the
+ * CURRENT rate per currency pair (e.g. the net-worth-in-base card, the
+ * transactions base-currency label) and would otherwise pull the family's
+ * entire rate history across the wire and de-duplicate it in the browser.
+ *
+ * Returns the same `FxOverview` shape with at most one entry per
+ * `(fromCurrency, toCurrency)`: the row with the greatest `asOfDate` for that
+ * pair. Consumers that need history (the Currencies & FX history table) keep
+ * using `getFxOverviewForFamily` / `listFxRateSnapshotsForFamily`.
+ */
+export async function getLatestFxOverviewForFamily({
+  familyId,
+  userId,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  familyId: string
+  userId: string
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<FxOverview> {
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
+    const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
+    // `_max(asOfDate)` per directed pair (served by the
+    // [familyId, fromCurrency, toCurrency, asOfDate desc] index), then fetch
+    // exactly those rows — two cheap queries instead of reading every snapshot
+    // the family ever recorded.
+    const latestDates = await tx.fxRateSnapshot.groupBy({
+      by: ["fromCurrency", "toCurrency"],
+      where: { familyId },
+      _max: { asOfDate: true },
+    })
+    const latestPairs = latestDates.flatMap((pair) =>
+      pair._max.asOfDate === null
+        ? []
+        : [
+            {
+              fromCurrency: pair.fromCurrency,
+              toCurrency: pair.toCurrency,
+              asOfDate: pair._max.asOfDate,
+            },
+          ]
+    )
+    if (latestPairs.length === 0) return { baseCurrency, rates: [] }
+
+    const rows = await tx.fxRateSnapshot.findMany({
+      where: { familyId, OR: latestPairs },
+      orderBy: [
+        { fromCurrency: "asc" },
+        { toCurrency: "asc" },
+        { asOfDate: "desc" },
+      ],
+    })
+    return { baseCurrency, rates: rows.map(serializeSnapshot) }
+  })
+}
+
+export const getLatestFxOverviewFn = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .handler(async ({ context }) => {
+    return await getLatestFxOverviewForFamily({
+      familyId: context.familyId,
+      userId: context.user.id,
+    })
+  })
+
+// =============================================================================
 // REBUILD BASE PROJECTIONS (derived, rebuildable — ADR-0035 §4)
 // =============================================================================
 

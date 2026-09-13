@@ -81,7 +81,7 @@ import {
 } from "@/lib/account-list-tools"
 import { formatCurrency } from "@/lib/currency"
 import { normalizeNetWorthAt, type PointBalance } from "@/lib/net-worth"
-import { getFxOverviewFn } from "@/server/fx"
+import { getLatestFxOverviewFn } from "@/server/fx"
 import { cn } from "@/lib/utils"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import {
@@ -800,9 +800,12 @@ function NetWorthInBaseCard({
   // construction.
   personDebtAccounts: ReadonlyArray<AccountRecord>
 }) {
+  // Latest-only FX overview: this card converts each account's native balance
+  // to the family base, so it only needs the newest snapshot per currency
+  // pair. The full-history ["fx-overview"] key stays with Currencies & FX.
   const { data: fxOverview } = useQuery({
-    queryKey: ["fx-overview"],
-    queryFn: async () => await getFxOverviewFn(),
+    queryKey: ["fx-overview-latest"],
+    queryFn: async () => await getLatestFxOverviewFn(),
   })
 
   const base = fxOverview?.baseCurrency
@@ -814,7 +817,9 @@ function NetWorthInBaseCard({
         unconverted: [] as Array<{ currency: string; native: bigint }>,
         personDebtNet: null as bigint | null,
       }
-    // rates are sorted asOfDate DESC, so the first per `fromCurrency` is latest.
+    // The overview is latest-only (one row per pair), so this builds the
+    // fromCurrency -> rate lookup; the first-wins guard keeps it correct even
+    // if a pair ever appears twice.
     const latest = new Map<string, bigint>()
     for (const rate of rates ?? []) {
       if (rate.toCurrency !== base) continue

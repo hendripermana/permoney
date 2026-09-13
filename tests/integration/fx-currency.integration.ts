@@ -15,6 +15,8 @@ import {
   updateTransactionForFamily,
 } from "@/server/transactions"
 import {
+  getFxOverviewForFamily,
+  getLatestFxOverviewForFamily,
   listFxRateSnapshotsForFamily,
   rebuildFxProjectionsForFamily,
   setBaseCurrencyForFamily,
@@ -443,6 +445,68 @@ describe("currency + FX snapshots + cross-currency transfers (PER-147 / ADR-0035
     })
     expect(rows).toHaveLength(1)
     expect((await readTx(owner, created.id)).baseAmount).toBe(-82_500_000n)
+  })
+
+  // ---- latest-only overview --------------------------------------------------
+
+  test("latest-only overview returns exactly the newest row per directed pair", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const other = await factories.createAuthenticatedOnboardedUser()
+    await forceBase(owner, "IDR")
+    await forceBase(other, "IDR")
+
+    await seedRate(owner, "USD", "IDR", "16000", "2026-01-01")
+    await seedRate(owner, "USD", "IDR", "16500", "2026-02-01")
+    await seedRate(owner, "EUR", "IDR", "17000", "2026-01-15")
+    await seedRate(owner, "USD", "EUR", "0.92", "2025-12-01")
+    // Another family's newer rate must never leak into this family's overview.
+    await seedRate(other, "USD", "IDR", "99000", "2026-03-01")
+
+    // Full history is unaffected by the new read path.
+    const full = await getFxOverviewForFamily({
+      familyId: owner.family.id,
+      userId: owner.user.id,
+    })
+    expect(full.rates).toHaveLength(4)
+
+    const latest = await getLatestFxOverviewForFamily({
+      familyId: owner.family.id,
+      userId: owner.user.id,
+    })
+    expect(latest.baseCurrency).toBe("IDR")
+    // One row per directed pair, in the same pair order the full overview uses.
+    expect(
+      latest.rates.map(
+        (rate) => `${rate.fromCurrency}->${rate.toCurrency}@${rate.asOfDate}`
+      )
+    ).toEqual([
+      "EUR->IDR@2026-01-15",
+      "USD->EUR@2025-12-01",
+      "USD->IDR@2026-02-01",
+    ])
+    // Each returned row is the same snapshot the full history has for that date.
+    for (const rate of latest.rates) {
+      const newestInHistory = full.rates.find(
+        (candidate) =>
+          candidate.fromCurrency === rate.fromCurrency &&
+          candidate.toCurrency === rate.toCurrency &&
+          candidate.asOfDate === rate.asOfDate
+      )
+      expect(newestInHistory?.id).toBe(rate.id)
+      expect(newestInHistory?.rateScaled).toBe(rate.rateScaled)
+    }
+  })
+
+  test("latest-only overview is empty when the family has no rates", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await forceBase(owner, "IDR")
+
+    const latest = await getLatestFxOverviewForFamily({
+      familyId: owner.family.id,
+      userId: owner.user.id,
+    })
+
+    expect(latest).toEqual({ baseCurrency: "IDR", rates: [] })
   })
 
   // ---- base-currency change --------------------------------------------------
