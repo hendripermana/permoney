@@ -1,4 +1,6 @@
 import * as React from "react"
+import { useMutation, useQuery } from "@tanstack/react-query"
+import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -34,12 +36,14 @@ import {
   accountSupportsReserve,
   isLiquidCashAccountType,
 } from "@/lib/account-reserve"
+import { accountCollection } from "@/lib/account-collections"
 import type { AccountRecord } from "@/lib/account-collections"
 import { CURRENCY_OPTIONS } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
 import { parseMoneyInput, toDecimalString } from "@/lib/money"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import { createAccountFn, updateAccountFn } from "@/server/accounts"
+import { listZakatPayersFn, setAccountZakatOwnershipFn } from "@/server/zakat"
 
 // PER-221 — shared account create/edit dialog. Extracted verbatim from
 // accounts.index.tsx so BOTH the list route and the per-account detail route can
@@ -571,6 +575,8 @@ export function AccountFormDialog({
             </div>
           ) : null}
 
+          {editing ? <ZakatOwnershipSection account={editing} /> : null}
+
           {error ? (
             <p className="text-sm text-destructive" role="alert">
               {error}
@@ -593,5 +599,154 @@ export function AccountFormDialog({
         </form>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// =============================================================================
+// ADR-0056 — Zakat Maal per-account ownership tagging.
+//
+// Deliberately its OWN, self-contained save action (a direct call to
+// `setAccountZakatOwnershipFn`), separate from the main account form's
+// submit — this field-set is orthogonal to everything else on Account (name,
+// balance, product metadata) and has its own audit trail on the server. Per
+// ADR-0056's default-behavior rule, this section renders NOTHING until a
+// SECOND ZakatPayer exists — the common single-person household never sees
+// it, no clutter for the 95% case.
+// =============================================================================
+
+const ZAKAT_NO_JOINT = "__none__"
+
+function ZakatOwnershipSection({ account }: { account: AccountRecord }) {
+  const { data: payers = [] } = useQuery({
+    queryKey: ["zakat-payers"],
+    queryFn: () => listZakatPayersFn(),
+  })
+
+  const [zakatPayerId, setZakatPayerId] = React.useState<string>(
+    account.zakatPayerId ?? ZAKAT_NO_JOINT
+  )
+  const [zakatJointPayerId, setZakatJointPayerId] = React.useState<string>(
+    account.zakatJointPayerId ?? ZAKAT_NO_JOINT
+  )
+  const [zakatJointSharePercent, setZakatJointSharePercent] = React.useState(
+    account.zakatJointSharePercent != null
+      ? String(account.zakatJointSharePercent)
+      : "50"
+  )
+
+  const save = useMutation({
+    mutationFn: () =>
+      setAccountZakatOwnershipFn({
+        data: {
+          accountId: account.id,
+          zakatPayerId: zakatPayerId === ZAKAT_NO_JOINT ? null : zakatPayerId,
+          zakatJointPayerId:
+            zakatJointPayerId === ZAKAT_NO_JOINT ? null : zakatJointPayerId,
+          zakatJointSharePercent:
+            zakatJointPayerId === ZAKAT_NO_JOINT
+              ? null
+              : Number(zakatJointSharePercent),
+          idempotencyKey: createUuidV7(),
+        },
+      }),
+    onSuccess: () => {
+      // `accountCollection` (TanStack DB, "accounts_live") is the real
+      // source the edit dialog itself is fed from — a plain react-query
+      // `invalidateQueries` never touches it (CLAUDE.md §5B).
+      void accountCollection.utils.refetch()
+      toast.success("Zakat ownership saved.")
+    },
+    onError: (error) =>
+      toast.error(
+        error instanceof Error ? error.message : "Could not save ownership."
+      ),
+  })
+
+  // ADR-0056 default-behavior rule: zero-or-one payer needs no tagging UI at
+  // all — every account already counts 100% toward that one payer.
+  if (payers.length < 2) return null
+
+  const dirty =
+    zakatPayerId !== (account.zakatPayerId ?? ZAKAT_NO_JOINT) ||
+    zakatJointPayerId !== (account.zakatJointPayerId ?? ZAKAT_NO_JOINT) ||
+    (zakatJointPayerId !== ZAKAT_NO_JOINT &&
+      Number(zakatJointSharePercent) !== (account.zakatJointSharePercent ?? 50))
+
+  return (
+    <div className="flex flex-col gap-3 rounded-md border p-3">
+      <Label>Zakat ownership</Label>
+      <p className="text-xs text-muted-foreground">
+        Who this account's wealth belongs to, for Zakat purposes. Leave unset to
+        exclude it until it's tagged.
+      </p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="zakat-payer" className="text-xs">
+            Owner
+          </Label>
+          <Select value={zakatPayerId} onValueChange={setZakatPayerId}>
+            <SelectTrigger id="zakat-payer">
+              <SelectValue placeholder="Untagged" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ZAKAT_NO_JOINT}>Untagged</SelectItem>
+              {payers.map((payer) => (
+                <SelectItem key={payer.id} value={payer.id}>
+                  {payer.displayName}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="zakat-joint-payer" className="text-xs">
+            Joint co-owner (optional)
+          </Label>
+          <Select
+            value={zakatJointPayerId}
+            onValueChange={setZakatJointPayerId}
+            disabled={zakatPayerId === ZAKAT_NO_JOINT}
+          >
+            <SelectTrigger id="zakat-joint-payer">
+              <SelectValue placeholder="None" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ZAKAT_NO_JOINT}>None</SelectItem>
+              {payers
+                .filter((payer) => payer.id !== zakatPayerId)
+                .map((payer) => (
+                  <SelectItem key={payer.id} value={payer.id}>
+                    {payer.displayName}
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      {zakatJointPayerId !== ZAKAT_NO_JOINT ? (
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="zakat-joint-share" className="text-xs">
+            Joint co-owner's share (%, 1-99 — default 50)
+          </Label>
+          <Input
+            id="zakat-joint-share"
+            type="number"
+            min={1}
+            max={99}
+            value={zakatJointSharePercent}
+            onChange={(event) => setZakatJointSharePercent(event.target.value)}
+          />
+        </div>
+      ) : null}
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        disabled={!dirty || save.isPending}
+        onClick={() => save.mutate()}
+      >
+        Save ownership
+      </Button>
+    </div>
   )
 }

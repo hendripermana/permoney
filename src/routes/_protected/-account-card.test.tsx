@@ -40,6 +40,9 @@ const account: AccountRecord = {
   interestRateBps: null,
   counterpartyMerchantId: null,
   reserveBalance: null,
+  zakatPayerId: null,
+  zakatJointPayerId: null,
+  zakatJointSharePercent: null,
 }
 
 function renderCard(drift: ReadonlyArray<DriftRecord>) {

@@ -330,6 +330,13 @@ export interface SerializedAccount {
   // PER-217 — reserve/minimum balance in MINOR UNITS (digit-string), or null
   // when unset. Ledger-neutral; only feeds the "available" (safe-to-spend) view.
   reserveBalance: string | null
+  // ADR-0056 — Zakat Maal ownership tagging. NULL/NULL/NULL is the common
+  // case (see Account.zakatPayerId's doc comment in schema.prisma). Exposed
+  // here purely for display/edit — reads never enforce or interpret it;
+  // `src/server/zakat.ts` owns the actual calculation.
+  zakatPayerId: string | null
+  zakatJointPayerId: string | null
+  zakatJointSharePercent: number | null
 }
 
 function serializeAccount(account: Account): SerializedAccount {
@@ -356,6 +363,9 @@ function serializeAccount(account: Account): SerializedAccount {
     interestRateBps: account.interestRateBps,
     counterpartyMerchantId: account.counterpartyMerchantId,
     reserveBalance: account.reserveBalance?.toString() ?? null,
+    zakatPayerId: account.zakatPayerId,
+    zakatJointPayerId: account.zakatJointPayerId,
+    zakatJointSharePercent: account.zakatJointSharePercent,
   }
 }
 
