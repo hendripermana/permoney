@@ -41,7 +41,7 @@ import {
   bulkUpdateTransactionsFn,
   getTransactionFormData,
 } from "@/server/transactions"
-import { getFxOverviewFn } from "@/server/fx"
+import { getLatestFxOverviewFn } from "@/server/fx"
 import { formatCurrency } from "@/lib/currency"
 import { type Money } from "@/lib/money"
 import { computeTransactionKpiTotals } from "@/lib/transaction-kpi"
@@ -180,11 +180,13 @@ function TransactionsPage() {
     queryFn: () => getTransactionFormData(),
   })
 
-  // Family base currency — same shared query key/pattern as
-  // accounts.index.tsx / currencies.tsx, so it's cache-shared across routes.
+  // Family base currency — latest-only FX overview (this route only needs the
+  // base currency, never a rate). Deliberately a different query key from the
+  // full-history ["fx-overview"] cache used by currencies.tsx, so this route
+  // cannot force history over the wire.
   const { data: fxOverview } = useQuery({
-    queryKey: ["fx-overview"],
-    queryFn: async () => await getFxOverviewFn(),
+    queryKey: ["fx-overview-latest"],
+    queryFn: async () => await getLatestFxOverviewFn(),
   })
   const baseCurrency = fxOverview?.baseCurrency ?? "IDR"
 

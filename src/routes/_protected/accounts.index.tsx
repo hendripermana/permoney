@@ -59,7 +59,7 @@ import {
   type DriftRecord,
 } from "@/lib/account-collections"
 import { transactionCollection } from "@/lib/collections"
-import { applyFilters } from "@/lib/transaction-filters"
+import { indexTransactionsByAccount } from "@/lib/transaction-filters"
 import { computeAccountRunway, type AccountRunway } from "@/lib/account-runway"
 import { accountSupportsReserve } from "@/lib/account-reserve"
 import {
@@ -81,7 +81,7 @@ import {
 } from "@/lib/account-list-tools"
 import { formatCurrency } from "@/lib/currency"
 import { normalizeNetWorthAt, type PointBalance } from "@/lib/net-worth"
-import { getFxOverviewFn } from "@/server/fx"
+import { getLatestFxOverviewFn } from "@/server/fx"
 import { cn } from "@/lib/utils"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import {
@@ -205,14 +205,17 @@ function AccountsPage() {
 
   // PER-222 — per-account runway forecast (liquid cash-like ASSET only — see
   // accountSupportsReserve's doc comment for why INVESTMENT is excluded even
-  // though it is `transaction_flow`), using the SAME applyFilters lens as the
-  // detail page so the badge and the detail panel agree.
+  // though it is `transaction_flow`), using the SAME per-account ledger lens as
+  // the detail page so the badge and the detail panel agree. The ledger is
+  // indexed by account ONCE (not re-filtered per account) — see
+  // indexTransactionsByAccount for the equivalence with `applyFilters`.
   const runwayByAccount = React.useMemo(() => {
     const map = new Map<string, AccountRunway>()
     if (!allTransactions) return map
+    const ledgerByAccount = indexTransactionsByAccount(allTransactions)
     for (const a of listedAccounts) {
       if (!accountSupportsReserve(a)) continue
-      const ledger = applyFilters(allTransactions, { accounts: [a.id] })
+      const ledger = ledgerByAccount.get(a.id) ?? []
       map.set(
         a.id,
         computeAccountRunway(
@@ -797,9 +800,12 @@ function NetWorthInBaseCard({
   // construction.
   personDebtAccounts: ReadonlyArray<AccountRecord>
 }) {
+  // Latest-only FX overview: this card converts each account's native balance
+  // to the family base, so it only needs the newest snapshot per currency
+  // pair. The full-history ["fx-overview"] key stays with Currencies & FX.
   const { data: fxOverview } = useQuery({
-    queryKey: ["fx-overview"],
-    queryFn: async () => await getFxOverviewFn(),
+    queryKey: ["fx-overview-latest"],
+    queryFn: async () => await getLatestFxOverviewFn(),
   })
 
   const base = fxOverview?.baseCurrency
@@ -811,7 +817,9 @@ function NetWorthInBaseCard({
         unconverted: [] as Array<{ currency: string; native: bigint }>,
         personDebtNet: null as bigint | null,
       }
-    // rates are sorted asOfDate DESC, so the first per `fromCurrency` is latest.
+    // The overview is latest-only (one row per pair), so this builds the
+    // fromCurrency -> rate lookup; the first-wins guard keeps it correct even
+    // if a pair ever appears twice.
     const latest = new Map<string, bigint>()
     for (const rate of rates ?? []) {
       if (rate.toCurrency !== base) continue

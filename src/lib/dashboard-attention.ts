@@ -6,7 +6,10 @@ import {
   isRunwayAlerting,
   type AccountRunway,
 } from "./account-runway"
-import { applyFilters, type FilterableTransaction } from "./transaction-filters"
+import {
+  indexTransactionsByAccount,
+  type FilterableTransaction,
+} from "./transaction-filters"
 
 // =============================================================================
 // PER-226 — Account intelligence, slice 5: "ambient intelligence on the
@@ -87,7 +90,8 @@ function compareBigintDesc(a: bigint, b: bigint): number {
  * pages already compute, across every cash-like ASSET account, into a compact
  * "needs attention" summary for the dashboard. `allTransactions` should be the
  * full, unfiltered transaction collection (the same one the accounts pages
- * preload) — this function does its own per-account `applyFilters` slicing.
+ * preload) — this function indexes it by account ONCE and looks each account's
+ * ledger up from that index.
  */
 export function computeDashboardAttention<
   T extends FilterableTransaction & AnalyticsTxn,
@@ -98,6 +102,7 @@ export function computeDashboardAttention<
 ): DashboardAttentionSummary {
   const attention: AttentionAccount[] = []
   const idleOpportunities: IdleOpportunityAccount[] = []
+  const ledgerByAccount = indexTransactionsByAccount(allTransactions)
 
   for (const account of accounts) {
     if (account.status !== "active") continue
@@ -116,7 +121,7 @@ export function computeDashboardAttention<
       ? BigInt(account.reserveBalance)
       : null
     const reserveMinor = reserveMinorRaw ?? 0n
-    const ledger = applyFilters(allTransactions, { accounts: [account.id] })
+    const ledger = ledgerByAccount.get(account.id) ?? []
 
     const runway = computeAccountRunway(
       ledger,

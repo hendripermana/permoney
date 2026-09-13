@@ -36,7 +36,6 @@ import {
 } from "@/components/blocks/dashboard-cards"
 import { getCashFlowReportFn, getNetWorthSeriesFn } from "@/server/reporting"
 import { getBudgetForPeriodFn, listExpenseCategoriesFn } from "@/server/budgets"
-import { getAccountsFn } from "@/server/accounts"
 import { accountCollection } from "@/lib/account-collections"
 import { transactionCollection } from "@/lib/collections"
 import { computeDashboardAttention } from "@/lib/dashboard-attention"
@@ -175,26 +174,28 @@ function DashboardPage() {
     queryKey: ["dashboard", "expense-categories"],
     queryFn: async () => await listExpenseCategoriesFn(),
   })
-  // PER-183: a brand-new family has zero accounts (onboarding no longer
-  // seeds a demo one). Net worth/cash flow/budget cards are meaningless
-  // against nothing, so a fresh user gets a clear next step instead of a
-  // wall of empty charts.
-  const accountsQuery = useQuery({
-    queryKey: ["dashboard", "accounts"],
-    queryFn: async () => await getAccountsFn(),
-  })
-  const hasNoAccounts = accountsQuery.data?.length === 0
-
   // PER-226 — "Needs a look" ambient-intelligence strip. Same collections and
   // computation shape as the accounts list page (accounts.index.tsx), reused
   // here rather than re-fetched via a plain server-fn query so this stays a
   // pure aggregation over the same live ledger every other account view sees.
+  //
+  // PER-183: a brand-new family has zero accounts (onboarding no longer seeds a
+  // demo one). Net worth/cash flow/budget cards are meaningless against
+  // nothing, so a fresh user gets a clear next step instead of a wall of empty
+  // charts.
+  //
+  // `accountCollection` is the route's single account source: it is preloaded
+  // in the loader and its `getAccountsFn()` payload is the same data (and
+  // TanStack Query key) the accounts pages read, so `hasNoAccounts` derives
+  // from that one live source instead of a second `useQuery` over the same
+  // server fn.
   const { data: attentionAccounts } = useLiveQuery((q) =>
     q.from({ a: accountCollection })
   )
   const { data: attentionTransactions } = useLiveQuery((q) =>
     q.from({ t: transactionCollection })
   )
+  const hasNoAccounts = attentionAccounts?.length === 0
   const attentionSummary = React.useMemo(
     () =>
       computeDashboardAttention(

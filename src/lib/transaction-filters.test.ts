@@ -3,6 +3,7 @@ import {
   applyFilters,
   applySearch,
   getDateCutoff,
+  indexTransactionsByAccount,
   type FilterableTransaction,
   type TransactionFilters,
 } from "./transaction-filters"
@@ -467,6 +468,115 @@ describe("applyFilters", () => {
       applyFilters(original, { ...baseFilters, type: ["income"] })
       expect(original).toEqual(snapshot)
     })
+  })
+})
+
+// =============================================================================
+// indexTransactionsByAccount
+// =============================================================================
+
+describe("indexTransactionsByAccount", () => {
+  // The index is the O(1)-per-account replacement for
+  // `applyFilters(list, { accounts: [id] })` inside per-account loops
+  // (dashboard attention strip, accounts-list runway badges). Complexity may
+  // change; the per-account result set and order must not.
+  it("is element-for-element identical to the per-account applyFilters slice", () => {
+    const txs = [
+      tx({ id: "bca-expense", accountId: ACCOUNT_BCA }),
+      tx({
+        id: "bca-to-gopay",
+        type: "transfer",
+        accountId: ACCOUNT_BCA,
+        toAccountId: ACCOUNT_GOPAY,
+      }),
+      tx({ id: "usd-income", type: "income", accountId: ACCOUNT_USD }),
+      tx({
+        id: "self-transfer",
+        type: "transfer",
+        accountId: ACCOUNT_GOPAY,
+        toAccountId: ACCOUNT_GOPAY,
+      }),
+      tx({ id: "other-account", accountId: "acc_other" }),
+    ]
+
+    const index = indexTransactionsByAccount(txs)
+
+    for (const accountId of [
+      ACCOUNT_BCA,
+      ACCOUNT_GOPAY,
+      ACCOUNT_USD,
+      "acc_other",
+      "acc_none",
+    ]) {
+      expect(index.get(accountId) ?? []).toEqual(
+        applyFilters(txs, { ...baseFilters, accounts: [accountId] })
+      )
+    }
+  })
+
+  it("indexes a transfer under both legs without duplicating a same-account transfer", () => {
+    const txs = [
+      tx({
+        id: "bca-to-gopay",
+        type: "transfer",
+        accountId: ACCOUNT_BCA,
+        toAccountId: ACCOUNT_GOPAY,
+      }),
+      tx({
+        id: "gopay-to-gopay",
+        type: "transfer",
+        accountId: ACCOUNT_GOPAY,
+        toAccountId: ACCOUNT_GOPAY,
+      }),
+    ]
+
+    const index = indexTransactionsByAccount(txs)
+
+    expect(index.get(ACCOUNT_BCA)?.map((t) => t.id)).toEqual(["bca-to-gopay"])
+    expect(index.get(ACCOUNT_GOPAY)?.map((t) => t.id)).toEqual([
+      "bca-to-gopay",
+      "gopay-to-gopay",
+    ])
+  })
+
+  it("preserves input order within each account bucket", () => {
+    const txs = [
+      tx({ id: "first", accountId: ACCOUNT_BCA, date: new Date("2026-04-01") }),
+      tx({
+        id: "second",
+        accountId: ACCOUNT_BCA,
+        date: new Date("2026-04-02"),
+      }),
+      tx({ id: "third", accountId: ACCOUNT_BCA, date: new Date("2026-04-03") }),
+    ]
+
+    const index = indexTransactionsByAccount(txs)
+
+    expect(index.get(ACCOUNT_BCA)?.map((t) => t.id)).toEqual([
+      "first",
+      "second",
+      "third",
+    ])
+  })
+
+  it("leaves an account with no matching transactions absent from the index", () => {
+    const index = indexTransactionsByAccount([
+      tx({ id: "a", accountId: ACCOUNT_BCA }),
+    ])
+
+    expect(index.get("acc_none")).toBeUndefined()
+  })
+
+  it("does not mutate the input array (purity)", () => {
+    const original = [
+      tx({ id: "a", accountId: ACCOUNT_BCA, toAccountId: ACCOUNT_GOPAY }),
+      tx({ id: "b", accountId: ACCOUNT_GOPAY }),
+    ]
+    const snapshot = [...original]
+
+    indexTransactionsByAccount(original)
+
+    expect(original).toEqual(snapshot)
   })
 })
 
