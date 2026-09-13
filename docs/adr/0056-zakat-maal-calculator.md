@@ -27,7 +27,7 @@ from evidence instead of asking the user to guess.
 This ADR intentionally does **not** silently pick one school of Islamic
 jurisprudence (madhab) and hard-code its ruling. The research below found
 real, longstanding, legitimate scholarly disagreement on several
-load-bearing calculation questions. Presenting one answer as *the* answer
+load-bearing calculation questions. Presenting one answer as _the_ answer
 would be a worse mistake than building nothing — Permoney is global and
 users follow different schools (Hanafi, Maliki, Shafi'i, Hanbali) and
 different national/institutional standards. The product answer is
