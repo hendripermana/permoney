@@ -428,9 +428,9 @@ describe("computeZakatForPayers", () => {
           balance: 157_000_000n, // 82M opening + 90M draw − 15M repaid
           transactions: [
             income("cash", 90_000_000n, loanTakenOutDate),
-            expense("cash", 5_000_000n, loanPayments[1]!.date),
-            expense("cash", 5_000_000n, loanPayments[2]!.date),
-            expense("cash", 5_000_000n, loanPayments[3]!.date),
+            expense("cash", 5_000_000n, new Date(loanPayments[1]!.date)),
+            expense("cash", 5_000_000n, new Date(loanPayments[2]!.date)),
+            expense("cash", 5_000_000n, new Date(loanPayments[3]!.date)),
           ],
         }),
         cashAccount({
