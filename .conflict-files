@@ -1,0 +1,3 @@
+ancestorEntries = []
+ourEntries = ["src/lib/zakat-calculation.test.ts"]
+theirEntries = ["src/lib/zakat-calculation.test.ts"]

@@ -1,0 +1,4921 @@
+import { createServerFn } from "@tanstack/react-start"
+import type { Account, Prisma, Valuation } from "@prisma/client"
+import { z } from "zod"
+import {
+  deriveTransferKindForAccounts,
+  isLiabilityCostKind,
+  parseAccountType,
+  TRANSACTION_KIND_VALUES,
+  type TransferTransactionKind,
+} from "@/lib/liability-semantics"
+import {
+  absMoney,
+  addMoney,
+  encodeMoney,
+  negateMoney,
+  subMoney,
+  toMoney,
+  type Money,
+} from "@/lib/money"
+import { deriveTransferFx } from "@/lib/fx"
+// PER-264 / PER-265 — `.server` hard fence (see that module's header).
+import { markAccountBalanceDirty } from "./anchor-rebuild.server"
+import {
+  deriveTransferPurpose,
+  TRANSFER_PURPOSE_VALUES,
+  type TransferPurpose,
+} from "@/lib/money-movement"
+import { assertSplitParity } from "@/lib/split-parity"
+import {
+  balanceOverrideInputSchema,
+  type BalanceOverrideReason,
+} from "@/lib/balance-override"
+import { createUuidV7 } from "@/lib/uuid-v7"
+import { computeBaseProjectionForAmount, getFamilyBaseCurrency } from "./fx"
+import {
+  familyMiddleware,
+  requireCapability,
+  scopedTenantTransaction,
+  type TenantTransactionClient,
+} from "./middleware/with-family"
+import {
+  auditLogs,
+  createAuditContext,
+  type AuditContext,
+  type AuditLogEntry,
+} from "./middleware/audit"
+import {
+  TenantReferenceError,
+  validateTenantReferences,
+} from "./validation/tenant-references"
+import { VersionDriftError } from "./middleware/with-retry"
+import {
+  IDEMPOTENCY_RECORD_TTL_MS,
+  IdempotencyConflictError,
+  hashCanonicalPayload,
+  toCanonicalJson,
+} from "./idempotency"
+import {
+  isUniqueConstraintError,
+  uuidV7Schema,
+  type RunInTenantTransaction,
+} from "./mutation-kit"
+import {
+  accountHasHoldings,
+  createValuationWithinTx,
+  fetchAccountFacts,
+  HOLDINGS_VALUATION_SOURCE,
+  HoldingsAccountLedgerError,
+  latestValuation,
+  rebuildWithinTx,
+  valueMagnitudeSchema,
+  ValuationError,
+  type CreateValuationInput,
+  type ServerActor,
+} from "./valuations"
+
+export { IdempotencyConflictError } from "./idempotency"
+
+/**
+ * BACKEND FUNCTION: Fetch reference data for the Transaction Form Dropdowns
+ * This function executes strictly on the Server (Node.js).
+ */
+export const getTransactionFormData = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .handler(async ({ context }) => {
+    return scopedTenantTransaction(
+      context.familyId,
+      context.user.id,
+      async (tx) => {
+        const [accounts, categories, merchants, holdingAccounts, tags] =
+          await runTenantTransactionQueriesInOrder([
+            () =>
+              tx.account.findMany({
+                where: { familyId: context.familyId },
+                orderBy: { name: "asc" },
+              }),
+            () =>
+              tx.category.findMany({
+                where: {
+                  OR: [{ isSystem: true }, { familyId: context.familyId }],
+                },
+                orderBy: { name: "asc" },
+              }),
+            () =>
+              tx.merchant.findMany({
+                where: { familyId: context.familyId },
+                orderBy: { name: "asc" },
+              }),
+            // PER-259 / ADR-0054 — which accounts carry holdings, so the form
+            // can say so BEFORE the user fills in a transfer the server is
+            // bound to reject (`HoldingsAccountLedgerError`). One distinct
+            // id-only scan over the tenant's holdings, not an N+1 EXISTS per
+            // account; the same predicate `accountHasHoldings` keys off,
+            // hoisted to the whole family at once.
+            () =>
+              tx.holding.findMany({
+                where: { familyId: context.familyId },
+                select: { accountId: true },
+                distinct: ["accountId"],
+              }),
+            // PER-145 — active tags for the transaction form's tag picker.
+            // Archived tags are excluded (they stay attached to whatever
+            // history already carries them, but disappear from the picker).
+            () =>
+              tx.tag.findMany({
+                where: { familyId: context.familyId, archivedAt: null },
+                orderBy: { name: "asc" },
+                select: { id: true, name: true, color: true },
+              }),
+          ] as const)
+        const holdingsAccountIds = new Set(
+          holdingAccounts.map((holding) => holding.accountId)
+        )
+        return {
+          accounts: accounts.map((account) => ({
+            ...account,
+            hasHoldings: holdingsAccountIds.has(account.id),
+          })),
+          categories,
+          merchants,
+          tags,
+        }
+      }
+    )
+  })
+
+// =============================================================================
+// MONEY INPUT SCHEMA (post-ADR-0001)
+//
+// Accepts three shapes for monetary fields:
+//   1. `bigint` — native BigInt (used in server-internal calls + tests)
+//   2. `string` of digits (with optional leading `-`) — the WIRE format that
+//      clients send after Step 4d (BigInts can't be JSON-stringified, so
+//      they cross the wire as strings).
+//   3. `number` integer — transitional support for legacy form payloads;
+//      MUST be already in minor units (sen, cents, satoshi). Non-integer
+//      numbers are rejected so callers can't accidentally send display
+//      values like `100.50`.
+//
+// All three coerce to `bigint` for downstream business logic.
+// =============================================================================
+const moneyInputSchema = z
+  .union([
+    z.bigint(),
+    z
+      .string()
+      .regex(
+        /^-?\d+$/,
+        "money wire value must be a string of digits (e.g. '100050')"
+      ),
+    z
+      .number()
+      .int("legacy number money input must be an integer in minor units"),
+  ])
+  .transform((v) => (typeof v === "bigint" ? v : BigInt(v)))
+
+const positiveMoneyInputSchema = moneyInputSchema.refine((b) => b > 0n, {
+  message: "amount must be positive",
+})
+
+// =============================================================================
+// WIRE SERIALIZATION HELPER
+//
+// Server-fn return values cross JSON. `JSON.stringify(10n)` throws, so every
+// monetary bigint field is encoded as a digit-string at the boundary. The
+// client revives them in the TanStack DB collection's `select` callback (see
+// src/lib/collections.ts). This is the Stripe/Wise pattern — zero precision
+// loss anywhere it matters.
+//
+// We keep `splitEntries` as a parallel array transformation so its `amount`
+// field is also wire-encoded.
+// =============================================================================
+// CRITICAL: each conditional is wrapped in `[T]` to prevent TypeScript's
+// distributive conditional behavior. Without the tuple wrapping, a field
+// typed `Merchant | null` would distribute over the union and incorrectly
+// match the `null` branch of `T extends bigint | null`, mapping the entire
+// field to `string | Merchant` \u2014 a subtle bug that broke `merchant.name`
+// access throughout the UI before this fix.
+type SerializeMoney<T> = [T] extends [bigint]
+  ? string
+  : [T] extends [bigint | null]
+    ? string | null
+    : [T] extends [bigint | null | undefined]
+      ? string | null | undefined
+      : [T] extends [Array<infer U>]
+        ? Array<{ [K in keyof U]: SerializeMoney<U[K]> }>
+        : T
+
+type Serialized<T> = { [K in keyof T]: SerializeMoney<T[K]> }
+
+/**
+ * Encode all bigint-money fields of a transaction-like object to digit-strings
+ * so the result survives JSON serialization across the server-fn boundary.
+ *
+ * The generic mapped return type preserves every other field's type exactly,
+ * which keeps `Awaited<ReturnType<typeof getTransactionsFn>>` useful for the
+ * client without requiring duplicated DTO declarations.
+ */
+function serializeTransaction<
+  T extends {
+    amount: bigint
+    destinationAmount?: bigint | null
+    accountBalanceAfter?: bigint | null
+    baseAmount?: bigint | null
+    fxRateScaled?: bigint | null
+    splitEntries?: Array<{ amount: bigint }>
+  },
+>(tx: T): Serialized<T> {
+  const out: Record<string, unknown> = { ...tx }
+  out.amount = encodeMoney(tx.amount)
+  out.destinationAmount =
+    tx.destinationAmount == null ? null : encodeMoney(tx.destinationAmount)
+  out.accountBalanceAfter =
+    tx.accountBalanceAfter == null ? null : encodeMoney(tx.accountBalanceAfter)
+  // FX base projection (PER-147): BigInt wire fields must be encoded to strings.
+  out.baseAmount = tx.baseAmount == null ? null : encodeMoney(tx.baseAmount)
+  out.fxRateScaled = tx.fxRateScaled == null ? null : tx.fxRateScaled.toString()
+  if (tx.splitEntries) {
+    out.splitEntries = tx.splitEntries.map((e) => ({
+      ...e,
+      amount: encodeMoney(e.amount),
+    }))
+  }
+  return out as Serialized<T>
+}
+
+function indexById<T extends { id: string }>(
+  items: readonly T[]
+): Map<string, T> {
+  return new Map(items.map((item) => [item.id, item]))
+}
+
+export function accountBalanceAuditEntries<
+  T extends { id: string; balance: bigint },
+>(oldAccounts: readonly T[], newAccounts: readonly T[]): AuditLogEntry[] {
+  const newAccountsById = indexById(newAccounts)
+  return oldAccounts.flatMap((oldAccount) => {
+    const newAccount = newAccountsById.get(oldAccount.id)
+    if (!newAccount || oldAccount.balance === newAccount.balance) return []
+    return [
+      {
+        action: "update",
+        entityType: "Account",
+        entityId: oldAccount.id,
+        before: oldAccount,
+        after: newAccount,
+      },
+    ]
+  })
+}
+
+export function createdAuditEntries<T extends { id: string }>(
+  entityType: string,
+  items: readonly T[]
+): AuditLogEntry[] {
+  return items.map((item) => ({
+    action: "create",
+    entityType,
+    entityId: item.id,
+    before: null,
+    after: item,
+  }))
+}
+
+export type AccountDeltaMap = Record<string, bigint>
+
+interface AccountBalanceVersion {
+  balance: bigint
+  balanceSource: string
+  id: string
+  version: number
+}
+
+interface AccountBalanceMutation {
+  after: AccountBalanceVersion
+  before: AccountBalanceVersion
+}
+
+type QueryResultTuple<TQueries extends readonly (() => Promise<unknown>)[]> = {
+  [TIndex in keyof TQueries]: TQueries[TIndex] extends () => Promise<
+    infer TResult
+  >
+    ? TResult
+    : never
+}
+
+/**
+ * Prisma interactive transaction memakai satu pg Client. Jangan jalankan query
+ * dari `tx` yang sama dengan `Promise.all`; pg@8 memberi warning dan pg@9 akan
+ * menolak overlap tersebut.
+ */
+async function runTenantTransactionQueriesInOrder<
+  const TQueries extends readonly (() => Promise<unknown>)[],
+>(queries: TQueries): Promise<QueryResultTuple<TQueries>> {
+  const results: unknown[] = []
+  await queries.reduce<Promise<void>>(
+    (previous, query) =>
+      previous.then(() =>
+        query().then((result) => {
+          results.push(result)
+        })
+      ),
+    Promise.resolve()
+  )
+  return results as QueryResultTuple<TQueries>
+}
+
+async function findTransactionWithSplitEntries(
+  tx: TenantTransactionClient,
+  id: string
+) {
+  const [transaction, splitEntries] = await runTenantTransactionQueriesInOrder([
+    () => tx.transaction.findUniqueOrThrow({ where: { id } }),
+    () =>
+      tx.splitEntry.findMany({
+        where: { transactionId: id },
+        orderBy: { createdAt: "asc" },
+      }),
+  ] as const)
+  return { ...transaction, splitEntries }
+}
+
+async function findOptionalTransactionWithSplitEntries(
+  tx: TenantTransactionClient,
+  id: string
+) {
+  const transaction = await tx.transaction.findUnique({ where: { id } })
+  if (!transaction) return null
+  const splitEntries = await tx.splitEntry.findMany({
+    where: { transactionId: id },
+    orderBy: { createdAt: "asc" },
+  })
+  return { ...transaction, splitEntries }
+}
+
+export async function findTransactionAuditGraph(
+  tx: TenantTransactionClient,
+  id: string
+) {
+  const transaction = await tx.transaction.findUnique({ where: { id } })
+  if (!transaction) return null
+
+  const [splitEntries, transferOut, transferIn] =
+    await runTenantTransactionQueriesInOrder([
+      () =>
+        tx.splitEntry.findMany({
+          where: { transactionId: id },
+          orderBy: { createdAt: "asc" },
+        }),
+      () => tx.transfer.findFirst({ where: { outflowTransactionId: id } }),
+      () => tx.transfer.findFirst({ where: { inflowTransactionId: id } }),
+    ] as const)
+
+  return { ...transaction, splitEntries, transferOut, transferIn }
+}
+
+async function findTransferGraph(tx: TenantTransactionClient, id: string) {
+  const transfer = await tx.transfer.findUnique({ where: { id } })
+  if (!transfer) return null
+
+  // PER-196 / ADR-0048 §4: editing/deleting a valuation-linked transfer (one
+  // Transaction leg + one Valuation leg) is not yet supported — the
+  // reversal-and-replace machinery below assumes two Transaction legs. Fail
+  // loud here, the single choke point every update/delete path reads a
+  // transfer graph through, rather than let a null leg crash deeper in.
+  if (transfer.valuationId !== null) {
+    throw new ValuationLinkedTransferUnsupportedError()
+  }
+  if (!transfer.outflowTransactionId || !transfer.inflowTransactionId) {
+    // Unreachable given transfer_leg_shape (DB CHECK) once valuationId is
+    // null — narrows the type for the lookups below without a cast.
+    throw new Error(`Transfer ${id} has a malformed leg shape`)
+  }
+  const outflowTransactionId = transfer.outflowTransactionId
+  const inflowTransactionId = transfer.inflowTransactionId
+
+  const [outflowTransaction, inflowTransaction] =
+    await runTenantTransactionQueriesInOrder([
+      () =>
+        tx.transaction.findUniqueOrThrow({
+          where: { id: outflowTransactionId },
+        }),
+      () =>
+        tx.transaction.findUniqueOrThrow({
+          where: { id: inflowTransactionId },
+        }),
+    ] as const)
+
+  return { ...transfer, outflowTransaction, inflowTransaction }
+}
+
+async function findTransactionsWithSplitEntries(
+  tx: TenantTransactionClient,
+  ids: readonly string[]
+) {
+  if (ids.length === 0) return []
+
+  const transactions = await tx.transaction.findMany({
+    where: { id: { in: [...ids] } },
+  })
+  const splitEntries = await tx.splitEntry.findMany({
+    where: { transactionId: { in: transactions.map((item) => item.id) } },
+    orderBy: { createdAt: "asc" },
+  })
+  const splitEntriesByTransactionId = new Map<string, typeof splitEntries>()
+  for (const splitEntry of splitEntries) {
+    const current = splitEntriesByTransactionId.get(splitEntry.transactionId)
+    if (current) current.push(splitEntry)
+    else splitEntriesByTransactionId.set(splitEntry.transactionId, [splitEntry])
+  }
+
+  return transactions.map((transaction) => ({
+    ...transaction,
+    splitEntries: splitEntriesByTransactionId.get(transaction.id) ?? [],
+  }))
+}
+
+async function findTransactionsWithTransferOutAndSplitEntries(
+  tx: TenantTransactionClient,
+  ids: readonly string[]
+) {
+  const transactions = await findTransactionsWithSplitEntries(tx, ids)
+  const transfers = await tx.transfer.findMany({
+    where: {
+      outflowTransactionId: { in: transactions.map((item) => item.id) },
+    },
+  })
+  const transfersByOutflowId = new Map(
+    transfers.map((transfer) => [transfer.outflowTransactionId, transfer])
+  )
+
+  return transactions.map((transaction) => ({
+    ...transaction,
+    transferOut: transfersByOutflowId.get(transaction.id) ?? null,
+  }))
+}
+
+function accountListRelation(account: {
+  accountType: string
+  color: string | null
+  name: string
+}) {
+  return {
+    accountType: account.accountType,
+    color: account.color,
+    name: account.name,
+    type: account.accountType,
+  }
+}
+
+function categoryListRelation(category: {
+  color: string
+  icon: string
+  name: string
+}) {
+  return { name: category.name, color: category.color, icon: category.icon }
+}
+
+function merchantListRelation(merchant: {
+  logoUrl: string | null
+  name: string
+}) {
+  return { name: merchant.name, logoUrl: merchant.logoUrl }
+}
+
+export async function findLedgerTransactionsForFamily(
+  tx: TenantTransactionClient,
+  familyId: string
+) {
+  const transactions = await tx.transaction.findMany({
+    orderBy: { date: "desc" },
+    where: {
+      familyId,
+      deletedAt: null,
+      AND: [
+        {
+          // A classic dual-leg transfer's inflow leg is hidden — its outflow
+          // twin represents the movement in the list. PER-196 / ADR-0048 §4:
+          // a valuation-linked redemption's cash leg can ALSO sit in the
+          // inflow FK slot, but has no outflow twin at all (the other side
+          // is a Valuation, not a Transaction) — hiding it would reproduce
+          // PER-196's original "hidden from the list" bug through a new
+          // mechanism. Only hide an inflow leg when a real outflow twin
+          // exists to show instead.
+          OR: [
+            { transferIn: { is: null } },
+            { transferIn: { outflowTransactionId: null } },
+          ],
+        },
+        {
+          // PER-20 / ADR-0012: defense-in-depth against any future drift
+          // between Transaction.deletedAt and Transfer.deletedAt. A
+          // non-transfer row (`transferOut: null`) passes; an outflow leg
+          // only passes when its Transfer row is also alive.
+          OR: [
+            { transferOut: { is: null } },
+            { transferOut: { deletedAt: null } },
+          ],
+        },
+      ],
+    },
+  })
+  const transactionIds = transactions.map((transaction) => transaction.id)
+
+  const accountIds = new Set<string>()
+  const categoryIds = new Set<string>()
+  const merchantIds = new Set<string>()
+  for (const transaction of transactions) {
+    accountIds.add(transaction.accountId)
+    if (transaction.toAccountId) accountIds.add(transaction.toAccountId)
+    if (transaction.categoryId) categoryIds.add(transaction.categoryId)
+    if (transaction.merchantId) merchantIds.add(transaction.merchantId)
+  }
+
+  const splitEntries =
+    transactionIds.length > 0
+      ? await tx.splitEntry.findMany({
+          where: { transactionId: { in: transactionIds } },
+          orderBy: { createdAt: "asc" },
+        })
+      : []
+  for (const splitEntry of splitEntries) {
+    if (splitEntry.categoryId) categoryIds.add(splitEntry.categoryId)
+    if (splitEntry.merchantId) merchantIds.add(splitEntry.merchantId)
+  }
+
+  // PER-247: hydrate the contextual money-movement labels (Transfer.purpose)
+  // and fee legs so lists can render self-explanatory movements ("Top-up
+  // GoPay (+Rp1.000 fee)") without a second round-trip per row.
+  const transfers =
+    transactionIds.length > 0
+      ? await tx.transfer.findMany({
+          where: {
+            deletedAt: null,
+            OR: [
+              { outflowTransactionId: { in: transactionIds } },
+              { inflowTransactionId: { in: transactionIds } },
+            ],
+          },
+          select: {
+            outflowTransactionId: true,
+            inflowTransactionId: true,
+            purpose: true,
+            feeTransactionId: true,
+          },
+        })
+      : []
+  const feeTransactionIds = transfers
+    .map((transfer) => transfer.feeTransactionId)
+    .filter((id): id is string => id != null)
+  const transferFees =
+    feeTransactionIds.length > 0
+      ? await tx.transaction.findMany({
+          where: { id: { in: feeTransactionIds } },
+          select: {
+            id: true,
+            accountId: true,
+            amount: true,
+            categoryId: true,
+            currency: true,
+          },
+        })
+      : []
+  const transferFeesById = indexById(transferFees)
+  const transferByTransactionId = new Map<string, (typeof transfers)[number]>()
+  for (const transfer of transfers) {
+    if (transfer.outflowTransactionId) {
+      transferByTransactionId.set(transfer.outflowTransactionId, transfer)
+    }
+    if (transfer.inflowTransactionId) {
+      transferByTransactionId.set(transfer.inflowTransactionId, transfer)
+    }
+  }
+
+  const [accounts, categories, merchants, transactionTags] =
+    await runTenantTransactionQueriesInOrder([
+      () =>
+        accountIds.size > 0
+          ? tx.account.findMany({
+              where: { id: { in: Array.from(accountIds) } },
+              select: { id: true, name: true, accountType: true, color: true },
+            })
+          : Promise.resolve([]),
+      () =>
+        categoryIds.size > 0
+          ? tx.category.findMany({
+              where: { id: { in: Array.from(categoryIds) } },
+              select: { id: true, name: true, color: true, icon: true },
+            })
+          : Promise.resolve([]),
+      () =>
+        merchantIds.size > 0
+          ? tx.merchant.findMany({
+              where: { id: { in: Array.from(merchantIds) } },
+              select: { id: true, name: true, logoUrl: true },
+            })
+          : Promise.resolve([]),
+      // PER-145 — tags attached to any transaction in this page, joined with
+      // the Tag row so the list can render chips without a second round-trip.
+      // Archived tags are NOT excluded here — a tag on a past transaction is
+      // ledger-adjacent evidence and stays visible on that row even after the
+      // tag itself is archived from the picker.
+      () =>
+        transactionIds.length > 0
+          ? tx.transactionTag.findMany({
+              where: { transactionId: { in: transactionIds } },
+              select: {
+                transactionId: true,
+                tag: {
+                  select: { id: true, name: true, color: true },
+                },
+              },
+            })
+          : Promise.resolve([]),
+    ] as const)
+
+  const accountsById = indexById(accounts)
+  const categoriesById = indexById(categories)
+  const merchantsById = indexById(merchants)
+  const splitEntriesByTransactionId = new Map<string, typeof splitEntries>()
+  for (const splitEntry of splitEntries) {
+    const current = splitEntriesByTransactionId.get(splitEntry.transactionId)
+    if (current) current.push(splitEntry)
+    else splitEntriesByTransactionId.set(splitEntry.transactionId, [splitEntry])
+  }
+  const tagsByTransactionId = new Map<
+    string,
+    Array<{ id: string; name: string; color: string }>
+  >()
+  for (const row of transactionTags) {
+    const current = tagsByTransactionId.get(row.transactionId)
+    if (current) current.push(row.tag)
+    else tagsByTransactionId.set(row.transactionId, [row.tag])
+  }
+
+  return transactions.map((transaction) => {
+    const account = accountsById.get(transaction.accountId)
+    if (!account) throw new Error("Transaction account relation is incomplete")
+
+    const toAccount = transaction.toAccountId
+      ? accountsById.get(transaction.toAccountId)
+      : null
+    const category = transaction.categoryId
+      ? categoriesById.get(transaction.categoryId)
+      : null
+    const merchant = transaction.merchantId
+      ? merchantsById.get(transaction.merchantId)
+      : null
+
+    return {
+      ...transaction,
+      // PER-145 — tags attached to this transaction (sorted for a stable
+      // chip order regardless of attach order).
+      tags: (tagsByTransactionId.get(transaction.id) ?? [])
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name)),
+      // PER-247: contextual money-movement fields (null for non-transfers).
+      // The fee amount is wire-encoded as a positive magnitude string (the
+      // same boundary convention as serializeTransaction).
+      transferPurpose:
+        transferByTransactionId.get(transaction.id)?.purpose ?? null,
+      // PER-247: does this surfaced transfer leg RECEIVE money into its own
+      // `accountId` (money flows toAccount → account), rather than send it out
+      // (account → toAccount)? True only for a valuation-linked redemption —
+      // its single cash leg sits in the Transfer's inflow slot with no outflow
+      // twin (classic inflow legs are hidden from this list). The renderer uses
+      // this to orient the account arrow, otherwise a reksadana withdrawal
+      // ("Hasil Jualan → Bank Jago") displays reversed as "Bank Jago → Hasil
+      // Jualan" — the data (accountId=cash, toAccountId=tracked) is correct,
+      // only the direction label needs it. See docs/adr/0048.
+      transferIncoming:
+        transferByTransactionId.get(transaction.id)?.inflowTransactionId ===
+        transaction.id,
+      transferFee: (() => {
+        const transfer = transferByTransactionId.get(transaction.id)
+        const fee = transfer?.feeTransactionId
+          ? transferFeesById.get(transfer.feeTransactionId)
+          : null
+        return fee
+          ? {
+              accountId: fee.accountId,
+              amount: encodeMoney(absMoney(fee.amount)),
+              categoryId: fee.categoryId,
+              currency: fee.currency,
+            }
+          : null
+      })(),
+      account: accountListRelation(account),
+      toAccount: toAccount ? accountListRelation(toAccount) : null,
+      category: category ? categoryListRelation(category) : null,
+      merchant: merchant ? merchantListRelation(merchant) : null,
+      splitEntries: (splitEntriesByTransactionId.get(transaction.id) ?? []).map(
+        (splitEntry) => {
+          const splitCategory = splitEntry.categoryId
+            ? categoriesById.get(splitEntry.categoryId)
+            : null
+          const splitMerchant = splitEntry.merchantId
+            ? merchantsById.get(splitEntry.merchantId)
+            : null
+          return {
+            ...splitEntry,
+            category: splitCategory
+              ? categoryListRelation(splitCategory)
+              : null,
+            merchant: splitMerchant
+              ? merchantListRelation(splitMerchant)
+              : null,
+          }
+        }
+      ),
+    }
+  })
+}
+
+export function addAccountDelta(
+  accountDeltas: AccountDeltaMap,
+  accountId: string,
+  amount: bigint
+): void {
+  if (!accountDeltas[accountId]) accountDeltas[accountId] = 0n
+  accountDeltas[accountId] += amount
+}
+
+export async function applyAccountDeltas(
+  tx: TenantTransactionClient,
+  familyId: string,
+  accountDeltas: AccountDeltaMap
+): Promise<AccountBalanceMutation[]> {
+  const mutations: AccountBalanceMutation[] = []
+  await runTenantTransactionQueriesInOrder(
+    Object.entries(accountDeltas).map(([accountId, delta]) => async () => {
+      if (delta === 0n) return
+      mutations.push(
+        await applyAccountBalanceDelta(tx, {
+          accountId,
+          delta,
+          familyId,
+          notFoundMessage: "Account not found or access denied!",
+        })
+      )
+    })
+  )
+  return mutations
+}
+
+// PER-196 / ADR-0048 §3: a `balanceSource === "valuation"` account's balance
+// may only change through a Valuation write (`setAccountBalanceTo`, the
+// single choke point `createValuationForFamily` and `rebuildFamilyBalances`
+// route through) — never through the incremental single-transaction delta
+// path. This is the typed error `applyAccountBalanceDelta` raises instead of
+// issuing that write; ADR-0048 §3 documents why there is no per-call-site
+// carve-out (standalone manual expense/income included).
+export class ValuationAccountLedgerError extends Error {
+  override readonly name = "ValuationAccountLedgerError"
+  readonly statusCode = 422
+  constructor(message: string) {
+    super(message)
+  }
+}
+
+// PER-196 / ADR-0048 §4: editing a valuation-linked transfer (one
+// Transaction leg + one Valuation leg) is not yet supported — the
+// reversal-and-replace path (replaceTransactionWithinTenantTransaction)
+// assumes two Transaction legs. Raised by `findTransferGraph`, the choke
+// point the update path reads a transfer's graph through. Deleting a
+// valuation-linked transfer IS supported (softDeleteValuationLinkedTransferWithinTx)
+// — this error's message reflects that split.
+export class ValuationLinkedTransferUnsupportedError extends Error {
+  override readonly name = "ValuationLinkedTransferUnsupportedError"
+  readonly statusCode = 422
+  constructor(
+    message = "Editing a valuation-linked transfer is not yet supported. Delete it and record a new transfer instead."
+  ) {
+    super(message)
+  }
+}
+
+// PER-198 / ADR-0051: deleting a valuation-linked transfer that is a Buy/Sell
+// TRADE is blocked. Such a transfer's tracked-side move is a Σ-holdings anchor
+// (its Valuation.source === HOLDINGS_VALUATION_SOURCE), but the paired Holding
+// position is NOT part of the transfer graph. The generic valuation-linked
+// delete reverses the cash leg + tombstones the anchor while the Holding stays,
+// so Σ-holdings would no longer equal the reverted balance — silent net-worth
+// drift. Full trade reversal (also undoing the position) is a later slice
+// (PER-141-adjacent); until then trade transactions cannot be deleted. This is
+// a fail-safe guard, not a weakening of any invariant: a plain valuation-linked
+// transfer (no holding involved; source !== "holdings") still deletes normally.
+export class HoldingsTradeDeleteUnsupportedError extends Error {
+  override readonly name = "HoldingsTradeDeleteUnsupportedError"
+  readonly statusCode = 422
+  constructor(
+    message = "This is a Buy/Sell trade. Deleting it would leave the holding un-reversed; trade reversal isn't supported yet."
+  ) {
+    super(message)
+  }
+}
+
+// Reads the ADR-0044 §8 bulk-replay bypass GUC (`app.bulk_ledger_replay`,
+// SET LOCAL by `withBulkLedgerReplayBypass`, `src/server/bulk-ledger-replay.ts`
+// — the single anchor that sets it). This is a READ only; it must never call
+// `set_config` itself, or it would become a second anchor and break the
+// source-grep test that keeps every legitimate bypass site visible in one
+// place.
+async function isBulkLedgerReplayActive(
+  tx: TenantTransactionClient
+): Promise<boolean> {
+  const [row] = await tx.$queryRaw<{ bypass: string }[]>`
+    SELECT COALESCE(current_setting('app.bulk_ledger_replay', true), 'off') AS bypass
+  `
+  return row?.bypass === "on"
+}
+
+async function assertIncrementalBalanceWriteAllowed(
+  tx: TenantTransactionClient,
+  account: { id: string; balanceSource: string }
+): Promise<void> {
+  if (account.balanceSource !== "valuation") return
+  if (await isBulkLedgerReplayActive(tx)) return
+  throw new ValuationAccountLedgerError(
+    `Account ${account.id} is balanceSource="valuation" (ADR-0048): its balance ` +
+      `can only change through a new Valuation, never an incremental transaction ` +
+      `delta. Record this as an investment value update instead of a standard ` +
+      `transaction, or (for a cash move into/out of this account) use the ` +
+      `valuation-linked transfer flow.`
+  )
+}
+
+async function applyAccountBalanceDelta(
+  tx: TenantTransactionClient,
+  {
+    accountId,
+    delta,
+    familyId,
+    notFoundMessage,
+  }: {
+    accountId: string
+    delta: bigint
+    familyId: string
+    notFoundMessage: string
+  }
+): Promise<AccountBalanceMutation> {
+  const before = await findAccountBalanceVersion(
+    tx,
+    accountId,
+    familyId,
+    notFoundMessage
+  )
+
+  await assertIncrementalBalanceWriteAllowed(tx, before)
+
+  const update = await tx.account.updateMany({
+    where: { id: accountId, familyId, version: before.version },
+    data: {
+      balance: { increment: delta },
+      version: { increment: 1 },
+    },
+  })
+
+  if (update.count !== 1) {
+    const current = await tx.account.findFirst({
+      where: { id: accountId, familyId },
+      select: { id: true },
+    })
+    if (!current) {
+      throw new Error(notFoundMessage)
+    }
+    throw new VersionDriftError(
+      `Account ${accountId} balance version drift detected`
+    )
+  }
+
+  // PER-264 / PER-265 (ADR-0043 anchor-provenance amendment) — the ONE place
+  // the whole write path funnels through, so registering here covers single,
+  // bulk, transfer-leg, import and future bank-sync writes at once.
+  //
+  // The increment above is date-blind. For a `transaction_flow` account whose
+  // current latest anchor is `ground_truth` (a human's live "Reconcile" against
+  // their real wallet), a BACKDATED transaction entered afterwards was already
+  // inside that observed number — incrementing it again invents money the
+  // wallet never had.
+  //
+  // The correction cannot be computed HERE: several callers apply the delta
+  // before the Transaction row it accounts for is written or tombstoned, so the
+  // canonical formula would read a stale ledger. This only marks the account;
+  // `flushAnchorRebuilds` re-materializes it at the tenant-transaction
+  // boundary, in this same transaction, once every row write has landed. See
+  // the module header of src/server/anchor-rebuild.server.ts for the full
+  // reasoning and the cost analysis.
+  markAccountBalanceDirty(tx, accountId)
+
+  const after = await findAccountBalanceVersion(
+    tx,
+    accountId,
+    familyId,
+    notFoundMessage
+  )
+
+  return { after, before }
+}
+
+async function findAccountBalanceVersion(
+  tx: TenantTransactionClient,
+  accountId: string,
+  familyId: string,
+  notFoundMessage: string
+): Promise<AccountBalanceVersion> {
+  const account = await tx.account.findFirst({
+    where: { id: accountId, familyId },
+    select: { balance: true, balanceSource: true, id: true, version: true },
+  })
+  if (!account) {
+    throw new Error(notFoundMessage)
+  }
+  return account
+}
+
+export function signedIncomeExpenseAmount(
+  type: "expense" | "income",
+  amount: bigint
+): bigint {
+  return type === "expense" ? negateMoney(absMoney(amount)) : absMoney(amount)
+}
+
+// Schema untuk setiap baris line item dalam split transaction
+const splitEntrySchema = z.object({
+  description: z.string().min(1),
+  amount: positiveMoneyInputSchema,
+  categoryId: z.string().nullable().optional(),
+  merchantId: z.string().nullable().optional(),
+})
+
+// 1. SERVER SECURITY CONTRACT (Zod Schema)
+// Never trust data directly from the browser.
+// We validate the payload shape at the Backend Gateway!
+const transactionInputSchema = z.object({
+  id: z.string().min(1).optional(), // ID pre-generated di client untuk sinkronisasi optimistic
+  type: z.enum(["expense", "income", "transfer"]),
+  kind: z.enum(TRANSACTION_KIND_VALUES).optional().default("standard"),
+  amount: positiveMoneyInputSchema,
+  description: z.string().min(1),
+  accountId: z.string().min(1),
+  categoryId: z.string().nullable().optional(),
+  toAccountId: z.string().nullable().optional(),
+  merchantId: z.string().nullable().optional(),
+  date: z.coerce.date(),
+  notes: z.string().nullable().optional(),
+  currency: z.string().optional().default("IDR"),
+  // Split Transaction Engine
+  isSplit: z.boolean().optional().default(false),
+  splitEntries: z.array(splitEntrySchema).optional(),
+  // Enterprise: lifecycle status, multi-currency, dan attachment
+  status: z
+    .enum(["PENDING", "CLEARED", "RECONCILED"])
+    .optional()
+    .default("CLEARED"),
+  destinationAmount: positiveMoneyInputSchema.nullable().optional(),
+  destinationCurrency: z.string().nullable().optional(),
+  attachmentUrl: z.string().nullable().optional(),
+  // Optional fee on ANY transfer (PER-247, generalizing ADR-0035 §6's
+  // cross-currency-only fxFee* inputs). When present, a standalone fee expense
+  // row is posted on `feeAccountId` (default: the source account) in that
+  // account's currency and linked to the Transfer via feeTransactionId (one
+  // fee leg max per transfer). The server derives the leg's kind: `fx_fee`
+  // for a cross-currency transfer, `transfer_fee` otherwise. Rejected for
+  // non-transfer transactions (assertManualTransactionKindShape).
+  feeAmount: positiveMoneyInputSchema.nullable().optional(),
+  feeAccountId: z.string().nullable().optional(),
+  feeCategoryId: z.string().nullable().optional(),
+  // PER-247: optional override of the derived funds_movement transfer purpose
+  // (see src/lib/money-movement.ts). Null/absent = derive from the account
+  // taxonomy. Rejected for liability transfer kinds (cc_payment /
+  // loan_payment / liability_draw) — their kind already carries the meaning.
+  transferPurpose: z.enum(TRANSFER_PURPOSE_VALUES).nullable().optional(),
+  // PER-196 / ADR-0048 §1: valuation-linked transfer. When either transfer
+  // side is a balanceSource="valuation" account, this is the new valuation
+  // value for that account (prefilled client-side as latest ∓ amount,
+  // editable). Ignored for non-transfer transactions and for a transfer
+  // between two transaction_flow accounts.
+  newValuationValue: valueMagnitudeSchema.optional(),
+  // PER-267 / ADR-0043's PER-264 amendment, "UI surface" section: the
+  // transaction form's rarely-used "ubah saldo juga" escape hatch. Present
+  // only when the user explicitly chose to also move the balance for a
+  // transaction that would otherwise be excluded by a `ground_truth` anchor
+  // (see `createTransactionForFamily`'s standard expense/income branch for
+  // the server-side re-verification — this flag is NEVER trusted on its own).
+  // Ignored for transfers (out of scope for this slice; see the rejection
+  // there for why).
+  balanceOverride: balanceOverrideInputSchema.nullable().optional(),
+})
+
+const createTransactionTransportInputSchema = transactionInputSchema.extend({
+  idempotencyKey: uuidV7Schema.optional(),
+})
+
+// PER-199: durable provider-identity binding (mirrors Account/Category/
+// Merchant/Transaction's externalProvider/externalId columns). Deliberately
+// added ONLY to this INTERNAL schema, never to `transactionInputSchema` /
+// `createTransactionTransportInputSchema` — those back the public
+// `createTransactionFn` `.inputValidator`, so a client can never set or spoof
+// a provider binding. Only internal server-side callers (e.g. Sure-migration
+// transfer-pair promotion) construct a `data` object with these fields and
+// call `createTransactionForFamily` directly, bypassing the public transport
+// layer entirely — exactly as already happens for `idempotencyKey` there.
+// `toExternalId` names the INFLOW leg's binding; `externalId` (this
+// object's own key) names the OUTFLOW leg's for a transfer, or the single
+// leg's for income/expense.
+const createTransactionInputSchema = createTransactionTransportInputSchema
+  .required({
+    idempotencyKey: true,
+  })
+  .extend({
+    externalProvider: z.string().min(1).nullable().optional(),
+    externalId: z.string().min(1).nullable().optional(),
+    toExternalId: z.string().min(1).nullable().optional(),
+  })
+
+const updateTransactionTransportInputSchema = transactionInputSchema.extend({
+  id: z.string().min(1),
+  idempotencyKey: uuidV7Schema.optional(),
+})
+
+const updateTransactionInputSchema =
+  updateTransactionTransportInputSchema.required({
+    idempotencyKey: true,
+  })
+
+const deleteTransactionTransportInputSchema = z.object({
+  id: z.string().min(1),
+  idempotencyKey: uuidV7Schema.optional(),
+})
+
+const deleteTransactionInputSchema =
+  deleteTransactionTransportInputSchema.required({
+    idempotencyKey: true,
+  })
+
+const bulkTransactionRowInputSchema = z.object({
+  id: z.string().min(1),
+  idempotencyKey: uuidV7Schema,
+  type: z.enum(["expense", "income"]), // CSV defaults to pure income/expense
+  amount: positiveMoneyInputSchema,
+  description: z.string().min(1),
+  accountId: z.string().min(1),
+  categoryId: z.string().nullable().optional(),
+  merchantId: z.string().nullable().optional(),
+  date: z.coerce.date(),
+  notes: z.string().nullable().optional(),
+  status: z
+    .enum(["PENDING", "CLEARED", "RECONCILED"])
+    .optional()
+    .default("CLEARED"),
+  attachmentUrl: z.string().nullable().optional(),
+})
+
+// Bound at 500, matching the precedent already set for
+// budget.allocations (src/server/budgets.ts). A whole array is processed
+// inside one interactive transaction on the RLS-scoped connection; an
+// unbounded array risks unbounded transaction time and connection-pool
+// starvation for other tenants. No legitimate UI-originated bulk edit
+// approaches this size.
+export const bulkCreateTransactionsTransportInputSchema = z.object({
+  idempotencyKey: uuidV7Schema.optional(),
+  transactions: z.array(bulkTransactionRowInputSchema).max(500),
+})
+
+const bulkCreateTransactionsInputSchema =
+  bulkCreateTransactionsTransportInputSchema.required({
+    idempotencyKey: true,
+  })
+
+// Same 500-row bound as bulkCreateTransactionsTransportInputSchema.
+export const bulkUpdateTransactionsTransportInputSchema = z.object({
+  ids: z.array(z.string().min(1)).max(500),
+  idempotencyKey: uuidV7Schema.optional(),
+  categoryId: z.string().nullable().optional(),
+  merchantId: z.string().nullable().optional(),
+  accountId: z.string().optional(),
+})
+
+const bulkUpdateTransactionsInputSchema =
+  bulkUpdateTransactionsTransportInputSchema.required({
+    idempotencyKey: true,
+  })
+
+// Same 500-row bound as bulkCreateTransactionsTransportInputSchema.
+export const bulkDeleteTransactionsTransportInputSchema = z.object({
+  ids: z.array(z.string().min(1)).max(500),
+  idempotencyKey: uuidV7Schema.optional(),
+})
+
+const bulkDeleteTransactionsInputSchema =
+  bulkDeleteTransactionsTransportInputSchema.required({
+    idempotencyKey: true,
+  })
+
+type CreateTransactionInput = z.infer<typeof createTransactionInputSchema>
+type UpdateTransactionInput = z.infer<typeof updateTransactionInputSchema>
+type DeleteTransactionInput = z.infer<typeof deleteTransactionInputSchema>
+type BulkCreateTransactionsInput = z.infer<
+  typeof bulkCreateTransactionsInputSchema
+>
+type BulkUpdateTransactionsInput = z.infer<
+  typeof bulkUpdateTransactionsInputSchema
+>
+type BulkDeleteTransactionsInput = z.infer<
+  typeof bulkDeleteTransactionsInputSchema
+>
+
+interface CreateTransactionForFamilyArgs {
+  data: unknown
+  familyId: string
+  runInTenantTransaction?: RunInTenantTransaction
+  user: { id: string }
+}
+
+export class TransactionGoneError extends Error {
+  statusCode = 410
+
+  constructor(message = "Transaction has been deleted and cannot be mutated") {
+    super(message)
+    this.name = "TransactionGoneError"
+  }
+}
+
+// PER-253 Tier 3 "same-account/round-trip guards": a transfer whose source and
+// destination are the SAME account is not a real money movement — it nets to
+// zero but still posts two ledger rows on that one account (a fabricated
+// outflow + inflow), corrupting its statement and violating every other
+// invariant that assumes a transfer's two legs land on DISTINCT accounts
+// (per-account direction inference, `deriveTransferKindForAccounts`, the
+// `Transfer` row's own outflow/inflow pairing). Raised by
+// `assertManualTransactionKindShape`, the single choke point both
+// `createTransactionForFamily` (create) and
+// `replaceTransactionWithinTenantTransaction` (edit / reversal-and-replace)
+// call before any balance delta or ledger row is written — see the
+// `transaction_transfer_distinct_accounts` DB CHECK for the defense-in-depth
+// backstop against any path that bypasses this function.
+export class SameAccountTransferError extends Error {
+  override readonly name = "SameAccountTransferError"
+  readonly statusCode = 422
+  constructor(
+    message = "A transfer must move money between two different accounts"
+  ) {
+    super(message)
+  }
+}
+
+// PER-279: "RECONCILED" may only ever be written by the audited
+// `setTransactionReconciledFn` (src/server/transaction-reconciliation.ts),
+// which stamps `reconciledAt`/`reconciledById` in the same write. The
+// generic manual create/edit path has no such audit trail, so a client
+// sending status="RECONCILED" here would silently produce a row that CLAIMS
+// to be reconciled with no record of who/when — the exact gap PER-83's DB
+// CHECKs (row-shape only) cannot close on their own, since they never
+// require reconciledAt to be non-null.
+export class ReconciledStatusNotDirectlyEditableError extends Error {
+  override readonly name = "ReconciledStatusNotDirectlyEditableError"
+  readonly statusCode = 422
+  constructor() {
+    super(
+      'Status "Reconciled" can only be set via Reconcile mode, not the transaction form'
+    )
+  }
+}
+
+// PER-279: once a transaction is RECONCILED, editing it through the generic
+// reversal-and-replace path is a second, more insidious route to the same
+// audit-trail gap — the replaced row never carries `reconciledAt`/
+// `reconciledById` forward (only `setTransactionReconciledFn` ever writes
+// them), so ANY edit of a reconciled row's unrelated field (notes, category,
+// …) would silently produce a new row that is still `status="RECONCILED"`
+// but has lost its audit trail. Locking edits (and deletes, for the same
+// reason) until the transaction is un-reconciled via Reconcile mode is the
+// standard behavior real reconciliation tools use, and it is the only way
+// to guarantee "status=RECONCILED implies it was actually audited" stays
+// true after this row is touched again.
+export class ReconciledTransactionLockedError extends Error {
+  override readonly name = "ReconciledTransactionLockedError"
+  readonly statusCode = 409
+  constructor() {
+    super(
+      "This transaction is reconciled and locked. Un-reconcile it in Reconcile mode before editing or deleting."
+    )
+  }
+}
+
+function assertManualTransactionKindShape(data: {
+  accountId: string
+  kind: string
+  status: string
+  toAccountId?: string | null
+  type: "expense" | "income" | "transfer"
+  feeAmount?: bigint | null
+  transferPurpose?: string | null
+}): void {
+  if (data.status === "RECONCILED") {
+    throw new ReconciledStatusNotDirectlyEditableError()
+  }
+
+  if (data.type === "transfer") {
+    if (data.kind !== "standard") {
+      throw new Error("Transfer kind is derived from account direction")
+    }
+    if (data.toAccountId && data.accountId === data.toAccountId) {
+      throw new SameAccountTransferError()
+    }
+    return
+  }
+
+  // PER-247: fee + purpose are transfer-only inputs. Never silently drop
+  // money-shaped client input — reject it loud instead.
+  if (data.feeAmount) {
+    throw new Error("A transfer fee can only be attached to a transfer")
+  }
+  if (data.transferPurpose) {
+    throw new Error("A transfer purpose can only be attached to a transfer")
+  }
+
+  if (
+    data.type === "income" &&
+    !["standard", "balance_adjustment", "reimbursement"].includes(data.kind)
+  ) {
+    throw new Error("Income transactions must use kind standard")
+  }
+
+  // PER-260: reimbursement is an income-only kind (guarded above — the
+  // `type === "expense"`/`"transfer"` branches never reach here with
+  // kind="reimbursement" since it's absent from both allow-lists).
+
+  if (
+    data.type === "expense" &&
+    ![
+      "standard",
+      "liability_interest",
+      "liability_fee",
+      "balance_adjustment",
+    ].includes(data.kind)
+  ) {
+    throw new Error(`Expense transactions cannot use kind ${data.kind}`)
+  }
+
+  if (isLiabilityCostKind(data.kind) && !data.toAccountId) {
+    throw new Error(`${data.kind} requires a liability toAccountId`)
+  }
+}
+
+/**
+ * PER-267 / ADR-0043's PER-264 amendment, "UI surface" section — the
+ * transaction form's "ubah saldo juga" escape hatch.
+ *
+ * Called from `createTransactionForFamily`'s standard expense/income branch,
+ * AFTER the transaction row and its incremental balance delta are already
+ * written (so `balanceIncludingThisTransaction` is the account's balance as
+ * if this transaction had already counted — exactly "money discovered right
+ * now"). Re-verifies the gating condition itself: the client's decision to
+ * show the override control is a UI convenience, never a money-moving
+ * authority, so this never trusts `data.balanceOverride` alone. If the
+ * account's current anchor is not `ground_truth`, or the transaction wasn't
+ * actually excluded by it, the override is a no-op request against a
+ * condition that doesn't hold — rejected loud rather than silently writing an
+ * anchor nothing needed.
+ *
+ * Writes ONE new `ground_truth` reconciliation anchor dated now, valued at
+ * `balanceIncludingThisTransaction`. Because that anchor becomes the latest
+ * anchor (dated after the old one) with zero flow after it (it's dated now),
+ * `createValuationWithinTx`'s own re-materialization computes exactly that
+ * value back out — so it writes the anchor and leaves the already-correct
+ * materialized balance untouched, no extra `Account` audit row.
+ */
+async function applyBalanceOverride(
+  tx: TenantTransactionClient,
+  {
+    familyId,
+    user,
+    auditCtx,
+    accountId,
+    transactionDate,
+    balanceIncludingThisTransaction,
+    currency,
+    reason,
+    note,
+  }: {
+    familyId: string
+    user: ServerActor
+    auditCtx: AuditContext
+    accountId: string
+    transactionDate: Date
+    balanceIncludingThisTransaction: bigint
+    currency: string
+    reason: BalanceOverrideReason
+    note: string | null
+  }
+): Promise<void> {
+  const anchor = await latestValuation(tx, familyId, accountId, {
+    anchorTypesOnly: true,
+    asOf: new Date(),
+  })
+  if (
+    anchor === null ||
+    anchor.provenance !== "ground_truth" ||
+    !(transactionDate.getTime() <= anchor.valuationDate.getTime())
+  ) {
+    throw new ValuationError(
+      "Balance override does not apply: this transaction's date is not " +
+        "at/before the account's last reconciliation, so it already " +
+        "moves the balance normally"
+    )
+  }
+
+  await createValuationWithinTx(
+    tx,
+    familyId,
+    {
+      accountId,
+      value: balanceIncludingThisTransaction.toString(),
+      currency,
+      valuationDate: new Date(),
+      type: "reconciliation",
+      source: "manual",
+      note,
+      // Never persisted as its own IdempotencyRecord (this call bypasses
+      // `createValuationForFamily`'s replay wrapper, same as the other direct
+      // `createValuationWithinTx` call sites in this file) — the whole
+      // multi-row write's idempotency is already owned by the enclosing
+      // transaction create's own `replayIdempotentTransaction` check, which
+      // hashes `data` (now including `balanceOverride`) as one canonical
+      // payload. A valid uuidv7 is still required by the schema shape.
+      idempotencyKey: createUuidV7(),
+    },
+    user,
+    auditCtx,
+    "ground_truth",
+    // PER-267 acceptance criteria: the reason chip (and free text for
+    // "Lainnya") must be queryable from the audit trail. Folded into this
+    // Valuation's own `AuditLog.after` payload — see `createValuationWithinTx`.
+    {
+      ticketRef: "PER-267",
+      balanceOverrideReason: reason,
+      balanceOverrideNote: note,
+    }
+  )
+}
+
+/**
+ * Create the optional fee leg of a transfer (PER-247, generalized from the
+ * PER-147 / ADR-0035 §6 cross-currency-only fee). A standalone expense posted
+ * on `feeAccountId` (default: the source account) in that account's native
+ * currency, with its own atomic balance delta, base projection, and audit.
+ * `feeKind` is "fx_fee" for a cross-currency transfer (ADR-0035 §6) and
+ * "transfer_fee" otherwise (PER-247). Returns the new fee transaction id, or
+ * null when no fee was requested. The caller links it onto the `Transfer`
+ * row.
+ */
+async function createTransferFeeLegIfRequested(
+  tx: TenantTransactionClient,
+  {
+    familyId,
+    user,
+    baseCurrency,
+    auditCtx,
+    feeKind,
+    feeAmount: requestedFeeAmount,
+    feeAccountId: requestedFeeAccountId,
+    feeCategoryId,
+    defaultFeeAccountId,
+    date,
+    description,
+    notes,
+    status,
+  }: {
+    familyId: string
+    user: { id: string }
+    baseCurrency: string
+    auditCtx: Awaited<ReturnType<typeof createAuditContext>>
+    feeKind: "fx_fee" | "transfer_fee"
+    feeAmount: bigint | null | undefined
+    feeAccountId: string | null | undefined
+    feeCategoryId: string | null | undefined
+    // The fee bearer when feeAccountId is not specified: the transfer's
+    // source/cash account (PER-247 locked decision: origin bears the fee by
+    // default, editable via feeAccountId).
+    defaultFeeAccountId: string
+    date: Date
+    description: string
+    notes?: string | null
+    status: string
+  }
+): Promise<string | null> {
+  if (!requestedFeeAmount) return null
+
+  const feeAccountId = requestedFeeAccountId ?? defaultFeeAccountId
+  await validateTenantReferences(tx, familyId, {
+    accountId: feeAccountId,
+    categoryId: feeCategoryId,
+  })
+
+  const oldFeeAccount = await tx.account.findUniqueOrThrow({
+    where: { id: feeAccountId },
+  })
+  const feeAmount = negateMoney(absMoney(requestedFeeAmount))
+  const feeMutation = await applyAccountBalanceDelta(tx, {
+    accountId: feeAccountId,
+    delta: feeAmount,
+    familyId,
+    notFoundMessage: "Transfer fee account not found or access denied!",
+  })
+  const feeProjection = await computeBaseProjectionForAmount(tx, familyId, {
+    amount: feeAmount,
+    currency: oldFeeAccount.currency,
+    date,
+    baseCurrency,
+  })
+
+  const feeTx = await tx.transaction.create({
+    data: {
+      type: "expense",
+      kind: feeKind,
+      amount: feeAmount,
+      currency: oldFeeAccount.currency,
+      description:
+        feeKind === "fx_fee"
+          ? `FX fee: ${description}`
+          : `Transfer fee: ${description}`,
+      date,
+      notes: notes || null,
+      accountId: feeAccountId,
+      categoryId: feeCategoryId || null,
+      userId: user.id,
+      familyId,
+      status,
+      baseAmount: feeProjection.baseAmount,
+      baseCurrency: feeProjection.baseCurrency,
+      fxRateScaled: feeProjection.fxRateScaled,
+      fxRateSnapshotId: feeProjection.fxRateSnapshotId,
+      accountBalanceAfter: feeMutation.after.balance,
+    },
+  })
+
+  const newFeeAccount = await tx.account.findUniqueOrThrow({
+    where: { id: feeAccountId },
+  })
+  await auditLogs(tx, auditCtx, [
+    ...accountBalanceAuditEntries([oldFeeAccount], [newFeeAccount]),
+    ...createdAuditEntries("Transaction", [feeTx]),
+  ])
+
+  return feeTx.id
+}
+
+/**
+ * PER-247: resolve the effective purpose for a transfer. The client may
+ * override the taxonomy-derived default, but a purpose is only meaningful on
+ * a funds_movement transfer — liability kinds (cc_payment / loan_payment /
+ * liability_draw) already carry their meaning via `kind` (also guarded by the
+ * transfer_liability_kind_safe constraint trigger at the DB layer).
+ */
+function resolveTransferPurpose({
+  kind,
+  override,
+  fromAccount,
+  toAccount,
+}: {
+  kind: string
+  override: TransferPurpose | null | undefined
+  fromAccount: Account
+  toAccount: Account
+}): TransferPurpose | null {
+  if (kind !== "funds_movement") {
+    if (override) {
+      throw new Error(
+        `A transfer purpose only applies to funds_movement transfers, not ${kind}`
+      )
+    }
+    return null
+  }
+  return (
+    override ??
+    deriveTransferPurpose({
+      fromAccountType: parseAccountType(fromAccount.accountType),
+      toAccountType: parseAccountType(toAccount.accountType),
+      toAccountSubtype: toAccount.accountSubtype,
+    })
+  )
+}
+
+/**
+ * PER-247: resolve everything about a transfer request that the ledger
+ * DERIVES rather than trusts from the client — the kind (from account
+ * direction), the purpose (override or taxonomy-derived default), and the
+ * default fee bearer. Runs BEFORE the idempotency replay check so the
+ * canonical request payload hashes the same resolved values the persisted
+ * side stores: a faithful replay matches, and the same idempotency key with
+ * a different purpose/fee fails with a conflict (ADR-0006).
+ */
+interface ResolvedTransferSemantics {
+  data: CreateTransactionInput
+  fromAccount: Account
+  toAccount: Account
+  kind: TransferTransactionKind
+  purpose: TransferPurpose | null
+}
+
+async function resolveTransferSemantics(
+  tx: TenantTransactionClient,
+  data: CreateTransactionInput
+): Promise<ResolvedTransferSemantics> {
+  if (!data.toAccountId) {
+    throw new Error("Transfer requires a destination account!")
+  }
+  const toAccountId = data.toAccountId
+
+  const [fromAccount, toAccount] = await runTenantTransactionQueriesInOrder([
+    () =>
+      tx.account.findUniqueOrThrow({
+        where: { id: data.accountId },
+      }),
+    () =>
+      tx.account.findUniqueOrThrow({
+        where: { id: toAccountId },
+      }),
+  ] as const)
+
+  const kind = deriveTransferKindForAccounts({
+    fromAccountType: parseAccountType(fromAccount.accountType),
+    toAccountType: parseAccountType(toAccount.accountType),
+  })
+  const purpose = resolveTransferPurpose({
+    kind,
+    override: data.transferPurpose,
+    fromAccount,
+    toAccount,
+  })
+
+  // Default fee bearer: the source account (locked PER-247 decision: origin
+  // bears the fee, editable via feeAccountId). A valuation-linked
+  // REDEMPTION's source is the tracked (valuation) account, which cannot
+  // post expense deltas (ADR-0048 §3) — the cash destination bears the fee.
+  const feeAccountId = data.feeAmount
+    ? (data.feeAccountId ??
+      (fromAccount.balanceSource === "valuation"
+        ? toAccountId
+        : data.accountId))
+    : data.feeAccountId
+
+  return {
+    data: { ...data, transferPurpose: purpose, feeAccountId },
+    fromAccount,
+    toAccount,
+    kind,
+    purpose,
+  }
+}
+
+async function assertLiabilityCostTarget(
+  tx: TenantTransactionClient,
+  familyId: string,
+  data: {
+    kind: string
+    toAccountId?: string | null
+  }
+): Promise<void> {
+  if (!isLiabilityCostKind(data.kind)) return
+
+  const target = await tx.account.findFirst({
+    where: { familyId, id: data.toAccountId ?? "" },
+    select: { accountClass: true, id: true },
+  })
+
+  if (!target || target.accountClass !== "LIABILITY") {
+    throw new Error(`${data.kind} must point at a liability account`)
+  }
+}
+
+const UPDATE_TRANSACTION_ENDPOINT = "updateTransactionFn"
+const DELETE_TRANSACTION_ENDPOINT = "deleteTransactionFn"
+const BULK_CREATE_TRANSACTIONS_ENDPOINT = "bulkCreateTransactionsFn"
+const BULK_UPDATE_TRANSACTIONS_ENDPOINT = "bulkUpdateTransactionsFn"
+const BULK_DELETE_TRANSACTIONS_ENDPOINT = "bulkDeleteTransactionsFn"
+
+type IdempotentMutationEndpoint =
+  | typeof UPDATE_TRANSACTION_ENDPOINT
+  | typeof DELETE_TRANSACTION_ENDPOINT
+  | typeof BULK_CREATE_TRANSACTIONS_ENDPOINT
+  | typeof BULK_UPDATE_TRANSACTIONS_ENDPOINT
+  | typeof BULK_DELETE_TRANSACTIONS_ENDPOINT
+
+interface SerializedTransactionResult {
+  id: string
+}
+
+interface BulkUpdateReplacementResult {
+  id: string
+  replacementId: string
+}
+
+interface BulkCreateTransactionsResult {
+  count: number
+  success: boolean
+  transactionIds: string[]
+}
+
+interface BulkUpdateTransactionsResult {
+  replacements: BulkUpdateReplacementResult[]
+  success: boolean
+}
+
+interface BulkDeleteTransactionsResult {
+  count: number
+  success: boolean
+}
+
+async function replayIdempotentEndpointResponse<TResponse>(
+  tx: TenantTransactionClient,
+  {
+    endpoint,
+    familyId,
+    key,
+    requestHash,
+  }: {
+    endpoint: IdempotentMutationEndpoint
+    familyId: string
+    key: string
+    requestHash: string
+  }
+): Promise<TResponse | null> {
+  const record = await tx.idempotencyRecord.findUnique({
+    where: {
+      familyId_endpoint_key: {
+        endpoint,
+        familyId,
+        key,
+      },
+    },
+  })
+  if (!record) return null
+  if (record.requestHash !== requestHash) {
+    throw new IdempotencyConflictError()
+  }
+  return record.responseJson as TResponse
+}
+
+async function persistIdempotentEndpointResponse(
+  tx: TenantTransactionClient,
+  {
+    endpoint,
+    familyId,
+    key,
+    requestHash,
+    response,
+  }: {
+    endpoint: IdempotentMutationEndpoint
+    familyId: string
+    key: string
+    requestHash: string
+    response: unknown
+  }
+): Promise<void> {
+  await tx.idempotencyRecord.create({
+    data: {
+      endpoint,
+      expiresAt: new Date(Date.now() + IDEMPOTENCY_RECORD_TTL_MS),
+      familyId,
+      key,
+      requestHash,
+      responseJson: toCanonicalJson(response) as Prisma.InputJsonValue,
+      statusCode: 200,
+    },
+  })
+}
+
+interface PersistedSplitEntryForIdempotency {
+  amount: bigint
+  categoryId: string | null
+  description: string
+  merchantId: string | null
+}
+
+interface PersistedTransferFeeForIdempotency {
+  accountId: string
+  amount: bigint
+  categoryId: string | null
+}
+
+interface PersistedTransferRelationForIdempotency {
+  purpose: string | null
+  feeTransaction: PersistedTransferFeeForIdempotency | null
+}
+
+interface PersistedTransferOutForIdempotency extends PersistedTransferRelationForIdempotency {
+  inflowTransaction: {
+    accountId: string
+    amount: bigint
+    categoryId: string | null
+    currency: string
+    date: Date
+    description: string
+    destinationAmount: bigint | null
+    destinationCurrency: string | null
+    merchantId: string | null
+    notes: string | null
+    status: string
+    toAccountId: string | null
+    type: string
+  } | null
+}
+
+interface PersistedTransactionForIdempotency {
+  accountBalanceAfter: bigint | null
+  accountId: string
+  amount: bigint
+  attachmentUrl: string | null
+  categoryId: string | null
+  createdAt: Date
+  currency: string
+  date: Date
+  deletedAt: Date | null
+  description: string
+  destinationAmount: bigint | null
+  destinationCurrency: string | null
+  excluded: boolean
+  familyId: string
+  id: string
+  idempotencyKey: string | null
+  isSplit: boolean
+  kind: string
+  merchantId: string | null
+  notes: string | null
+  splitEntries: PersistedSplitEntryForIdempotency[]
+  status: string
+  toAccountId: string | null
+  transferIn: PersistedTransferRelationForIdempotency | null
+  transferOut: PersistedTransferOutForIdempotency | null
+  type: string
+  updatedAt: Date
+  userId: string
+}
+
+function canonicalMoney(value: bigint | null | undefined): string | null {
+  return value == null ? null : encodeMoney(absMoney(value))
+}
+
+function canonicalSplitEntries(
+  entries: Array<{
+    amount: bigint
+    categoryId?: string | null
+    description: string
+    merchantId?: string | null
+  }>
+) {
+  return entries.map((entry) => ({
+    amount: encodeMoney(absMoney(entry.amount)),
+    categoryId: entry.categoryId ?? null,
+    description: entry.description,
+    merchantId: entry.merchantId ?? null,
+  }))
+}
+
+function canonicalRequestPayload(
+  data: CreateTransactionInput,
+  // PER-196 / ADR-0048 §4: a valuation-linked transfer has no real second
+  // Transaction leg, so there is nothing comparable to fabricate here.
+  // Defaults to true (existing classic-transfer behavior, and the update
+  // endpoint's own request-hash use at canonicalUpdateRequestPayload, which
+  // never reaches a persisted valuation-linked row anyway since that path
+  // fails loud via ValuationLinkedTransferUnsupportedError first).
+  { hasTransferPartner = true }: { hasTransferPartner?: boolean } = {}
+) {
+  return {
+    accountId: data.accountId,
+    amount: encodeMoney(absMoney(data.amount)),
+    attachmentUrl: data.attachmentUrl ?? null,
+    categoryId: data.isSplit ? null : (data.categoryId ?? null),
+    currency: data.currency,
+    date: data.date.toISOString(),
+    description: data.description,
+    destinationAmount: canonicalMoney(data.destinationAmount),
+    destinationCurrency: data.destinationCurrency ?? null,
+    // PER-247: the transfer fee + purpose are part of the canonical payload —
+    // replaying the same key with a different fee/purpose must conflict, and
+    // (create path only) the caller pre-normalizes derived purpose + default
+    // fee bearer so a faithful replay hashes the same values the persisted
+    // side stores (see resolveTransferSemantics).
+    feeAmount: canonicalMoney(data.feeAmount),
+    feeAccountId: data.feeAmount ? (data.feeAccountId ?? null) : null,
+    feeCategoryId: data.feeAmount ? (data.feeCategoryId ?? null) : null,
+    transferPurpose: data.transferPurpose ?? null,
+    isSplit: data.isSplit,
+    kind: data.type === "transfer" ? null : data.kind,
+    // PER-210: a split parent keeps its single merchant (merchant = whole
+    // receipt); only categoryId is nulled on the parent. Must stay symmetric
+    // with canonicalPersistedPayload's merchantId line so idempotency replay
+    // detection keeps matching split-with-merchant payloads.
+    merchantId: data.merchantId ?? null,
+    notes: data.notes ?? null,
+    splitEntries: data.isSplit
+      ? canonicalSplitEntries(data.splitEntries ?? [])
+      : [],
+    status: data.status,
+    toAccountId: data.toAccountId ?? null,
+    transferPartner:
+      data.type === "transfer" && hasTransferPartner
+        ? {
+            accountId: data.toAccountId ?? null,
+            amount: encodeMoney(
+              absMoney(data.destinationAmount ?? data.amount)
+            ),
+            categoryId: data.categoryId ?? null,
+            currency: data.destinationCurrency ?? data.currency,
+            date: data.date.toISOString(),
+            description: data.description,
+            destinationAmount: canonicalMoney(data.destinationAmount),
+            destinationCurrency: data.destinationCurrency ?? null,
+            merchantId: data.merchantId ?? null,
+            notes: data.notes ?? null,
+            status: data.status,
+            toAccountId: data.accountId,
+            type: "transfer",
+          }
+        : null,
+    type: data.type,
+  }
+}
+
+function canonicalUpdateRequestPayload(data: UpdateTransactionInput) {
+  return {
+    id: data.id,
+    replacement: canonicalRequestPayload(data),
+  }
+}
+
+function canonicalDeleteRequestPayload(data: DeleteTransactionInput) {
+  return { id: data.id }
+}
+
+function canonicalBulkCreateRequestPayload(data: BulkCreateTransactionsInput) {
+  return {
+    transactions: data.transactions
+      .map((row) => ({
+        accountId: row.accountId,
+        amount: encodeMoney(absMoney(row.amount)),
+        attachmentUrl: row.attachmentUrl ?? null,
+        categoryId: row.categoryId ?? null,
+        date: row.date.toISOString(),
+        description: row.description,
+        id: row.id,
+        idempotencyKey: row.idempotencyKey,
+        merchantId: row.merchantId ?? null,
+        notes: row.notes ?? null,
+        status: row.status,
+        type: row.type,
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
+  }
+}
+
+function canonicalBulkUpdateRequestPayload(data: BulkUpdateTransactionsInput) {
+  const patch: Record<string, unknown> = {}
+  if (data.accountId !== undefined) patch.accountId = data.accountId
+  if (data.categoryId !== undefined) patch.categoryId = data.categoryId
+  if (data.merchantId !== undefined) patch.merchantId = data.merchantId
+
+  return {
+    ids: canonicalIds(data.ids),
+    patch,
+  }
+}
+
+function canonicalBulkDeleteRequestPayload(data: BulkDeleteTransactionsInput) {
+  return { ids: canonicalIds(data.ids) }
+}
+
+function canonicalIds(ids: readonly string[]): string[] {
+  return [...ids].sort((left, right) => left.localeCompare(right))
+}
+
+function assertNoDuplicateValues(
+  values: readonly string[],
+  label: string
+): void {
+  const seen = new Set<string>()
+  for (const value of values) {
+    if (seen.has(value)) {
+      throw new Error(`${label} must not contain duplicate values`)
+    }
+    seen.add(value)
+  }
+}
+
+function assertAllRequestedTransactionsLoaded(
+  requestedIds: readonly string[],
+  loadedRows: readonly { id: string }[]
+): void {
+  const loadedIds = new Set(loadedRows.map((row) => row.id))
+  const missingId = requestedIds.find((id) => !loadedIds.has(id))
+  if (missingId) {
+    throw new Error("Transaction not found or access denied")
+  }
+}
+
+function canonicalPersistedPayload(tx: PersistedTransactionForIdempotency) {
+  const transferPartner = tx.transferOut?.inflowTransaction ?? null
+  // PER-247: the persisted purpose + fee leg live on the Transfer row — in
+  // whichever FK slot the idempotency-key-carrying cash leg landed (outflow
+  // for a classic transfer / valuation-linked contribution, inflow for a
+  // valuation-linked redemption).
+  const transferRelation = tx.transferOut ?? tx.transferIn
+  const persistedFee = transferRelation?.feeTransaction ?? null
+
+  return {
+    accountId: tx.accountId,
+    amount: encodeMoney(absMoney(tx.amount)),
+    attachmentUrl: tx.attachmentUrl,
+    categoryId: tx.isSplit ? null : tx.categoryId,
+    currency: tx.currency,
+    date: tx.date.toISOString(),
+    description: tx.description,
+    destinationAmount: canonicalMoney(tx.destinationAmount),
+    destinationCurrency: tx.destinationCurrency,
+    feeAmount: persistedFee ? canonicalMoney(persistedFee.amount) : null,
+    feeAccountId: persistedFee?.accountId ?? null,
+    feeCategoryId: persistedFee?.categoryId ?? null,
+    transferPurpose: transferRelation?.purpose ?? null,
+    isSplit: tx.isSplit,
+    kind: tx.type === "transfer" ? null : tx.kind,
+    // PER-210: split parent keeps its merchant. Symmetric twin of
+    // canonicalRequestPayload's merchantId line (input-side vs persisted-side).
+    merchantId: tx.merchantId,
+    notes: tx.notes,
+    splitEntries: tx.isSplit ? canonicalSplitEntries(tx.splitEntries) : [],
+    status: tx.status,
+    toAccountId: tx.toAccountId,
+    transferPartner:
+      tx.type === "transfer"
+        ? transferPartner && {
+            accountId: transferPartner.accountId,
+            amount: encodeMoney(absMoney(transferPartner.amount)),
+            categoryId: transferPartner.categoryId,
+            currency: transferPartner.currency,
+            date: transferPartner.date.toISOString(),
+            description: transferPartner.description,
+            destinationAmount: canonicalMoney(
+              transferPartner.destinationAmount
+            ),
+            destinationCurrency: transferPartner.destinationCurrency,
+            merchantId: transferPartner.merchantId,
+            notes: transferPartner.notes,
+            status: transferPartner.status,
+            toAccountId: transferPartner.toAccountId,
+            type: transferPartner.type,
+          }
+        : null,
+    type: tx.type,
+  }
+}
+
+function assertIdempotentPayloadMatches(
+  data: CreateTransactionInput,
+  existing: PersistedTransactionForIdempotency
+): void {
+  // PER-196 / ADR-0048 §4: `existing` is the Transaction row carrying the
+  // idempotency key — always the cash leg for a valuation-linked transfer,
+  // in whichever FK slot it landed in. It has a real transfer partner only
+  // when it's the outflow leg of a classic dual-leg transfer (transferOut
+  // resolves and its inflowTransaction is non-null); a valuation-linked
+  // contribution's transferOut.inflowTransaction is null, and a
+  // valuation-linked redemption's cash leg has no transferOut at all (it
+  // sits in inflowTransactionId instead).
+  const hasTransferPartner =
+    existing.type === "transfer" &&
+    existing.transferOut !== null &&
+    existing.transferOut.inflowTransaction !== null
+
+  if (
+    JSON.stringify(canonicalRequestPayload(data, { hasTransferPartner })) !==
+    JSON.stringify(canonicalPersistedPayload(existing))
+  ) {
+    throw new IdempotencyConflictError()
+  }
+}
+
+async function findIdempotentTransaction(
+  tx: TenantTransactionClient,
+  familyId: string,
+  idempotencyKey: string
+): Promise<PersistedTransactionForIdempotency | null> {
+  const transaction = await tx.transaction.findUnique({
+    where: {
+      tx_family_idempotency: {
+        familyId,
+        idempotencyKey,
+      },
+    },
+  })
+  if (!transaction) return null
+
+  const [splitEntries, transferIn, transferOut] =
+    await runTenantTransactionQueriesInOrder([
+      () =>
+        tx.splitEntry.findMany({
+          where: { transactionId: transaction.id },
+          orderBy: { createdAt: "asc" },
+        }),
+      () =>
+        tx.transfer.findFirst({
+          where: { inflowTransactionId: transaction.id },
+        }),
+      () =>
+        tx.transfer.findFirst({
+          where: { outflowTransactionId: transaction.id },
+        }),
+    ] as const)
+
+  // PER-247: hydrate the fee leg (if any) linked from whichever Transfer row
+  // this transaction anchors, so the canonical persisted payload can compare
+  // fee + purpose against a replayed request.
+  const feeTransactionIds = [
+    transferIn?.feeTransactionId,
+    transferOut?.feeTransactionId,
+  ].filter((id): id is string => id != null)
+  const feeTransactions =
+    feeTransactionIds.length > 0
+      ? await tx.transaction.findMany({
+          where: { id: { in: feeTransactionIds } },
+          select: {
+            id: true,
+            accountId: true,
+            amount: true,
+            categoryId: true,
+          },
+        })
+      : []
+  const feeTransactionsById = indexById(feeTransactions)
+  const feeFor = (
+    feeTransactionId: string | null | undefined
+  ): PersistedTransferFeeForIdempotency | null =>
+    feeTransactionId
+      ? (feeTransactionsById.get(feeTransactionId) ?? null)
+      : null
+
+  const transferOutWithInflowTransaction = transferOut
+    ? {
+        ...transferOut,
+        purpose: transferOut.purpose,
+        feeTransaction: feeFor(transferOut.feeTransactionId),
+        // PER-196 / ADR-0048 §4: null for a valuation-linked transfer where
+        // THIS transaction is the outflow (contribution) leg — there is no
+        // inflow Transaction, only a linked Valuation.
+        inflowTransaction: transferOut.inflowTransactionId
+          ? await tx.transaction.findUniqueOrThrow({
+              where: { id: transferOut.inflowTransactionId },
+            })
+          : null,
+      }
+    : null
+
+  return {
+    ...transaction,
+    splitEntries,
+    transferIn: transferIn
+      ? {
+          purpose: transferIn.purpose,
+          feeTransaction: feeFor(transferIn.feeTransactionId),
+        }
+      : null,
+    transferOut: transferOutWithInflowTransaction,
+  }
+}
+
+function serializePersistedReplay(tx: PersistedTransactionForIdempotency) {
+  const {
+    splitEntries: _splitEntries,
+    transferIn: _transferIn,
+    transferOut: _transferOut,
+    ...transaction
+  } = tx
+
+  return serializeTransaction({
+    ...transaction,
+    amount: absMoney(transaction.amount),
+  })
+}
+
+async function replayIdempotentTransaction(
+  tx: TenantTransactionClient,
+  familyId: string,
+  data: CreateTransactionInput
+) {
+  const existing = await findIdempotentTransaction(
+    tx,
+    familyId,
+    data.idempotencyKey
+  )
+  if (!existing) return null
+
+  assertIdempotentPayloadMatches(data, existing)
+  return serializePersistedReplay(existing)
+}
+
+async function readIdempotencyHeader(): Promise<string | null> {
+  try {
+    const { getRequest } = await import("@tanstack/react-start/server")
+    return getRequest().headers.get("Idempotency-Key")
+  } catch {
+    return null
+  }
+}
+
+async function normalizeCreateTransactionTransportInput(
+  data: z.infer<typeof createTransactionTransportInputSchema>
+): Promise<CreateTransactionInput> {
+  const rawHeaderKey = await readIdempotencyHeader()
+  const headerKey =
+    rawHeaderKey == null ? null : uuidV7Schema.parse(rawHeaderKey)
+  if (headerKey && data.idempotencyKey && headerKey !== data.idempotencyKey) {
+    throw new Error("Idempotency-Key header does not match idempotencyKey")
+  }
+
+  // Normalisasi data dengan menyertakan idempotencyKey dari header jika ada
+  return createTransactionInputSchema.parse({
+    ...data,
+    idempotencyKey: headerKey ?? data.idempotencyKey,
+  })
+}
+
+async function normalizeUpdateTransactionTransportInput(
+  data: z.infer<typeof updateTransactionTransportInputSchema>
+): Promise<UpdateTransactionInput> {
+  const rawHeaderKey = await readIdempotencyHeader()
+  const headerKey =
+    rawHeaderKey == null ? null : uuidV7Schema.parse(rawHeaderKey)
+  if (headerKey && data.idempotencyKey && headerKey !== data.idempotencyKey) {
+    throw new Error("Idempotency-Key header does not match idempotencyKey")
+  }
+
+  return updateTransactionInputSchema.parse({
+    ...data,
+    idempotencyKey: headerKey ?? data.idempotencyKey,
+  })
+}
+
+async function normalizeDeleteTransactionTransportInput(
+  data: z.infer<typeof deleteTransactionTransportInputSchema>
+): Promise<DeleteTransactionInput> {
+  const rawHeaderKey = await readIdempotencyHeader()
+  const headerKey =
+    rawHeaderKey == null ? null : uuidV7Schema.parse(rawHeaderKey)
+  if (headerKey && data.idempotencyKey && headerKey !== data.idempotencyKey) {
+    throw new Error("Idempotency-Key header does not match idempotencyKey")
+  }
+
+  return deleteTransactionInputSchema.parse({
+    ...data,
+    idempotencyKey: headerKey ?? data.idempotencyKey,
+  })
+}
+
+async function normalizeBulkCreateTransactionsTransportInput(
+  data: z.infer<typeof bulkCreateTransactionsTransportInputSchema>
+): Promise<BulkCreateTransactionsInput> {
+  const rawHeaderKey = await readIdempotencyHeader()
+  const headerKey =
+    rawHeaderKey == null ? null : uuidV7Schema.parse(rawHeaderKey)
+  if (headerKey && data.idempotencyKey && headerKey !== data.idempotencyKey) {
+    throw new Error("Idempotency-Key header does not match idempotencyKey")
+  }
+
+  return bulkCreateTransactionsInputSchema.parse({
+    ...data,
+    idempotencyKey: headerKey ?? data.idempotencyKey,
+  })
+}
+
+async function normalizeBulkUpdateTransactionsTransportInput(
+  data: z.infer<typeof bulkUpdateTransactionsTransportInputSchema>
+): Promise<BulkUpdateTransactionsInput> {
+  const rawHeaderKey = await readIdempotencyHeader()
+  const headerKey =
+    rawHeaderKey == null ? null : uuidV7Schema.parse(rawHeaderKey)
+  if (headerKey && data.idempotencyKey && headerKey !== data.idempotencyKey) {
+    throw new Error("Idempotency-Key header does not match idempotencyKey")
+  }
+
+  return bulkUpdateTransactionsInputSchema.parse({
+    ...data,
+    idempotencyKey: headerKey ?? data.idempotencyKey,
+  })
+}
+
+async function normalizeBulkDeleteTransactionsTransportInput(
+  data: z.infer<typeof bulkDeleteTransactionsTransportInputSchema>
+): Promise<BulkDeleteTransactionsInput> {
+  const rawHeaderKey = await readIdempotencyHeader()
+  const headerKey =
+    rawHeaderKey == null ? null : uuidV7Schema.parse(rawHeaderKey)
+  if (headerKey && data.idempotencyKey && headerKey !== data.idempotencyKey) {
+    throw new Error("Idempotency-Key header does not match idempotencyKey")
+  }
+
+  return bulkDeleteTransactionsInputSchema.parse({
+    ...data,
+    idempotencyKey: headerKey ?? data.idempotencyKey,
+  })
+}
+
+// PER-196 / ADR-0048 §1/§4: a transfer touching a balanceSource="valuation"
+// account is a valuation-linked move — one Transaction leg on the cash side
+// + one new Valuation on the tracked-asset side, linked by one Transfer row
+// (valuationId set, exactly one of outflowTransactionId/inflowTransactionId
+// set) — never a raw dual-leg transfer. Called from createTransactionForFamily's
+// transfer branch once it detects either side is valuation-tracked.
+// The cash-side leg fields a valuation-linked move needs. A narrow view of
+// `CreateTransactionInput` so a non-transfer caller (PER-198 trades) can drive
+// the same double-entry primitive without constructing a full transaction
+// payload.
+export interface ValuationLinkedTransferLeg {
+  amount: bigint
+  date: Date
+  description: string
+  notes?: string | null
+  id?: string
+  categoryId?: string | null
+  merchantId?: string | null
+  status: string
+  attachmentUrl?: string | null
+  idempotencyKey: string
+}
+
+// PER-196 / ADR-0048 §1/§4 — the shared double-entry primitive for a valuation-
+// linked move: decrement/credit the CASH account through the guarded
+// `applyAccountBalanceDelta` path, post the single cash `Transaction` leg, and
+// pair it with a `Valuation` on the tracked-asset side under one `Transfer`
+// row (valuationId set, exactly one of outflow/inflow Transaction FKs set —
+// the ADR-0048 §4 shape). It never mutates the tracked account's balance
+// directly (the PER-196 guard forbids that); the tracked side moves ONLY
+// through the `Valuation` the caller supplies via `resolveValuation`.
+//
+// `resolveValuation` runs AFTER the cash leg is posted and BEFORE the Transfer
+// is created, inside the same transaction. The default valuation-linked
+// transfer supplies the ADR-0048 prefill (latest ∓ cashAmount); PER-198 trades
+// supply Σ-holdings after applying the position change — same structural shape,
+// different source of the tracked account's new value.
+export async function postValuationLinkedTransferLegs(
+  tx: TenantTransactionClient,
+  {
+    cashAccount,
+    trackedAccount,
+    direction,
+    kind,
+    leg,
+    familyId,
+    user,
+    auditCtx,
+    baseCurrency,
+    resolveValuation,
+    purpose = null,
+    fee = null,
+  }: {
+    cashAccount: Account
+    trackedAccount: Account
+    direction: "contribution" | "redemption"
+    kind: string
+    leg: ValuationLinkedTransferLeg
+    familyId: string
+    user: { id: string }
+    auditCtx: AuditContext
+    baseCurrency: string
+    resolveValuation: (
+      tx: TenantTransactionClient
+    ) => Promise<{ valuation: Valuation }>
+    // PER-247: optional purpose label (funds_movement only — callers
+    // resolve/validate it) and optional transfer-fee request, both written
+    // onto the canonical Transfer row in the same transaction.
+    purpose?: TransferPurpose | null
+    fee?: {
+      amount: bigint | null | undefined
+      accountId?: string | null
+      categoryId?: string | null
+    } | null
+  }
+) {
+  // v1 scope (ADR-0048 §1): the cash leg and the tracked account are both
+  // denominated in one currency. Cross-currency valuation-linked moves need
+  // their own FX design and are not supported yet — fail loud rather than
+  // silently mixing currencies.
+  if (cashAccount.currency !== trackedAccount.currency) {
+    throw new ValuationError(
+      `Valuation-linked transfer requires matching currencies (cash account ${cashAccount.currency}, tracked account ${trackedAccount.currency}); cross-currency is not yet supported`
+    )
+  }
+
+  const isContribution = direction === "contribution"
+  const cashAmount = absMoney(leg.amount)
+  const cashDelta = isContribution ? negateMoney(cashAmount) : cashAmount
+
+  const cashMutation = await applyAccountBalanceDelta(tx, {
+    accountId: cashAccount.id,
+    delta: cashDelta,
+    familyId,
+    notFoundMessage: "Cash account not found or access denied!",
+  })
+  const cashBalanceAfter = cashMutation.after.balance
+
+  const projection = await computeBaseProjectionForAmount(tx, familyId, {
+    amount: cashDelta,
+    currency: cashAccount.currency,
+    date: leg.date,
+    baseCurrency,
+  })
+
+  const cashTx = await tx.transaction.create({
+    data: {
+      ...(leg.id ? { id: leg.id } : {}),
+      type: "transfer",
+      kind,
+      currency: cashAccount.currency,
+      amount: cashDelta,
+      description: leg.description,
+      date: leg.date,
+      notes: leg.notes || null,
+      accountId: cashAccount.id,
+      toAccountId: trackedAccount.id,
+      categoryId: leg.categoryId || null,
+      merchantId: leg.merchantId || null,
+      userId: user.id,
+      familyId,
+      status: leg.status,
+      baseAmount: projection.baseAmount,
+      baseCurrency: projection.baseCurrency,
+      fxRateScaled: projection.fxRateScaled,
+      fxRateSnapshotId: projection.fxRateSnapshotId,
+      accountBalanceAfter: cashBalanceAfter,
+      attachmentUrl: leg.attachmentUrl,
+      idempotencyKey: leg.idempotencyKey,
+    },
+  })
+
+  // Tracked side: whatever Valuation the caller decides. A redemption that
+  // would drive the tracked value negative is rejected by
+  // createValuationWithinTx's existing ADR-0045 sign check.
+  const { valuation } = await resolveValuation(tx)
+
+  const createdTransfer = await tx.transfer.create({
+    data: {
+      ...(isContribution
+        ? { outflowTransactionId: cashTx.id }
+        : { inflowTransactionId: cashTx.id }),
+      valuationId: valuation.id,
+      purpose,
+    },
+  })
+
+  const newCashAccount = await tx.account.findUniqueOrThrow({
+    where: { id: cashAccount.id },
+  })
+
+  await auditLogs(tx, auditCtx, [
+    ...accountBalanceAuditEntries([cashAccount], [newCashAccount]),
+    ...createdAuditEntries("Transaction", [cashTx]),
+    ...createdAuditEntries("Transfer", [createdTransfer]),
+  ])
+
+  // PER-247: optional transfer-fee leg on a valuation-linked move (e.g. the
+  // bank charge on a nabung/invest transfer into a tracked investment
+  // account). Single-currency path (enforced above) => always transfer_fee.
+  const feeTransactionId = await createTransferFeeLegIfRequested(tx, {
+    familyId,
+    user,
+    baseCurrency,
+    auditCtx,
+    feeKind: "transfer_fee",
+    feeAmount: fee?.amount,
+    feeAccountId: fee?.accountId,
+    feeCategoryId: fee?.categoryId,
+    defaultFeeAccountId: cashAccount.id,
+    date: leg.date,
+    description: leg.description,
+    notes: leg.notes,
+    status: leg.status,
+  })
+  if (feeTransactionId) {
+    await tx.transfer.update({
+      where: { id: createdTransfer.id },
+      data: { feeTransactionId },
+    })
+  }
+
+  return serializeTransaction({
+    ...cashTx,
+    amount: absMoney(cashTx.amount),
+  })
+}
+
+// PER-259 / ADR-0054 — a within-transaction primitive that posts ONE standard
+// INCOME `Transaction` on a cash-like account, guarded + base-projected +
+// audited, and returns it serialized. Factored out of `createTransactionForFamily`'s
+// standard income branch so a non-transfer caller (a holdings dividend CASH
+// payout — cash lands on a user-chosen destination account, the source holding
+// untouched) can post the exact same canonical income row without re-opening a
+// transaction or duplicating the balance/projection/audit contract. The +amount
+// delta rides the guarded `applyAccountBalanceDelta` path, so a destination that
+// is itself a valuation/holdings account is rejected fail-loud (ADR-0048 §3 /
+// ADR-0054) — a cash dividend cannot land on a holdings account. Currency is
+// derived from the account, never the caller (PER-147). The caller owns
+// idempotency (endpoint-scoped) and any provenance audit.
+export async function postIncomeTransactionWithinTx(
+  tx: TenantTransactionClient,
+  {
+    account,
+    amount,
+    date,
+    description,
+    notes = null,
+    categoryId = null,
+    familyId,
+    user,
+    auditCtx,
+    baseCurrency,
+    idempotencyKey,
+    status,
+  }: {
+    account: Account
+    amount: bigint
+    date: Date
+    description: string
+    notes?: string | null
+    categoryId?: string | null
+    familyId: string
+    user: { id: string }
+    auditCtx: AuditContext
+    baseCurrency: string
+    idempotencyKey: string
+    status: string
+  }
+) {
+  const inflow = absMoney(amount)
+
+  const [oldAccount, accountMutation] =
+    await runTenantTransactionQueriesInOrder([
+      () => tx.account.findUniqueOrThrow({ where: { id: account.id } }),
+      () =>
+        applyAccountBalanceDelta(tx, {
+          accountId: account.id,
+          delta: inflow,
+          familyId,
+          notFoundMessage: "Destination account not found or access denied!",
+        }),
+    ] as const)
+  const accountBalanceAfter = accountMutation.after.balance
+
+  const projection = await computeBaseProjectionForAmount(tx, familyId, {
+    amount: inflow,
+    currency: account.currency,
+    date,
+    baseCurrency,
+  })
+
+  const created = await tx.transaction.create({
+    data: {
+      type: "income",
+      kind: "standard",
+      amount: inflow,
+      currency: account.currency,
+      description,
+      date,
+      notes: notes || null,
+      accountId: account.id,
+      categoryId: categoryId || null,
+      userId: user.id,
+      familyId,
+      status,
+      baseAmount: projection.baseAmount,
+      baseCurrency: projection.baseCurrency,
+      fxRateScaled: projection.fxRateScaled,
+      fxRateSnapshotId: projection.fxRateSnapshotId,
+      accountBalanceAfter,
+      idempotencyKey,
+    },
+  })
+
+  const newAccount = await tx.account.findUniqueOrThrow({
+    where: { id: account.id },
+  })
+
+  await auditLogs(tx, auditCtx, [
+    ...accountBalanceAuditEntries([oldAccount], [newAccount]),
+    ...createdAuditEntries("Transaction", [created]),
+  ])
+
+  return serializeTransaction({ ...created, amount: absMoney(created.amount) })
+}
+
+// PER-259 Slice 3 / ADR-0054 — the EXPENSE sibling of `postIncomeTransactionWithinTx`.
+// Posts ONE standard EXPENSE `Transaction` on a cash-like account, guarded +
+// base-projected + audited, and returns it serialized. Factored out so a non-
+// transfer caller (a standalone investment FEE — a platform / annual /
+// transaction fee charged separately, reducing a user-chosen cash account, with
+// the source holding untouched) can post the exact same canonical expense row
+// without re-opening a transaction or duplicating the balance/projection/audit
+// contract. The −amount delta rides the guarded `applyAccountBalanceDelta` path,
+// so a source account that is itself a valuation/holdings account is rejected
+// fail-loud (ADR-0048 §3 / ADR-0054) — a fee can never land on a holdings
+// account. Currency is derived from the account, never the caller (PER-147). The
+// caller owns idempotency (endpoint-scoped) and any provenance audit.
+export async function postExpenseTransactionWithinTx(
+  tx: TenantTransactionClient,
+  {
+    account,
+    amount,
+    date,
+    description,
+    notes = null,
+    categoryId = null,
+    familyId,
+    user,
+    auditCtx,
+    baseCurrency,
+    idempotencyKey,
+    status,
+  }: {
+    account: Account
+    amount: bigint
+    date: Date
+    description: string
+    notes?: string | null
+    categoryId?: string | null
+    familyId: string
+    user: { id: string }
+    auditCtx: AuditContext
+    baseCurrency: string
+    idempotencyKey: string
+    status: string
+  }
+) {
+  // Signed convention (CLAUDE.md §5A): an expense is stored NEGATIVE and the
+  // account balance moves DOWN by exactly that amount.
+  const outflow = negateMoney(absMoney(amount))
+
+  const [oldAccount, accountMutation] =
+    await runTenantTransactionQueriesInOrder([
+      () => tx.account.findUniqueOrThrow({ where: { id: account.id } }),
+      () =>
+        applyAccountBalanceDelta(tx, {
+          accountId: account.id,
+          delta: outflow,
+          familyId,
+          notFoundMessage: "Source account not found or access denied!",
+        }),
+    ] as const)
+  const accountBalanceAfter = accountMutation.after.balance
+
+  const projection = await computeBaseProjectionForAmount(tx, familyId, {
+    amount: outflow,
+    currency: account.currency,
+    date,
+    baseCurrency,
+  })
+
+  const created = await tx.transaction.create({
+    data: {
+      type: "expense",
+      kind: "standard",
+      amount: outflow,
+      currency: account.currency,
+      description,
+      date,
+      notes: notes || null,
+      accountId: account.id,
+      categoryId: categoryId || null,
+      userId: user.id,
+      familyId,
+      status,
+      baseAmount: projection.baseAmount,
+      baseCurrency: projection.baseCurrency,
+      fxRateScaled: projection.fxRateScaled,
+      fxRateSnapshotId: projection.fxRateSnapshotId,
+      accountBalanceAfter,
+      idempotencyKey,
+    },
+  })
+
+  const newAccount = await tx.account.findUniqueOrThrow({
+    where: { id: account.id },
+  })
+
+  await auditLogs(tx, auditCtx, [
+    ...accountBalanceAuditEntries([oldAccount], [newAccount]),
+    ...createdAuditEntries("Transaction", [created]),
+  ])
+
+  return serializeTransaction({ ...created, amount: absMoney(created.amount) })
+}
+
+async function createValuationLinkedTransferWithinTx(
+  tx: TenantTransactionClient,
+  {
+    cashAccount,
+    trackedAccount,
+    direction,
+    kind,
+    data,
+    familyId,
+    user,
+    auditCtx,
+    baseCurrency,
+    purpose = null,
+  }: {
+    cashAccount: Account
+    trackedAccount: Account
+    direction: "contribution" | "redemption"
+    kind: string
+    data: CreateTransactionInput
+    familyId: string
+    user: { id: string }
+    auditCtx: AuditContext
+    baseCurrency: string
+    // PER-247: resolved funds_movement purpose label (null for liability
+    // kinds and for plain transfers).
+    purpose?: TransferPurpose | null
+  }
+) {
+  // PER-259 / ADR-0054 — a holdings-tracked account moves money ONLY through
+  // trades (Buy/Sell), which post via `postValuationLinkedTransferLegs`
+  // directly (bypassing this function). A plain or valuation-linked transfer
+  // whose tracked leg carries holdings would set a value without moving units,
+  // desyncing units × price. Reject fail-loud BEFORE the cash leg posts so the
+  // user gets an actionable "use Buy/Sell" message (createValuationWithinTx is
+  // the backstop law for any other value-set path). This never fires for a
+  // holdings-free valuation account (property, manual asset), so ADR-0048 is
+  // unchanged.
+  if (await accountHasHoldings(tx, trackedAccount.id, familyId)) {
+    throw new HoldingsAccountLedgerError(trackedAccount.id)
+  }
+
+  return postValuationLinkedTransferLegs(tx, {
+    cashAccount,
+    trackedAccount,
+    direction,
+    kind,
+    purpose,
+    fee: {
+      amount: data.feeAmount,
+      accountId: data.feeAccountId,
+      categoryId: data.feeCategoryId,
+    },
+    leg: {
+      amount: data.amount,
+      date: data.date,
+      description: data.description,
+      notes: data.notes,
+      id: data.id,
+      categoryId: data.categoryId,
+      merchantId: data.merchantId,
+      status: data.status,
+      attachmentUrl: data.attachmentUrl,
+      idempotencyKey: data.idempotencyKey,
+    },
+    familyId,
+    user,
+    auditCtx,
+    baseCurrency,
+    // ADR-0048 §1 prefill: latest ∓ cashAmount, editable via
+    // data.newValuationValue. Runs after the cash leg is posted (order
+    // preserved from the pre-refactor path).
+    resolveValuation: async (t) => {
+      const isContribution = direction === "contribution"
+      const cashAmount = absMoney(data.amount)
+      const latest = await latestValuation(t, familyId, trackedAccount.id)
+      const latestValue = latest?.value ?? toMoney(trackedAccount.balance)
+      const prefill = isContribution
+        ? addMoney(latestValue, cashAmount)
+        : subMoney(latestValue, cashAmount)
+      const newValuationMagnitude = data.newValuationValue
+        ? BigInt(data.newValuationValue)
+        : prefill
+      const valuationInput: CreateValuationInput = {
+        accountId: trackedAccount.id,
+        value: newValuationMagnitude.toString(),
+        currency: trackedAccount.currency,
+        valuationDate: data.date,
+        type: "manual",
+        source: "transfer",
+        note: null,
+        idempotencyKey: data.idempotencyKey,
+      }
+      return createValuationWithinTx(
+        t,
+        familyId,
+        valuationInput,
+        user,
+        auditCtx,
+        // PER-266 — the valuation-linked transfer's tracked-side anchor. Its
+        // default value is `latestValuation ± cashAmount`, i.e. COMPUTED from
+        // rows Permoney already holds, which is `derived` by definition. When
+        // the user overrides it with `newValuationValue` they are typing a
+        // number from their broker app, which is closer to ground truth — but
+        // this anchor only ever lands on a `balanceSource="valuation"` account
+        // (`trackedAccount`), where the transaction-flow `afterAnchor`
+        // predicate is never evaluated at all, so the classification is
+        // documentation rather than live behavior. `derived` is recorded
+        // because it describes the default, and because it is the strictly
+        // more permissive branch should such an account ever be converted.
+        "derived"
+      )
+    },
+  })
+}
+
+export async function createTransactionForFamily({
+  data: rawData,
+  familyId,
+  runInTenantTransaction = scopedTenantTransaction,
+  user,
+}: CreateTransactionForFamilyArgs) {
+  const parsedData = createTransactionInputSchema.parse(rawData)
+  const auditCtx = await createAuditContext(
+    { user: { id: user.id, familyId } },
+    parsedData.idempotencyKey
+  )
+
+  const createOrReplay = async () =>
+    await runInTenantTransaction(
+      familyId,
+      user.id,
+      async (tx: TenantTransactionClient) => {
+        // PER-94: tenant-owned foreign reference validation. Runs first so a
+        // cross-tenant payload short-circuits with a typed
+        // `TenantReferenceError` before any balance update or audit row is
+        // written. PER-104 DB triggers remain the backstop for raw-SQL paths.
+        await validateTenantReferences(tx, familyId, {
+          accountId: parsedData.accountId,
+          toAccountId: parsedData.toAccountId,
+          merchantId: parsedData.merchantId,
+          categoryId: parsedData.categoryId,
+          // PER-260: a reimbursement row's category must be an EXPENSE
+          // category so it nets against that category's spending — never
+          // just trust the FK.
+          categoryType:
+            parsedData.kind === "reimbursement" ? "expense" : undefined,
+          splitEntries: parsedData.splitEntries,
+        })
+
+        // PER-247: resolve the derived transfer semantics (kind, purpose,
+        // default fee bearer) BEFORE the replay check, so the canonical
+        // request payload hashes the same resolved values the persisted side
+        // stores — a faithful replay matches, and the same idempotency key
+        // with a different purpose/fee fails with a conflict.
+        const transferSemantics =
+          parsedData.type === "transfer" && parsedData.toAccountId
+            ? await resolveTransferSemantics(tx, parsedData)
+            : null
+        const data = transferSemantics?.data ?? parsedData
+
+        const replay = await replayIdempotentTransaction(tx, familyId, data)
+        if (replay) return replay
+
+        // === SPLIT PARITY GUARD (GAAP Compliance) ===
+        // Backend MUST validate that SplitEntries sum === parent.amount.
+        // UI validation is a convenience; THIS is the authoritative check.
+        // Throws inside `$transaction` → automatic rollback if violated.
+        assertSplitParity(data)
+        assertManualTransactionKindShape(data)
+
+        // PER-267: the "ubah saldo juga" balance override is scoped to a
+        // single-account expense/income entry (see the standard branch below
+        // for why — its value is the account's own post-delta balance, which
+        // has no single meaning for a two-leg transfer). Fail loud rather
+        // than silently ignoring a misused flag on a path that never reads it.
+        if (data.type === "transfer" && data.balanceOverride) {
+          throw new ValuationError(
+            "Balance override ('ubah saldo juga') is not supported for transfers"
+          )
+        }
+
+        // Base reporting currency for the family; each posted row materializes
+        // its base projection at write time (PER-147 / ADR-0035 §4).
+        const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
+
+        // A. HANDLE TRANSFER (DOUBLE-ENTRY)
+        if (data.type === "transfer") {
+          if (!data.toAccountId)
+            throw new Error("Transfer requires a destination account!")
+          if (!transferSemantics) {
+            // Unreachable: semantics resolve for every transfer that carries
+            // a destination account. Internal invariant, not a user error.
+            throw new Error(
+              "Invariant violated: transfer semantics unresolved for a transfer with a destination account"
+            )
+          }
+          const toAccountId = data.toAccountId
+          const {
+            fromAccount: oldSrcAcc,
+            toAccount: oldDstAcc,
+            kind,
+            purpose,
+          } = transferSemantics
+
+          // PER-196 / ADR-0048 §1/§2: route to the valuation-linked path
+          // whenever either side is balanceSource="valuation" — the classic
+          // dual-leg path below would otherwise hit applyAccountBalanceDelta's
+          // ADR-0048 §3 guard and fail on the destination leg.
+          const srcIsValuation = oldSrcAcc.balanceSource === "valuation"
+          const dstIsValuation = oldDstAcc.balanceSource === "valuation"
+          if (srcIsValuation && dstIsValuation) {
+            throw new ValuationError(
+              "Transfers between two valuation-tracked accounts are not supported (ADR-0048 §2)"
+            )
+          }
+          if (srcIsValuation || dstIsValuation) {
+            return await createValuationLinkedTransferWithinTx(tx, {
+              cashAccount: srcIsValuation ? oldDstAcc : oldSrcAcc,
+              trackedAccount: srcIsValuation ? oldSrcAcc : oldDstAcc,
+              direction: srcIsValuation ? "redemption" : "contribution",
+              kind,
+              data,
+              familyId,
+              user,
+              auditCtx,
+              baseCurrency,
+              purpose,
+            })
+          }
+
+          const sourceMutation = await applyAccountBalanceDelta(tx, {
+            accountId: data.accountId,
+            delta: negateMoney(absMoney(data.amount)),
+            familyId,
+            notFoundMessage: "Source account not found or access denied!",
+          })
+          const sourceBalanceAfter = sourceMutation.after.balance
+
+          // Multi-currency: gunakan destinationAmount jika tersedia, fallback ke amount
+          const inAmount = data.destinationAmount ?? data.amount
+          // CURRENCY IS DERIVED FROM THE ACCOUNT, NOT THE CLIENT (PER-147).
+          // Each leg is denominated in its own account's native currency. This
+          // is the durable, global-correct invariant: a USD account's leg is
+          // always stored as USD regardless of what the browser sent, so the
+          // row can never silently default to the family currency. The
+          // client-sent `currency`/`destinationCurrency` remain advisory display
+          // hints only.
+          const outCurrency = oldSrcAcc.currency
+          const inCurrency = oldDstAcc.currency
+
+          const destMutation = await applyAccountBalanceDelta(tx, {
+            accountId: toAccountId,
+            delta: absMoney(inAmount),
+            familyId,
+            notFoundMessage: "Destination account not found or access denied!",
+          })
+          const destBalanceAfter = destMutation.after.balance
+
+          const outflowAmount = negateMoney(absMoney(data.amount))
+          const inflowAmount = absMoney(inAmount)
+          const outflowProjection = await computeBaseProjectionForAmount(
+            tx,
+            familyId,
+            {
+              amount: outflowAmount,
+              currency: outCurrency,
+              date: data.date,
+              baseCurrency,
+            }
+          )
+          const inflowProjection = await computeBaseProjectionForAmount(
+            tx,
+            familyId,
+            {
+              amount: inflowAmount,
+              currency: inCurrency,
+              date: data.date,
+              baseCurrency,
+            }
+          )
+
+          const outflowTx = await tx.transaction.create({
+            data: {
+              ...(data.id ? { id: data.id } : {}),
+              type: "transfer",
+              kind,
+              currency: outCurrency,
+              amount: outflowAmount,
+              description: data.description,
+              date: data.date,
+              notes: data.notes || null,
+              accountId: data.accountId,
+              toAccountId,
+              categoryId: data.categoryId || null,
+              merchantId: data.merchantId || null,
+              userId: user.id,
+              familyId,
+              status: data.status,
+              destinationAmount: data.destinationAmount,
+              destinationCurrency: data.destinationCurrency,
+              baseAmount: outflowProjection.baseAmount,
+              baseCurrency: outflowProjection.baseCurrency,
+              fxRateScaled: outflowProjection.fxRateScaled,
+              fxRateSnapshotId: outflowProjection.fxRateSnapshotId,
+              accountBalanceAfter: sourceBalanceAfter,
+              attachmentUrl: data.attachmentUrl,
+              idempotencyKey: data.idempotencyKey,
+              externalProvider: data.externalProvider ?? null,
+              externalId: data.externalId ?? null,
+            },
+          })
+
+          const inflowTx = await tx.transaction.create({
+            data: {
+              type: "transfer",
+              kind,
+              currency: inCurrency,
+              amount: inflowAmount,
+              description: data.description,
+              date: data.date,
+              notes: data.notes || null,
+              accountId: toAccountId,
+              toAccountId: data.accountId,
+              categoryId: data.categoryId || null,
+              merchantId: data.merchantId || null,
+              userId: user.id,
+              familyId,
+              status: data.status,
+              destinationAmount: data.destinationAmount,
+              destinationCurrency: data.destinationCurrency,
+              baseAmount: inflowProjection.baseAmount,
+              baseCurrency: inflowProjection.baseCurrency,
+              fxRateScaled: inflowProjection.fxRateScaled,
+              fxRateSnapshotId: inflowProjection.fxRateSnapshotId,
+              accountBalanceAfter: destBalanceAfter,
+              attachmentUrl: data.attachmentUrl,
+              externalProvider: data.externalProvider ?? null,
+              externalId: data.toExternalId ?? null,
+            },
+          })
+
+          // Cross-rate recorded on the canonical pairing record, derived from the
+          // two native legs (ADR-0035 §5). NULL for same-currency transfers.
+          const transferFx = deriveTransferFx(
+            outflowAmount,
+            outCurrency as Parameters<typeof deriveTransferFx>[1],
+            inflowAmount,
+            inCurrency as Parameters<typeof deriveTransferFx>[3]
+          )
+
+          const createdTransfer = await tx.transfer.create({
+            data: {
+              outflowTransactionId: outflowTx.id,
+              inflowTransactionId: inflowTx.id,
+              fxRateScaled: transferFx.fxRateScaled,
+              fromCurrency: transferFx.fromCurrency,
+              toCurrency: transferFx.toCurrency,
+              purpose,
+            },
+          })
+
+          // Re-fetch + audit the transfer legs' account balances BEFORE the fee
+          // leg, so the fee's own delta (it may post on the source account) is
+          // never folded into the transfer-leg balance audit.
+          const [newSrcAcc, newDstAcc] =
+            await runTenantTransactionQueriesInOrder([
+              () =>
+                tx.account.findUniqueOrThrow({
+                  where: { id: data.accountId },
+                }),
+              () =>
+                tx.account.findUniqueOrThrow({
+                  where: { id: toAccountId },
+                }),
+            ] as const)
+
+          await auditLogs(tx, auditCtx, [
+            ...accountBalanceAuditEntries(
+              [oldSrcAcc, oldDstAcc],
+              [newSrcAcc, newDstAcc]
+            ),
+            ...createdAuditEntries("Transaction", [outflowTx, inflowTx]),
+            ...createdAuditEntries("Transfer", [createdTransfer]),
+          ])
+
+          // Optional fee leg (PER-247, generalized from ADR-0035 §6): a
+          // standalone expense on the fee account (default: source) in that
+          // account's native currency, linked back onto the Transfer. Kind is
+          // fx_fee for a cross-currency transfer, transfer_fee otherwise.
+          // Fully audited inside the helper.
+          const feeTransactionId = await createTransferFeeLegIfRequested(tx, {
+            familyId,
+            user,
+            baseCurrency,
+            auditCtx,
+            feeKind:
+              transferFx.fxRateScaled !== null ? "fx_fee" : "transfer_fee",
+            feeAmount: data.feeAmount,
+            feeAccountId: data.feeAccountId,
+            feeCategoryId: data.feeCategoryId,
+            defaultFeeAccountId: data.accountId,
+            date: data.date,
+            description: data.description,
+            notes: data.notes,
+            status: data.status,
+          })
+          if (feeTransactionId) {
+            await tx.transfer.update({
+              where: { id: createdTransfer.id },
+              data: { feeTransactionId },
+            })
+          }
+
+          return serializeTransaction({
+            ...outflowTx,
+            amount: absMoney(outflowTx.amount),
+          })
+        }
+
+        // B. HANDLE STANDARD EXPENSE / INCOME
+        await assertLiabilityCostTarget(tx, familyId, data)
+        const amountSign: Money =
+          data.type === "expense"
+            ? negateMoney(absMoney(data.amount))
+            : absMoney(data.amount)
+
+        const [oldAccount, accountMutation] =
+          await runTenantTransactionQueriesInOrder([
+            () =>
+              tx.account.findUniqueOrThrow({
+                where: { id: data.accountId },
+              }),
+            () =>
+              applyAccountBalanceDelta(tx, {
+                accountId: data.accountId,
+                delta: amountSign,
+                familyId,
+                notFoundMessage: "Account not found or access denied!",
+              }),
+          ] as const)
+        const accountBalanceAfter = accountMutation.after.balance
+
+        // Native currency is the ACCOUNT's currency, derived server-side — never
+        // the client-sent `data.currency` (which previously defaulted to "IDR"
+        // and silently mislabelled foreign-account rows). Permoney is global:
+        // the account is the single source of truth for what money this is.
+        const standardCurrency = oldAccount.currency
+        const standardProjection = await computeBaseProjectionForAmount(
+          tx,
+          familyId,
+          {
+            amount: amountSign,
+            currency: standardCurrency,
+            date: data.date,
+            baseCurrency,
+          }
+        )
+
+        const newTransaction = await tx.transaction.create({
+          data: {
+            ...(data.id ? { id: data.id } : {}),
+            type: data.type,
+            kind: data.kind,
+            amount: amountSign,
+            // Persist the account's native currency so the materialized base
+            // projection and the stored row always agree (PER-147).
+            currency: standardCurrency,
+            description: data.description,
+            date: data.date,
+            notes: data.notes || null,
+            accountId: data.accountId,
+            toAccountId: data.toAccountId || null,
+            // Jika split aktif, categoryId di parent menjadi null (kategori hidup di entries)
+            categoryId: data.isSplit ? null : data.categoryId || null,
+            // PER-210: split parent retains its single merchant (merchant =
+            // whole receipt); only categoryId is nulled on the parent.
+            merchantId: data.merchantId || null,
+            isSplit: data.isSplit,
+            userId: user.id,
+            familyId,
+            status: data.status,
+            baseAmount: standardProjection.baseAmount,
+            baseCurrency: standardProjection.baseCurrency,
+            fxRateScaled: standardProjection.fxRateScaled,
+            fxRateSnapshotId: standardProjection.fxRateSnapshotId,
+            accountBalanceAfter: accountBalanceAfter,
+            attachmentUrl: data.attachmentUrl,
+            idempotencyKey: data.idempotencyKey,
+          },
+        })
+
+        // Jika isSplit, buat setiap line item satu-satu agar Prisma
+        // auto-generate cuid() untuk id (createMany bypass @default di SQLite)
+        let createdSplitEntries: Awaited<
+          ReturnType<TenantTransactionClient["splitEntry"]["create"]>
+        >[] = []
+        if (data.isSplit && data.splitEntries?.length) {
+          createdSplitEntries = await runTenantTransactionQueriesInOrder(
+            data.splitEntries.map(
+              (entry) => () =>
+                tx.splitEntry.create({
+                  data: {
+                    transactionId: newTransaction.id,
+                    description: entry.description,
+                    amount: absMoney(entry.amount),
+                    categoryId: entry.categoryId || null,
+                    merchantId: entry.merchantId || null,
+                  },
+                })
+            )
+          )
+        }
+
+        const newAccount = await tx.account.findUniqueOrThrow({
+          where: { id: data.accountId },
+        })
+
+        await auditLogs(tx, auditCtx, [
+          ...accountBalanceAuditEntries([oldAccount], [newAccount]),
+          ...createdAuditEntries("Transaction", [newTransaction]),
+          ...createdAuditEntries("SplitEntry", createdSplitEntries),
+        ])
+
+        // PER-267 / ADR-0043's PER-264 amendment, "UI surface" section — the
+        // "ubah saldo juga" override. Default behavior needs nothing here: a
+        // backdated entry under a `ground_truth` anchor is already excluded
+        // from the materialized balance by `flushAnchorRebuilds`
+        // (`applyAccountBalanceDelta` marked this account dirty above; the
+        // tenant-transaction boundary re-materializes it from canonical rows
+        // before commit — see anchor-rebuild.server.ts). This block only runs
+        // for the opt-in override, and re-verifies the gating condition
+        // itself rather than trusting the client's decision to send it: a
+        // client claiming the override applies to a transaction that isn't
+        // actually excluded must not be allowed to fabricate a reconciliation.
+        if (data.balanceOverride) {
+          await applyBalanceOverride(tx, {
+            familyId,
+            user,
+            auditCtx,
+            accountId: data.accountId,
+            transactionDate: data.date,
+            // `newAccount.balance` is the account's balance immediately after
+            // `applyAccountBalanceDelta`'s unconditional increment above —
+            // i.e. exactly "the balance as if this transaction had already
+            // counted," which is what "money discovered right now" means.
+            // Read BEFORE `flushAnchorRebuilds` runs (at the tenant-transaction
+            // boundary, after this callback returns), so it is not yet
+            // corrected back to the anchor-only figure.
+            balanceIncludingThisTransaction: newAccount.balance,
+            currency: newAccount.currency,
+            reason: data.balanceOverride.reason,
+            note: data.balanceOverride.note ?? null,
+          })
+        }
+
+        return serializeTransaction({
+          ...newTransaction,
+          amount: absMoney(newTransaction.amount),
+        })
+      }
+    )
+
+  try {
+    return await createOrReplay()
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error
+
+    const replay = await runInTenantTransaction(
+      familyId,
+      user.id,
+      async (tx: TenantTransactionClient) => {
+        // PER-247: the replay hash must use the same resolved transfer
+        // semantics as the create attempt (see createOrReplay).
+        const transferSemantics =
+          parsedData.type === "transfer" && parsedData.toAccountId
+            ? await resolveTransferSemantics(tx, parsedData)
+            : null
+        return await replayIdempotentTransaction(
+          tx,
+          familyId,
+          transferSemantics?.data ?? parsedData
+        )
+      }
+    )
+    if (replay) return replay
+
+    throw error
+  }
+}
+
+/**
+ * BACKEND FUNCTION: Create Transaction & Update Balances (ACID Compliant)
+ */
+export const createTransactionFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("ledger:write")])
+  .inputValidator(
+    (data: z.input<typeof createTransactionTransportInputSchema>) =>
+      createTransactionTransportInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await createTransactionForFamily({
+      data: await normalizeCreateTransactionTransportInput(data),
+      familyId: context.familyId,
+      user: context.user,
+    })
+  })
+
+// Exported for reuse by src/server/accounts.ts (PER-183 cascade account
+// delete): this is the canonical, transfer-symmetric, audited, balance-
+// correct per-transaction soft delete. Do not reimplement it elsewhere.
+// PER-196 / ADR-0048 §4: symmetric reversal for a valuation-linked transfer
+// (one Transaction leg + one Valuation leg, joined by one Transfer row).
+// Mirrors the classic dual-leg reversal in
+// softDeleteTransactionWithinTenantTransaction: reverse the cash leg's
+// balance delta, tombstone the cash Transaction, tombstone the Valuation,
+// re-materialize the tracked account's balance from whatever Valuation is
+// now the latest non-deleted one (rebuildWithinTx — the same primitive
+// createValuationForFamily and rebuildFamilyBalances already route every
+// legitimate tracked-account balance write through), then tombstone the
+// Transfer row itself. Every step is idempotent at the call-site level via
+// deleteTransactionForFamily's IdempotencyRecord and the `deletedAt: null`
+// guard on each updateMany below (a replayed delete cannot double-reverse).
+// PER-259 Slice 5 / ADR-0054 — the escape hatch `softDeleteValuationLinkedTransferWithinTx`
+// takes when the tracked-side leg IS a holdings anchor (source === HOLDINGS_VALUATION_SOURCE).
+// The DEFAULT behavior (no hook supplied) is UNCHANGED from PER-198/ADR-0051: throw
+// `HoldingsTradeDeleteUnsupportedError` before any write, exactly as before — this keeps
+// every existing caller (the generic `deleteTransactionFn` path, bulk delete, etc.) fail-safe.
+// ONLY the new Slice 5 trade-correction path (`src/server/holdings.ts`) supplies this hook,
+// which must reverse the paired `Holding` row (from its captured AuditLog before/after
+// snapshot — never recompute an inverse via math) and re-materialize the investment
+// account's Σ-holdings anchor (`recomputeAccountValueAnchorWithinTx`) in the SAME
+// transaction, in place of the generic `rebuildWithinTx` step below (which would pick
+// "whatever valuation is now latest" — WRONG when a different holding in the same account
+// had activity after this trade; see the call site for the full rationale).
+export type HoldingsTradeReversalHook = (
+  tx: TenantTransactionClient,
+  args: {
+    familyId: string
+    auditCtx: AuditContext
+    valuation: Valuation
+    cashTx: NonNullable<Awaited<ReturnType<typeof findTransactionAuditGraph>>>
+  }
+) => Promise<void>
+
+export async function softDeleteValuationLinkedTransferWithinTx(
+  tx: TenantTransactionClient,
+  {
+    auditCtx,
+    familyId,
+    cashTx,
+    onHoldingsTradeReversal,
+  }: {
+    auditCtx: AuditContext
+    familyId: string
+    cashTx: NonNullable<Awaited<ReturnType<typeof findTransactionAuditGraph>>>
+    onHoldingsTradeReversal?: HoldingsTradeReversalHook
+  }
+): Promise<void> {
+  const transfer = cashTx.transferOut ?? cashTx.transferIn
+  if (!transfer || transfer.valuationId === null) {
+    throw new Error(
+      `softDeleteValuationLinkedTransferWithinTx called on Transaction ${cashTx.id} without a valuation-linked Transfer`
+    )
+  }
+  if (transfer.deletedAt !== null) {
+    throw new TransactionGoneError()
+  }
+
+  const oldValuation = await tx.valuation.findUniqueOrThrow({
+    where: { id: transfer.valuationId },
+  })
+
+  // PER-198 / ADR-0051 — fail-safe TRADE guard. When the tracked-side move was a
+  // Σ-holdings restatement (a Buy/Sell trade), the paired Holding is outside the
+  // transfer graph and would NOT be reversed here, silently drifting the account
+  // off Σ holdings. Block the delete before mutating anything (the surrounding
+  // transaction rolls back, so no balance/tombstone is written). A plain
+  // valuation-linked transfer (source !== "holdings") is unaffected. PER-259
+  // Slice 5: a caller MAY supply `onHoldingsTradeReversal` to lift this guard —
+  // every OTHER caller (no hook) keeps today's exact fail-safe behavior.
+  if (
+    oldValuation.source === HOLDINGS_VALUATION_SOURCE &&
+    !onHoldingsTradeReversal
+  ) {
+    throw new HoldingsTradeDeleteUnsupportedError()
+  }
+
+  const trackedAccountFacts = await fetchAccountFacts(
+    tx,
+    familyId,
+    oldValuation.accountId
+  )
+  if (!trackedAccountFacts) {
+    throw new Error(`Tracked-asset account ${oldValuation.accountId} not found`)
+  }
+  const oldCashAccount = await tx.account.findUniqueOrThrow({
+    where: { id: cashTx.accountId },
+  })
+
+  // 1. Reverse the cash leg's balance delta (single formula regardless of
+  // direction: cashTx.amount is already signed, negating it undoes exactly
+  // what creating it applied).
+  await applyAccountBalanceDelta(tx, {
+    accountId: cashTx.accountId,
+    delta: negateMoney(cashTx.amount),
+    familyId,
+    notFoundMessage: "Cash account not found or access denied!",
+  })
+
+  const deletedAt = new Date()
+
+  // 2. Tombstone the cash Transaction.
+  const cashTxUpdate = await tx.transaction.updateMany({
+    where: { id: cashTx.id, familyId, deletedAt: null },
+    data: { deletedAt },
+  })
+  if (cashTxUpdate.count !== 1) throw new TransactionGoneError()
+
+  // 3. Tombstone the Valuation (never hard-deleted, ADR-0034).
+  const valuationUpdate = await tx.valuation.updateMany({
+    where: { id: oldValuation.id, familyId, deletedAt: null },
+    data: { deletedAt },
+  })
+  if (valuationUpdate.count !== 1) throw new TransactionGoneError()
+
+  // 4. Re-materialize the tracked account. PLAIN valuation-linked transfer
+  // (no hook): whatever Valuation is now the latest non-deleted one
+  // (rebuildWithinTx writes its own Account audit entry when the balance
+  // actually changes) — unchanged from before Slice 5. HOLDINGS trade (hook
+  // supplied): the hook reverses the paired Holding from its captured
+  // before/after snapshot and re-materializes the Σ-holdings anchor itself —
+  // NEVER rebuildWithinTx here, which would pick "whatever valuation is now
+  // latest" and could silently pick up a LATER anchor written by a
+  // DIFFERENT holding's subsequent trade in the same account, clobbering
+  // that unrelated activity instead of reflecting the surgical, per-holding
+  // reversal this trade's correction/delete actually performed.
+  if (onHoldingsTradeReversal) {
+    await onHoldingsTradeReversal(tx, {
+      familyId,
+      auditCtx,
+      valuation: oldValuation,
+      cashTx,
+    })
+  } else {
+    await rebuildWithinTx(tx, familyId, trackedAccountFacts, auditCtx)
+  }
+
+  // 5. Tombstone the Transfer row itself.
+  const transferUpdate = await tx.transfer.updateMany({
+    where: { id: transfer.id, deletedAt: null },
+    data: { deletedAt },
+  })
+  if (transferUpdate.count !== 1) throw new TransactionGoneError()
+
+  const [newCashAccount, updatedCashTx, updatedValuation, updatedTransfer] =
+    await runTenantTransactionQueriesInOrder([
+      () => tx.account.findUniqueOrThrow({ where: { id: cashTx.accountId } }),
+      () => tx.transaction.findUniqueOrThrow({ where: { id: cashTx.id } }),
+      () => tx.valuation.findUniqueOrThrow({ where: { id: oldValuation.id } }),
+      () => tx.transfer.findUniqueOrThrow({ where: { id: transfer.id } }),
+    ] as const)
+
+  await auditLogs(tx, auditCtx, [
+    ...accountBalanceAuditEntries([oldCashAccount], [newCashAccount]),
+    {
+      action: "soft_delete",
+      entityType: "Transaction",
+      entityId: cashTx.id,
+      before: cashTx,
+      after: updatedCashTx,
+    },
+    {
+      action: "soft_delete",
+      entityType: "Valuation",
+      entityId: oldValuation.id,
+      before: oldValuation,
+      after: updatedValuation,
+    },
+    {
+      action: "soft_delete",
+      entityType: "Transfer",
+      entityId: transfer.id,
+      before: transfer,
+      after: updatedTransfer,
+    },
+  ])
+}
+
+export async function softDeleteTransactionWithinTenantTransaction(
+  tx: TenantTransactionClient,
+  {
+    auditCtx,
+    familyId,
+    id,
+    // PER-279: user-initiated single/bulk delete must respect the same
+    // reconciled-lock as edits (see `ReconciledTransactionLockedError`).
+    // Defaults to false because this same helper is also the shared
+    // primitive for account-deletion cascade (src/server/accounts.ts) and
+    // ledger-cleanup.ts, where the whole account/history is going away
+    // regardless of any individual row's reconciliation state — those
+    // callers must NOT be blocked by a reconciled transaction underneath.
+    enforceReconciledLock = false,
+  }: {
+    auditCtx: AuditContext
+    familyId: string
+    id: string
+    enforceReconciledLock?: boolean
+  }
+): Promise<void> {
+  // 1. Cari transaksi lama beserta relasi transfernya dan split entries.
+  let oldTx = await findTransactionAuditGraph(tx, id)
+
+  if (!oldTx) throw new Error("Transaction not found!")
+
+  if (oldTx.deletedAt !== null) {
+    throw new TransactionGoneError()
+  }
+
+  if (enforceReconciledLock && oldTx.status === "RECONCILED") {
+    throw new ReconciledTransactionLockedError()
+  }
+
+  // PER-196 / ADR-0048 §4: a valuation-linked transfer's ONE Transaction leg
+  // can sit in either FK slot (outflow for a contribution, inflow for a
+  // redemption) with no Transaction at all on the other side. Detect that
+  // shape before the classic-transfer redirect/reversal logic below, which
+  // assumes two Transaction legs, ever runs, and route to the symmetric
+  // valuation-linked reversal instead.
+  if (
+    oldTx.type === "transfer" &&
+    ((oldTx.transferIn && oldTx.transferIn.outflowTransactionId === null) ||
+      (oldTx.transferOut && oldTx.transferOut.inflowTransactionId === null))
+  ) {
+    await softDeleteValuationLinkedTransferWithinTx(tx, {
+      auditCtx,
+      familyId,
+      cashTx: oldTx,
+    })
+    return
+  }
+
+  // PER-20 / ADR-0012: a transfer is one money movement. If the user clicked
+  // the inflow leg, redirect to the outflow leg so the symmetric handler logic
+  // below treats outflow as the source of truth.
+  if (oldTx.type === "transfer" && oldTx.transferIn && !oldTx.transferOut) {
+    // The valuation-linked branch above already returned for a null
+    // outflowTransactionId, so this is guaranteed non-null here — an
+    // internal invariant, not a reachable "unsupported" case.
+    const outflowTransactionId = oldTx.transferIn.outflowTransactionId
+    if (!outflowTransactionId) {
+      throw new Error(
+        `Invariant violated: Transfer ${oldTx.transferIn.id} reached the classic-transfer redirect with a null outflowTransactionId`
+      )
+    }
+    const outflowAuditGraph = await findTransactionAuditGraph(
+      tx,
+      outflowTransactionId
+    )
+    if (!outflowAuditGraph) {
+      throw new Error("Transfer outflow leg missing for inflow soft-delete")
+    }
+    if (outflowAuditGraph.deletedAt !== null) {
+      throw new TransactionGoneError()
+    }
+    oldTx = outflowAuditGraph
+  }
+
+  const oldTransferGraph =
+    oldTx.type === "transfer" && oldTx.transferOut
+      ? await findTransferGraph(tx, oldTx.transferOut.id)
+      : null
+  if (oldTransferGraph?.deletedAt !== null && oldTransferGraph) {
+    throw new TransactionGoneError()
+  }
+
+  const inflowTx =
+    oldTx.type === "transfer" && oldTransferGraph
+      ? await findOptionalTransactionWithSplitEntries(
+          tx,
+          oldTransferGraph.inflowTransaction.id
+        )
+      : null
+
+  // FX fee leg (PER-147 / ADR-0035 §6): a transfer's optional fx_fee expense is
+  // reversed and soft-deleted symmetrically with its legs.
+  const feeTx = oldTransferGraph?.feeTransactionId
+    ? await findOptionalTransactionWithSplitEntries(
+        tx,
+        oldTransferGraph.feeTransactionId
+      )
+    : null
+
+  const affectedAccountIds = [oldTx.accountId]
+  if (inflowTx) {
+    affectedAccountIds.push(inflowTx.accountId)
+  }
+  if (feeTx) {
+    affectedAccountIds.push(feeTx.accountId)
+  }
+  const oldAccounts = await tx.account.findMany({
+    where: { id: { in: affectedAccountIds } },
+  })
+
+  // 2. Reverse balances exactly once inside the caller transaction.
+  if (oldTx.type === "transfer" && oldTx.transferOut) {
+    await applyAccountBalanceDelta(tx, {
+      accountId: oldTx.accountId,
+      delta: absMoney(oldTx.amount),
+      familyId,
+      notFoundMessage: "Source account not found or access denied!",
+    })
+
+    if (inflowTx) {
+      await applyAccountBalanceDelta(tx, {
+        accountId: inflowTx.accountId,
+        delta: negateMoney(absMoney(inflowTx.amount)),
+        familyId,
+        notFoundMessage: "Destination account not found or access denied!",
+      })
+    }
+
+    // Reverse the fee expense: add back its magnitude on the fee account.
+    if (feeTx && feeTx.deletedAt === null) {
+      await applyAccountBalanceDelta(tx, {
+        accountId: feeTx.accountId,
+        delta: absMoney(feeTx.amount),
+        familyId,
+        notFoundMessage: "Transfer fee account not found or access denied!",
+      })
+    }
+  } else {
+    await applyAccountBalanceDelta(tx, {
+      accountId: oldTx.accountId,
+      delta: negateMoney(oldTx.amount),
+      familyId,
+      notFoundMessage: "Account not found or access denied!",
+    })
+  }
+
+  const deletedAt = new Date()
+  if (oldTx.type === "transfer" && oldTx.transferOut && inflowTx) {
+    const outflowUpdate = await tx.transaction.updateMany({
+      where: { id: oldTx.id, familyId, deletedAt: null },
+      data: { deletedAt },
+    })
+    if (outflowUpdate.count !== 1) throw new TransactionGoneError()
+
+    const inflowUpdate = await tx.transaction.updateMany({
+      where: { id: inflowTx.id, familyId, deletedAt: null },
+      data: { deletedAt },
+    })
+    if (inflowUpdate.count !== 1) throw new TransactionGoneError()
+
+    const transferUpdate = await tx.transfer.updateMany({
+      where: { id: oldTx.transferOut.id, deletedAt: null },
+      data: { deletedAt },
+    })
+    if (transferUpdate.count !== 1) throw new TransactionGoneError()
+
+    if (feeTx && feeTx.deletedAt === null) {
+      const feeUpdate = await tx.transaction.updateMany({
+        where: { id: feeTx.id, familyId, deletedAt: null },
+        data: { deletedAt },
+      })
+      if (feeUpdate.count !== 1) throw new TransactionGoneError()
+    }
+  } else {
+    const update = await tx.transaction.updateMany({
+      where: { id: oldTx.id, familyId, deletedAt: null },
+      data: { deletedAt },
+    })
+    if (update.count !== 1) throw new TransactionGoneError()
+  }
+
+  const [updatedOutflowTx, updatedInflowTx, newAccounts, updatedTransferGraph] =
+    await runTenantTransactionQueriesInOrder([
+      () => findTransactionWithSplitEntries(tx, oldTx.id),
+      () =>
+        inflowTx
+          ? findTransactionWithSplitEntries(tx, inflowTx.id)
+          : Promise.resolve(null),
+      () =>
+        tx.account.findMany({
+          where: { id: { in: affectedAccountIds } },
+        }),
+      () =>
+        oldTransferGraph
+          ? findTransferGraph(tx, oldTransferGraph.id)
+          : Promise.resolve(null),
+    ] as const)
+
+  await auditLogs(tx, auditCtx, [
+    ...accountBalanceAuditEntries(oldAccounts, newAccounts),
+    {
+      action: "soft_delete",
+      entityType: "Transaction",
+      entityId: oldTx.id,
+      before: oldTx,
+      after: updatedOutflowTx,
+    },
+    ...(updatedInflowTx && inflowTx
+      ? [
+          {
+            action: "soft_delete" as const,
+            entityType: "Transaction",
+            entityId: inflowTx.id,
+            before: inflowTx,
+            after: updatedInflowTx,
+          },
+        ]
+      : []),
+    ...(oldTransferGraph && updatedTransferGraph
+      ? [
+          {
+            action: "soft_delete" as const,
+            entityType: "Transfer",
+            entityId: oldTransferGraph.id,
+            before: oldTransferGraph,
+            after: updatedTransferGraph,
+          },
+        ]
+      : []),
+    ...(feeTx
+      ? [
+          {
+            action: "soft_delete" as const,
+            entityType: "Transaction",
+            entityId: feeTx.id,
+            before: feeTx,
+            after: await findTransactionWithSplitEntries(tx, feeTx.id),
+          },
+        ]
+      : []),
+  ])
+}
+
+/**
+ * BACKEND FUNCTION: Fetch complete transaction ledger
+ * Menerapkan Data Projection: Hanya mengambil field relasi yang dibutuhkan UI
+ */
+export const getTransactionsFn = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .handler(async ({ context }) => {
+    return scopedTenantTransaction(
+      context.familyId,
+      context.user.id,
+      async (tx) => {
+        const transactions = await findLedgerTransactionsForFamily(
+          tx,
+          context.familyId
+        )
+
+        // The MAP logic: Ubah array yang didapat dari DB.
+        // Amounts are stored signed (negative for expense) but the UI consumes
+        // them as positive magnitudes; sign is communicated via `type` for
+        // income/expense, and via the already-computed `transferIncoming`
+        // (above) for a transfer — see `signedDeltaForAccount`'s doc comment
+        // for why `toAccountId === accountId` alone is NOT a reliable sign for
+        // a valuation-linked trade/redemption's cash leg.
+        // Wire-encode bigint → string at this boundary; client revives via
+        // TanStack DB collection `select` callback (see src/lib/collections.ts).
+        return transactions.map((tx) =>
+          serializeTransaction({
+            ...tx,
+            amount: absMoney(tx.amount),
+          })
+        )
+      }
+    )
+  })
+
+export async function deleteTransactionForFamily({
+  id,
+  idempotencyKey,
+  familyId,
+  user,
+}: {
+  id: string
+  idempotencyKey: string
+  familyId: string
+  user: { id: string; familyId?: string | null }
+}) {
+  const data = deleteTransactionInputSchema.parse({ id, idempotencyKey })
+  const requestHash = await hashCanonicalPayload(
+    canonicalDeleteRequestPayload(data)
+  )
+  const auditCtx = await createAuditContext({ user }, data.idempotencyKey)
+
+  const deleteOrReplay = async () =>
+    await scopedTenantTransaction(
+      familyId,
+      user.id,
+      async (tx: TenantTransactionClient) => {
+        const replay = await replayIdempotentEndpointResponse<{
+          success: boolean
+        }>(tx, {
+          endpoint: DELETE_TRANSACTION_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+        })
+        if (replay) return replay
+
+        await softDeleteTransactionWithinTenantTransaction(tx, {
+          auditCtx,
+          familyId,
+          id: data.id,
+          enforceReconciledLock: true,
+        })
+
+        const response = { success: true }
+        await persistIdempotentEndpointResponse(tx, {
+          endpoint: DELETE_TRANSACTION_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+          response,
+        })
+
+        return response
+      }
+    )
+
+  try {
+    return await deleteOrReplay()
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error
+
+    const replay = await scopedTenantTransaction(
+      familyId,
+      user.id,
+      async (tx: TenantTransactionClient) =>
+        await replayIdempotentEndpointResponse<{ success: boolean }>(tx, {
+          endpoint: DELETE_TRANSACTION_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+        })
+    )
+    if (replay) return replay
+
+    throw error
+  }
+}
+
+/**
+ * BACKEND FUNCTION: Delete Transaction (Soft Delete — GAAP Compliance)
+ * Transaksi tidak pernah benar-benar dihapus; hanya ditandai dengan deletedAt.
+ */
+export const deleteTransactionFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("ledger:write")])
+  .inputValidator(
+    (data: z.input<typeof deleteTransactionTransportInputSchema>) =>
+      deleteTransactionTransportInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    const normalized = await normalizeDeleteTransactionTransportInput(data)
+    return await deleteTransactionForFamily({
+      id: normalized.id,
+      idempotencyKey: normalized.idempotencyKey,
+      familyId: context.familyId,
+      user: context.user,
+    })
+  })
+
+async function replaceTransactionWithinTenantTransaction(
+  tx: TenantTransactionClient,
+  {
+    auditCtx,
+    data,
+    familyId,
+    user,
+  }: {
+    auditCtx: AuditContext
+    data: UpdateTransactionInput
+    familyId: string
+    user: { id: string; familyId?: string | null }
+  }
+): Promise<SerializedTransactionResult> {
+  // PER-94: validate updated foreign references before reversal/replace.
+  await validateTenantReferences(tx, familyId, {
+    accountId: data.accountId,
+    toAccountId: data.toAccountId,
+    merchantId: data.merchantId,
+    categoryId: data.categoryId,
+    // PER-260: a reimbursement row's category must be an EXPENSE category —
+    // see the matching comment in createTransactionForFamily.
+    categoryType: data.kind === "reimbursement" ? "expense" : undefined,
+    splitEntries: data.splitEntries,
+  })
+
+  assertSplitParity(data)
+  assertManualTransactionKindShape(data)
+
+  // Ambil snapshot graph lengkap sebelum mutasi dilakukan.
+  let oldTx = await findTransactionAuditGraph(tx, data.id)
+
+  if (!oldTx) throw new Error("Original transaction not found")
+  if (oldTx.deletedAt !== null) throw new TransactionGoneError()
+  if (oldTx.status === "RECONCILED") {
+    throw new ReconciledTransactionLockedError()
+  }
+
+  // PER-196 / ADR-0048 §4: editing a valuation-linked transfer's one
+  // Transaction leg is not yet supported — the reversal/replace logic below
+  // assumes two Transaction legs. Fail loud before any redirect/reversal
+  // step runs.
+  if (
+    oldTx.type === "transfer" &&
+    ((oldTx.transferIn && oldTx.transferIn.outflowTransactionId === null) ||
+      (oldTx.transferOut && oldTx.transferOut.inflowTransactionId === null))
+  ) {
+    throw new ValuationLinkedTransferUnsupportedError()
+  }
+
+  if (oldTx.type === "transfer" && oldTx.transferIn && !oldTx.transferOut) {
+    // Guaranteed non-null by the valuation-linked check above.
+    const outflowTransactionId = oldTx.transferIn.outflowTransactionId
+    if (!outflowTransactionId) {
+      throw new ValuationLinkedTransferUnsupportedError()
+    }
+    const outflowAuditGraph = await findTransactionAuditGraph(
+      tx,
+      outflowTransactionId
+    )
+    if (!outflowAuditGraph) {
+      throw new Error("Transfer outflow leg missing for update")
+    }
+    if (outflowAuditGraph.deletedAt !== null) {
+      throw new TransactionGoneError()
+    }
+    oldTx = outflowAuditGraph
+  }
+
+  const oldTransferGraph =
+    oldTx.type === "transfer" && oldTx.transferOut
+      ? await findTransferGraph(tx, oldTx.transferOut.id)
+      : null
+  if (oldTransferGraph?.deletedAt !== null && oldTransferGraph) {
+    throw new TransactionGoneError()
+  }
+  const oldInflowTx =
+    oldTx.type === "transfer" && oldTransferGraph
+      ? await findTransactionWithSplitEntries(
+          tx,
+          oldTransferGraph.inflowTransaction.id
+        )
+      : null
+
+  // PER-247: the old transfer's fee leg (fx_fee / transfer_fee) must be
+  // reversed and soft-deleted symmetrically with the legs — previously the
+  // replace path silently left the fee expense active and orphaned. The new
+  // fee (if any) is re-created fresh below from the request payload.
+  const oldFeeTx = oldTransferGraph?.feeTransactionId
+    ? await findOptionalTransactionWithSplitEntries(
+        tx,
+        oldTransferGraph.feeTransactionId
+      )
+    : null
+
+  // Kumpulkan semua akun yang terpengaruh (sebelum dan sesudah).
+  const touchedAccountIds = new Set([oldTx.accountId, data.accountId])
+  if (oldInflowTx) touchedAccountIds.add(oldInflowTx.accountId)
+  if (data.toAccountId) touchedAccountIds.add(data.toAccountId)
+  if (oldFeeTx) touchedAccountIds.add(oldFeeTx.accountId)
+  if (data.type === "transfer" && data.feeAmount) {
+    touchedAccountIds.add(data.feeAccountId ?? data.accountId)
+  }
+
+  const oldAccounts = await tx.account.findMany({
+    where: { id: { in: Array.from(touchedAccountIds) } },
+  })
+
+  // Base reporting currency for the replacement rows. The superseding row is a
+  // brand-new ledger entry, so it must materialize its base projection inline
+  // (PER-147 / ADR-0035 §4) exactly like the create path — never leaving it for
+  // a later rebuild to backfill.
+  const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
+
+  const accountDeltas: AccountDeltaMap = {}
+  if (oldTx.type === "transfer" && oldTx.transferOut) {
+    if (!oldInflowTx) {
+      throw new Error("Transfer inflow leg missing for update")
+    }
+    addAccountDelta(accountDeltas, oldTx.accountId, absMoney(oldTx.amount))
+    addAccountDelta(
+      accountDeltas,
+      oldInflowTx.accountId,
+      negateMoney(absMoney(oldInflowTx.amount))
+    )
+    // PER-247: reverse the old fee expense (add back its magnitude on the fee
+    // account) in the same aggregate delta pass.
+    if (oldFeeTx && oldFeeTx.deletedAt === null) {
+      addAccountDelta(
+        accountDeltas,
+        oldFeeTx.accountId,
+        absMoney(oldFeeTx.amount)
+      )
+    }
+  } else {
+    addAccountDelta(accountDeltas, oldTx.accountId, negateMoney(oldTx.amount))
+  }
+
+  let resultTransaction: Awaited<
+    ReturnType<TenantTransactionClient["transaction"]["create"]>
+  >
+  let createdInflowTx: Awaited<
+    ReturnType<TenantTransactionClient["transaction"]["create"]>
+  > | null = null
+  let createdTransfer: Awaited<
+    ReturnType<TenantTransactionClient["transfer"]["create"]>
+  > | null = null
+  let createdSplitEntries: Awaited<
+    ReturnType<TenantTransactionClient["splitEntry"]["create"]>
+  >[] = []
+
+  if (data.type === "transfer") {
+    if (!data.toAccountId)
+      throw new Error("Transfer requires a destination account!")
+    const toAccountId = data.toAccountId
+    const fromAccount = oldAccounts.find(
+      (account) => account.id === data.accountId
+    )
+    const toAccount = oldAccounts.find((account) => account.id === toAccountId)
+    if (!fromAccount)
+      throw new Error("Source account not found or access denied!")
+    if (!toAccount)
+      throw new Error("Destination account not found or access denied!")
+    const kind = deriveTransferKindForAccounts({
+      fromAccountType: parseAccountType(fromAccount.accountType),
+      toAccountType: parseAccountType(toAccount.accountType),
+    })
+    // PER-247: resolve the contextual purpose (client override or
+    // taxonomy-derived default) for the replacement transfer.
+    const purpose = resolveTransferPurpose({
+      kind,
+      override: data.transferPurpose,
+      fromAccount,
+      toAccount,
+    })
+
+    const inAmount = data.destinationAmount ?? data.amount
+    // Each leg is denominated in its own account's native currency, derived
+    // server-side (PER-147) — not the client-sent currency, which previously
+    // went unset on this path and silently defaulted every replacement row to
+    // the family currency ("IDR").
+    const outCurrency = fromAccount.currency
+    const inCurrency = toAccount.currency
+
+    addAccountDelta(
+      accountDeltas,
+      data.accountId,
+      negateMoney(absMoney(data.amount))
+    )
+    addAccountDelta(accountDeltas, toAccountId, absMoney(inAmount))
+    await applyAccountDeltas(tx, familyId, accountDeltas)
+
+    const sourceBalanceAfter = (
+      await findAccountBalanceVersion(
+        tx,
+        data.accountId,
+        familyId,
+        "Source account not found or access denied!"
+      )
+    ).balance
+    const destBalanceAfter = (
+      await findAccountBalanceVersion(
+        tx,
+        toAccountId,
+        familyId,
+        "Destination account not found or access denied!"
+      )
+    ).balance
+
+    const outflowAmount = negateMoney(absMoney(data.amount))
+    const inflowAmount = absMoney(inAmount)
+    const outflowProjection = await computeBaseProjectionForAmount(
+      tx,
+      familyId,
+      {
+        amount: outflowAmount,
+        currency: outCurrency,
+        date: data.date,
+        baseCurrency,
+      }
+    )
+    const inflowProjection = await computeBaseProjectionForAmount(
+      tx,
+      familyId,
+      {
+        amount: inflowAmount,
+        currency: inCurrency,
+        date: data.date,
+        baseCurrency,
+      }
+    )
+
+    const outflowTx = await tx.transaction.create({
+      data: {
+        type: "transfer",
+        kind,
+        currency: outCurrency,
+        amount: outflowAmount,
+        description: data.description,
+        date: data.date,
+        notes: data.notes || null,
+        accountId: data.accountId,
+        toAccountId,
+        categoryId: data.categoryId || null,
+        merchantId: data.merchantId || null,
+        userId: user.id,
+        familyId,
+        status: data.status,
+        destinationAmount: data.destinationAmount,
+        destinationCurrency: data.destinationCurrency,
+        baseAmount: outflowProjection.baseAmount,
+        baseCurrency: outflowProjection.baseCurrency,
+        fxRateScaled: outflowProjection.fxRateScaled,
+        fxRateSnapshotId: outflowProjection.fxRateSnapshotId,
+        accountBalanceAfter: sourceBalanceAfter,
+        attachmentUrl: data.attachmentUrl,
+        supersedes: oldTx.id,
+      },
+    })
+
+    const inflowTx = await tx.transaction.create({
+      data: {
+        type: "transfer",
+        kind,
+        currency: inCurrency,
+        amount: inflowAmount,
+        description: data.description,
+        date: data.date,
+        notes: data.notes || null,
+        accountId: toAccountId,
+        toAccountId: data.accountId,
+        categoryId: data.categoryId || null,
+        merchantId: data.merchantId || null,
+        userId: user.id,
+        familyId,
+        status: data.status,
+        destinationAmount: data.destinationAmount,
+        destinationCurrency: data.destinationCurrency,
+        baseAmount: inflowProjection.baseAmount,
+        baseCurrency: inflowProjection.baseCurrency,
+        fxRateScaled: inflowProjection.fxRateScaled,
+        fxRateSnapshotId: inflowProjection.fxRateSnapshotId,
+        accountBalanceAfter: destBalanceAfter,
+        attachmentUrl: data.attachmentUrl,
+        ...(oldInflowTx ? { supersedes: oldInflowTx.id } : {}),
+      },
+    })
+
+    // Record the implied cross-rate on the canonical pairing record so an edited
+    // cross-currency transfer keeps the same FX contract as a freshly created
+    // one (ADR-0035 §5). NULL for same-currency transfers.
+    const transferFx = deriveTransferFx(
+      outflowAmount,
+      outCurrency as Parameters<typeof deriveTransferFx>[1],
+      inflowAmount,
+      inCurrency as Parameters<typeof deriveTransferFx>[3]
+    )
+
+    createdTransfer = await tx.transfer.create({
+      data: {
+        outflowTransactionId: outflowTx.id,
+        inflowTransactionId: inflowTx.id,
+        fxRateScaled: transferFx.fxRateScaled,
+        fromCurrency: transferFx.fromCurrency,
+        toCurrency: transferFx.toCurrency,
+        purpose,
+      },
+    })
+
+    // PER-247: create the replacement transfer's fee leg (if requested) and
+    // link it onto the new Transfer. The old fee leg was reversed in the
+    // aggregate delta pass above and is soft-deleted below.
+    const newFeeTransactionId = await createTransferFeeLegIfRequested(tx, {
+      familyId,
+      user,
+      baseCurrency,
+      auditCtx,
+      feeKind: transferFx.fxRateScaled !== null ? "fx_fee" : "transfer_fee",
+      feeAmount: data.feeAmount,
+      feeAccountId: data.feeAccountId,
+      feeCategoryId: data.feeCategoryId,
+      defaultFeeAccountId: data.accountId,
+      date: data.date,
+      description: data.description,
+      notes: data.notes,
+      status: data.status,
+    })
+    if (newFeeTransactionId) {
+      createdTransfer = await tx.transfer.update({
+        where: { id: createdTransfer.id },
+        data: { feeTransactionId: newFeeTransactionId },
+      })
+    }
+
+    resultTransaction = outflowTx
+    createdInflowTx = inflowTx
+  } else {
+    await assertLiabilityCostTarget(tx, familyId, data)
+    const amountSign: Money =
+      data.type === "expense"
+        ? negateMoney(absMoney(data.amount))
+        : absMoney(data.amount)
+
+    addAccountDelta(accountDeltas, data.accountId, amountSign)
+    await applyAccountDeltas(tx, familyId, accountDeltas)
+    const accountBalanceAfter = (
+      await findAccountBalanceVersion(
+        tx,
+        data.accountId,
+        familyId,
+        "Account not found or access denied!"
+      )
+    ).balance
+
+    // Native currency comes from the account, derived server-side (PER-147).
+    const targetAccount = oldAccounts.find(
+      (account) => account.id === data.accountId
+    )
+    if (!targetAccount) throw new Error("Account not found or access denied!")
+    const standardCurrency = targetAccount.currency
+    const standardProjection = await computeBaseProjectionForAmount(
+      tx,
+      familyId,
+      {
+        amount: amountSign,
+        currency: standardCurrency,
+        date: data.date,
+        baseCurrency,
+      }
+    )
+
+    const newTx = await tx.transaction.create({
+      data: {
+        type: data.type,
+        kind: data.kind,
+        amount: amountSign,
+        currency: standardCurrency,
+        description: data.description,
+        date: data.date,
+        notes: data.notes || null,
+        accountId: data.accountId,
+        toAccountId: data.toAccountId || null,
+        categoryId: data.isSplit ? null : data.categoryId || null,
+        // PER-210: split parent retains its single merchant; only categoryId
+        // is nulled on the parent (categories live on the split children).
+        merchantId: data.merchantId || null,
+        isSplit: data.isSplit,
+        userId: user.id,
+        familyId,
+        status: data.status,
+        baseAmount: standardProjection.baseAmount,
+        baseCurrency: standardProjection.baseCurrency,
+        fxRateScaled: standardProjection.fxRateScaled,
+        fxRateSnapshotId: standardProjection.fxRateSnapshotId,
+        accountBalanceAfter: accountBalanceAfter,
+        attachmentUrl: data.attachmentUrl,
+        supersedes: oldTx.id,
+      },
+    })
+
+    if (data.isSplit && data.splitEntries?.length) {
+      createdSplitEntries = await runTenantTransactionQueriesInOrder(
+        data.splitEntries.map(
+          (entry) => () =>
+            tx.splitEntry.create({
+              data: {
+                transactionId: newTx.id,
+                description: entry.description,
+                amount: absMoney(entry.amount),
+                categoryId: entry.categoryId || null,
+                merchantId: entry.merchantId || null,
+              },
+            })
+        )
+      )
+    }
+
+    resultTransaction = newTx
+  }
+
+  const deletedAt = new Date()
+  const outflowUpdate = await tx.transaction.updateMany({
+    where: { id: oldTx.id, familyId, deletedAt: null },
+    data: { deletedAt, supersededBy: resultTransaction.id },
+  })
+  if (outflowUpdate.count !== 1) throw new TransactionGoneError()
+
+  if (oldInflowTx) {
+    const inflowUpdate = await tx.transaction.updateMany({
+      where: { id: oldInflowTx.id, familyId, deletedAt: null },
+      data: {
+        deletedAt,
+        ...(createdInflowTx ? { supersededBy: createdInflowTx.id } : {}),
+      },
+    })
+    if (inflowUpdate.count !== 1) throw new TransactionGoneError()
+  }
+
+  if (oldTransferGraph) {
+    const transferUpdate = await tx.transfer.updateMany({
+      where: { id: oldTransferGraph.id, deletedAt: null },
+      data: { deletedAt },
+    })
+    if (transferUpdate.count !== 1) throw new TransactionGoneError()
+  }
+
+  // PER-247: tombstone the old fee leg symmetrically with the old legs.
+  if (oldFeeTx && oldFeeTx.deletedAt === null) {
+    const feeUpdate = await tx.transaction.updateMany({
+      where: { id: oldFeeTx.id, familyId, deletedAt: null },
+      data: { deletedAt },
+    })
+    if (feeUpdate.count !== 1) throw new TransactionGoneError()
+  }
+
+  // PER-145 — carry any Tags forward onto the replacement row(s). Unlike
+  // `SplitEntry` above (recreated fresh from `data.splitEntries` on every
+  // edit — it IS part of this payload), `TransactionTag` is attached
+  // out-of-band via `setTransactionTagsFn` and never touches this function's
+  // input at all, so nothing else here re-establishes it on the new row. A
+  // RE-POINT (never a delete + recreate) preserves each tagging's original
+  // `createdAt`. Only the two user-editable legs can carry a tag today (the
+  // TagsField in the form binds to a single opened transaction id); the fee
+  // leg has no tag UI surface, so it's intentionally not handled here.
+  await tx.transactionTag.updateMany({
+    where: { transactionId: oldTx.id },
+    data: { transactionId: resultTransaction.id },
+  })
+  if (oldInflowTx && createdInflowTx) {
+    await tx.transactionTag.updateMany({
+      where: { transactionId: oldInflowTx.id },
+      data: { transactionId: createdInflowTx.id },
+    })
+  }
+
+  const [
+    updatedOldOutflow,
+    updatedOldInflow,
+    newOutflow,
+    newInflow,
+    updatedOldTransfer,
+    newTransferGraph,
+    newAccounts,
+    updatedOldFee,
+  ] = await runTenantTransactionQueriesInOrder([
+    () => findTransactionWithSplitEntries(tx, oldTx.id),
+    () =>
+      oldInflowTx
+        ? findTransactionWithSplitEntries(tx, oldInflowTx.id)
+        : Promise.resolve(null),
+    () => findTransactionWithSplitEntries(tx, resultTransaction.id),
+    () =>
+      createdInflowTx
+        ? findTransactionWithSplitEntries(tx, createdInflowTx.id)
+        : Promise.resolve(null),
+    () =>
+      oldTransferGraph
+        ? findTransferGraph(tx, oldTransferGraph.id)
+        : Promise.resolve(null),
+    () =>
+      createdTransfer
+        ? findTransferGraph(tx, createdTransfer.id)
+        : Promise.resolve(null),
+    () =>
+      tx.account.findMany({
+        where: { id: { in: Array.from(touchedAccountIds) } },
+      }),
+    () =>
+      oldFeeTx
+        ? findTransactionWithSplitEntries(tx, oldFeeTx.id)
+        : Promise.resolve(null),
+  ] as const)
+
+  await auditLogs(tx, auditCtx, [
+    ...accountBalanceAuditEntries(oldAccounts, newAccounts),
+    {
+      action: "soft_delete",
+      entityType: "Transaction",
+      entityId: oldTx.id,
+      before: oldTx,
+      after: updatedOldOutflow,
+    },
+    ...(oldInflowTx && updatedOldInflow
+      ? [
+          {
+            action: "soft_delete" as const,
+            entityType: "Transaction",
+            entityId: oldInflowTx.id,
+            before: oldInflowTx,
+            after: updatedOldInflow,
+          },
+        ]
+      : []),
+    ...(oldTransferGraph && updatedOldTransfer
+      ? [
+          {
+            action: "soft_delete" as const,
+            entityType: "Transfer",
+            entityId: oldTransferGraph.id,
+            before: oldTransferGraph,
+            after: updatedOldTransfer,
+          },
+        ]
+      : []),
+    ...(oldFeeTx && updatedOldFee
+      ? [
+          {
+            action: "soft_delete" as const,
+            entityType: "Transaction",
+            entityId: oldFeeTx.id,
+            before: oldFeeTx,
+            after: updatedOldFee,
+          },
+        ]
+      : []),
+    ...createdAuditEntries("Transaction", [
+      newOutflow,
+      ...(newInflow ? [newInflow] : []),
+    ]),
+    ...(newTransferGraph
+      ? createdAuditEntries("Transfer", [newTransferGraph])
+      : []),
+    ...createdAuditEntries("SplitEntry", createdSplitEntries),
+  ])
+
+  return serializeTransaction({
+    ...resultTransaction,
+    amount: absMoney(resultTransaction.amount),
+  })
+}
+
+export async function updateTransactionForFamily({
+  data: rawData,
+  familyId,
+  user,
+}: {
+  data: unknown
+  familyId: string
+  user: { id: string; familyId?: string | null }
+}) {
+  const data = updateTransactionInputSchema.parse(rawData)
+  const requestHash = await hashCanonicalPayload(
+    canonicalUpdateRequestPayload(data)
+  )
+  const auditCtx = await createAuditContext({ user }, data.idempotencyKey)
+
+  const updateOrReplay = async () =>
+    await scopedTenantTransaction(
+      familyId,
+      user.id,
+      async (tx: TenantTransactionClient) => {
+        const replay =
+          await replayIdempotentEndpointResponse<SerializedTransactionResult>(
+            tx,
+            {
+              endpoint: UPDATE_TRANSACTION_ENDPOINT,
+              familyId,
+              key: data.idempotencyKey,
+              requestHash,
+            }
+          )
+        if (replay) return replay
+
+        const response = await replaceTransactionWithinTenantTransaction(tx, {
+          auditCtx,
+          data,
+          familyId,
+          user,
+        })
+
+        await persistIdempotentEndpointResponse(tx, {
+          endpoint: UPDATE_TRANSACTION_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+          response,
+        })
+
+        return response
+      }
+    )
+
+  try {
+    return await updateOrReplay()
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error
+
+    const replay = await scopedTenantTransaction(
+      familyId,
+      user.id,
+      async (tx: TenantTransactionClient) =>
+        await replayIdempotentEndpointResponse<SerializedTransactionResult>(
+          tx,
+          {
+            endpoint: UPDATE_TRANSACTION_ENDPOINT,
+            familyId,
+            key: data.idempotencyKey,
+            requestHash,
+          }
+        )
+    )
+    if (replay) return replay
+
+    throw error
+  }
+}
+
+/**
+ * BACKEND FUNCTION: Update Transaction (soft-delete + new-row supersession)
+ */
+export const updateTransactionFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("ledger:write")])
+  .inputValidator(
+    (data: z.input<typeof updateTransactionTransportInputSchema>) =>
+      updateTransactionTransportInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    const normalized = await normalizeUpdateTransactionTransportInput(data)
+    return await updateTransactionForFamily({
+      data: normalized,
+      familyId: context.familyId,
+      user: context.user,
+    })
+  })
+
+type BulkUpdateSourceTransaction = Awaited<
+  ReturnType<typeof findTransactionsWithTransferOutAndSplitEntries>
+>[number]
+
+function assertNoDeletedTransactionTargets(
+  transactions: readonly { deletedAt: Date | null }[]
+): void {
+  if (transactions.some((transaction) => transaction.deletedAt !== null)) {
+    throw new TransactionGoneError()
+  }
+}
+
+function hasBulkUpdatePatch(data: BulkUpdateTransactionsInput): boolean {
+  return (
+    data.accountId !== undefined ||
+    data.categoryId !== undefined ||
+    data.merchantId !== undefined
+  )
+}
+
+function buildBulkUpdateReplacementInput(
+  transaction: BulkUpdateSourceTransaction,
+  data: BulkUpdateTransactionsInput
+): UpdateTransactionInput {
+  const patchedSplitEntries = transaction.isSplit
+    ? transaction.splitEntries.map((entry) => ({
+        amount: absMoney(entry.amount),
+        categoryId:
+          data.categoryId !== undefined ? data.categoryId : entry.categoryId,
+        description: entry.description,
+        merchantId:
+          data.merchantId !== undefined ? data.merchantId : entry.merchantId,
+      }))
+    : []
+
+  return updateTransactionInputSchema.parse({
+    accountId: data.accountId ?? transaction.accountId,
+    amount: absMoney(transaction.amount),
+    attachmentUrl: transaction.attachmentUrl,
+    categoryId: transaction.isSplit
+      ? null
+      : data.categoryId !== undefined
+        ? data.categoryId
+        : transaction.categoryId,
+    currency: transaction.currency,
+    date: transaction.date,
+    description: transaction.description,
+    destinationAmount:
+      transaction.destinationAmount == null
+        ? null
+        : absMoney(transaction.destinationAmount),
+    destinationCurrency: transaction.destinationCurrency,
+    id: transaction.id,
+    idempotencyKey: data.idempotencyKey,
+    isSplit: transaction.isSplit,
+    // PER-210: the split parent keeps its single merchant (only categoryId is
+    // nulled on split). Bulk paths must match single paths, so preserve/set the
+    // parent merchant here exactly like the single-update path.
+    merchantId:
+      data.merchantId !== undefined ? data.merchantId : transaction.merchantId,
+    notes: transaction.notes,
+    splitEntries: patchedSplitEntries,
+    status: transaction.status,
+    toAccountId: transaction.toAccountId,
+    type: transaction.type,
+  })
+}
+
+export async function bulkDeleteTransactionsForFamily({
+  ids,
+  idempotencyKey,
+  familyId,
+  user,
+}: {
+  ids: string[]
+  idempotencyKey: string
+  familyId: string
+  user: { id: string; familyId?: string | null }
+}): Promise<BulkDeleteTransactionsResult> {
+  const data = bulkDeleteTransactionsInputSchema.parse({ ids, idempotencyKey })
+  assertNoDuplicateValues(data.ids, "bulk delete ids")
+  const requestHash = await hashCanonicalPayload(
+    canonicalBulkDeleteRequestPayload(data)
+  )
+  const auditCtx = await createAuditContext({ user }, data.idempotencyKey)
+
+  const deleteOrReplay = async () =>
+    await scopedTenantTransaction(
+      familyId,
+      user.id,
+      async (tx: TenantTransactionClient) => {
+        const replay =
+          await replayIdempotentEndpointResponse<BulkDeleteTransactionsResult>(
+            tx,
+            {
+              endpoint: BULK_DELETE_TRANSACTIONS_ENDPOINT,
+              familyId,
+              key: data.idempotencyKey,
+              requestHash,
+            }
+          )
+        if (replay) return replay
+
+        const targets = await findTransactionsWithTransferOutAndSplitEntries(
+          tx,
+          data.ids
+        )
+        assertAllRequestedTransactionsLoaded(data.ids, targets)
+        assertNoDeletedTransactionTargets(targets)
+
+        for (const id of data.ids) {
+          await softDeleteTransactionWithinTenantTransaction(tx, {
+            auditCtx,
+            familyId,
+            id,
+            enforceReconciledLock: true,
+          })
+        }
+
+        const response = { count: data.ids.length, success: true }
+        await persistIdempotentEndpointResponse(tx, {
+          endpoint: BULK_DELETE_TRANSACTIONS_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+          response,
+        })
+
+        return response
+      }
+    )
+
+  try {
+    return await deleteOrReplay()
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error
+
+    const replay = await scopedTenantTransaction(
+      familyId,
+      user.id,
+      async (tx: TenantTransactionClient) =>
+        await replayIdempotentEndpointResponse<BulkDeleteTransactionsResult>(
+          tx,
+          {
+            endpoint: BULK_DELETE_TRANSACTIONS_ENDPOINT,
+            familyId,
+            key: data.idempotencyKey,
+            requestHash,
+          }
+        )
+    )
+    if (replay) return replay
+
+    throw error
+  }
+}
+
+/**
+ * BACKEND FUNCTION: Bulk Delete Transactions (Soft Delete — GAAP Compliance)
+ */
+export const bulkDeleteTransactionsFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("ledger:write")])
+  .inputValidator(
+    (data: z.input<typeof bulkDeleteTransactionsTransportInputSchema>) =>
+      bulkDeleteTransactionsTransportInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    const normalized = await normalizeBulkDeleteTransactionsTransportInput(data)
+    if (data.ids.length === 0) return { success: true }
+    return await bulkDeleteTransactionsForFamily({
+      ids: normalized.ids,
+      idempotencyKey: normalized.idempotencyKey,
+      familyId: context.familyId,
+      user: context.user,
+    })
+  })
+
+export async function bulkUpdateTransactionsForFamily({
+  data: rawData,
+  familyId,
+  user,
+}: {
+  data: unknown
+  familyId: string
+  user: { id: string; familyId?: string | null }
+}): Promise<BulkUpdateTransactionsResult> {
+  const data = bulkUpdateTransactionsInputSchema.parse(rawData)
+  assertNoDuplicateValues(data.ids, "bulk update ids")
+  const requestHash = await hashCanonicalPayload(
+    canonicalBulkUpdateRequestPayload(data)
+  )
+  const auditCtx = await createAuditContext({ user }, data.idempotencyKey)
+
+  const updateOrReplay = async () =>
+    await scopedTenantTransaction(
+      familyId,
+      user.id,
+      async (tx: TenantTransactionClient) => {
+        const replay =
+          await replayIdempotentEndpointResponse<BulkUpdateTransactionsResult>(
+            tx,
+            {
+              endpoint: BULK_UPDATE_TRANSACTIONS_ENDPOINT,
+              familyId,
+              key: data.idempotencyKey,
+              requestHash,
+            }
+          )
+        if (replay) return replay
+
+        if (!hasBulkUpdatePatch(data)) {
+          const response = { replacements: [], success: true }
+          await persistIdempotentEndpointResponse(tx, {
+            endpoint: BULK_UPDATE_TRANSACTIONS_ENDPOINT,
+            familyId,
+            key: data.idempotencyKey,
+            requestHash,
+            response,
+          })
+          return response
+        }
+
+        // PER-94: validate every patched reference before any ledger mutation.
+        await validateTenantReferences(tx, familyId, {
+          accountId: data.accountId,
+          merchantId: data.merchantId,
+          categoryId: data.categoryId,
+        })
+
+        const targets = await findTransactionsWithTransferOutAndSplitEntries(
+          tx,
+          data.ids
+        )
+        assertAllRequestedTransactionsLoaded(data.ids, targets)
+        assertNoDeletedTransactionTargets(targets)
+
+        const targetsById = indexById(targets)
+        const replacements: BulkUpdateReplacementResult[] = []
+        for (const id of data.ids) {
+          const target = targetsById.get(id)
+          if (!target) throw new Error("Transaction not found or access denied")
+          const replacement = await replaceTransactionWithinTenantTransaction(
+            tx,
+            {
+              auditCtx,
+              data: buildBulkUpdateReplacementInput(target, data),
+              familyId,
+              user,
+            }
+          )
+          replacements.push({ id, replacementId: replacement.id })
+        }
+
+        const response = { replacements, success: true }
+        await persistIdempotentEndpointResponse(tx, {
+          endpoint: BULK_UPDATE_TRANSACTIONS_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+          response,
+        })
+
+        return response
+      }
+    )
+
+  try {
+    return await updateOrReplay()
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error
+
+    const replay = await scopedTenantTransaction(
+      familyId,
+      user.id,
+      async (tx: TenantTransactionClient) =>
+        await replayIdempotentEndpointResponse<BulkUpdateTransactionsResult>(
+          tx,
+          {
+            endpoint: BULK_UPDATE_TRANSACTIONS_ENDPOINT,
+            familyId,
+            key: data.idempotencyKey,
+            requestHash,
+          }
+        )
+    )
+    if (replay) return replay
+
+    throw error
+  }
+}
+
+/**
+ * BACKEND FUNCTION: Bulk Update Transactions
+ */
+export const bulkUpdateTransactionsFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("ledger:write")])
+  .inputValidator(
+    (data: z.input<typeof bulkUpdateTransactionsTransportInputSchema>) =>
+      bulkUpdateTransactionsTransportInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    const normalized = await normalizeBulkUpdateTransactionsTransportInput(data)
+    if (data.ids.length === 0) return { success: true }
+    return await bulkUpdateTransactionsForFamily({
+      data: normalized,
+      familyId: context.familyId,
+      user: context.user,
+    })
+  })
+
+export async function bulkCreateTransactionsForFamily({
+  data: rawData,
+  familyId,
+  user,
+}: {
+  data: unknown
+  familyId: string
+  user: { id: string; familyId?: string | null }
+}): Promise<BulkCreateTransactionsResult> {
+  const data = bulkCreateTransactionsInputSchema.parse(rawData)
+  assertNoDuplicateValues(
+    data.transactions.map((row) => row.id),
+    "bulk create transaction ids"
+  )
+  assertNoDuplicateValues(
+    data.transactions.map((row) => row.idempotencyKey),
+    "bulk create row idempotency keys"
+  )
+  const requestHash = await hashCanonicalPayload(
+    canonicalBulkCreateRequestPayload(data)
+  )
+  const auditCtx = await createAuditContext({ user }, data.idempotencyKey)
+
+  const createOrReplay = async () =>
+    await scopedTenantTransaction(
+      familyId,
+      user.id,
+      async (tx: TenantTransactionClient) => {
+        const replay =
+          await replayIdempotentEndpointResponse<BulkCreateTransactionsResult>(
+            tx,
+            {
+              endpoint: BULK_CREATE_TRANSACTIONS_ENDPOINT,
+              familyId,
+              key: data.idempotencyKey,
+              requestHash,
+            }
+          )
+        if (replay) return replay
+
+        // PER-94: validasi seluruh referensi batch sebelum satu pun ledger row
+        // dibuat supaya batch tetap all-or-nothing.
+        await runTenantTransactionQueriesInOrder(
+          data.transactions.map(
+            (row, index) => () =>
+              validateTenantReferences(tx, familyId, {
+                accountId: row.accountId,
+                merchantId: row.merchantId,
+                categoryId: row.categoryId,
+              }).catch((error: unknown) => {
+                if (error instanceof TenantReferenceError) {
+                  throw new TenantReferenceError(
+                    `transactions[${index}].${error.field}`,
+                    error.referenceId,
+                    error.familyId
+                  )
+                }
+                throw error
+              })
+          )
+        )
+
+        const touchedAccountIds = new Set(
+          data.transactions.map((row) => row.accountId)
+        )
+        const oldAccounts = await tx.account.findMany({
+          where: { id: { in: Array.from(touchedAccountIds) } },
+        })
+
+        const transactionIds = data.transactions.map((row) => row.id)
+        const accountDeltas: AccountDeltaMap = {}
+        const rows = data.transactions.map((row) => {
+          const signedAmount = signedIncomeExpenseAmount(row.type, row.amount)
+          addAccountDelta(accountDeltas, row.accountId, signedAmount)
+
+          return {
+            id: row.id,
+            userId: user.id,
+            familyId,
+            type: row.type,
+            amount: signedAmount,
+            description: row.description,
+            accountId: row.accountId,
+            categoryId: row.categoryId ?? null,
+            merchantId: row.merchantId ?? null,
+            date: row.date,
+            notes: row.notes ?? null,
+            status: row.status,
+            attachmentUrl: row.attachmentUrl ?? null,
+            idempotencyKey: row.idempotencyKey,
+          }
+        })
+
+        await tx.transaction.createMany({ data: rows })
+        await applyAccountDeltas(tx, familyId, accountDeltas)
+        const [newTxs, newAccounts] = await runTenantTransactionQueriesInOrder([
+          () => findTransactionsWithSplitEntries(tx, transactionIds),
+          () =>
+            tx.account.findMany({
+              where: { id: { in: Array.from(touchedAccountIds) } },
+            }),
+        ] as const)
+        await auditLogs(tx, auditCtx, [
+          ...accountBalanceAuditEntries(oldAccounts, newAccounts),
+          ...createdAuditEntries("Transaction", newTxs),
+        ])
+
+        const response = {
+          count: data.transactions.length,
+          success: true,
+          transactionIds,
+        }
+        await persistIdempotentEndpointResponse(tx, {
+          endpoint: BULK_CREATE_TRANSACTIONS_ENDPOINT,
+          familyId,
+          key: data.idempotencyKey,
+          requestHash,
+          response,
+        })
+
+        return response
+      }
+    )
+
+  try {
+    return await createOrReplay()
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error
+
+    const replay = await scopedTenantTransaction(
+      familyId,
+      user.id,
+      async (tx: TenantTransactionClient) =>
+        await replayIdempotentEndpointResponse<BulkCreateTransactionsResult>(
+          tx,
+          {
+            endpoint: BULK_CREATE_TRANSACTIONS_ENDPOINT,
+            familyId,
+            key: data.idempotencyKey,
+            requestHash,
+          }
+        )
+    )
+    if (replay) return replay
+
+    throw error
+  }
+}
+
+/**
+ * BACKEND FUNCTION: Bulk Create Transactions
+ */
+export const bulkCreateTransactionsFn = createServerFn({ method: "POST" })
+  .middleware([requireCapability("ledger:write")])
+  .inputValidator(
+    (data: z.input<typeof bulkCreateTransactionsTransportInputSchema>) =>
+      bulkCreateTransactionsTransportInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    const normalized = await normalizeBulkCreateTransactionsTransportInput(data)
+    if (normalized.transactions.length === 0) {
+      return { count: 0, success: true, transactionIds: [] }
+    }
+    return await bulkCreateTransactionsForFamily({
+      data: normalized,
+      familyId: context.familyId,
+      user: context.user,
+    })
+  })

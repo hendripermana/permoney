@@ -1,0 +1,24 @@
+-- PER-259 Slice 5 / ADR-0054 — "latest quantity-mutating event" identity marker.
+--
+-- Correcting (edit/delete) a Buy/Sell trade is only safe when nothing else has
+-- touched the SAME (account, instrument) position since — a Switch leg, a
+-- Dividend reinvest, or a later Buy/Sell. Comparing current quantity/cost VALUES
+-- against the trade's captured before/after snapshot is not sound: a later
+-- Sell-then-rebuy-at-the-same-price can coincidentally reproduce the original
+-- values and falsely look "unchanged". This column is an IDENTITY marker
+-- instead — the idempotencyKey of whichever operation last changed this row's
+-- quantity/avgUnitCostMinor — so the correction guard compares identity, never
+-- a value diff.
+--
+-- Every holdings-quantity-mutating write path stamps it: recordTradeForFamily's
+-- Buy AND Sell branches, both legs of recordSwitchForFamily, the reinvest
+-- branch of recordDistributionForFamily, and it is explicitly CLEARED (set
+-- back to NULL) by upsertHoldingForFamily's manual raw-edit branch — a manual
+-- edit invalidates any earlier trade's claim to being "still latest" (src/server/holdings.ts).
+--
+-- ADDITIVE ONLY — one nullable column, no default, no backfill needed (every
+-- existing holding predates trade-correction and is correctly NULL = "not
+-- known to be the result of a still-latest tracked mutation"; the first trade
+-- recorded against it going forward stamps the marker).
+
+ALTER TABLE "Holding" ADD COLUMN "lastMutationIdempotencyKey" TEXT;

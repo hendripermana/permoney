@@ -1,0 +1,580 @@
+# Project: Permoney (https://permana.icu)
+
+# Using Vite+, the Unified Toolchain for the Web
+
+This project is using Vite+, a unified toolchain built on top of Vite, Rolldown, Vitest, tsdown, Oxlint, Oxfmt, and Vite Task. Vite+ wraps runtime management, package management, and frontend tooling in a single global CLI called `vp`. Vite+ is distinct from Vite, but it invokes Vite through `vp dev` and `vp build`.
+
+## Vite+ Workflow
+
+`vp` is a global binary that handles the full development lifecycle. Run `vp help` to print a list of commands and `vp <command> --help` for information about a specific command.
+
+### Start
+
+- create - Create a new project from a template
+- migrate - Migrate an existing project to Vite+
+- config - Configure hooks and agent integration
+- staged - Run linters on staged files
+- install (`i`) - Install dependencies
+- env - Manage Node.js versions
+
+### Develop
+
+- dev - Run the development server
+- check - Run format, lint, and TypeScript type checks
+- lint - Lint code
+- fmt - Format code
+- test - Run tests
+
+### Execute
+
+- run - Run monorepo tasks
+- exec - Execute a command from local `node_modules/.bin`
+- dlx - Execute a package binary without installing it as a dependency
+- cache - Manage the task cache
+
+### Build
+
+- build - Build for production
+- pack - Build libraries
+- preview - Preview production build
+
+### Manage Dependencies
+
+Vite+ automatically detects and wraps the underlying package manager such as pnpm, npm, or Yarn through the `packageManager` field in `package.json` or package manager-specific lockfiles.
+
+- add - Add packages to dependencies
+- remove (`rm`, `un`, `uninstall`) - Remove packages from dependencies
+- update (`up`) - Update packages to latest versions
+- dedupe - Deduplicate dependencies
+- outdated - Check for outdated packages
+- list (`ls`) - List installed packages
+- why (`explain`) - Show why a package is installed
+- info (`view`, `show`) - View package information from the registry
+- link (`ln`) / unlink - Manage local package links
+- pm - Forward a command to the package manager
+
+### Maintain
+
+- upgrade - Update `vp` itself to the latest version
+
+These commands map to their corresponding tools. For example, `vp dev --port 3000` runs Vite's dev server and works the same as Vite. `vp test` runs JavaScript tests through the bundled Vitest. The version of all tools can be checked using `vp --version`. This is useful when researching documentation, features, and bugs.
+
+## Common Pitfalls
+
+- **Using the package manager directly:** Do not use pnpm, npm, or Yarn directly. Vite+ can handle all package manager operations.
+- **Always use Vite commands to run tools:** Don't attempt to run `vp vitest` or `vp oxlint`. They do not exist. Use `vp test` and `vp lint` instead.
+- **Running scripts:** Vite+ built-in commands (`vp dev`, `vp build`, `vp test`, etc.) always run the Vite+ built-in tool, not any `package.json` script of the same name. To run a custom script that shares a name with a built-in command, use `vp run <script>`. For example, if you have a custom `dev` script that runs multiple services concurrently, run it with `vp run dev`, not `vp dev` (which always starts Vite's dev server).
+- **Do not install Vitest, Oxlint, Oxfmt, or tsdown directly:** Vite+ wraps these tools. They must not be installed directly. You cannot upgrade these tools by installing their latest versions. Always use Vite+ commands.
+- **Use Vite+ wrappers for one-off binaries:** Use `vp dlx` instead of package-manager-specific `dlx`/`npx` commands.
+- **Import JavaScript modules from `vite-plus`:** Instead of importing from `vite` or `vitest`, all modules should be imported from the project's `vite-plus` dependency. For example, `import { defineConfig } from 'vite-plus';` or `import { expect, test, vi } from 'vite-plus/test';`. You must not install `vitest` to import test utilities.
+- **Type-Aware Linting:** There is no need to install `oxlint-tsgolint`, `vp lint --type-aware` works out of the box.
+
+## Agent skills
+
+### Issue tracker
+
+Issues, PRDs, milestones, and implementation tickets are tracked in Linear under the `Permana` team. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Linear uses the five canonical agent triage labels without aliases. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Permoney is a single-context repository with system-wide ADRs under `docs/adr/`. See `docs/agents/domain.md`.
+
+### Agent harness
+
+Agent context is portable across coding tools through versioned repository guidance, Serena memories, and local/remote-managed CommandCode Taste. Follow the precedence and bootstrap contract in `docs/agents/agent-harness.md`; Taste is advisory and must never override durable project guidance.
+
+## Review Checklist for Agents
+
+- [ ] Run `vp install` after pulling remote changes and before getting started.
+- [ ] If `vp` is not installed or `vp install` fails, stop and report the exact error. Do not substitute `npm`, `pnpm`, or `yarn` commands unless the user explicitly asks for that fallback.
+- [ ] Run `vp check` and `vp test` to validate changes.
+- [ ] If `vp check` or `vp test` fails, stop and report the first failing command and error excerpt. Do not claim the task is done until the failure is fixed or the user explicitly approves a partial workaround.
+
+## Long-Horizon Engineering Standard For Agents
+
+Permoney is not being built as a short-lived prototype. Agents must treat the
+core system as financial infrastructure that should remain understandable,
+adaptable, and trustworthy for decades. Do not optimize for "it works today" if
+the shortcut weakens future adaptability, tenant isolation, ledger correctness,
+auditability, or the ability to replace technologies cleanly.
+
+When choosing between designs, prefer the option with clearer boundaries and
+stronger invariants, even when it takes more work now. Authentication,
+onboarding, tenant scoping, ledger mutation, import staging, audit logging, UI
+state, and browser behavior must each have explicit ownership. A feature is not
+properly done when behavior is merely green locally; it is done when the
+architecture explains why the behavior remains correct under retries,
+concurrency, future integrations, and framework evolution.
+
+Future agents must work with this mindset:
+
+- **Framework & Infrastructure Agnostic:** Build core paths so they can survive framework, auth provider, database, AI, bank-sync, and deployment changes without rewriting the financial model.
+- **Durable Invariants:** Keep irreversible financial meaning in durable server/database invariants, not in UI convention or request timing.
+- **Explicit State Transitions:** Make state transitions explicit (e.g., authenticated-but-not-onboarded, tenant-scoped, transaction-scoped, replayed idempotency key, soft-deleted ledger row, and audited mutation).
+- **Strict Contracts:** Prefer a smaller, stricter contract over a broad ambiguous one. Ambiguity is technical debt, especially in money movement and tenant isolation.
+- **Real Boundary Testing:** Test the real boundary that can fail: real Postgres for data integrity, real browser E2E for routing/hydration/client-bundle safety, and targeted unit tests for pure logic.
+- **Document Tradeoffs:** Never hide architectural uncertainty behind passing tests. If the design tradeoff is material, document the decision and why it keeps Permoney more adaptable.
+- **Scalable Architecture:** Do not choose the easiest implementation because it is easy. Choose the implementation whose boundaries would still make sense if Permoney is far larger, integrated with more providers, or maintained by a different team years from now.
+
+## AI AGENT OPERATIONAL WORKFLOW (ANTI-DUMB ZONE & HANDOFF)
+
+To maintain maximum engineering intelligence and avoid the LLM "Dumb Zone" (>120k tokens), all agents executing tasks on Permoney must strictly manage their session lifecycle using this operational workflow.
+
+### A. The Context Budget & Smart Zone Guardrails
+
+- **Token Awareness:** Keep track of the active token count in the current session. The "Smart Zone" resides below 120k tokens. Beyond this boundary, the agent becomes prone to hallucinations, repetitive bugs, and breaking invariants.
+- **Proactive Interrogation (`grill_me`):** At the start of a fresh session for a new Milestone or Ticket, the agent MUST look at the current codebase, read the specific Linear ticket definition, and invoke the `grill_me` skill. The agent must interview the developer relentlessly one question at a time to build a shared design concept before generating any code.
+- **Never Vibe-Code:** Do not push huge lines of code blindly based on vague prompts. Use the context provided by Linear tickets to establish explicit boundaries and definition of done.
+- **Fallback for missing context:** If no Linear ticket definition or acceptance criteria are available, ask the user for the ticket ID or required behavior before changing code. If `grill_me` is unavailable or the ticket context cannot be read, ask the user for the missing context instead of continuing with guessed assumptions.
+
+### B. The /handoff & Session Reset Protocol
+
+- **When to Handoff:** If the current session is approaching the 120k token limit (Dumb Zone) OR if a critical out-of-scope refactoring/bug opportunity is discovered mid-task, the agent MUST halt implementation.
+- **Execution:** Do not attempt to force-compact the session endlessly within the same chat graph. Instead, generate a clean, temporary, and disposable markdown handoff artifact summarizing the core focus of the task, the current delta of files modified, precise next steps, and suggested skills (e.g., `grill_me`, `prototype`).
+- **Storage Invariant:** Save the handoff file ONLY to the user operating system's temporary directory (`/tmp` or equivalent). Never commit handoff markdown logs into the main repository workspace to prevent "Dock Rot" (rotting documentation that pollutes future agents' context).
+- **The Memento Reset:** Once the handoff document is created, the user will wipe the context and spin up a 100% fresh chat session (Fresh Smart Zone). The agent in the new session will accept the handoff artifact, instantly regain the accurate "tattoo of memory", and resume coding with peak efficiency.
+
+### C. Vertical Slices & Deep Modules (The Swiss Army Knife Pattern)
+
+- **Tracer Bullets Principle:** When breaking a feature down into implementation issues, agents are strictly forbidden from coding horizontally (layer-by-layer: e.g., writing all database code first, then all server functions, then all UI). Always implement features in "Vertical Slices" (Tracer Bullets) that cut through all layers in a single cycle to guarantee instant architectural feedback loops via `vp check` and `vp test` before adding polish.
+- **Deep Modules Over Fragmentation:** Build code structure following the "Swiss Army Knife" philosophy (Deep Modules). Avoid creating a chaotic scatter of tiny files, premature custom hooks, or excessive micro-folders for a single feature. Keep the public interface minimal and simple on the outside, while encapsulating the complex execution flows deeply inside a self-contained service file (e.g., `src/services/account.ts` or `src/server/transactions.server.ts`).
+- **No Closed-Loop Cheating:** Never let the agent review its own massive code within the same bloated session. Implementation happens AFK, but code review and critical validation must occur either through a fresh agent session using a higher-tier model (e.g., Opus/DeepSeek) or through strict human code-review.
+
+## TanStack Intent — Agent Skills Discovery
+
+**Usage for AI agents:**
+
+- When a user request matches a `when:` description, load the corresponding skill with:
+  ```
+  vp dlx @tanstack/intent@latest load <use>
+  ```
+  For example, to load the TanStack DB optimistic mutations skill: `vp dlx @tanstack/intent@latest load @tanstack/db#db-core/mutations-optimistic`.
+- The auto-generated line inside the block mentions `npx` — **override that with `vp dlx`** per project Vite+ convention (see § _Common Pitfalls_).
+
+**Maintenance commands (run after adding/removing dependencies):**
+
+- `vp dlx @tanstack/intent@latest install --map` — regenerate the mapping block from currently installed packages. Safe to run anytime; only rewrites content between the markers.
+- `vp dlx @tanstack/intent@latest stale` — verify mapped skills still exist and reference current versions.
+- `vp dlx @tanstack/intent@latest list` — dump every discoverable skill from `node_modules` with descriptions.
+
+**Do not hand-edit inside the markers.** Any manual edit is overwritten on the next `install --map`. To add project-specific rules, write them OUTSIDE the block (like this section).
+
+<!-- intent-skills:start -->
+
+# Skill mappings - load `use` with `pnpm dlx @tanstack/intent@latest load <use>`.
+
+skills:
+
+- when: "TanStack DB core concepts: createCollection with queryCollectionOptions, electricCollectionOptions, powerSyncCollectionOptions, rxdbCollectionOptions, trailbaseCollectionOptions, localOnlyCollectionOptions. Live queries via query builder (from, where, join, select, groupBy, orderBy, limit). Optimistic mutations with draft proxy (collection.insert, collection.update, collection.delete). createOptimisticAction, createTransaction, createPacedMutations. Entry point for all TanStack DB skills."
+  use: "@tanstack/db#db-core"
+- when: "Creating typed collections with createCollection. Adapter selection: queryCollectionOptions (REST/TanStack Query), electricCollectionOptions (ElectricSQL real-time sync), powerSyncCollectionOptions (PowerSync SQLite), rxdbCollectionOptions (RxDB), trailbaseCollectionOptions (TrailBase), localOnlyCollectionOptions, localStorageCollectionOptions. CollectionConfig options: getKey, schema, sync, gcTime, autoIndex (default off), defaultIndexType, syncMode (eager/on-demand, plus progressive for Electric). StandardSchema validation with Zod/Valibot/ArkType. Collection lifecycle (idle/loading/ready/error). Adapter-specific sync patterns including Electric txid tracking, Query direct writes, and PowerSync query-driven sync with onLoad/onLoadSubset hooks."
+  use: "@tanstack/db#db-core/collection-setup"
+- when: "Building custom collection adapters for new backends. SyncConfig interface: sync function receiving begin, write, commit, markReady, truncate, metadata primitives. ChangeMessage format (insert, update, delete). loadSubset for on-demand sync. LoadSubsetOptions (where, orderBy, limit, cursor). Expression parsing: parseWhereExpression, parseOrderByExpression, extractSimpleComparisons, parseLoadSubsetOptions. Collection options creator pattern. rowUpdateMode (partial vs full). Subscription lifecycle and cleanup functions. Persisted sync metadata API (metadata.row and metadata.collection) for storing per-row and per-collection adapter state."
+  use: "@tanstack/db#db-core/custom-adapter"
+- when: "Query builder fluent API: from, where, join, leftJoin, rightJoin, innerJoin, fullJoin, select, fn.select, groupBy, having, orderBy, limit, offset, distinct, findOne. Operators: eq, gt, gte, lt, lte, like, ilike, inArray, isNull, isUndefined, and, or, not. Aggregates: count, sum, avg, min, max. String functions: upper, lower, length, concat, coalesce. Math: add. $selected namespace. createLiveQueryCollection. Derived collections. Predicate push-down. Incremental view maintenance via differential dataflow (d2ts). Virtual properties ($synced, $origin, $key, $collectionId). Includes subqueries for hierarchical data. toArray and concat(toArray(...)) scalar includes. queryOnce for one-shot queries. createEffect for reactive side effects (onEnter, onUpdate, onExit, onBatch)."
+  use: "@tanstack/db#db-core/live-queries"
+- when: "collection.insert, collection.update (Immer-style draft proxy), collection.delete. createOptimisticAction (onMutate + mutationFn). createPacedMutations with debounceStrategy, throttleStrategy, queueStrategy. createTransaction, getActiveTransaction, ambient transaction context. Transaction lifecycle (pending/persisting/completed/failed). Mutation merging. onInsert/onUpdate/onDelete handlers. PendingMutation type. Transaction.isPersisted."
+  use: "@tanstack/db#db-core/mutations-optimistic"
+- when: "SQLite-backed persistence for TanStack DB collections. persistedCollectionOptions wraps any adapter (Electric, Query, PowerSync, or local-only) with durable local storage. Platform adapters: browser (WA-SQLite OPFS), React Native (op-sqlite), Expo (expo-sqlite), Electron (IPC), Node (better-sqlite3), Capacitor, Tauri, Cloudflare Durable Objects. Multi-tab/multi-process coordination via BrowserCollectionCoordinator / ElectronCollectionCoordinator / SingleProcessCoordinator. schemaVersion for migration resets. Local-only mode for offline-first without a server."
+  use: "@tanstack/db#db-core/persistence"
+- when: "Integrating TanStack DB with meta-frameworks (TanStack Start, Next.js, Remix, Nuxt, SvelteKit). Client-side only: SSR is NOT supported — routes must disable SSR. Preloading collections in route loaders with collection.preload(). Pattern: ssr: false + await collection.preload() in loader. Multiple collection preloading with Promise.all. Framework-specific loader APIs."
+  use: "@tanstack/db#meta-framework"
+- when: "Two-way event patterns between devtools panel and application. App-to-devtools observation, devtools-to-app commands, time-travel debugging with snapshots and revert. structuredClone for snapshot safety, distinct event suffixes for observation vs commands, serializable payloads only."
+  use: "@tanstack/devtools-event-client#devtools-bidirectional"
+- when: "Create typed EventClient for a library. Define event maps with typed payloads, pluginId auto-prepend namespacing, emit()/on()/onAll()/onAllPluginEvents() API. Connection lifecycle (5 retries, 300ms), event queuing, enabled/disabled state, SSR fallbacks, singleton pattern. Unique pluginId requirement to avoid event collisions."
+  use: "@tanstack/devtools-event-client#devtools-event-client"
+- when: "Analyze library codebase for critical architecture and debugging points, add strategic event emissions. Identify middleware boundaries, state transitions, lifecycle hooks. Consolidate events (1 not 15), debounce high-frequency updates, DRY shared payload fields, guard emit() for production. Transparent server/client event bridging."
+  use: "@tanstack/devtools-event-client#devtools-instrumentation"
+- when: "Configure @tanstack/devtools-vite for source inspection (data-tsd-source, inspectHotkey, ignore patterns), console piping (client-to-server, server-to-client, levels), enhanced logging, server event bus (port, host, HTTPS), production stripping (removeDevtoolsOnBuild), editor integration (launch-editor, custom editor.open). Must be FIRST plugin in Vite config. Vite ^6 || ^7 only."
+  use: "@tanstack/devtools-vite#devtools-vite-plugin"
+- when: "React bindings for TanStack DB. useLiveQuery hook with dependency arrays (8 overloads: query function, config object, pre-created collection, disabled state via returning undefined/null). useLiveSuspenseQuery for React Suspense with Error Boundaries (data always defined). useLiveInfiniteQuery for cursor-based pagination (pageSize, fetchNextPage, hasNextPage, isFetchingNextPage). usePacedMutations for debounced React state updates. Return shape: data, state, collection, status, isLoading, isReady, isError. Import from @tanstack/react-db (re-exports all of @tanstack/db)."
+  use: "@tanstack/react-db#react-db"
+- when: "Step-by-step migration from Next.js App Router to TanStack Start: route definition conversion, API mapping, server function conversion from Server Actions, middleware conversion, data fetching pattern changes."
+  use: "@tanstack/react-start#lifecycle/migrate-from-nextjs"
+- when: "React bindings for TanStack Start: createStart, StartClient, StartServer, React-specific imports, re-exports from @tanstack/react-router, full project setup with React, useServerFn hook."
+  use: "@tanstack/react-start#react-start"
+- when: "Implement, review, debug, and refactor TanStack Start React Server Components in React 19 apps. Use when tasks mention @tanstack/react-start/rsc, renderServerComponent, createCompositeComponent, CompositeComponent, renderToReadableStream, createFromReadableStream, createFromFetch, Composite Components, React Flight streams, loader or query owned RSC caching, router.invalidate, structuralSharing: false, selective SSR, stale names like renderRsc or .validator, or migration from Next App Router RSC patterns. Do not use for generic SSR or non-TanStack RSC frameworks except brief comparison."
+  use: "@tanstack/react-start#react-start/server-components"
+- when: "Framework-agnostic core concepts for TanStack Router: route trees, createRouter, createRoute, createRootRoute, createRootRouteWithContext, addChildren, Register type declaration, route matching, route sorting, file naming conventions. Entry point for all router skills."
+  use: "@tanstack/router-core#router-core"
+- when: "Route protection with beforeLoad, redirect()/throw redirect(), isRedirect helper, authenticated layout routes (\_authenticated), non-redirect auth (inline login), RBAC with roles and permissions, auth provider integration (Auth0, Clerk, Supabase), router context for auth state."
+  use: "@tanstack/router-core#router-core/auth-and-guards"
+- when: "Automatic code splitting (autoCodeSplitting), .lazy.tsx convention, createLazyFileRoute, createLazyRoute, lazyRouteComponent, getRouteApi for typed hooks in split files, codeSplitGroupings per-route override, splitBehavior programmatic config, critical vs non-critical properties."
+  use: "@tanstack/router-core#router-core/code-splitting"
+- when: "Route loader option, loaderDeps for cache keys, staleTime/gcTime/ defaultPreloadStaleTime SWR caching, pendingComponent/pendingMs/ pendingMinMs, errorComponent/onError/onCatch, beforeLoad, router context and createRootRouteWithContext DI pattern, router.invalidate, Await component, deferred data loading with unawaited promises."
+  use: "@tanstack/router-core#router-core/data-loading"
+- when: "Link component, useNavigate, Navigate component, router.navigate, ToOptions/NavigateOptions/LinkOptions, from/to relative navigation, activeOptions/activeProps, preloading (intent/viewport/render), preloadDelay, navigation blocking (useBlocker, Block), createLink, linkOptions helper, scroll restoration, MatchRoute."
+  use: "@tanstack/router-core#router-core/navigation"
+- when: "notFound() function, notFoundComponent, defaultNotFoundComponent, notFoundMode (fuzzy/root), errorComponent, CatchBoundary, CatchNotFound, isNotFound, NotFoundRoute (deprecated), route masking (mask option, createRouteMask, unmaskOnReload)."
+  use: "@tanstack/router-core#router-core/not-found-and-errors"
+- when: "Dynamic path segments ($paramName), splat routes ($ / \_splat), optional params ({-$paramName}), prefix/suffix patterns ({$param}.ext), useParams, params.parse/stringify, pathParamsAllowedCharacters, i18n locale patterns."
+  use: "@tanstack/router-core#router-core/path-params"
+- when: "validateSearch, search param validation with Zod/Valibot/ArkType adapters, fallback(), search middlewares (retainSearchParams, stripSearchParams), custom serialization (parseSearch, stringifySearch), search param inheritance, loaderDeps for cache keys, reading and writing search params."
+  use: "@tanstack/router-core#router-core/search-params"
+- when: "Non-streaming and streaming SSR, RouterClient/RouterServer, renderRouterToString/renderRouterToStream, createRequestHandler, defaultRenderHandler/defaultStreamHandler, HeadContent/Scripts components, head route option (meta/links/styles/scripts), ScriptOnce, automatic loader dehydration/hydration, memory history on server, data serialization, document head management."
+  use: "@tanstack/router-core#router-core/ssr"
+- when: "Full type inference philosophy (never cast, never annotate inferred values), Register module declaration, from narrowing on hooks and Link, strict:false for shared components, getRouteApi for code-split typed access, addChildren with object syntax for TS perf, LinkProps and ValidateLinkOptions type utilities, as const satisfies pattern."
+  use: "@tanstack/router-core#router-core/type-safety"
+- when: "TanStack Router bundler plugin for route generation and automatic code splitting. Supports Vite, Webpack, Rspack, and esbuild. Configures autoCodeSplitting, routesDirectory, target framework, and code split groupings."
+  use: "@tanstack/router-plugin#router-plugin"
+- when: "Core overview for TanStack Start: tanstackStart() Vite plugin, getRouter() factory, root route document shell (HeadContent, Scripts, Outlet), client/server entry points, routeTree.gen.ts, tsconfig configuration. Entry point for all Start skills."
+  use: "@tanstack/start-client-core#start-core"
+- when: "Server-side authentication primitives for TanStack Start: session cookies (HttpOnly, Secure, SameSite, \_\_Host- prefix), session read/issue/destroy via createServerFn and middleware, OAuth authorization-code flow with state and PKCE, password-reset enumeration defense, CSRF for non-GET RPCs, rate limiting auth endpoints, session rotation on privilege change. Pairs with router-core/auth-and-guards for the routing side."
+  use: "@tanstack/start-client-core#start-core/auth-server-primitives"
+- when: "Deploy to Cloudflare Workers, Netlify, Vercel, Node.js/Docker, Bun, Railway. Selective SSR (ssr option per route), SPA mode, static prerendering, ISR with Cache-Control headers, SEO and head management."
+  use: "@tanstack/start-client-core#start-core/deployment"
+- when: "Isomorphic-by-default principle, environment boundary functions (createServerFn, createServerOnlyFn, createClientOnlyFn, createIsomorphicFn), ClientOnly component, useHydrated hook, import protection, dead code elimination, environment variable safety (VITE\_ prefix, process.env)."
+  use: "@tanstack/start-client-core#start-core/execution-model"
+- when: "createMiddleware, request middleware (.server only), server function middleware (.client + .server), context passing via next({ context }), sendContext for client-server transfer, global middleware via createStart in src/start.ts, middleware factories, method order enforcement, fetch override precedence."
+  use: "@tanstack/start-client-core#start-core/middleware"
+- when: "createServerFn (GET/POST), inputValidator (Zod or function), useServerFn hook, server context utilities (getRequest, getRequestHeader, setResponseHeader, setResponseStatus), error handling (throw errors, redirect, notFound), streaming, FormData handling, file organization (.functions.ts, .server.ts)."
+  use: "@tanstack/start-client-core#start-core/server-functions"
+- when: "Server-side API endpoints using the server property on createFileRoute, HTTP method handlers (GET, POST, PUT, DELETE), createHandlers for per-handler middleware, handler context (request, params, context), request body parsing, response helpers, file naming for API routes."
+  use: "@tanstack/start-client-core#start-core/server-routes"
+- when: "Server-side runtime for TanStack Start: createStartHandler, request/response utilities (getRequest, setResponseHeader, setCookie, getCookie, useSession), three-phase request handling, AsyncLocalStorage context."
+  use: "@tanstack/start-server-core#start-server-core"
+- when: "Load environment variables from a .env file into process.env for Node.js applications. Use when configuring apps with secrets, setting up local development environments, managing API keys and database uRLs, parsing .env file contents, or populating environment variables programmatically. Always use this skill when the user mentions .env, even for simple tasks like \"set up dotenv\" — the skill contains critical gotchas (encrypted keys, variable expansion, command substitution) that prevent common production issues."
+  use: "dotenv#dotenv"
+- when: "Use dotenvx to run commands with environment variables, manage multiple .env files, expand variables, and encrypt env files for safe commits and CI/CD."
+  use: "dotenv#dotenvx"
+- when: "Vite+ skill for development workflow and CLI operations. Use this skill to route user requests to the appropriate bundled Vite+ docs."
+use: "vite-plus#vite-plus"
+<!-- intent-skills:end -->
+
+# 🚨 STRICT REACT & FRONTEND ENGINEERING RULES
+
+As an AI Agent, you MUST follow these architectural rules for the Permoney project. Refusal to follow these leads to flaky code and infinite loops.
+
+## 1. THE `useEffect` BAN (Declarative & Predictable Logic)
+
+**Do NOT call `useEffect` directly.** Use `useEffect` only when there is no declarative replacement from the no-use-effect skill, such as subscribing to a browser event or integrating with an external library that requires a side effect.
+
+**MANDATORY:** You MUST consult and strictly follow the [no-use-effect skill](.agents/skills/no-use-effect/SKILL.md) whenever you are dealing with state synchronization or side effects. The skill document provides the exact five replacement patterns required and the specific `useMountEffect` escape hatch.
+
+## 2. STRICT TYPESCRIPT (NO `any` ALLOWED)
+
+- **BANNED:** Never use the `any` keyword. It defeats the purpose of TypeScript.
+- **INSTEAD:** Use explicit Interfaces, Types, or literal casting (e.g., `value as "expense" | "income"`). Rely on our Zod schemas (`transactionSchema`) for validation and type inference.
+
+## 3. UI & DESIGN SYSTEM (shadcn/ui + Tailwind)
+
+All UI components MUST remain strictly consistent with the overarching design guidelines and the shadcn/ui design system.
+
+- **MANDATORY DESIGN DIRECTIVES**: Every single UI implementation and modification MUST strictly adhere to the rules outlined in [DESIGN.md](./DESIGN.md). You are strictly prohibited from writing UI code without first validating it against these design standards.
+- **Source of Truth**: Always refer to [COMPONENTS.md](./COMPONENTS.md) and the `@/components/ui` directory before proposing or creating new components.
+- **Component Addition**: DO NOT use `npx` or `pnpm dlx` directly. Use the Vite+ wrapper command ONLY: `vp dlx shadcn@latest add [component-name]`.
+- **Styling**: Use Tailwind CSS utility classes exclusively. Inline styles (`style={{...}}`) are strictly prohibited.
+- **Class Merging**: Use the `cn()` utility function for all class merging, especially for conditional rendering logic.
+- **Icons**: Use `lucide-react` for all iconography to maintain visual consistency.
+- **TanStack Integration**:
+  - For **TanStack Table**, utilize primitives from `@/components/ui/table.tsx`.
+  - For **TanStack Form**, utilize primitives from `@/components/ui/form.tsx`.
+- **Language Standards**:
+  - **Code & UI**: All user-facing text, variable names, and logic must be in **English**.
+
+## Approved Community Registries
+
+- **Shadcnblocks**: Use for complex layout shells and dashboard sections.
+- **Kibo UI**: Use for advanced enterprise components and data-heavy tables.
+- **Magic UI**: Use for high-end animations and interactive visual elements.
+
+## Execution Rule
+
+When adding a community component, always follow the Vite+ pattern:
+`vp dlx shadcn@latest add @<registry>/<component-name>`
+
+## 4. DIRECTORY STRUCTURE
+
+- `@/components/ui`: Reserved for shadcn primitives (Atomic components).
+- `@/components/blocks`: Reserved for complex components that compose multiple UI primitives (Molecules/Organisms).
+
+## 5. THE TRANSACTION CORE ARCHITECTURE
+
+Transactions are the heart of Permoney. This is not a CRUD module. It is the canonical financial ledger that every future feature depends on: accounts, budgets, reports, bank imports, smart rules, AI enrichment, audit trails, and reconciliation. If a shortcut makes transaction history, balances, tenant isolation, or auditability weaker, the shortcut is wrong even when the UI works and the build is green.
+
+The canonical domain boundary is documented in [`docs/adr/0008-core-domain-model-and-ledger-boundaries.md`](./docs/adr/0008-core-domain-model-and-ledger-boundaries.md). Read it before adding or changing import staging, valuation snapshots, AI enrichment, reconciliation, asset tracking, or other systems that touch money-shaped data.
+
+The account taxonomy contract is documented in [`docs/account-taxonomy.md`](./docs/account-taxonomy.md). Use `accountClass`, `accountType`, and `accountSubtype` for account classification; do not introduce new ledger behavior through ad hoc account product strings.
+
+### A. Data Integrity & Double-Entry (Server-Side)
+
+- **ACID Transactions**: Every financial mutation (create/update/delete/bulk/import/onboarding demo data) MUST be wrapped in an interactive `prisma.$transaction(async (tx) => ...)` block so reads, writes, RLS GUC setup, balance updates, idempotency checks, and audit logs share the same transaction.
+- **Signed Amounts**: At the Database level, `amount` must be SIGNED (Negative for Expense/Transfer Out, Positive for Income/Transfer In). The UI handles absolute values for display.
+- **Atomic Balance Updates**: Never compute a new balance in memory and save it. Use Prisma's `{ increment: x }` or `{ decrement: x }` to avoid race conditions.
+- **Split Transaction Normalization**: If `isSplit` is true, only the `categoryId` on the parent `Transaction` must be `null` (category allocation lives in the `SplitEntry` children). The parent RETAINS its single `merchantId` — merchant = where the whole receipt was purchased (PER-210). The relaxed `split_parent_details_live_on_children` CHECK enforces `NOT "isSplit" OR "categoryId" IS NULL`.
+- **Transfer Logic**: A `Transfer` is a dual-leg operation creating an Outflow and Inflow transaction. Use the `kind` field to distinguish between `funds_movement`, `cc_payment`, `loan_payment`, and `liability_draw`. Liability interest and fees are separate expense rows using `liability_interest` or `liability_fee` with `toAccountId` pointing at the liability account. See [`docs/liability-semantics.md`](./docs/liability-semantics.md).
+- **Database Is the Law**: Core financial invariants must be enforced by database constraints where possible: transaction type/status/kind domains, amount sign, ISO-like currency code shape, destination amount/currency pair validity, transfer destination requirements, and account balance rules.
+- **Idempotency Is Mandatory**: Any mutation that can be retried by the browser, network, import worker, or future bank-sync job must accept an idempotency key. Replaying the same key must not create another transaction or change balances again. Same key with different payload must fail with a conflict.
+- **Delete Must Be Idempotent**: Deleting a transaction twice must never reverse the balance twice. A deleted transaction may return no-op success or a conflict, but it must not mutate balances again.
+- **No Hard Delete for Ledger History**: User-visible transaction history, transfer legs, split entries, and audit evidence must not be erased as the correctness mechanism. If update uses reversal-and-replace, the old state and new state must be represented in `AuditLog` inside the same transaction.
+- **AuditLog Required for Mutations**: Every create/update/delete/bulk/import/onboarding mutation must write append-only audit rows in the same transaction, including `familyId`, `userId`, entity identity, action, before/after snapshots, request metadata when available, and idempotency key when applicable.
+- **Tenant-Owned References**: Before writing `accountId`, `toAccountId`, `categoryId`, `merchantId`, split-entry references, or smart-rule outputs, validate that every referenced row belongs to `context.familyId`, except explicitly allowed global system categories. Foreign keys alone are not tenant isolation.
+- **RLS GUC Must Be Transaction-Scoped**: Any query relying on Postgres RLS must set `app.family_id` on the same transaction/connection as the query, using `set_config(..., true)`. Do not use connection-level GUC state outside the transaction as a correctness dependency.
+- **Bulk Paths Must Match Single Paths**: `bulkCreateTransactionsFn`, `bulkUpdateTransactionsFn`, `bulkDeleteTransactionsFn`, import flows, and future bank-sync ingestion must satisfy the same validation, idempotency, audit, RLS, and balance invariants as single create/update/delete.
+- **Raw Bank Data Is Not Canonical Ledger Data**: Future bank/API integrations must store raw provider payloads in an import-staging model first. Only normalized, deduplicated, idempotent, tenant-validated, user-confirmed or rule-confirmed rows may become canonical `Transaction` records.
+- **Real Postgres Tests Required**: Ledger correctness cannot be proven with mocked Prisma only. Any change to transaction/account balance behavior requires real Postgres integration tests for concurrency, idempotency replay, delete replay, tenant isolation, RLS GUC behavior, and constraint rejection. Use the PER-86 harness and local workflow documented in [`docs/testing.md`](./docs/testing.md).
+- **No "Good Enough" Ledger Work**: If the work touches money movement, balances, transaction history, tenant isolation, import, or audit, do not simplify it just because the task is hard. Stop and design the invariant, then implement and test it.
+
+### B. Reactive Ledger (Client-Side)
+
+- **TanStack DB Integration**: Use `useLiveQuery` from `@tanstack/react-db` for the main ledger view. This provides sub-10ms reactivity for local state.
+- **MANDATORY Route Loader Preload**: Every route that calls `useLiveQuery(...)` against a collection MUST have a `loader` that awaits `collection.preload()`. Without this, `useLiveQuery` triggers `startSyncImmediate()` during the render phase; the async fetch resolves before child fibers commit, producing the React warning _"Can't perform a React state update on a component that hasn't mounted yet."_ The canonical route shape:
+
+  ```tsx
+  export const Route = createFileRoute("/transactions")({
+    ssr: false, // TanStack DB collections are client-only
+    loader: async () => {
+      await transactionCollection.preload()
+      return null
+    },
+    component: TransactionsPage,
+  })
+  ```
+
+  Source: `node_modules/@tanstack/db/skills/meta-framework/SKILL.md` § _HIGH — Forgetting to preload in route loader_. Loader runs during navigation, blocks until collection reaches `status === "ready"`, so by the time the component renders there is zero async work in render.
+
+- **`ssr: false` is a hard requirement for any route touching TanStack DB collections.** Collections are browser-only; SSR rendering will hang or error.
+- **Synchronization**: After any server mutation (e.g., `createTransactionFn`), you MUST call `transactionCollection.utils.refetch()` to sync the local TanStack DB state with the server/Postgres source of truth.
+- **Optimistic Bulk UI**: For mass edits, perform an optimistic update on the `transactionCollection` draft before triggering `bulkUpdateTransactionsFn` for instant user feedback.
+
+### C. Performance & State Orchestration
+
+- **Memoized KPI Aggregation**: Use `useMemo` to derive financial KPIs (Net Cash Flow, Total Income) from the `filteredTransactions` array to prevent expensive recalculations on every render.
+- **Search & Filter Pipeline**: Filtering logic must be separated into a pure utility (`applyFilters`) and synchronized with TanStack Router Search Params for persistent, shareable URLs.
+- **The Singleton Edit Pattern**: Manage the "Edit Transaction" state via a singleton `editingTrx` state in the parent list, resetting with a `key` on the modal to ensure clean internal state.
+
+### D. Bulk Mutation Engine & Smart Rules
+
+- **Atomic Bulk Creation**: Use `bulkCreateTransactionsFn` for imports. It must calculate aggregate account deltas and apply them atomically.
+- **Smart Rules Directives**: Automated mapping must leverage the `SmartRule` keyword engine during the ingestion phase, BEFORE presenting the preview to the user.
+
+## 6. THE SERVER/CLIENT BOUNDARY (TanStack Start)
+
+Permoney uses **TanStack Start**, NOT Next.js / Remix / React Server Components. The server/client boundary is a hard safety fence: shipping `@prisma/client` or `DATABASE_URL` to the browser is a security and build failure.
+
+For every new server file, the model must obey these rules:
+
+- **MUST NOT** add `"use server"` at the top of any file. It disables the `createServerFn` splitter and leaks server code into the client bundle.
+- **MUST** wrap every database access, secret API key read, and filesystem operation in `createServerFn(...).handler(...)`. Do not perform those operations in route loaders, because loaders are isomorphic during navigation.
+- **MUST** validate server function input with `.inputValidator(z.object({...}))` and derive client-side types from `Awaited<ReturnType<typeof serverFn>>`. Do not import Prisma model types into UI code.
+- **MUST** use the `*.server.ts` suffix for any module that imports `@prisma/client`, secrets, Node built-ins, or filesystem APIs. Consumers must import it with the explicit `.server` suffix.
+- **MUST** keep `*.server.ts` top-level code side-effect free. Do not call `new PrismaClient(...)`, `new PrismaPg(...)`, `throw new Error(...)`, or assign to `globalThis` at module scope.
+
+### A. Server Function Authoring Rules
+
+```ts
+// src/server/db.server.ts — HARD FENCE + SIDE-EFFECT FREE
+import { PrismaClient } from "@prisma/client"
+import { PrismaPg } from "@prisma/adapter-pg"
+
+// SINGLETON STORAGE — HMR-safe via globalThis di dev
+const globalForPrisma = globalThis as unknown as {
+  prisma: PrismaClient | undefined
+}
+
+const POSTGRES_SCHEMES = ["postgres://", "postgresql://"] as const
+
+function validatePostgresUrl(url: string | undefined): string {
+  if (!url || url.trim() === "") {
+    throw new Error(
+      `🚨 DATABASE_URL is not set. Expected a Postgres URL like ` +
+        `"postgres://user:pass@host:5432/db". For local dev: ` +
+        `"postgres://permoney:permoney@localhost:5433/permoney" ` +
+        `(start the local DB with \`vp run db:up\`).`
+    )
+  }
+  const isPostgres = POSTGRES_SCHEMES.some((s) => url.startsWith(s))
+  if (!isPostgres) {
+    const scheme = url.includes(":") ? `${url.split(":")[0]}:` : "<no-scheme>"
+    throw new Error(
+      `🚨 DATABASE_URL must use a "postgres://" or "postgresql://" scheme ` +
+        `(got "${scheme}"). Permoney migrated to Postgres in ADR-0003; ` +
+        `legacy "file:" / "libsql:" URLs are no longer supported. ` +
+        `For local dev: "postgres://permoney:permoney@localhost:5433/permoney".`
+    )
+  }
+  return url
+}
+
+// 1. LAZY FACTORY — dipanggil PERTAMA KALI saat properti prisma diakses.
+function createPrismaClient(): PrismaClient {
+  // SECURITY TRAP (runtime defense-in-depth)
+  if (typeof window !== "undefined") {
+    throw new Error(
+      "🚨 SECURITY BREACH: The database connection file (db.ts) was imported into the client-side bundle. Check your UI component imports!"
+    )
+  }
+
+  const dbUrl = validatePostgresUrl(process.env.DATABASE_URL)
+
+  // PRISMA V7 DRIVER ADAPTER — `PrismaPg` accepts the same `pg.Pool` config
+  // as `pg` itself; pass the raw connection string, let it parse host/port/
+  // auth. For prod, set `?sslmode=require` (or `verify-full` + a CA bundle).
+  const adapter = new PrismaPg({ connectionString: dbUrl })
+
+  const client = new PrismaClient({
+    adapter,
+    log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
+  })
+
+  return client
+}
+
+// 2. PROXY SINGLETON — zero module-level side effects. Every access lazily
+//    inits the singleton on first hit, then caches it via globalForPrisma —
+//    in ALL environments, not just dev, because the client is constructed
+//    INSIDE the getter (never at module scope); skipping the cache in
+//    production would build a brand-new PrismaClient + pg Pool on every
+//    property access, exhausting Postgres connection slots under load.
+export const prisma: PrismaClient = /* @__PURE__ */ new Proxy(
+  {} as PrismaClient,
+  {
+    get(_target, prop) {
+      const client = (globalForPrisma.prisma ??= createPrismaClient())
+      const value = Reflect.get(client, prop) as unknown
+      return typeof value === "function"
+        ? (value as (...args: Array<unknown>) => unknown).bind(client)
+        : value
+    },
+  }
+)
+```
+
+Consumed in server-function wrappers like:
+
+```ts
+// src/server/transactions.ts — createServerFn wrappers
+import { createServerFn } from "@tanstack/react-start"
+import { prisma } from "./db.server" // <-- explicit .server suffix
+```
+
+### F. The `import-protection` Warning — Expected Behavior, Not a Bug
+
+- **Input validation is mandatory.** Use `.inputValidator(z.object({...}))` with Zod. Never trust a client-sent `id`, `amount`, or `userId`.
+- **Return values are the type contract.** Derive client-side types via `Awaited<ReturnType<typeof serverFn>>` — NEVER import Prisma model types directly into UI code. Example pattern:
+
+  ```ts
+  // src/lib/collections.ts
+  type TransactionRecord = Awaited<ReturnType<typeof getTransactionsFn>>[number]
+  ```
+
+- **File organization — MANDATORY for any file that imports `@prisma/client`, secrets, Node built-ins, or filesystem APIs:** Use the `*.server.ts` suffix. This is a HARD COMPILE-TIME FENCE — TanStack Start's Vite plugin replaces the file with an empty module in the client graph **before** Vite's `optimizeDeps` runs, preventing pre-bundling of server-only deps into the browser. The Proxy + `/* @__PURE__ */` pattern alone is insufficient because `optimizeDeps` follows static imports eagerly, before tree-shaking. Layered defense:
+  - `*.server.ts` — hard fence (mandatory for db, secrets, Node-only code)
+  - `*.functions.ts` — `createServerFn` wrappers (recommended, not required)
+  - Proxy + `/* @__PURE__ */` — defense-in-depth inside `*.server.ts`
+  - `typeof window !== "undefined"` runtime trap — last-line defense
+- **Imports of `*.server.ts` files MUST use the explicit `.server` suffix in the import path** — Vite does not auto-resolve `./db` to `./db.server.ts`. Always write `import { prisma } from "./db.server"`.
+
+### C. The `db.server.ts` Invariant — Hard Fence + Side-Effect-Free
+
+The splitter replaces `.handler(body)` with an RPC stub on the client. The `import { prisma } from "./db.server"` line itself remains in the source AST. The `*.server.ts` suffix tells the Vite plugin to **replace the imported module with an empty stub** in the client graph, neutralizing the import edge before `optimizeDeps` can follow it into `@prisma/client`'s browser bundle (which uses `require()` and crashes Rolldown).
+
+Defense-in-depth: even with the hard fence, `src/server/db.server.ts` and any module reachable from it MUST be side-effect free at top level:
+
+- **BANNED:** `new PrismaClient(...)`, `new PrismaPg(...)`, `throw new Error(...)`, `globalThis.x = ...` at module scope.
+- **REQUIRED:** All construction goes inside a factory function. Exports use a `Proxy` for lazy access, annotated with `/* @__PURE__ */` so Rolldown can eliminate the module entirely when no client code references it.
+- **REQUIRED:** The `typeof window !== "undefined"` security trap lives INSIDE the factory (defense-in-depth), never at module scope.
+
+Canonical implementation — do not regress from this pattern:
+
+```ts
+// src/server/db.server.ts — HARD FENCE + SIDE-EFFECT FREE
+import { PrismaClient } from "@prisma/client"
+import { PrismaPg } from "@prisma/adapter-pg"
+
+// SINGLETON STORAGE — HMR-safe via globalThis di dev
+const globalForPrisma = globalThis as unknown as {
+  prisma: PrismaClient | undefined
+}
+
+const POSTGRES_SCHEMES = ["postgres://", "postgresql://"] as const
+
+function validatePostgresUrl(url: string | undefined): string {
+  if (!url || url.trim() === "") {
+    throw new Error(
+      `🚨 DATABASE_URL is not set. Expected a Postgres URL like ` +
+        `"postgres://user:pass@host:5432/db". For local dev: ` +
+        `"postgres://permoney:permoney@localhost:5433/permoney" ` +
+        `(start the local DB with \`vp run db:up\`).`
+    )
+  }
+  const isPostgres = POSTGRES_SCHEMES.some((s) => url.startsWith(s))
+  if (!isPostgres) {
+    const scheme = url.includes(":") ? `${url.split(":")[0]}:` : "<no-scheme>"
+    throw new Error(
+      `🚨 DATABASE_URL must use a "postgres://" or "postgresql://" scheme ` +
+        `(got "${scheme}"). Permoney migrated to Postgres in ADR-0003; ` +
+        `legacy "file:" / "libsql:" URLs are no longer supported. ` +
+        `For local dev: "postgres://permoney:permoney@localhost:5433/permoney".`
+    )
+  }
+  return url
+}
+
+// 1. LAZY FACTORY — dipanggil PERTAMA KALI saat properti prisma diakses.
+function createPrismaClient(): PrismaClient {
+  // SECURITY TRAP (runtime defense-in-depth)
+  if (typeof window !== "undefined") {
+    throw new Error(
+      "🚨 SECURITY BREACH: The database connection file (db.ts) was imported into the client-side bundle. Check your UI component imports!"
+    )
+  }
+
+  const dbUrl = validatePostgresUrl(process.env.DATABASE_URL)
+
+  // PRISMA V7 DRIVER ADAPTER — `PrismaPg` accepts the same `pg.Pool` config
+  // as `pg` itself; pass the raw connection string, let it parse host/port/
+  // auth. For prod, set `?sslmode=require` (or `verify-full` + a CA bundle).
+  const adapter = new PrismaPg({ connectionString: dbUrl })
+
+  const client = new PrismaClient({
+    adapter,
+    log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
+  })
+
+  return client
+}
+
+// 2. PROXY SINGLETON — zero module-level side effects. Every access lazily
+//    inits the singleton on first hit, then caches it via globalForPrisma —
+//    in ALL environments, not just dev, because the client is constructed
+//    INSIDE the getter (never at module scope); skipping the cache in
+//    production would build a brand-new PrismaClient + pg Pool on every
+//    property access, exhausting Postgres connection slots under load.
+export const prisma: PrismaClient = /* @__PURE__ */ new Proxy(
+  {} as PrismaClient,
+  {
+    get(_target, prop) {
+      const client = (globalForPrisma.prisma ??= createPrismaClient())
+      const value = Reflect.get(client, prop) as unknown
+      return typeof value === "function"
+        ? (value as (...args: Array<unknown>) => unknown).bind(client)
+        : value
+    },
+  }
+)
+```
+
+Consumed in server-function wrappers like:
+
+```ts
+// src/server/transactions.ts — createServerFn wrappers
+import { createServerFn } from "@tanstack/react-start"
+import { prisma } from "./db.server" // <-- explicit .server suffix
+```
+
+### D. Why This Architecture — Historical Bugs to Never Repeat
+
+Past AI-introduced regressions that triggered the security trap (documented so future agents do not repeat them):
+
+1. **Adding `"use server"` directives.** Disables splitter → full handler bodies + prisma import ship to browser.
+2. **Eager Prisma construction at module scope.** `export const prisma = new PrismaClient(...)` is a top-level side effect → Vite refuses to tree-shake → module evaluates on the client → `@prisma/client` (~MB of Node-only code) + trap fires.
+3. **Database calls in route `loader`.** Loaders are isomorphic; `await prisma.x()` in a loader hits the client during SPA navigation.
+4. **Importing Prisma model types into UI.** Couples the client to `@prisma/client`. Use `Awaited<ReturnType<typeof serverFn>>` instead.
+5. **Naming the db module `db.ts` instead of `db.server.ts`.** Without the `.server.ts` suffix, Vite's `optimizeDeps` follows the static import edge `import { prisma } from "./db"` BEFORE TanStack Start's splitter runs. Pre-bundling sees `@prisma/client`, resolves its `"browser"` package.json field to `index-browser.js` (CJS with `require()`), and Rolldown crashes the dev server with `Calling 'require' for '.prisma/client/index-browser'`. The Proxy + `@__PURE__` pattern is insufficient on its own; the suffix is required. Fixed by renaming `src/server/db.ts` → `src/server/db.server.ts` and updating all importers from `"./db"` to `"./db.server"`.
+
+###

@@ -1,0 +1,14 @@
+#!/usr/bin/env sh
+# Permoney pre-commit hook
+# Wired via `git config core.hooksPath .vite-hooks` (auto by `vp config`).
+
+set -e
+
+# 1) Vite+ Staged: lint & format only changed files (fast, ~2s)
+vp staged
+
+# 2) TanStack Intent: detect skill mapping drift after dep changes.
+#    Runs `intent stale` to ensure the AGENTS.md skill block still
+#    matches what's in node_modules. If you added/removed a TanStack
+#    package, run: `vp dlx @tanstack/intent@latest install --map`
+vp dlx @tanstack/intent@latest stale

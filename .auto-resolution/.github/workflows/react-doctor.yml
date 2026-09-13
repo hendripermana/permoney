@@ -1,0 +1,28 @@
+name: React Doctor
+
+on:
+  pull_request:
+
+permissions:
+  checks: write # required to create/update the React Doctor check run
+  contents: read
+  pull-requests: write # required to post PR comments
+  statuses: write # required to publish the commit status (was missing — caused "Resource not accessible by integration")
+
+jobs:
+  react-doctor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: millionco/react-doctor@fd64d2605481e241ada5561b01a635f2cd923b6a
+        with:
+          # `token` is not a recognized input for this action (valid inputs:
+          # directory/project/scope/blocking/comment/review-comments/
+          # commit-status/node-version/version) — it was silently ignored and
+          # the action authenticates via the default GITHUB_TOKEN env the
+          # runner already provides. Removed to stop the "Unexpected input(s)
+          # 'token'" warning on every run.
+          commit-status: true
