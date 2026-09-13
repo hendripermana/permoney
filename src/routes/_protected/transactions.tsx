@@ -5,7 +5,7 @@ import {
   IconSearch,
 } from "@tabler/icons-react"
 import { format } from "date-fns"
-import { useLiveQuery } from "@tanstack/react-db"
+import { createOptimisticAction, useLiveQuery } from "@tanstack/react-db"
 import { useQuery } from "@tanstack/react-query"
 import {
   createFileRoute,
@@ -308,49 +308,65 @@ function TransactionsPage() {
     const ids = Object.keys(rowSelection)
     if (ids.length === 0) return
 
-    try {
-      // 1. Optimistic UI Updates - Mutating the browser cache instantly!
-      ids.forEach((id) => {
-        transactionCollection.update(id, (draft: Record<string, unknown>) => {
-          if (field === "categoryId") {
-            draft.categoryId = value
-            const cat = formData?.categories.find(
-              (c: { id: string }) => c.id === value
-            )
-            if (cat) draft.category = cat
-          } else if (field === "merchantId") {
-            draft.merchantId = value
-            const merch = formData?.merchants.find(
-              (m: { id: string }) => m.id === value
-            )
-            if (merch) draft.merchant = merch
-          } else if (field === "accountId") {
-            draft.accountId = value
-            const acc = formData?.accounts.find(
-              (a: { id: string }) => a.id === value
-            )
-            if (acc) draft.account = acc
-          }
+    // A single optimistic action, not a per-row `.update()` loop followed by
+    // a separate bulk call: each `.update()` outside an explicit transaction
+    // auto-commits through the collection's own `onUpdate` (one
+    // `updateTransactionFn` per row), so a following `bulkUpdateTransactionsFn`
+    // was a SECOND write of the same change — every bulk edit persisted
+    // twice. `createOptimisticAction` keeps the instant local feedback
+    // (CLAUDE.md §5.D) but routes persistence through `mutationFn` only.
+    const applyBulkFieldUpdate = createOptimisticAction<{
+      ids: Array<string>
+      field: "categoryId" | "merchantId" | "accountId"
+      value: string
+    }>({
+      onMutate: (input) => {
+        input.ids.forEach((id) => {
+          transactionCollection.update(id, (draft: Record<string, unknown>) => {
+            if (input.field === "categoryId") {
+              draft.categoryId = input.value
+              const cat = formData?.categories.find(
+                (c: { id: string }) => c.id === input.value
+              )
+              if (cat) draft.category = cat
+            } else if (input.field === "merchantId") {
+              draft.merchantId = input.value
+              const merch = formData?.merchants.find(
+                (m: { id: string }) => m.id === input.value
+              )
+              if (merch) draft.merchant = merch
+            } else if (input.field === "accountId") {
+              draft.accountId = input.value
+              const acc = formData?.accounts.find(
+                (a: { id: string }) => a.id === input.value
+              )
+              if (acc) draft.account = acc
+            }
+          })
         })
-      })
+      },
+      mutationFn: async (input) => {
+        const updatePayload: {
+          ids: Array<string>
+          idempotencyKey: string
+          categoryId?: string
+          merchantId?: string
+          accountId?: string
+        } = { ids: input.ids, idempotencyKey: createUuidV7() }
+        if (input.field === "categoryId") updatePayload.categoryId = input.value
+        else if (input.field === "merchantId")
+          updatePayload.merchantId = input.value
+        else updatePayload.accountId = input.value
 
-      // 2. Typed bulk update payload (zero `any`)
-      const updatePayload: {
-        ids: Array<string>
-        idempotencyKey: string
-        categoryId?: string
-        merchantId?: string
-        accountId?: string
-      } = { ids, idempotencyKey: createUuidV7() }
-      if (field === "categoryId") updatePayload.categoryId = value
-      else if (field === "merchantId") updatePayload.merchantId = value
-      else updatePayload.accountId = value
+        await bulkUpdateTransactionsFn({ data: updatePayload })
+        await transactionCollection.utils.refetch()
+      },
+    })
 
-      await bulkUpdateTransactionsFn({ data: updatePayload })
-
-      // 3. Clear UI selections and sync true state
+    try {
+      const tx = applyBulkFieldUpdate({ ids, field, value })
+      await tx.isPersisted.promise
       setRowSelection({})
-      await transactionCollection.utils.refetch()
     } catch (err) {
       console.error(err)
       alert(`Failed to update ${field}`)
@@ -592,6 +608,7 @@ function TransactionsPage() {
                 <TransactionFilterPanel
                   filters={filters}
                   onApply={handleFilterApply}
+                  currency={baseCurrency}
                 />
               </div>
               <div className="flex items-center gap-2">

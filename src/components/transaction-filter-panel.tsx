@@ -30,6 +30,15 @@ import { Calendar } from "@/components/ui/calendar"
 
 import { cn } from "@/lib/utils"
 import type { TransactionFilters } from "@/lib/transaction-filters"
+import { CURRENCIES, type CurrencyCode } from "@/lib/data/currencies"
+
+// Same defensive cast `formatCurrency` uses (src/lib/currency.ts): the
+// family's baseCurrency is a plain validated string, not a CurrencyCode
+// literal, so guard the registry lookup instead of assuming it always hits.
+function getMinorUnitFactor(currency: string): number {
+  const code = currency as CurrencyCode
+  return CURRENCIES[code]?.minorUnitConversion ?? 100
+}
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -88,12 +97,20 @@ const STATUS_OPTIONS = [
 interface TransactionFilterPanelProps {
   filters: TransactionFilters
   onApply: (filters: TransactionFilters) => void
+  // The family's base/display currency. `amountMin`/`amountMax` are stored
+  // as MAJOR-unit numbers (what the user types, e.g. 500000 for Rp500.000)
+  // but `applyFilters` compares them straight against `Transaction.amount`,
+  // which is minor units (sen: ×100 for IDR). Without this conversion, every
+  // amount filter was silently off by the currency's minor-unit factor.
+  currency: string
 }
 
 export function TransactionFilterPanel({
   filters,
   onApply,
+  currency,
 }: TransactionFilterPanelProps) {
+  const minorUnitFactor = getMinorUnitFactor(currency)
   const [isOpen, setIsOpen] = React.useState(false)
   // Panel kiri: kategori filter yang aktif
   const [activeCategory, setActiveCategory] =
@@ -439,12 +456,16 @@ export function TransactionFilterPanel({
                 type="number"
                 inputMode="decimal"
                 placeholder="0"
-                value={draft.amountMin ?? ""}
+                value={
+                  draft.amountMin != null
+                    ? draft.amountMin / minorUnitFactor
+                    : ""
+                }
                 onChange={(e) =>
                   setDraft((prev) => ({
                     ...prev,
                     amountMin: e.target.value
-                      ? Number(e.target.value)
+                      ? Math.round(Number(e.target.value) * minorUnitFactor)
                       : undefined,
                   }))
                 }
@@ -463,12 +484,16 @@ export function TransactionFilterPanel({
                 type="number"
                 inputMode="decimal"
                 placeholder="No limit"
-                value={draft.amountMax ?? ""}
+                value={
+                  draft.amountMax != null
+                    ? draft.amountMax / minorUnitFactor
+                    : ""
+                }
                 onChange={(e) =>
                   setDraft((prev) => ({
                     ...prev,
                     amountMax: e.target.value
-                      ? Number(e.target.value)
+                      ? Math.round(Number(e.target.value) * minorUnitFactor)
                       : undefined,
                   }))
                 }
