@@ -1,0 +1,31 @@
+{
+  // reksadana-nav — self-hosted NAV feed worker (PER-250 / ADR-0053).
+  // Deploy to the creator's Cloudflare account; then set REKSADANA_API_URL in the
+  // Permoney app to this worker's URL. See README.md.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "reksadana-nav",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-15",
+  "observability": {
+    "enabled": true,
+  },
+  // D1 stale cache (LKGP): the last-known-good payload per fund. Create it with
+  //   wrangler d1 create reksadana-nav-cache
+  // then paste the returned database_id below and apply schema.sql (see README).
+  "d1_databases": [
+    {
+      "binding": "NAV_CACHE",
+      "database_name": "reksadana-nav-cache",
+      "database_id": "49744818-bb82-4c4f-aa0c-38f8c3253622",
+    },
+  ],
+  // Optional upstream overrides (defaults target the VERIFIED Bareksa endpoints;
+  // PER-258). `{fund}` is substituted with the URL-encoded fund code, which is the
+  // Bareksa numeric product id (pid). BAREKSA_PRODUCT_URL is the product page the
+  // token/cookie bootstrap reads; BAREKSA_AJAX_BASE is the ajax NAV endpoint base
+  // (the worker builds the query: id, cperiod, startdate/enddate, requested_page).
+  "vars": {
+    // "BAREKSA_PRODUCT_URL": "https://www.bareksa.com/id/data/reksadana/{fund}/",
+    // "BAREKSA_AJAX_BASE": "https://www.bareksa.com/ajax/mutualfund/nav/product1/"
+  },
+}

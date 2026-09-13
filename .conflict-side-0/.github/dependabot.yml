@@ -1,0 +1,68 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: Asia/Jakarta
+    open-pull-requests-limit: 10
+    # Group all non-major updates into one PR per week to reduce noise;
+    # majors and security patches still come as individual PRs.
+    groups:
+      tanstack:
+        patterns:
+          - "@tanstack/*"
+      prisma:
+        patterns:
+          - "@prisma/*"
+          - prisma
+      radix:
+        patterns:
+          - "@radix-ui/*"
+          - radix-ui
+      types:
+        patterns:
+          - "@types/*"
+      dev-tooling:
+        patterns:
+          - vitest
+          - "@vitest/*"
+          - "@vitejs/*"
+          - "@rsbuild/*"
+          - "@testing-library/*"
+        exclude-patterns:
+          # vite-plus (and its `vite` alias override) must NEVER be grouped
+          # with routine dev-tooling bumps: a 2026-08-30 upgrade of this exact
+          # package broke production with an ARM64-only SSR crash invisible to
+          # x86_64 CI (see docs/adr's dependency-upgrade-hazards notes), and a
+          # grouped PR silently re-bundling it recurred on 2026-09-10. Any
+          # vite-plus bump must land as its own isolated, individually-Reviewed
+          # PR, verified with a native ARM64 build+boot test on the prod VM
+          # before merging — never auto-merged as part of a routine group.
+          - vite-plus
+          - vite
+      better-auth:
+        patterns:
+          - better-auth
+          - "@better-auth/*"
+    labels:
+      - dependencies
+
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      ci-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - ci

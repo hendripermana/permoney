@@ -1,0 +1,115 @@
+import {
+  ACCOUNT_TYPE_VALUES,
+  getAccountClassForType,
+  type AccountType,
+} from "./accounts"
+
+export const TRANSACTION_KIND_VALUES = [
+  "standard",
+  "funds_movement",
+  "cc_payment",
+  "loan_payment",
+  "liability_draw",
+  "liability_interest",
+  "liability_fee",
+  // Cash reconciliation correction posted when a reconciliation valuation
+  // reveals drift (PER-146 / ADR-0034 §4). An ordinary income/expense row.
+  "balance_adjustment",
+  // FX conversion fee on a cross-currency transfer (PER-147 / ADR-0035 §6). An
+  // expense finance-cost row created alongside the transfer; never ordinary
+  // spending. Naturally exempt from the liability cost-target trigger.
+  "fx_fee",
+  // General transfer fee on any transfer (PER-247): top-up/e-wallet/bank
+  // charges. Same shape as fx_fee (standalone expense row linked via
+  // Transfer.feeTransactionId); the kind distinguishes it from an FX
+  // conversion fee. Never client-settable — synthesized by the transfer
+  // mutation path only.
+  "transfer_fee",
+  // Reimbursement/refund offset (PER-260 / ADR-0055): an income row that
+  // nets against an EXPENSE-type category instead of adding new income.
+  // Valid ONLY on type="income". Covers split-bill reimbursement, partial
+  // reimbursement, and 100%-refund dogfooding cases — one mechanism at
+  // different percentages. Client-settable (unlike transfer_fee): the user
+  // opts in via the transaction form's toggle.
+  "reimbursement",
+] as const
+
+export type TransactionKind = (typeof TRANSACTION_KIND_VALUES)[number]
+export type TransactionType = "expense" | "income" | "transfer"
+
+export type TransferTransactionKind =
+  | "cc_payment"
+  | "funds_movement"
+  | "liability_draw"
+  | "loan_payment"
+
+export type LiabilityCostTransactionKind =
+  | "liability_fee"
+  | "liability_interest"
+
+const ACCOUNT_TYPE_SET: ReadonlySet<string> = new Set(ACCOUNT_TYPE_VALUES)
+const LIABILITY_PRINCIPAL_PAYMENT_KINDS = new Set<TransactionKind>([
+  "cc_payment",
+  "loan_payment",
+])
+const LIABILITY_COST_KINDS = new Set<TransactionKind>([
+  "liability_fee",
+  "liability_interest",
+])
+
+export function parseAccountType(value: string): AccountType {
+  if (ACCOUNT_TYPE_SET.has(value)) return value as AccountType
+  throw new Error(`Unsupported accountType ${value}`)
+}
+
+export function deriveTransferKindForAccounts({
+  fromAccountType,
+  toAccountType,
+}: {
+  fromAccountType: AccountType
+  toAccountType: AccountType
+}): TransferTransactionKind {
+  if (toAccountType === "CREDIT") return "cc_payment"
+  if (toAccountType === "LOAN") return "loan_payment"
+  if (getAccountClassForType(fromAccountType) === "LIABILITY") {
+    return "liability_draw"
+  }
+  return "funds_movement"
+}
+
+export function isLiabilityPrincipalPaymentKind(
+  kind: string
+): kind is "cc_payment" | "loan_payment" {
+  return LIABILITY_PRINCIPAL_PAYMENT_KINDS.has(kind as TransactionKind)
+}
+
+export function isLiabilityBorrowingKind(
+  kind: string
+): kind is "liability_draw" {
+  return kind === "liability_draw"
+}
+
+export function isLiabilityCostKind(
+  kind: string
+): kind is LiabilityCostTransactionKind {
+  return LIABILITY_COST_KINDS.has(kind as TransactionKind)
+}
+
+export function isOrdinarySpendingTransaction({
+  kind,
+  type,
+}: {
+  kind: string
+  type: string
+}): boolean {
+  return type === "expense" && kind === "standard"
+}
+
+/**
+ * PER-260: a reimbursement/refund row — an income transaction assigned an
+ * EXPENSE-type category so it nets against that category's spending in both
+ * the cash-flow report and the budget engine. See ADR-0055.
+ */
+export function isReimbursementKind(kind: string): boolean {
+  return kind === "reimbursement"
+}
