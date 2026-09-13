@@ -2,6 +2,9 @@
   "name": "permoney",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
   "scripts": {
     "dev": "vp dev --port 3006",
     "build": "vp build",
@@ -91,7 +94,7 @@
     "@tanstack/react-query-devtools": "^5.102.8",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.3",
-    "@types/node": "^26.5.0",
+    "@types/node": "^24.13.4",
     "@types/papaparse": "^5.5.2",
     "@types/pg": "^8.23.1",
     "@types/react": "^19.2.18",

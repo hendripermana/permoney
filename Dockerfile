@@ -56,9 +56,13 @@ ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=3005
 
-# Non-root runtime user (the official node image ships a `node` user/group).
+# Runtime artifact from the pinned Nitro build: this `.output` tree is the exact
+# date-stamped nitro beta `package.json` pins and vite.config.ts documents
+# (NITRO PIN note), not a floating tag. Upgrading the pin means re-validating
+# this image on the target architecture.
 COPY --from=build --chown=node:node /app/.output ./.output
 
+# Non-root runtime user (the official node image ships a `node` user/group).
 USER node
 EXPOSE 3005
 
