@@ -107,7 +107,10 @@ import { computeAccountPerformance } from "@/lib/account-performance"
 import { sortAccountOptions } from "@/lib/holdings"
 import { getAccountOpeningValueFn } from "@/server/valuations"
 import { enableHoldingsTrackingFn } from "@/server/accounts"
-import { canEnableHoldingsTracking } from "@/lib/accounts"
+import {
+  canEnableHoldingsTracking,
+  ACCOUNT_SUBTYPE_LABEL,
+} from "@/lib/accounts"
 import {
   deleteHoldingEventFn,
   deleteHoldingFn,
@@ -1076,7 +1079,11 @@ function AccountDetailPage() {
                 account.accountType as keyof typeof ACCOUNT_TYPE_LABEL
               ] ?? account.accountType}
             </Badge>
-            <Badge variant="outline">{account.accountSubtype}</Badge>
+            <Badge variant="outline">
+              {ACCOUNT_SUBTYPE_LABEL[
+                account.accountSubtype as keyof typeof ACCOUNT_SUBTYPE_LABEL
+              ] ?? account.accountSubtype}
+            </Badge>
             {account.status !== "active" ? (
               <Badge variant="outline">Archived</Badge>
             ) : null}

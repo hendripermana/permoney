@@ -1442,8 +1442,8 @@ export const getAccountBalanceFn = createServerFn({ method: "GET" })
 // than two near-duplicate queries:
 //   1. The transaction-form banner — compares its own chosen date against
 //      `valuationDate` to warn the user their entry won't move the balance.
-//   2. The account detail page's balance subtitle — "Direkonsiliasi {date} →
-//      {value}, {n} transaksi tercatat sesudahnya", so the number is
+//   2. The account detail page's balance subtitle — "Reconciled {date} →
+//      {value}, {n} transactions recorded since", so the number is
 //      self-explanatory.
 // Returns null for a tracked (`valuation`-sourced) account, or a
 // `transaction_flow` account whose latest anchor is `derived` (migrated) or

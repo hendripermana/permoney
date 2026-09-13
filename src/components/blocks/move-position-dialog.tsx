@@ -194,9 +194,9 @@ export function MovePositionDialog({
               Move to another account
             </DialogTitle>
             <DialogDescription>
-              Move {holding.instrument.name} — units and cost basis — to a
-              different account. No cash moves and no gain is realized; this is
-              not a sale.
+              Move {holding.instrument.name} — units and cost basis (what you
+              originally paid per unit) — to a different account. No cash moves
+              and no gain is realized; this is not a sale.
             </DialogDescription>
           </DialogHeader>
 
