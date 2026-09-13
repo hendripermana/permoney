@@ -11,6 +11,7 @@ import {
   IconUsers,
   IconReceipt2,
   IconHandStop,
+  IconMoneybag,
 } from "@tabler/icons-react"
 
 import { NavMain, type NavItem } from "@/components/nav-main"
@@ -26,44 +27,51 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
 import { getSettingsOverviewFn, SETTINGS_OVERVIEW_KEY } from "@/server/settings"
+import { getZakatSettingsFn } from "@/server/zakat"
 
 // Kita ubah data navigasinya khusus untuk Permoney
+const BASE_NAV_MAIN: NavItem[] = [
+  {
+    title: "Dashboard",
+    url: "/dashboard",
+    icon: IconDashboard,
+  },
+  {
+    title: "Transactions",
+    url: "/transactions",
+    icon: IconReceipt2,
+  },
+  {
+    title: "Accounts & Wallets",
+    url: "/accounts",
+    icon: IconDatabase,
+  },
+  {
+    title: "Debts",
+    url: "/debts",
+    icon: IconHandStop,
+  },
+  {
+    title: "Budgets",
+    url: "/budgets",
+    icon: IconChartBar,
+  },
+  // PER-166 follow-up: "Smart Import" (/import) and "Currencies & FX"
+  // (/currencies) intentionally live under Settings → "Related tools"
+  // (settings/index.tsx), not the primary sidebar. PER-113 surfaced them in
+  // Settings but left the duplicate top-level entries here; removed so each
+  // destination has a single home.
+]
+
+const ZAKAT_NAV_ITEM: NavItem = {
+  title: "Zakat",
+  url: "/zakat",
+  icon: IconMoneybag,
+}
+
 const data: {
-  navMain: NavItem[]
   navSecondary: NavItem[]
 } = {
-  navMain: [
-    {
-      title: "Dashboard",
-      url: "/dashboard",
-      icon: IconDashboard,
-    },
-    {
-      title: "Transactions",
-      url: "/transactions",
-      icon: IconReceipt2,
-    },
-    {
-      title: "Accounts & Wallets",
-      url: "/accounts",
-      icon: IconDatabase,
-    },
-    {
-      title: "Debts",
-      url: "/debts",
-      icon: IconHandStop,
-    },
-    {
-      title: "Budgets",
-      url: "/budgets",
-      icon: IconChartBar,
-    },
-    // PER-166 follow-up: "Smart Import" (/import) and "Currencies & FX"
-    // (/currencies) intentionally live under Settings → "Related tools"
-    // (settings/index.tsx), not the primary sidebar. PER-113 surfaced them in
-    // Settings but left the duplicate top-level entries here; removed so each
-    // destination has a single home.
-  ],
   navSecondary: [
     {
       title: "Members",
@@ -88,6 +96,21 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     queryKey: SETTINGS_OVERVIEW_KEY,
     queryFn: () => getSettingsOverviewFn(),
   })
+  // Same query key `settings/zakat.tsx` uses for `getZakatSettingsFn` — one
+  // shared cache entry, not a second independent fetch. Zakat is opt-in and
+  // off by default (ADR-0056 fast-follow): the sidebar entry only appears
+  // once the family has explicitly turned it on.
+  const { data: zakatSettings } = useQuery({
+    queryKey: ["zakat-settings"],
+    queryFn: () => getZakatSettingsFn(),
+  })
+  const navMain = React.useMemo(
+    () =>
+      zakatSettings?.enabled === true
+        ? [...BASE_NAV_MAIN, ZAKAT_NAV_ITEM]
+        : BASE_NAV_MAIN,
+    [zakatSettings?.enabled]
+  )
 
   return (
     <Sidebar collapsible="icon" {...props}>
@@ -112,7 +135,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       </SidebarHeader>
       <SidebarContent>
         {/* Menu Utama */}
-        <NavMain items={data.navMain} />
+        <NavMain items={navMain} />
         {/* Menu Secondary (Settings dll) ditaruh di bawah */}
         <NavSecondary items={data.navSecondary} className="mt-auto" />
       </SidebarContent>

@@ -1426,6 +1426,12 @@ model ZakatSettings {
   id       String @id @default(cuid())
   familyId String @unique
 
+  // Zakat is opt-in and OFF by default — not every Permoney user is Muslim.
+  // Slice 1 shipped without this and silently defaulted every family "on"
+  // via `DEFAULT_ZAKAT_SETTINGS`, with no visible entry point (fast-follow
+  // fix). A family that has never opened Zakat settings, or has explicitly
+  // turned it off, must see nothing about it anywhere in the app.
+  enabled Boolean @default(false)
   // "gold" (default, Maliki/Shafi'i/Hanbali) | "silver" (Hanafi / Qaradawi's
   // precautionary recommendation) — domain-constrained by a DB CHECK.
   nisabBasis String @default("gold")

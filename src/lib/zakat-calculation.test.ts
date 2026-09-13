@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vite-plus/test"
 import {
   computeZakatForPayers,
+  suggestHawlStartDate,
   type ZakatCalculationAccount,
 } from "./zakat-calculation"
 import { hijriAnniversary } from "./zakat-hijri"
@@ -477,5 +478,71 @@ describe("computeZakatForPayers", () => {
         now: AFTER_ANNIVERSARY,
       })
     ).toThrow()
+  })
+})
+
+describe("suggestHawlStartDate", () => {
+  const NOW = new Date("2025-06-01T00:00:00.000Z")
+
+  test("wealth currently below nisab: nothing to suggest", () => {
+    const result = suggestHawlStartDate({
+      accounts: [cashAccount({ id: "a1", balance: 40_000_000n })],
+      nisabValueMinor: NISAB,
+      now: NOW,
+    })
+    expect(result).toBeNull()
+  })
+
+  test("wealth continuously above nisab since the only transaction: suggests that transaction's date, approximate", () => {
+    const onlyTxnDate = new Date("2025-03-01T00:00:00.000Z")
+    const result = suggestHawlStartDate({
+      accounts: [
+        cashAccount({
+          id: "a1",
+          balance: 100_000_000n,
+          transactions: [income("a1", 100_000_000n, onlyTxnDate)],
+        }),
+      ],
+      nisabValueMinor: NISAB,
+      now: NOW,
+    })
+    expect(result).not.toBeNull()
+    expect(result?.hawlStartDate).toBe(onlyTxnDate.toISOString())
+    expect(result?.approximate).toBe(true)
+  })
+
+  test("wealth dipped below nisab then recovered and stayed above since: suggests the day right after recovery, exact", () => {
+    const dipDate = new Date("2025-02-01T00:00:00.000Z")
+    const recoverDate = new Date("2025-03-15T00:00:00.000Z")
+    const result = suggestHawlStartDate({
+      accounts: [
+        cashAccount({
+          id: "a1",
+          balance: 100_000_000n,
+          transactions: [
+            expense("a1", 95_000_000n, dipDate), // -> 5,000,000 (below nisab)
+            income("a1", 95_000_000n, recoverDate), // -> back to 100,000,000
+          ],
+        }),
+      ],
+      nisabValueMinor: NISAB,
+      now: NOW,
+    })
+    expect(result).not.toBeNull()
+    expect(result?.hawlStartDate).toBe(recoverDate.toISOString())
+    expect(result?.approximate).toBe(false)
+  })
+
+  test("no transaction history at all (balance-only account): suggests today, approximate", () => {
+    const result = suggestHawlStartDate({
+      accounts: [
+        cashAccount({ id: "a1", balance: 100_000_000n, transactions: [] }),
+      ],
+      nisabValueMinor: NISAB,
+      now: NOW,
+    })
+    expect(result).not.toBeNull()
+    expect(result?.hawlStartDate).toBe(NOW.toISOString())
+    expect(result?.approximate).toBe(true)
   })
 })

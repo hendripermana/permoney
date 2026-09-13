@@ -21,7 +21,10 @@ import {
   getZakatSettingsForFamily,
   listZakatPayersForFamily,
   setAccountZakatOwnershipForFamily,
+  suggestHawlStartDateForFamily,
   upsertZakatSettingsForFamily,
+  ZakatPayerAlreadyLinkedError,
+  ZakatPayerLinkTargetNotFoundError,
   type ComputeZakatResult,
   type SerializedZakatPayerResult,
 } from "@/server/zakat"
@@ -98,12 +101,14 @@ describe("Zakat Maal calculator (ADR-0056)", () => {
   const setHawl = (
     owner: AuthenticatedOnboardedUser,
     overrides: {
+      enabled?: boolean
       haulRule?: "jumhur_continuous" | "hanafi_start_end"
       hawlStartDate?: Date
     } = {}
   ) =>
     upsertZakatSettingsForFamily({
       data: {
+        enabled: overrides.enabled ?? true,
         nisabBasis: "gold",
         haulRule: overrides.haulRule ?? "jumhur_continuous",
         hawlStartDate: overrides.hawlStartDate ?? HAWL_START,
@@ -471,6 +476,7 @@ describe("Zakat Maal calculator (ADR-0056)", () => {
       // given a start date where continuity genuinely holds.
       await upsertZakatSettingsForFamily({
         data: {
+          enabled: true,
           nisabBasis: "gold",
           haulRule: "jumhur_continuous",
           hawlStartDate: recoverDate,
@@ -612,10 +618,35 @@ describe("Zakat Maal calculator (ADR-0056)", () => {
   })
 
   describe("settings and payer CRUD", () => {
-    test("hawl_not_set is returned before any settings exist", async () => {
+    test("disabled is returned before any settings exist (opt-in, off by default)", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
       const result = await compute(owner, AFTER_ANNIVERSARY)
+      expect(result.status).toBe("disabled")
+    })
+
+    test("hawl_not_set is returned once enabled but before a Hawl start date is set", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      await upsertZakatSettingsForFamily({
+        data: {
+          enabled: true,
+          nisabBasis: "gold",
+          haulRule: "jumhur_continuous",
+          hawlStartDate: null,
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        userId: owner.user.id,
+      })
+      const result = await compute(owner, AFTER_ANNIVERSARY)
       expect(result.status).toBe("hawl_not_set")
+    })
+
+    test("enabled: false returns disabled regardless of a fully configured Hawl", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      await setHawl(owner, { enabled: false })
+      await addPayer(owner, "Saya")
+      const result = await compute(owner, AFTER_ANNIVERSARY)
+      expect(result.status).toBe("disabled")
     })
 
     test("zero ZakatPayer rows: every account counts 100% toward one implicit payer", async () => {
@@ -694,6 +725,139 @@ describe("Zakat Maal calculator (ADR-0056)", () => {
       expect(settings.nisabBasis).toBe("gold")
       expect(settings.haulRule).toBe("hanafi_start_end")
       expect(settings.hawlStartDate).toBe(HAWL_START.toISOString())
+    })
+  })
+
+  describe("ZakatPayer.linkedUserId (fast-follow — real family members as payers)", () => {
+    test("a valid linkedUserId (an active member of THIS family) succeeds", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const spouse = await factories.createUser({ familyId: owner.family.id })
+      await factories.createFamilyMember({
+        familyId: owner.family.id,
+        userId: spouse.id,
+        role: "member",
+      })
+
+      const payer = await createZakatPayerForFamily({
+        data: {
+          displayName: spouse.name,
+          linkedUserId: spouse.id,
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        userId: owner.user.id,
+      })
+      expect(payer.linkedUserId).toBe(spouse.id)
+    })
+
+    test("a linkedUserId belonging to a DIFFERENT family is rejected", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const otherFamilyOwner =
+        await factories.createAuthenticatedOnboardedUser()
+
+      await expect(
+        createZakatPayerForFamily({
+          data: {
+            displayName: "Outsider",
+            linkedUserId: otherFamilyOwner.user.id,
+            idempotencyKey: factories.createIdempotencyKey(),
+          },
+          familyId: owner.family.id,
+          userId: owner.user.id,
+        })
+      ).rejects.toThrow(ZakatPayerLinkTargetNotFoundError)
+    })
+
+    test("a linkedUserId with no FamilyMember row at all is rejected", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const strangerUser = await factories.createUser()
+
+      await expect(
+        createZakatPayerForFamily({
+          data: {
+            displayName: "Stranger",
+            linkedUserId: strangerUser.id,
+            idempotencyKey: factories.createIdempotencyKey(),
+          },
+          familyId: owner.family.id,
+          userId: owner.user.id,
+        })
+      ).rejects.toThrow(ZakatPayerLinkTargetNotFoundError)
+    })
+
+    test("a linkedUserId already used by an existing payer in the same family is rejected", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const spouse = await factories.createUser({ familyId: owner.family.id })
+      await factories.createFamilyMember({
+        familyId: owner.family.id,
+        userId: spouse.id,
+        role: "member",
+      })
+      await createZakatPayerForFamily({
+        data: {
+          displayName: spouse.name,
+          linkedUserId: spouse.id,
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        userId: owner.user.id,
+      })
+
+      await expect(
+        createZakatPayerForFamily({
+          data: {
+            displayName: "Duplicate link",
+            linkedUserId: spouse.id,
+            idempotencyKey: factories.createIdempotencyKey(),
+          },
+          familyId: owner.family.id,
+          userId: owner.user.id,
+        })
+      ).rejects.toThrow(ZakatPayerAlreadyLinkedError)
+    })
+  })
+
+  describe("suggestHawlStartDateFn — auto-detect helper (fast-follow)", () => {
+    test("wealth continuously above nisab since the family's first account: suggests that earliest point, approximate", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      // `suggestHawlStartDateForFamily` doesn't require Zakat to be enabled
+      // or a Hawl start date to already be set — it's the helper the user
+      // reaches FOR while filling in that very date.
+      await factories.createAccount({
+        familyId: owner.family.id,
+        accountType: "DEPOSITORY",
+        balance: rupiah(200_000_000),
+      })
+
+      const result = await suggestHawlStartDateForFamily({
+        familyId: owner.family.id,
+        userId: owner.user.id,
+        now: AFTER_ANNIVERSARY,
+      })
+      expect(result.status).toBe("ok")
+      if (result.status !== "ok") throw new Error("unreachable")
+      // No transaction history behind a factory-seeded account balance — the
+      // lib falls back to "now" (see `suggestHawlStartDate`'s doc comment).
+      expect(result.suggestion).not.toBeNull()
+      expect(result.suggestion?.approximate).toBe(true)
+    })
+
+    test("wealth currently below nisab: no suggestion", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      await factories.createAccount({
+        familyId: owner.family.id,
+        accountType: "DEPOSITORY",
+        balance: rupiah(1_000_000),
+      })
+
+      const result = await suggestHawlStartDateForFamily({
+        familyId: owner.family.id,
+        userId: owner.user.id,
+        now: AFTER_ANNIVERSARY,
+      })
+      expect(result.status).toBe("ok")
+      if (result.status !== "ok") throw new Error("unreachable")
+      expect(result.suggestion).toBeNull()
     })
   })
 
