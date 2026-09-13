@@ -61,7 +61,7 @@ hard-coded):**
    Hanafi benchmarks mixed wealth (cash + gold + silver + trade goods)
    against the much lower **silver** nisab (612.36g, AAOIFI), which is
    more precautionary (more people become obligated, more reaches those in
-   need) — Yusuf al-Qaradawi's *Fiqh az-Zakat*, the most widely cited
+   need) — Yusuf al-Qaradawi's _Fiqh az-Zakat_, the most widely cited
    cross-madhab reference work, favors silver for this exact reason.
 2. **Whether the Hawl requires continuous nisab.** Hanafi only requires
    wealth to be at/above nisab at the **start and end** of the Hawl (a dip
@@ -73,31 +73,104 @@ hard-coded):**
    card's outstanding statement balance, yes; the full remaining principal
    of a 3-year personal loan, no (only the portion currently due). AAOIFI
    itself documents multiple valid scholarly positions here.
-4. **Married couples' wealth.** Individually owned wealth is calculated
-   and paid separately by default (Islam's default is separation of
-   marital property — there is no fiqh concept of automatic "joint
-   property"). Combining a couple's money and paying Zakat on the
-   commingled total is explicitly permitted **with mutual consent**
-   (the rate doesn't change whether combined or separate). A spouse may
-   pay on behalf of the other as their *wakīl* (representative) with
-   consent; the underlying obligation still belongs to the wealth's true
-   owner.
+4. **How much debt is deductible, continued — and a correction this ADR
+   originally got wrong.** See "Married couples' wealth" below: an earlier
+   draft of this ADR proposed computing Zakat on a family's POOLED total
+   wealth by default, reasoning that combining spouses' money "with mutual
+   consent" is a documented valid position. That reasoning is true on its
+   own, but applying it as the DEFAULT is a real fiqh error, not a
+   simplification — see the worked scenarios below. It has been corrected.
 
-### A real architectural gap this surfaces
+### Why pooling by default is a real fiqh error, not a simplification
+
+Corrected after review: across all four madhabs, marital wealth is
+**Dhimmah Māliyyah Mustaqillah** — husband and wife hold 100% independent
+legal ownership of their own property, full stop. Zakat is _farḍ ʿayn_
+(an individual, non-transferable obligation), never a household-level
+one. Pooling before checking nisab produces two concrete failure modes,
+not just imprecision:
+
+- **False positive (neither owes, app says both do).** Husband holds
+  wealth equal to 50g of gold, wife holds 50g. Nisab is 87.48g. Neither
+  individually reaches nisab, so the correct answer is **zero** owed by
+  either. A pooled total of 100g crosses nisab and would wrongly declare
+  the household obligated — manufacturing a religious obligation that
+  does not exist.
+- **Misattributed obligation (right total, wrong payer, wrong amount).**
+  Husband holds 100g (above nisab, owes 2.5g), wife holds 20g (below
+  nisab, owes nothing). Pooled to 120g, a family-level calculator computes
+  3g owed — silently taxing the wife's wealth, which she has no
+  obligation on at all, and getting the total itself wrong in the
+  process.
+
+Neither of these is an edge case for Permoney specifically: the creator's
+own real data already has exactly this shape today — a bank account that
+is legally and beneficially the spouse's own money (recorded under the
+only login that currently exists), and an investment account
+("Dana Darurat") both spouses contribute to jointly every month. A
+pooled-by-default calculator would already be wrong for this account
+today.
+
+### The real architectural gap, and the design that avoids conflating two different problems
 
 Permoney's `Account` model is scoped only to `familyId` — there is no
-per-member ownership field distinguishing which `FamilyMember` owns a given
-account (checked directly against `prisma/schema.prisma`; `FamilyMember`
-exists per ADR-0036, but `Account` carries no `ownerId`/`familyMemberId`).
-Building strictly-correct **per-individual** Zakat (husband and wife
-calculated separately from the same family's accounts) needs that
-ownership concept, and the creator's own spouse cannot even log in to this
-family yet. Per the research above, computing Zakat on the family's total
-pooled wealth (with mutual consent) is an explicitly valid fiqh position,
-not a shortcut against correctness — so Slice 1 computes at the family
-level and documents per-individual attribution as a named future slice,
-rather than blocking on a schema change unrelated to the religious
-calculation itself.
+concept of which individual a given account's wealth economically belongs
+to. Checked directly: `FamilyMember.userId` is required (not nullable),
+and `addMemberForFamily` explicitly requires "the target user must already
+exist" — **there is no invite-a-person-who-hasn't-signed-up-yet flow
+built today** (`status: "invited"` is a reserved, unbuilt value). The
+creator's spouse cannot log in to Permoney yet.
+
+Building this correctly means NOT conflating two genuinely separate
+problems:
+
+1. **Who does this account's zakatable wealth economically belong to?**
+   — a lightweight domain fact, true today regardless of who is logged
+   in, needed NOW to compute correctly.
+2. **Who can authenticate and see/manage it?** — the multi-user
+   invite/login system, a real, larger, unrelated feature, correctly
+   deferred (see ADR-0036 for the membership model it would extend).
+
+Solving (1) without waiting on (2): a new, minimal, family-scoped
+`ZakatPayer` record — **not** a `FamilyMember`, **not** a `User`, no auth
+implications at all:
+
+```prisma
+model ZakatPayer {
+  id          String  @id @default(cuid())
+  familyId    String
+  displayName String  // "Saya", "Istri", free text the household chooses
+  // Set later, non-breaking, when a real login exists for this person —
+  // the eventual "claim your tagged accounts" flow just fills this in.
+  linkedUserId String? @unique
+  family Family @relation(fields: [familyId], references: [id], onDelete: Cascade)
+}
+```
+
+`Account` gains three nullable, additive columns:
+
+- `zakatPayerId` — who this account's wealth is attributed to. `NULL`
+  (unset) is a valid state, not an error — see the default-behavior rule
+  below.
+- `zakatJointPayerId` — if the account is jointly owned, the second payer.
+- `zakatJointSharePercent` — the **joint payer's** share (1–99; the
+  primary `zakatPayerId` holder keeps the remainder). Defaults to 50,
+  matching the fiqh default rule below — overridable per account for a
+  different agreed ratio.
+
+**Default-behavior rule (keeps the 95% single-person household
+unaffected):** a family with zero or one `ZakatPayer` row needs no
+tagging at all — every account is implicitly 100% that one payer's
+wealth, exactly like today. Tagging only becomes necessary, and the UI
+only prompts for it, once a **second** `ZakatPayer` is created — a
+one-time "these accounts need an owner for Zakat purposes" reconciliation
+screen, not a burden on everyone.
+
+**Joint-account default ratio**: per the fiqh rule the creator's own
+research surfaced — _"aset dalam rekening bersama dibagi sesuai porsi
+akad kepemilikan (default 50:50 kecuali ada kesepakatan rasio lain)"_ —
+`zakatJointSharePercent` defaults to 50 and is editable per account,
+never silently assumed to be something else.
 
 ## Decision
 
@@ -125,7 +198,7 @@ A per-family `ZakatSettings` record (new, minimal) capturing:
 Every settings choice is displayed alongside the final number — "Using:
 gold nisab (87.48g), majority (continuous) Hawl rule" — never a bare
 Rupiah figure with no visible assumptions. This is itself the correct
-Islamic scholarly practice (being transparent about *khilaf*, differences
+Islamic scholarly practice (being transparent about _khilaf_, differences
 of opinion), not just a UX nicety.
 
 ### Nisab value
@@ -138,38 +211,69 @@ very first tracer bullet if silver pricing isn't ready in time, rather
 than block the whole feature, and enable silver the moment that source
 lands.
 
-### Zakatable wealth (Slice 1 scope)
+### Zakatable wealth is computed PER ZAKATPAYER, never pooled
 
-`net_zakatable_wealth = zakatable_assets − deductible_near_term_debt`
+`net_zakatable_wealth(payer) = zakatable_assets(payer) − deductible_near_term_debt(payer)`
 
-- **Zakatable assets (Slice 1)**: cash-like ASSET accounts (`CASH`,
-  `DEPOSITORY`, `E_WALLET` — reuses `isLiquidCashAccountType` from
+For each `ZakatPayer` in the family (defaulting to exactly one, implicitly,
+when the household has never created a second one):
+
+`zakatable_assets(payer)` = the sum, over every account, of:
+
+- 100% of the account's zakatable value, when `account.zakatPayerId ==
+payer.id` and `zakatJointPayerId` is null, **plus**
+- `(100 − zakatJointSharePercent)%` when `account.zakatPayerId ==
+payer.id` and it IS jointly held, **plus**
+- `zakatJointSharePercent%` when `account.zakatJointPayerId == payer.id`
+  (i.e. this payer is the joint co-owner, not the primary).
+
+An account with no `zakatPayerId` set at all is **not silently split or
+guessed** — it is excluded from every payer's total and the result screen
+lists it under "Needs an owner before it can be included," alongside a
+link to tag it. Silently defaulting an untagged account to someone is
+exactly the kind of guess this feature exists to eliminate.
+
+**Asset/debt classes counted per payer (Slice 1 scope), otherwise
+unchanged from the original design**:
+
+- **Zakatable assets**: cash-like ASSET accounts (`CASH`, `DEPOSITORY`,
+  `E_WALLET` — reuses `isLiquidCashAccountType` from
   `src/lib/account-reserve.ts`, PR #341) **plus** `RECEIVABLE`-type
   accounts explicitly tracked as collectible (dayn qawī) in Permoney's
   existing debt/counterparty model (ADR-0049). Investment holdings
   (mutual funds, gold holdings) are explicitly **out of scope for Slice
   1** — jewelry/personal-use-asset zakat carries its own separate madhab
   divergence (Hanafi taxes personal jewelry; Shafi'i/Hanbali/Maliki
-  generally don't) that deserves its own dedicated design pass, not a
-  rushed inclusion here.
-- **Deductible debt (Slice 1)**: `CREDIT` accounts' full outstanding
-  balance (a credit card statement is due within days/weeks — near-term by
+  generally don't, and a "worn regularly within customary limits" test
+  either way) that deserves its own dedicated design pass, not a rushed
+  inclusion here. When investment assets DO get added (Slice 2), the same
+  per-`ZakatPayer` attribution fields apply — this is not a one-off,
+  it's the general ownership primitive for every future zakatable asset
+  class.
+- **Deductible debt**: `CREDIT` accounts' full outstanding balance (a
+  credit card statement is due within days/weeks — near-term by
   definition) **plus**, for `LOAN` accounts, only the next
   scheduled/imminently-due installment amount — never the full remaining
-  principal of a multi-year loan. This requires reading the loan's
-  repayment cadence (reuses the same recurring-detection heuristic already
-  shipped for `account-recurring.ts`, applied to `loan_payment`-kind
-  transfers, to estimate the next due amount when no explicit schedule
-  exists).
+  principal of a multi-year loan. Debt is attributed to a payer the same
+  way as assets (a liability account can itself be tagged
+  `zakatPayerId`/joint, e.g. a credit card genuinely opened and owed by
+  one spouse only). This requires reading the loan's repayment cadence
+  (reuses the same recurring-detection heuristic already shipped for
+  `account-recurring.ts`, applied to `loan_payment`-kind transfers, to
+  estimate the next due amount when no explicit schedule exists).
 
-### Hawl eligibility — verified from real history, not self-reported
+### Hawl eligibility — verified from real history, per payer, not self-reported
 
 This is the feature's actual differentiator. Given `hawlStartDate` and
-`haulRule`, reconstruct the family's net zakatable wealth on every day
-from `hawlStartDate` to today using the SAME balance-reconstruction
-primitive the net-worth report and `buildBalanceSeries` already use (no
-new historical-data mechanism — this is a read over data Permoney already
-durably keeps).
+`haulRule`, reconstruct **each payer's own** net zakatable wealth (per
+the attribution rule above) on every day from `hawlStartDate` to today,
+using the SAME balance-reconstruction primitive the net-worth report and
+`buildBalanceSeries` already use (no new historical-data mechanism — this
+is a read over data Permoney already durably keeps). A joint account's
+history is reconstructed once and split by `zakatJointSharePercent` at
+every historical point, not just at today's snapshot — the whole
+day-by-day series must reflect the ownership split, or the Hawl-continuity
+check would silently reintroduce Scenario A/B through the back door.
 
 - `hanafi_start_end`: check net zakatable wealth ≥ nisab on
   `hawlStartDate` AND on the Hawl-anniversary date only. Dips in between
@@ -187,32 +291,56 @@ the majority scholarly practice (`Hawl Anniversary Method`), never an
 average or a minimum-balance calculation. Averaging or using the lowest
 point during the year is a common mistake this ADR deliberately avoids.
 
-### Married couples / multiple family members
+### Married couples / multiple ZakatPayers — the result screen
 
-Slice 1 computes at the **family (pooled)** level, labeled explicitly as
-such ("This treats your household's tracked wealth as one pool, which is
-permitted with mutual consent — Zakat is normally an individual
-obligation"). Per-individual attribution (separate Zakat per
-`FamilyMember`, once a spouse or other member can log in and own specific
-accounts) is an explicit, named future slice, gated on adding real
-per-account ownership to the `Account` model — a genuine schema change,
-not a quick toggle, and deliberately not conflated with this ADR's scope.
+Each `ZakatPayer` gets their **own, fully independent** result: own
+nisab check, own Hawl status, own owed amount — including the honest
+"Rp0, not obligated" outcome when their individually-attributed wealth
+never reached nisab, even if a sibling payer in the same household owes a
+large amount. A secondary "household total" line is allowed ONLY as a
+plain sum of the already-independently-correct per-payer results (never
+a re-pooled recalculation) — clearly labeled as an informational total,
+not a joint obligation. A note on _wakalah_: the screen may state that
+one payer can pay another's amount on their behalf with their consent —
+this is a payment-workflow fact about who transfers the money, not a
+change to whose wealth the calculation is based on.
 
 ### Out of scope, deliberately, for Slice 1
 
 - Investment/gold-holdings assets and jewelry-specific rulings (own
-  future ADR amendment).
+  future ADR amendment) — the per-`ZakatPayer` attribution primitive
+  built here already applies to whatever gets added.
 - Zakat Fitrah (a completely different, non-wealth-based obligation) —
   not the same feature, not addressed here.
 - Automatic Zakat payment/disbursement — this is a **calculator**, not a
   payment product. It tells the user what is owed and why; paying it is
   the user's own action outside Permoney.
-- Per-individual (non-pooled) calculation — needs the `Account` ownership
-  schema change noted above.
+- The real multi-user invite/login/"claim my tagged accounts" flow —
+  `ZakatPayer.linkedUserId` is deliberately left as a forward-compatible
+  hook for it, not built here. Tagging ownership today is done by
+  whoever is currently logged in, on behalf of the household.
 - Non-Hijri-calendar convenience shortcuts (e.g. approximating with a
   fixed 355-day Gregorian offset) — compute the real Hijri calendar
   conversion; a personal-finance app that gets Islamic dates
   approximately right is worse than one that is silent about them.
+
+### Future direction: auto-detected joint-share from real transaction authorship
+
+`Transaction.userId` already records who personally entered every
+transaction (checked directly against `prisma/schema.prisma`). Today
+every transaction in a jointly-used account carries the SAME `userId`
+(whoever is currently the only person logged in), so `userId` carries no
+attribution signal yet and `zakatJointSharePercent` must stay a manual,
+editable number (default 50, per the fiqh default). Once the deferred
+multi-user login flow ships and a second real person is entering their
+own transactions into a shared account under their own login, their
+actual contribution becomes directly measurable: sum each `userId`'s net
+inflow into the account over the Hawl window and derive the joint share
+from real behavior instead of a static guess. This is a natural, additive
+upgrade to the SAME `zakatJointSharePercent` field (auto-computed value
+with the existing manual entry becoming an explicit override, never
+silently discarded) — not a new concept, not a breaking change, and not
+built in this slice.
 
 ## Sources
 
