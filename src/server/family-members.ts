@@ -593,6 +593,34 @@ export async function removeMemberForFamily({
           status: member.status,
         },
       })
+
+      // A revoked FamilyMember row alone leaves the user's active-family
+      // pointer dangling: session.ts's familyMiddleware resolves membership
+      // from User.familyId and finds no active row (NOT_A_MEMBER), while
+      // addMemberForFamily's re-invite path only assigns familyId when it is
+      // currently null — so a revoked member could never be re-invited to
+      // ANY family, including this one, without this clear. Only clear it
+      // when it still points at THIS family: guards against clobbering a
+      // pointer the user may have already moved elsewhere by the time this
+      // transaction runs.
+      const revokedUser = await tx.user.findUnique({
+        where: { id: data.userId },
+        select: { familyId: true },
+      })
+      if (revokedUser?.familyId === familyId) {
+        await tx.user.update({
+          where: { id: data.userId },
+          data: { familyId: null },
+        })
+        await auditLog(tx, auditCtx, {
+          action: "update",
+          entityType: "User",
+          entityId: data.userId,
+          before: { familyId },
+          after: { familyId: null },
+        })
+      }
+
       await persistIdempotentEndpointResponse(tx, {
         endpoint: REMOVE_MEMBER_ENDPOINT,
         familyId,

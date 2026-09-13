@@ -574,6 +574,90 @@ describe("family membership & role authorization (PER-144)", () => {
     expect(second.status).toBe("revoked")
   })
 
+  // -------------------------------------------------------------------------
+  // Audit finding #8 — revoking a member must clear User.familyId, or the
+  // user's active-family pointer keeps pointing at the (now revoked) family
+  // forever. That both breaks familyMiddleware's session resolution (it reads
+  // User.familyId, not an explicit familyId argument) and blocks re-invites,
+  // since addMemberForFamily only repoints a user's familyId when it is
+  // currently null.
+  // -------------------------------------------------------------------------
+  test("revoking a member clears User.familyId so they can be re-invited to another family", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const { user: member } = await addOutsider(owner.family.id, owner.user.id)
+
+    expect(
+      (
+        await harness.prisma.user.findUniqueOrThrow({
+          where: { id: member.id },
+          select: { familyId: true },
+        })
+      ).familyId
+    ).toBe(owner.family.id)
+
+    await removeMemberForFamily({
+      data: {
+        userId: member.id,
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      actor: { id: owner.user.id, role: "owner" },
+      runInTenantTransaction: runner(owner.user.id),
+    })
+
+    // The revoke must clear the dangling active-family pointer in the same
+    // transaction as the FamilyMember status flip.
+    const afterRevoke = await harness.prisma.user.findUniqueOrThrow({
+      where: { id: member.id },
+      select: { familyId: true },
+    })
+    expect(afterRevoke.familyId).toBeNull()
+
+    // The revoke is audited as a User.familyId change, not just a
+    // FamilyMember status change. AuditLog is RLS-scoped, so read it through
+    // withFamily (matching every other audit assertion in this file) rather
+    // than the raw harness.prisma client.
+    const userAudits = await harness.withFamily(owner.family.id, (tx) =>
+      tx.auditLog.findMany({
+        where: { entityType: "User", entityId: member.id },
+      })
+    )
+    expect(userAudits).toHaveLength(1)
+    expect(userAudits[0]?.afterJson).toMatchObject({ familyId: null })
+    expect(userAudits[0]?.beforeJson).toMatchObject({
+      familyId: owner.family.id,
+    })
+
+    // Re-invite to a DIFFERENT family now succeeds and repoints the user's
+    // active family — this is the exact path that was permanently blocked
+    // before the fix (targetUser.familyId was never null, so
+    // addMemberForFamily's `if (!targetUser.familyId)` guard never fired).
+    const otherOwner = await factories.createAuthenticatedOnboardedUser()
+    await addMemberForFamily({
+      data: {
+        email: member.email,
+        role: "member",
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: otherOwner.family.id,
+      actor: { id: otherOwner.user.id, role: "owner" },
+      runInTenantTransaction: runner(otherOwner.user.id),
+    })
+
+    const afterReinvite = await harness.prisma.user.findUniqueOrThrow({
+      where: { id: member.id },
+      select: { familyId: true },
+    })
+    expect(afterReinvite.familyId).toBe(otherOwner.family.id)
+
+    // familyMiddleware resolves membership from the user's OWN familyId
+    // pointer, not a caller-supplied one — proving the pointer itself (not
+    // just the FamilyMember row) now leads to an active membership.
+    expect(
+      await resolveActiveMembership(otherOwner.family.id, member.id)
+    ).not.toBeNull()
+  })
+
   test("adding a non-existent user surfaces MemberNotFoundError", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
     await expect(
