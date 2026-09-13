@@ -481,8 +481,8 @@ export function AccountFormDialog({
                 placeholder="0"
               />
               <p className="text-xs text-muted-foreground">
-                Money you keep untouched — your “dana mengendap”. It never
-                changes your balance or net worth; it only lowers your{" "}
+                Money you keep untouched — your idle cash. It never changes your
+                balance or net worth; it only lowers your{" "}
                 <span className="font-medium">safe-to-spend</span> (available =
                 balance − reserve).{editing ? " Leave empty to remove." : ""}
               </p>

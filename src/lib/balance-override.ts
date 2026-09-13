@@ -26,16 +26,16 @@ export const BALANCE_OVERRIDE_REASON_VALUES = [
 export type BalanceOverrideReason =
   (typeof BALANCE_OVERRIDE_REASON_VALUES)[number]
 
-// Indonesian labels — this project's transaction-entry UI copy is already
-// Indonesian (see transaction-form-modal.tsx); this feature matches that tone.
+// Product-wide policy (CLAUDE.md § "Language Standards"): all user-facing
+// text is English, with no per-feature exceptions.
 export const BALANCE_OVERRIDE_REASON_LABELS: Record<
   BalanceOverrideReason,
   string
 > = {
-  forgot_to_log: "Lupa dicatat",
-  found_uncounted_balance: "Ketemu saldo/uang yang belum terhitung",
-  correcting_earlier_reconcile: "Koreksi reconcile sebelumnya",
-  other: "Lainnya",
+  forgot_to_log: "Forgot to log it",
+  found_uncounted_balance: "Found uncounted balance/cash",
+  correcting_earlier_reconcile: "Correcting an earlier reconcile",
+  other: "Other",
 }
 
 export const BALANCE_OVERRIDE_REASONS = BALANCE_OVERRIDE_REASON_VALUES.map(
@@ -57,7 +57,7 @@ export const balanceOverrideInputSchema = z
       value.reason !== OTHER_BALANCE_OVERRIDE_REASON ||
       Boolean(value.note && value.note.length > 0),
     {
-      message: 'A short note is required when the reason is "Lainnya"',
+      message: 'A short note is required when the reason is "Other"',
       path: ["note"],
     }
   )

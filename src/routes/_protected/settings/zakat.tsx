@@ -414,10 +414,7 @@ function ZakatSettingsPage() {
                   {payers.length === 0 && (
                     <div className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
                       No payers created yet — everything counts as{" "}
-                      <span className="font-medium text-foreground">
-                        "Saya"
-                      </span>
-                      .
+                      <span className="font-medium text-foreground">"Me"</span>.
                     </div>
                   )}
                   {payers.map((payer) => (

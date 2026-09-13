@@ -849,9 +849,9 @@ export async function createValuationWithinTx(
   // PER-267 — optional extra fields folded into this write's OWN AuditLog
   // `after` payload (never `before`), mirroring `rebuildWithinTx`'s
   // `auditMetadata` (PER-268). Lets a narrowly-scoped caller — the
-  // transaction-form's "ubah saldo juga" override — stamp WHY a live
+  // transaction-form's "also update balance" override — stamp WHY a live
   // reconciliation anchor was written (the user's selected reason chip, plus
-  // free text for "Lainnya") on the very row it explains, without this
+  // free text for "Other") on the very row it explains, without this
   // function knowing anything about callers other than "some extra audit
   // context, if any."
   auditMetadata?: Record<string, unknown>

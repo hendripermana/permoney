@@ -117,7 +117,7 @@ function PartialBadge({ count }: { count?: number }) {
       <TriangleAlert className="size-3" aria-hidden />
       {typeof count === "number" && count > 0
         ? `${count} unconverted`
-        : "Partial — FX pending"}
+        : "Partial — exchange rate pending"}
     </Badge>
   )
 }
