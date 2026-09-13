@@ -18,14 +18,17 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import { createUuidV7 } from "@/lib/uuid-v7"
+import { getMembersFn } from "@/server/family-members"
 import {
   createZakatPayerFn,
   deleteZakatPayerFn,
   getZakatSettingsFn,
   listZakatPayersFn,
   renameZakatPayerFn,
+  suggestHawlStartDateFn,
   upsertZakatSettingsFn,
 } from "@/server/zakat"
 
@@ -37,6 +40,7 @@ export const Route = createFileRoute("/_protected/settings/zakat")({
 
 const SETTINGS_KEY = ["zakat-settings"] as const
 const PAYERS_KEY = ["zakat-payers"] as const
+const MEMBERS_KEY = ["family-members"] as const
 
 type NisabBasis = "gold" | "silver"
 type HaulRule = "jumhur_continuous" | "hanafi_start_end"
@@ -96,10 +100,22 @@ function ZakatSettingsPage() {
     queryKey: PAYERS_KEY,
     queryFn: () => listZakatPayersFn(),
   })
+  const { data: members = [] } = useQuery({
+    queryKey: MEMBERS_KEY,
+    queryFn: () => getMembersFn(),
+  })
 
+  const [enabled, setEnabled] = React.useState(false)
   const [nisabBasis, setNisabBasis] = React.useState<NisabBasis>("gold")
   const [haulRule, setHaulRule] = React.useState<HaulRule>("jumhur_continuous")
   const [hawlStartDate, setHawlStartDate] = React.useState("")
+  // Whether the current `hawlStartDate` value came from "Auto-detect from my
+  // transaction history" — drives the inline note below the date input.
+  // Cleared the moment the user edits the date any other way, so it never
+  // describes a value it didn't actually produce.
+  const [autoDetectNote, setAutoDetectNote] = React.useState<{
+    approximate: boolean
+  } | null>(null)
   // Track whether the user has touched the form locally, so a background
   // refetch of `settings` never clobbers an in-progress edit — a plain
   // declarative sync from props on every query update, no useEffect.
@@ -107,10 +123,12 @@ function ZakatSettingsPage() {
 
   if (settings && !dirty) {
     if (
+      settings.enabled !== enabled ||
       settings.nisabBasis !== nisabBasis ||
       settings.haulRule !== haulRule ||
       toDateInputValue(settings.hawlStartDate) !== hawlStartDate
     ) {
+      setEnabled(settings.enabled)
       setNisabBasis(settings.nisabBasis)
       setHaulRule(settings.haulRule)
       setHawlStartDate(toDateInputValue(settings.hawlStartDate))
@@ -121,6 +139,7 @@ function ZakatSettingsPage() {
     mutationFn: () =>
       upsertZakatSettingsFn({
         data: {
+          enabled,
           nisabBasis,
           haulRule,
           hawlStartDate: hawlStartDate ? new Date(hawlStartDate) : null,
@@ -138,11 +157,36 @@ function ZakatSettingsPage() {
       ),
   })
 
+  const autoDetectHawl = useMutation({
+    mutationFn: () => suggestHawlStartDateFn(),
+    onSuccess: (result) => {
+      if (result.status === "price_unavailable") {
+        toast.error(result.reason)
+        return
+      }
+      if (!result.suggestion) {
+        toast.error(
+          "Your current wealth hasn't reached nisab yet — Zakat isn't due, so there's nothing to detect."
+        )
+        return
+      }
+      setHawlStartDate(toDateInputValue(result.suggestion.hawlStartDate))
+      setAutoDetectNote({ approximate: result.suggestion.approximate })
+      setDirty(true)
+    },
+    onError: (error) =>
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not auto-detect a Hawl start date."
+      ),
+  })
+
   const [newPayerName, setNewPayerName] = React.useState("")
   const createPayer = useMutation({
-    mutationFn: (displayName: string) =>
+    mutationFn: (input: { displayName: string; linkedUserId?: string }) =>
       createZakatPayerFn({
-        data: { displayName, idempotencyKey: createUuidV7() },
+        data: { ...input, idempotencyKey: createUuidV7() },
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: PAYERS_KEY })
@@ -153,6 +197,16 @@ function ZakatSettingsPage() {
         error instanceof Error ? error.message : "Could not add payer."
       ),
   })
+
+  // Family members not yet linked to any existing ZakatPayer — one-click
+  // "add as a payer" chips, so tagging a real household member never
+  // requires typing their name manually (PER — Gap 2 fast-follow). Only
+  // "active" members are offered — an "invited" member has no accepted
+  // membership yet, and the server only allows linking an active one.
+  const unlinkedMembers = members.filter(
+    (m) =>
+      m.status === "active" && !payers.some((p) => p.linkedUserId === m.userId)
+  )
 
   const renamePayer = useMutation({
     mutationFn: (input: { id: string; displayName: string }) =>
@@ -210,6 +264,27 @@ function ZakatSettingsPage() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="flex flex-col gap-5">
+                  <div className="flex items-start justify-between gap-4 rounded-lg border p-3">
+                    <div className="space-y-0.5">
+                      <Label htmlFor="zakat-enabled">
+                        Enable Zakat calculator
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        Opt-in and off by default — not every Permoney user
+                        needs this. Turning it off hides Zakat everywhere,
+                        including the sidebar.
+                      </p>
+                    </div>
+                    <Switch
+                      id="zakat-enabled"
+                      checked={enabled}
+                      onCheckedChange={(checked) => {
+                        setEnabled(checked)
+                        setDirty(true)
+                      }}
+                    />
+                  </div>
+
                   <div className="space-y-2">
                     <Label>Nisab basis</Label>
                     <div className="grid gap-2 sm:grid-cols-2">
@@ -264,19 +339,55 @@ function ZakatSettingsPage() {
 
                   <div className="space-y-2">
                     <Label htmlFor="hawl-start-date">Hawl start date</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Zakat is only due once your wealth has stayed at or above
+                      the nisab threshold continuously for one full Hijri year
+                      (~354 days). This date is the anchor your one-year clock
+                      counts from.
+                    </p>
                     <Input
                       id="hawl-start-date"
                       type="date"
                       value={hawlStartDate}
                       onChange={(event) => {
                         setHawlStartDate(event.target.value)
+                        setAutoDetectNote(null)
                         setDirty(true)
                       }}
                     />
-                    <p className="text-xs text-muted-foreground">
-                      When your household's wealth first reached nisab. Left
-                      unset, Zakat cannot be calculated yet.
-                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setHawlStartDate(
+                            toDateInputValue(new Date().toISOString())
+                          )
+                          setAutoDetectNote(null)
+                          setDirty(true)
+                        }}
+                      >
+                        Not sure? Start counting from today
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={autoDetectHawl.isPending}
+                        onClick={() => autoDetectHawl.mutate()}
+                      >
+                        Auto-detect from my transaction history
+                      </Button>
+                    </div>
+                    {autoDetectNote && (
+                      <p className="text-xs text-muted-foreground">
+                        Detected from your transaction history — your wealth
+                        appears to have first reached nisab around this date.
+                        {autoDetectNote.approximate &&
+                          " (approximate — based on your earliest recorded transaction; your real wealth may go back further)"}
+                      </p>
+                    )}
                   </div>
 
                   <Button
@@ -320,25 +431,64 @@ function ZakatSettingsPage() {
                       onDelete={() => deletePayer.mutate(payer.id)}
                     />
                   ))}
-                  <div className="flex gap-2 pt-2">
-                    <Input
-                      placeholder="e.g. Istri, Suami"
-                      value={newPayerName}
-                      onChange={(event) => setNewPayerName(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" && newPayerName.trim()) {
-                          createPayer.mutate(newPayerName.trim())
+
+                  {unlinkedMembers.length > 0 && (
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {unlinkedMembers.map((member) => (
+                        <Button
+                          key={member.userId}
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={createPayer.isPending}
+                          onClick={() =>
+                            createPayer.mutate({
+                              displayName: member.name,
+                              linkedUserId: member.userId,
+                            })
+                          }
+                        >
+                          <Plus size={14} className="mr-1" />
+                          Add {member.name} as a payer
+                        </Button>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex flex-col gap-1.5 pt-2">
+                    <Label htmlFor="new-payer-name" className="text-xs">
+                      Or add someone who isn't on Permoney yet (e.g. a spouse
+                      who hasn't signed up)
+                    </Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="new-payer-name"
+                        placeholder="e.g. Istri, Suami"
+                        value={newPayerName}
+                        onChange={(event) =>
+                          setNewPayerName(event.target.value)
                         }
-                      }}
-                    />
-                    <Button
-                      variant="secondary"
-                      disabled={!newPayerName.trim() || createPayer.isPending}
-                      onClick={() => createPayer.mutate(newPayerName.trim())}
-                    >
-                      <Plus size={16} className="mr-1" />
-                      Add
-                    </Button>
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && newPayerName.trim()) {
+                            createPayer.mutate({
+                              displayName: newPayerName.trim(),
+                            })
+                          }
+                        }}
+                      />
+                      <Button
+                        variant="secondary"
+                        disabled={!newPayerName.trim() || createPayer.isPending}
+                        onClick={() =>
+                          createPayer.mutate({
+                            displayName: newPayerName.trim(),
+                          })
+                        }
+                      >
+                        <Plus size={16} className="mr-1" />
+                        Add
+                      </Button>
+                    </div>
                   </div>
                 </CardContent>
               </Card>

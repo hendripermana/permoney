@@ -499,6 +499,96 @@ function computeForOnePayer(
 }
 
 /**
+ * ADR-0056 fast-follow — "Auto-detect from my transaction history" (Hawl
+ * start date helper). Suggests a `hawlStartDate` for the IMPLICIT
+ * single-payer household (the vast majority of users, and the only case this
+ * button is offered for — see `settings/zakat.tsx`), by reusing the exact
+ * same private reconstruction primitives `computeForOnePayer` uses for the
+ * real calculation: never reinvented, never approximated differently than
+ * the real Hawl-break scan.
+ *
+ * Returns `null` when current net wealth hasn't reached nisab yet (nothing
+ * useful to suggest — Zakat isn't due regardless of when the clock would
+ * start). Otherwise scans BACKWARD from "now" through every date the
+ * merged wealth series could have changed, looking for the most recent dip
+ * below nisab:
+ *
+ *   - A dip found at `candidates[i]`: the Hawl can only have been running
+ *     since the day right after it broke — `candidates[i + 1]`, `approximate:
+ *     false` (exact, backed by real transaction history).
+ *   - No dip anywhere back to the earliest recorded transaction: wealth may
+ *     have been above nisab even longer than Permoney has history for, so
+ *     `candidates[0]` (the earliest point on record) is returned as a
+ *     conservative estimate, `approximate: true`.
+ *   - No transaction history at all on any relevant account (a manually-set
+ *     balance with nothing behind it): `now`, `approximate: true` — there is
+ *     no earlier data point to anchor to.
+ */
+export function suggestHawlStartDate(params: {
+  accounts: ReadonlyArray<ZakatCalculationAccount>
+  nisabValueMinor: bigint
+  now?: Date
+}): { hawlStartDate: string; approximate: boolean } | null {
+  const { accounts, nisabValueMinor, now = new Date() } = params
+  const payer: ZakatPayerRef = { id: "__implicit__", displayName: "Saya" }
+  const singlePayerMode = true
+
+  const relevant = resolveRelevantAccounts(accounts, payer, singlePayerMode)
+  const loan = computeLoanDeductionForPayer(
+    accounts,
+    payer,
+    singlePayerMode,
+    now
+  )
+
+  const currentNetWealth = netWealthAt(
+    relevant,
+    payer,
+    singlePayerMode,
+    now,
+    loan.deductions
+  )
+  if (currentNetWealth < nisabValueMinor) return null
+
+  let earliestMs: number | null = null
+  for (const r of relevant) {
+    for (const p of r.series.points) {
+      if (earliestMs === null || p.ms < earliestMs) earliestMs = p.ms
+    }
+  }
+  if (earliestMs === null) {
+    return { hawlStartDate: now.toISOString(), approximate: true }
+  }
+
+  const candidates = collectCandidateDates(relevant, new Date(earliestMs), now)
+
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    const net = netWealthAt(
+      relevant,
+      payer,
+      singlePayerMode,
+      candidates[i] as Date,
+      loan.deductions
+    )
+    if (net < nisabValueMinor) {
+      return {
+        hawlStartDate: (candidates[i + 1] as Date).toISOString(),
+        approximate: false,
+      }
+    }
+    if (i === 0) {
+      return {
+        hawlStartDate: (candidates[0] as Date).toISOString(),
+        approximate: true,
+      }
+    }
+  }
+  // Unreachable: `candidates` always has at least [from, to], and the i === 0
+  // branch above always returns before the loop can exit naturally.
+  throw new Error("suggestHawlStartDate: candidate scan exited unexpectedly")
+}
+
+/**
  * Compute EACH payer's fully independent Zakat result — the feature's core
  * entry point. Never pools wealth across payers (ADR-0056's central
  * correction). See the file header for the documented scope/precision

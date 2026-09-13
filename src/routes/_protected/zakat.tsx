@@ -64,6 +64,14 @@ function ZakatResultsPage() {
               <p className="text-sm text-muted-foreground">Calculating…</p>
             )}
 
+            {result?.status === "disabled" && (
+              <EmptyState
+                title="Zakat is turned off"
+                description="Not every Permoney user needs this. Turn it on in Zakat settings to start tracking."
+                cta="Go to Zakat settings"
+              />
+            )}
+
             {result?.status === "hawl_not_set" && (
               <EmptyState
                 title="Set a Hawl start date first"

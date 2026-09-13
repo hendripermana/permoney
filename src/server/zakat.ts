@@ -12,6 +12,7 @@ import {
 } from "@/lib/zakat-attribution"
 import {
   computeZakatForPayers,
+  suggestHawlStartDate,
   type ZakatCalculationAccount,
   type ZakatPayerResult,
   type HaulRule,
@@ -64,6 +65,27 @@ export class ZakatPayerNotFoundError extends Error {
   }
 }
 
+export class ZakatPayerLinkTargetNotFoundError extends Error {
+  override readonly name = "ZakatPayerLinkTargetNotFoundError"
+  readonly statusCode = 404
+  constructor(readonly linkedUserId: string) {
+    super(
+      `User ${linkedUserId} is not an active member of this family — a ` +
+        `ZakatPayer can only be linked to a real, active FamilyMember`
+    )
+  }
+}
+
+export class ZakatPayerAlreadyLinkedError extends Error {
+  override readonly name = "ZakatPayerAlreadyLinkedError"
+  readonly statusCode = 409
+  constructor(readonly linkedUserId: string) {
+    super(
+      `User ${linkedUserId} is already linked to another ZakatPayer in this family`
+    )
+  }
+}
+
 async function assertZakatPayerInFamily(
   tx: TenantTransactionClient,
   id: string,
@@ -82,23 +104,31 @@ async function assertZakatPayerInFamily(
 // -----------------------------------------------------------------------------
 
 export interface SerializedZakatSettings {
+  enabled: boolean
   nisabBasis: NisabBasis
   haulRule: HaulRule
   hawlStartDate: string | null
 }
 
+// Opt-in fast-follow fix: Zakat is OFF by default. Not every Permoney user
+// is Muslim — Slice 1 shipped with no toggle and silently used these
+// defaults (including implicit "on") for any family that never opened
+// Zakat settings. See `computeZakatForFamily`'s `enabled` check below.
 const DEFAULT_ZAKAT_SETTINGS: SerializedZakatSettings = {
+  enabled: false,
   nisabBasis: "gold",
   haulRule: "jumhur_continuous",
   hawlStartDate: null,
 }
 
 function serializeZakatSettings(row: {
+  enabled: boolean
   nisabBasis: string
   haulRule: string
   hawlStartDate: Date | null
 }): SerializedZakatSettings {
   return {
+    enabled: row.enabled,
     nisabBasis: row.nisabBasis as NisabBasis,
     haulRule: row.haulRule as HaulRule,
     hawlStartDate: row.hawlStartDate ? row.hawlStartDate.toISOString() : null,
@@ -132,6 +162,7 @@ export const getZakatSettingsFn = createServerFn({ method: "GET" })
 const UPSERT_ZAKAT_SETTINGS_ENDPOINT = "upsertZakatSettingsFn"
 
 export const upsertZakatSettingsInputSchema = z.object({
+  enabled: z.boolean(),
   nisabBasis: z.enum(NISAB_BASIS_VALUES),
   haulRule: z.enum(HAUL_RULE_VALUES),
   hawlStartDate: z.coerce.date().nullable(),
@@ -151,6 +182,7 @@ export async function upsertZakatSettingsForFamily({
 }): Promise<SerializedZakatSettings> {
   const data = upsertZakatSettingsInputSchema.parse(rawData)
   const requestHash = await hashCanonicalPayload({
+    enabled: data.enabled,
     nisabBasis: data.nisabBasis,
     haulRule: data.haulRule,
     hawlStartDate: data.hawlStartDate?.toISOString() ?? null,
@@ -182,11 +214,13 @@ export async function upsertZakatSettingsForFamily({
         where: { familyId },
         create: {
           familyId,
+          enabled: data.enabled,
           nisabBasis: data.nisabBasis,
           haulRule: data.haulRule,
           hawlStartDate: data.hawlStartDate,
         },
         update: {
+          enabled: data.enabled,
           nisabBasis: data.nisabBasis,
           haulRule: data.haulRule,
           hawlStartDate: data.hawlStartDate,
@@ -295,6 +329,12 @@ const CREATE_ZAKAT_PAYER_ENDPOINT = "createZakatPayerFn"
 
 export const createZakatPayerInputSchema = z.object({
   displayName: z.string().trim().min(1).max(120),
+  // Forward-compatible hook (ADR-0056 `ZakatPayer.linkedUserId`): links this
+  // payer to a REAL, already-registered family member (see
+  // `getMembersFn`/`src/server/family-members.ts`) instead of a free-text
+  // name. `null`/omitted keeps today's manual-name-only behavior exactly —
+  // this is for a spouse/relative who hasn't signed up for Permoney yet.
+  linkedUserId: z.string().min(1).nullable().optional(),
   idempotencyKey: uuidV7Schema,
 })
 
@@ -310,8 +350,10 @@ export async function createZakatPayerForFamily({
   runInTenantTransaction?: RunInTenantTransaction
 }): Promise<SerializedZakatPayer> {
   const data = createZakatPayerInputSchema.parse(rawData)
+  const linkedUserId = data.linkedUserId ?? null
   const requestHash = await hashCanonicalPayload({
     displayName: data.displayName,
+    linkedUserId,
   })
   const auditCtx = await createAuditContext(
     { user: { id: userId, familyId } },
@@ -329,8 +371,32 @@ export async function createZakatPayerForFamily({
         })
       if (replay) return replay
 
+      // Tenant-safe reference validation (CLAUDE.md §5A): never trust a
+      // client-provided user id — it must belong to an ACTIVE FamilyMember
+      // of THIS exact family before it can be linked.
+      if (linkedUserId !== null) {
+        const member = await tx.familyMember.findFirst({
+          where: { familyId, userId: linkedUserId, status: "active" },
+          select: { id: true },
+        })
+        if (!member) {
+          throw new ZakatPayerLinkTargetNotFoundError(linkedUserId)
+        }
+        // Friendly pre-check in front of the real DB unique index
+        // (`ZakatPayer_linkedUserId_key`), which stays the actual
+        // correctness guarantee against a race between two concurrent
+        // creates.
+        const alreadyLinked = await tx.zakatPayer.findFirst({
+          where: { familyId, linkedUserId },
+          select: { id: true },
+        })
+        if (alreadyLinked) {
+          throw new ZakatPayerAlreadyLinkedError(linkedUserId)
+        }
+      }
+
       const row = await tx.zakatPayer.create({
-        data: { familyId, displayName: data.displayName },
+        data: { familyId, displayName: data.displayName, linkedUserId },
       })
       const after = serializeZakatPayer(row)
 
@@ -824,6 +890,7 @@ export interface SerializedZakatPayerResult {
 }
 
 export type ComputeZakatResult =
+  | { status: "disabled" }
   | { status: "hawl_not_set" }
   | {
       status: "price_unavailable"
@@ -923,6 +990,115 @@ async function resolveNisabValueMinor(
   return { nisabValueMinor: computeNisabValue("gold", pricePerGramMinor) }
 }
 
+/**
+ * Load every in-scope account (with its own ledger of transactions, mapped
+ * to `ZakatCalculationAccount` shape) for a family — the shared read used by
+ * both `computeZakatForFamily` (the real calculation) and
+ * `suggestHawlStartDateForFamily` (the "auto-detect" helper). Extracted as a
+ * pure refactor (no behavior change) so the second endpoint doesn't
+ * duplicate this query/mapping.
+ */
+async function loadCalculationAccountsForFamily(
+  tx: TenantTransactionClient,
+  familyId: string
+): Promise<ZakatCalculationAccount[]> {
+  const accountRows = await tx.account.findMany({
+    where: { familyId, deletedAt: null },
+    select: {
+      id: true,
+      name: true,
+      accountClass: true,
+      accountType: true,
+      balance: true,
+      currency: true,
+      zakatPayerId: true,
+      zakatJointPayerId: true,
+      zakatJointSharePercent: true,
+    },
+  })
+  const inScope = accountRows.filter(
+    (a) => classifyZakatAccount(a) !== "out_of_scope"
+  )
+  const inScopeIds = inScope.map((a) => a.id)
+
+  // Every in-scope account's OWN ledger: rows where it is either side of
+  // the transaction. Slice 1's account kinds (CASH/DEPOSITORY/E_WALLET/
+  // RECEIVABLE/CREDIT/LOAN) are ALWAYS balanceSource="transaction_flow"
+  // and never valuation-linked, so `transferIncoming` (which only matters
+  // for a valuation-linked dual-leg transfer, PER-247/ADR-0048) is always
+  // `null` here — deliberately not queried via the `Transfer` table.
+  const txnRows =
+    inScopeIds.length > 0
+      ? await tx.transaction.findMany({
+          where: {
+            familyId,
+            deletedAt: null,
+            OR: [
+              { accountId: { in: inScopeIds } },
+              { toAccountId: { in: inScopeIds } },
+            ],
+          },
+          select: {
+            id: true,
+            date: true,
+            createdAt: true,
+            amount: true,
+            type: true,
+            kind: true,
+            accountId: true,
+            toAccountId: true,
+            description: true,
+          },
+        })
+      : []
+
+  const txnsByAccount = new Map<string, typeof txnRows>()
+  for (const id of inScopeIds) txnsByAccount.set(id, [])
+  for (const t of txnRows) {
+    if (t.accountId && txnsByAccount.has(t.accountId)) {
+      txnsByAccount.get(t.accountId)!.push(t)
+    }
+    if (t.toAccountId && txnsByAccount.has(t.toAccountId)) {
+      txnsByAccount.get(t.toAccountId)!.push(t)
+    }
+  }
+
+  return inScope.map(
+    (a): ZakatCalculationAccount => ({
+      id: a.id,
+      name: a.name,
+      accountClass: a.accountClass,
+      accountType: a.accountType,
+      balance: a.balance,
+      zakatPayerId: a.zakatPayerId,
+      zakatJointPayerId: a.zakatJointPayerId,
+      zakatJointSharePercent: a.zakatJointSharePercent,
+      transactions: (txnsByAccount.get(a.id) ?? []).map((t) => ({
+        date: t.date,
+        createdAt: t.createdAt,
+        // `Transaction.amount` is SIGNED in the database (CLAUDE.md §5A:
+        // negative for expense/transfer-out, positive for income/transfer-
+        // in). `signedDeltaForAccount` (reused by the bigint daily-series
+        // walk in zakat-calculation.ts) expects the AnalyticsTxn
+        // convention instead — an ABSOLUTE magnitude, with `type` alone
+        // carrying the sign — exactly like every other server-side
+        // `serializeTransaction` call site (`absMoney(...)`) already does
+        // before handing rows to client/analytics code. Skipping this
+        // once produced a real bug here: an expense's stored-negative
+        // amount was double-negated by `signedDeltaForAccount`'s `-amount`
+        // branch, making it ADD to the balance instead of subtracting.
+        amount: absMoney(t.amount),
+        type: t.type,
+        kind: t.kind,
+        accountId: t.accountId,
+        toAccountId: t.toAccountId,
+        transferIncoming: null,
+        description: t.description,
+      })),
+    })
+  )
+}
+
 export async function computeZakatForFamily({
   familyId,
   userId,
@@ -947,6 +1123,15 @@ export async function computeZakatForFamily({
     const settings = settingsRow
       ? serializeZakatSettings(settingsRow)
       : DEFAULT_ZAKAT_SETTINGS
+    // Opt-in fast-follow fix: not every Permoney user is Muslim. A family
+    // that has never turned this on (or has explicitly turned it off) must
+    // see nothing about it — checked BEFORE the Hawl-start-date gate below,
+    // since "not set up yet" and "not set up AT ALL because it's off" are
+    // different states with different UI (see `zakat.tsx`'s `disabled`
+    // empty state vs `hawl_not_set`).
+    if (!settings.enabled) {
+      return { status: "disabled" }
+    }
     if (settings.hawlStartDate === null) {
       return { status: "hawl_not_set" }
     }
@@ -973,100 +1158,9 @@ export async function computeZakatForFamily({
         ? payerRows.map(serializeZakatPayer)
         : [{ id: "__implicit__", displayName: "Saya", linkedUserId: null }]
 
-    const accountRows = await tx.account.findMany({
-      where: { familyId, deletedAt: null },
-      select: {
-        id: true,
-        name: true,
-        accountClass: true,
-        accountType: true,
-        balance: true,
-        currency: true,
-        zakatPayerId: true,
-        zakatJointPayerId: true,
-        zakatJointSharePercent: true,
-      },
-    })
-    const inScope = accountRows.filter(
-      (a) => classifyZakatAccount(a) !== "out_of_scope"
-    )
-    const inScopeIds = inScope.map((a) => a.id)
-
-    // Every in-scope account's OWN ledger: rows where it is either side of
-    // the transaction. Slice 1's account kinds (CASH/DEPOSITORY/E_WALLET/
-    // RECEIVABLE/CREDIT/LOAN) are ALWAYS balanceSource="transaction_flow"
-    // and never valuation-linked, so `transferIncoming` (which only matters
-    // for a valuation-linked dual-leg transfer, PER-247/ADR-0048) is always
-    // `null` here — deliberately not queried via the `Transfer` table.
-    const txnRows =
-      inScopeIds.length > 0
-        ? await tx.transaction.findMany({
-            where: {
-              familyId,
-              deletedAt: null,
-              OR: [
-                { accountId: { in: inScopeIds } },
-                { toAccountId: { in: inScopeIds } },
-              ],
-            },
-            select: {
-              id: true,
-              date: true,
-              createdAt: true,
-              amount: true,
-              type: true,
-              kind: true,
-              accountId: true,
-              toAccountId: true,
-              description: true,
-            },
-          })
-        : []
-
-    const txnsByAccount = new Map<string, typeof txnRows>()
-    for (const id of inScopeIds) txnsByAccount.set(id, [])
-    for (const t of txnRows) {
-      if (t.accountId && txnsByAccount.has(t.accountId)) {
-        txnsByAccount.get(t.accountId)!.push(t)
-      }
-      if (t.toAccountId && txnsByAccount.has(t.toAccountId)) {
-        txnsByAccount.get(t.toAccountId)!.push(t)
-      }
-    }
-
-    const calculationAccounts: ZakatCalculationAccount[] = inScope.map(
-      (a): ZakatCalculationAccount => ({
-        id: a.id,
-        name: a.name,
-        accountClass: a.accountClass,
-        accountType: a.accountType,
-        balance: a.balance,
-        zakatPayerId: a.zakatPayerId,
-        zakatJointPayerId: a.zakatJointPayerId,
-        zakatJointSharePercent: a.zakatJointSharePercent,
-        transactions: (txnsByAccount.get(a.id) ?? []).map((t) => ({
-          date: t.date,
-          createdAt: t.createdAt,
-          // `Transaction.amount` is SIGNED in the database (CLAUDE.md §5A:
-          // negative for expense/transfer-out, positive for income/transfer-
-          // in). `signedDeltaForAccount` (reused by the bigint daily-series
-          // walk in zakat-calculation.ts) expects the AnalyticsTxn
-          // convention instead — an ABSOLUTE magnitude, with `type` alone
-          // carrying the sign — exactly like every other server-side
-          // `serializeTransaction` call site (`absMoney(...)`) already does
-          // before handing rows to client/analytics code. Skipping this
-          // once produced a real bug here: an expense's stored-negative
-          // amount was double-negated by `signedDeltaForAccount`'s `-amount`
-          // branch, making it ADD to the balance instead of subtracting.
-          amount: absMoney(t.amount),
-          type: t.type,
-          kind: t.kind,
-          accountId: t.accountId,
-          toAccountId: t.toAccountId,
-          transferIncoming: null,
-          description: t.description,
-        })),
-      })
+    const calculationAccounts = await loadCalculationAccountsForFamily(
+      tx,
+      familyId
     )
 
     const results = computeZakatForPayers({
@@ -1097,6 +1191,78 @@ export const computeZakatFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
   .handler(async ({ context }) => {
     return await computeZakatForFamily({
+      familyId: context.familyId,
+      userId: context.user.id,
+    })
+  })
+
+// -----------------------------------------------------------------------------
+// suggestHawlStartDateFn — "Auto-detect from my transaction history" helper.
+// -----------------------------------------------------------------------------
+//
+// Pure READ, same shape as `computeZakatFn`: no idempotency key, no audit
+// log, `familyMiddleware` only. Never writes `hawlStartDate` itself — the
+// client prefills the date field and the user must still click "Save
+// settings" (ADR-0056 fast-follow: never auto-save silently).
+
+export type SuggestHawlStartDateResult =
+  | {
+      status: "ok"
+      suggestion: { hawlStartDate: string; approximate: boolean } | null
+    }
+  | { status: "price_unavailable"; reason: string }
+
+export async function suggestHawlStartDateForFamily({
+  familyId,
+  userId,
+  runInTenantTransaction = scopedTenantTransaction,
+  now = new Date(),
+}: {
+  familyId: string
+  userId: string
+  runInTenantTransaction?: RunInTenantTransaction
+  now?: Date
+}): Promise<SuggestHawlStartDateResult> {
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
+    const [family, settingsRow] = await Promise.all([
+      tx.family.findUniqueOrThrow({
+        where: { id: familyId },
+        select: { currency: true },
+      }),
+      tx.zakatSettings.findUnique({ where: { familyId } }),
+    ])
+    const settings = settingsRow
+      ? serializeZakatSettings(settingsRow)
+      : DEFAULT_ZAKAT_SETTINGS
+
+    const priceResolution = await resolveNisabValueMinor(
+      tx,
+      settings.nisabBasis,
+      family.currency
+    )
+    if ("reason" in priceResolution) {
+      return { status: "price_unavailable", reason: priceResolution.reason }
+    }
+
+    const calculationAccounts = await loadCalculationAccountsForFamily(
+      tx,
+      familyId
+    )
+
+    const suggestion = suggestHawlStartDate({
+      accounts: calculationAccounts,
+      nisabValueMinor: priceResolution.nisabValueMinor,
+      now,
+    })
+
+    return { status: "ok", suggestion }
+  })
+}
+
+export const suggestHawlStartDateFn = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .handler(async ({ context }) => {
+    return await suggestHawlStartDateForFamily({
       familyId: context.familyId,
       userId: context.user.id,
     })
