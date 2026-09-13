@@ -1621,7 +1621,7 @@ export async function getAccountOpeningValueForFamily({
       throw new ValuationError(`Account ${accountId} not found`)
     }
     const opening = await tx.valuation.findFirst({
-      where: { accountId, familyId, type: "opening" },
+      where: { accountId, familyId, type: "opening", deletedAt: null },
       orderBy: { valuationDate: "asc" },
       select: { value: true },
     })

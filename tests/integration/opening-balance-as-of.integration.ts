@@ -10,7 +10,11 @@ import {
   AccountValidationError,
   createAccountForFamily,
 } from "@/server/accounts"
-import { computeCanonicalBalance, fetchAccountFacts } from "@/server/valuations"
+import {
+  computeCanonicalBalance,
+  fetchAccountFacts,
+  getAccountOpeningValueForFamily,
+} from "@/server/valuations"
 import { createTransactionForFamily } from "@/server/transactions"
 import {
   createIntegrationHarness,
@@ -354,5 +358,66 @@ describe("PER-269 — opening balance as-of date", () => {
       caught = error
     }
     expect(caught).toBeTruthy()
+  })
+
+  // Audit finding #21 (whole-repo coherence audit): getAccountOpeningValueForFamily
+  // was missing the `deletedAt: null` guard that its sibling
+  // getAccountOpeningAsOfForFamily already has. A soft-deleted opening
+  // Valuation row could otherwise be picked up as "the" opening value and
+  // corrupt the PER-229 cost-basis calculation (accounts.$accountId.tsx
+  // feeds `openingValue` straight into computeAccountPerformance).
+  test("a soft-deleted opening Valuation is excluded from getAccountOpeningValueForFamily, even when it dates earlier than the live one", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+
+    const account = await createAccountForFamily({
+      data: {
+        name: "Cost basis guard",
+        accountType: "DEPOSITORY",
+        currency: "IDR",
+        openingBalance: "500000",
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+    const liveOpening = await harness.withFamily(owner.family.id, async (tx) =>
+      tx.valuation.findFirstOrThrow({
+        where: { accountId: account.id, type: "opening", deletedAt: null },
+      })
+    )
+
+    // Simulate a soft-deleted opening anchor left behind by a correction —
+    // dated BEFORE the live one, with a different (garbage) value, so an
+    // `orderBy: valuationDate asc` query without a `deletedAt` guard would
+    // pick this tombstoned row first and return the wrong basis.
+    await harness.withFamily(owner.family.id, async (tx) =>
+      tx.valuation.create({
+        data: {
+          value: 999_999n,
+          currency: liveOpening.currency,
+          valuationDate: daysAgo(30),
+          type: "opening",
+          source: liveOpening.source,
+          provenance: liveOpening.provenance,
+          normalBalance: liveOpening.normalBalance,
+          allowsNegativeAsset: liveOpening.allowsNegativeAsset,
+          deletedAt: new Date(),
+          createdById: owner.user.id,
+          accountId: account.id,
+          familyId: owner.family.id,
+        },
+      })
+    )
+
+    const result = await getAccountOpeningValueForFamily({
+      accountId: account.id,
+      familyId: owner.family.id,
+      userId: owner.user.id,
+      runInTenantTransaction: harness.withMember,
+    })
+
+    expect(result.openingValue).toBe(liveOpening.value.toString())
+    expect(result.openingValue).not.toBe("999999")
   })
 })

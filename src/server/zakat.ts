@@ -1111,14 +1111,20 @@ export async function computeZakatForFamily({
   now?: Date
 }): Promise<ComputeZakatResult> {
   return await runInTenantTransaction(familyId, userId, async (tx) => {
-    const [family, settingsRow, payerRows] = await Promise.all([
-      tx.family.findUniqueOrThrow({
-        where: { id: familyId },
-        select: { currency: true },
-      }),
-      tx.zakatSettings.findUnique({ where: { familyId } }),
-      tx.zakatPayer.findMany({ where: { familyId }, orderBy: { id: "asc" } }),
-    ])
+    // Sequential — all three reads share the one interactive-transaction
+    // `tx` client, and a single pg connection cannot multiplex concurrent
+    // queries (see the invariant comment on `TenantTransactionClient`).
+    const family = await tx.family.findUniqueOrThrow({
+      where: { id: familyId },
+      select: { currency: true },
+    })
+    const settingsRow = await tx.zakatSettings.findUnique({
+      where: { familyId },
+    })
+    const payerRows = await tx.zakatPayer.findMany({
+      where: { familyId },
+      orderBy: { id: "asc" },
+    })
 
     const settings = settingsRow
       ? serializeZakatSettings(settingsRow)
@@ -1224,13 +1230,16 @@ export async function suggestHawlStartDateForFamily({
   now?: Date
 }): Promise<SuggestHawlStartDateResult> {
   return await runInTenantTransaction(familyId, userId, async (tx) => {
-    const [family, settingsRow] = await Promise.all([
-      tx.family.findUniqueOrThrow({
-        where: { id: familyId },
-        select: { currency: true },
-      }),
-      tx.zakatSettings.findUnique({ where: { familyId } }),
-    ])
+    // Sequential — both reads share the one interactive-transaction `tx`
+    // client, and a single pg connection cannot multiplex concurrent
+    // queries (see the invariant comment on `TenantTransactionClient`).
+    const family = await tx.family.findUniqueOrThrow({
+      where: { id: familyId },
+      select: { currency: true },
+    })
+    const settingsRow = await tx.zakatSettings.findUnique({
+      where: { familyId },
+    })
     const settings = settingsRow
       ? serializeZakatSettings(settingsRow)
       : DEFAULT_ZAKAT_SETTINGS

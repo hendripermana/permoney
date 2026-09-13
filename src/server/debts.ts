@@ -622,29 +622,30 @@ export async function getPersonDebtsForFamily({
   runInTenantTransaction?: RunInTenantTransaction
 }): Promise<PersonDebtView[]> {
   return await runInTenantTransaction(familyId, userId, async (tx) => {
-    const [persons, accounts] = await Promise.all([
-      tx.merchant.findMany({
-        where: { familyId, kind: "person" },
-        select: { id: true, name: true, color: true },
-        orderBy: { name: "asc" },
-      }),
-      tx.account.findMany({
-        where: {
-          familyId,
-          deletedAt: null,
-          counterpartyMerchantId: { not: null },
-        },
-        select: {
-          id: true,
-          name: true,
-          accountType: true,
-          currency: true,
-          balance: true,
-          counterpartyMerchantId: true,
-        },
-        orderBy: { name: "asc" },
-      }),
-    ])
+    // Sequential — both reads share the one interactive-transaction `tx`
+    // client, and a single pg connection cannot multiplex concurrent
+    // queries (see the invariant comment on `TenantTransactionClient`).
+    const persons = await tx.merchant.findMany({
+      where: { familyId, kind: "person" },
+      select: { id: true, name: true, color: true },
+      orderBy: { name: "asc" },
+    })
+    const accounts = await tx.account.findMany({
+      where: {
+        familyId,
+        deletedAt: null,
+        counterpartyMerchantId: { not: null },
+      },
+      select: {
+        id: true,
+        name: true,
+        accountType: true,
+        currency: true,
+        balance: true,
+        counterpartyMerchantId: true,
+      },
+      orderBy: { name: "asc" },
+    })
 
     const accountsByPerson = new Map<string, typeof accounts>()
     for (const account of accounts) {

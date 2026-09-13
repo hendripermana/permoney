@@ -1310,40 +1310,40 @@ export async function getAccountDeletionImpactForFamily({
   const data = accountIdQuerySchema.parse(rawData)
 
   return await runInTenantTransaction(familyId, userId, async (tx) => {
-    const [transactionCount, valuationCount, holdingCount, transfers] =
-      await Promise.all([
-        tx.transaction.count({
-          where: {
-            familyId,
-            deletedAt: null,
-            OR: [{ accountId: data.id }, { toAccountId: data.id }],
-          },
-        }),
-        tx.valuation.count({
-          where: { familyId, accountId: data.id, deletedAt: null },
-        }),
-        tx.holding.count({
-          where: { familyId, accountId: data.id },
-        }),
-        tx.transfer.findMany({
-          where: {
-            deletedAt: null,
-            OR: [
-              { outflowTransaction: { accountId: data.id, deletedAt: null } },
-              { inflowTransaction: { accountId: data.id, deletedAt: null } },
-              // PER-196 / ADR-0048 §4: a valuation-linked transfer's
-              // tracked-asset side has no Transaction leg at all — only
-              // reachable via the linked Valuation's accountId.
-              { valuation: { accountId: data.id, deletedAt: null } },
-            ],
-          },
-          select: {
-            outflowTransaction: { select: { accountId: true } },
-            inflowTransaction: { select: { accountId: true } },
-            valuation: { select: { accountId: true } },
-          },
-        }),
-      ])
+    // Sequential — all four reads share the one interactive-transaction
+    // `tx` client, and a single pg connection cannot multiplex concurrent
+    // queries (see the invariant comment on `TenantTransactionClient`).
+    const transactionCount = await tx.transaction.count({
+      where: {
+        familyId,
+        deletedAt: null,
+        OR: [{ accountId: data.id }, { toAccountId: data.id }],
+      },
+    })
+    const valuationCount = await tx.valuation.count({
+      where: { familyId, accountId: data.id, deletedAt: null },
+    })
+    const holdingCount = await tx.holding.count({
+      where: { familyId, accountId: data.id },
+    })
+    const transfers = await tx.transfer.findMany({
+      where: {
+        deletedAt: null,
+        OR: [
+          { outflowTransaction: { accountId: data.id, deletedAt: null } },
+          { inflowTransaction: { accountId: data.id, deletedAt: null } },
+          // PER-196 / ADR-0048 §4: a valuation-linked transfer's
+          // tracked-asset side has no Transaction leg at all — only
+          // reachable via the linked Valuation's accountId.
+          { valuation: { accountId: data.id, deletedAt: null } },
+        ],
+      },
+      select: {
+        outflowTransaction: { select: { accountId: true } },
+        inflowTransaction: { select: { accountId: true } },
+        valuation: { select: { accountId: true } },
+      },
+    })
 
     const otherAccountIds = new Set<string>()
     for (const transfer of transfers) {
