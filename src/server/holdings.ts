@@ -974,22 +974,20 @@ export async function getAccountHoldingsForFamily({
           .filter((id): id is string => id !== null)
       ),
     ]
+    // Sequential — every lookup shares the one interactive-transaction `tx`
+    // client, and a single pg connection cannot multiplex concurrent
+    // queries (see the invariant comment on `TenantTransactionClient`).
     const latestAsOfByMarketId = new Map<string, string>()
-    await Promise.all(
-      linkedIds.map(async (marketInstrumentId) => {
-        const latest = await tx.marketQuote.findFirst({
-          where: { marketInstrumentId },
-          orderBy: { asOf: "desc" },
-          select: { asOf: true },
-        })
-        if (latest) {
-          latestAsOfByMarketId.set(
-            marketInstrumentId,
-            latest.asOf.toISOString()
-          )
-        }
+    for (const marketInstrumentId of linkedIds) {
+      const latest = await tx.marketQuote.findFirst({
+        where: { marketInstrumentId },
+        orderBy: { asOf: "desc" },
+        select: { asOf: true },
       })
-    )
+      if (latest) {
+        latestAsOfByMarketId.set(marketInstrumentId, latest.asOf.toISOString())
+      }
+    }
 
     const holdings = rows.map((row) => {
       const serialized = serializeHolding(row)
@@ -1442,16 +1440,17 @@ async function recordTradeWithinTx(
           await loadHoldingWithInstrument(tx, familyId, tradeOut.holdingId)
         )
 
-  const [fundingAfter, investmentAfter] = await Promise.all([
-    tx.account.findUniqueOrThrow({
-      where: { id: fundingAccount.id },
-      select: { balance: true },
-    }),
-    tx.account.findUniqueOrThrow({
-      where: { id: investmentAccount.id },
-      select: { balance: true },
-    }),
-  ])
+  // Sequential — both reads share the one interactive-transaction `tx`
+  // client, and a single pg connection cannot multiplex concurrent queries
+  // (see the invariant comment on `TenantTransactionClient`).
+  const fundingAfter = await tx.account.findUniqueOrThrow({
+    where: { id: fundingAccount.id },
+    select: { balance: true },
+  })
+  const investmentAfter = await tx.account.findUniqueOrThrow({
+    where: { id: investmentAccount.id },
+    select: { balance: true },
+  })
 
   const response: RecordTradeResult = {
     side: data.side,

@@ -204,45 +204,46 @@ export async function getNetWorthSeriesForFamily({
     const { from, to } = resolveDateRange(data, timezone)
     const upperBound = queryUpperBound(to)
 
-    // Four queries total — never one per sample date (ADR-0038 §7).
-    const [accounts, valuations, transactions, snapshots] = await Promise.all([
-      tx.account.findMany({
-        where: { familyId, deletedAt: null },
-        select: {
-          id: true,
-          accountClass: true,
-          balanceSource: true,
-          currency: true,
-        },
-      }),
-      tx.valuation.findMany({
-        where: { familyId, deletedAt: null, valuationDate: { lt: upperBound } },
-        select: {
-          accountId: true,
-          value: true,
-          valuationDate: true,
-          createdAt: true,
-          type: true,
-          // PER-264: the anchor-provenance branch of the shared `afterAnchor`
-          // predicate. Omitting it here would silently make the net-worth
-          // series fall back to `derived` for every anchor and diverge from
-          // `computeCanonicalBalance`.
-          provenance: true,
-        },
-      }),
-      tx.transaction.findMany({
-        where: { familyId, deletedAt: null, date: { lt: upperBound } },
-        select: { accountId: true, amount: true, date: true, createdAt: true },
-      }),
-      tx.fxRateSnapshot.findMany({
-        where: {
-          familyId,
-          toCurrency: baseCurrency,
-          asOfDate: { lt: upperBound },
-        },
-        select: { fromCurrency: true, rateScaled: true, asOfDate: true },
-      }),
-    ])
+    // Four queries total — never one per sample date (ADR-0038 §7). Run
+    // sequentially: they all share the one interactive-transaction `tx`
+    // client, and a single pg connection cannot multiplex concurrent
+    // queries (see the invariant comment on `TenantTransactionClient`).
+    const accounts = await tx.account.findMany({
+      where: { familyId, deletedAt: null },
+      select: {
+        id: true,
+        accountClass: true,
+        balanceSource: true,
+        currency: true,
+      },
+    })
+    const valuations = await tx.valuation.findMany({
+      where: { familyId, deletedAt: null, valuationDate: { lt: upperBound } },
+      select: {
+        accountId: true,
+        value: true,
+        valuationDate: true,
+        createdAt: true,
+        type: true,
+        // PER-264: the anchor-provenance branch of the shared `afterAnchor`
+        // predicate. Omitting it here would silently make the net-worth
+        // series fall back to `derived` for every anchor and diverge from
+        // `computeCanonicalBalance`.
+        provenance: true,
+      },
+    })
+    const transactions = await tx.transaction.findMany({
+      where: { familyId, deletedAt: null, date: { lt: upperBound } },
+      select: { accountId: true, amount: true, date: true, createdAt: true },
+    })
+    const snapshots = await tx.fxRateSnapshot.findMany({
+      where: {
+        familyId,
+        toCurrency: baseCurrency,
+        asOfDate: { lt: upperBound },
+      },
+      select: { fromCurrency: true, rateScaled: true, asOfDate: true },
+    })
 
     const points = buildNetWorthSeries({
       baseCurrency,
