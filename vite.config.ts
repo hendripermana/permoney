@@ -186,6 +186,15 @@ const config = defineConfig({
           // This fallback plugin catches any environment the server plugin doesn't cover.
           // Uses Vite 6 filter/handler API to match devServerPlugin's pattern.
           tanstackHeadScriptsShim,
+          // NITRO PIN (package.json): `nitro` is pinned to an exact
+          // date-stamped beta, deliberately — not an accident of an update.
+          // Commit e896fb2 pinned it away from the floating "latest" tag
+          // ("dependency-hell risk"): nitro only publishes date-versioned
+          // prereleases (registry `latest` is itself a beta), so tracking a tag
+          // would silently move the production runtime. The pinned build is the
+          // one validated here and shipped by the Dockerfile's
+          // `node .output/server/index.mjs`. Do not loosen it to a range or tag
+          // without re-running the Docker build + e2e gate on the target arch.
           nitro(),
           tailwindcss(),
           devtools({ injectSource: { enabled: false } }),
