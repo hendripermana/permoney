@@ -36,15 +36,15 @@ export function GroundTruthAnchorSubtitle({
   const anchorValueLabel = formatCurrency(BigInt(anchor.value), currency)
   const transactionLabel =
     anchor.transactionsAfter === 1
-      ? "1 transaksi tercatat sesudahnya"
-      : `${anchor.transactionsAfter} transaksi tercatat sesudahnya`
+      ? "1 transaction recorded since"
+      : `${anchor.transactionsAfter} transactions recorded since`
 
   return (
     <p
       className="text-xs text-muted-foreground"
       data-testid="ground-truth-anchor-subtitle"
     >
-      Direkonsiliasi {anchorDateLabel} → {anchorValueLabel}, {transactionLabel}
+      Reconciled {anchorDateLabel} → {anchorValueLabel}, {transactionLabel}
     </p>
   )
 }

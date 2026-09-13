@@ -55,6 +55,38 @@ export const ACCOUNT_SUBTYPE_VALUES = [
 export type AccountSubtype = (typeof ACCOUNT_SUBTYPE_VALUES)[number]
 
 /**
+ * Human-facing label for each account subtype, mirroring `ACCOUNT_TYPE_LABEL`
+ * above. Coherence-audit finding (2026-09-13): the account detail page badge
+ * rendered the raw snake_case `accountSubtype` value straight from the
+ * database (e.g. `money_market_fund`) with no humanization, unlike the
+ * `accountType` badge right next to it. `ACCOUNT_SUBTYPE_PATTERN` only
+ * constrains shape, not enumeration, so an older or hand-entered subtype
+ * string not in `ACCOUNT_SUBTYPE_VALUES` can still exist — callers must keep
+ * falling back to the raw value for those, exactly like `ACCOUNT_TYPE_LABEL`'s
+ * own call sites already do.
+ */
+export const ACCOUNT_SUBTYPE_LABEL: Record<AccountSubtype, string> = {
+  cash: "Cash",
+  checking: "Checking",
+  savings: "Savings",
+  payroll: "Payroll",
+  credit_card: "Credit Card",
+  bnpl: "Buy Now, Pay Later",
+  mortgage: "Mortgage",
+  personal_loan: "Personal Loan",
+  payday_loan: "Payday Loan",
+  brokerage: "Brokerage",
+  retirement: "Retirement",
+  crypto_wallet: "Crypto Wallet",
+  receivable: "Receivable",
+  gold: "Gold",
+  silver: "Silver",
+  vehicle: "Vehicle",
+  real_estate: "Real Estate",
+  generic_asset: "Other Asset",
+}
+
+/**
  * Whether an account's balance is driven by transaction flow (cash-like) or by
  * point-in-time valuations (tracked asset). This is the M2.5-4 cash-like vs
  * tracked-asset distinction (PER-75/PER-143). It is derived from `accountType`
