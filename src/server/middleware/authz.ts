@@ -14,13 +14,18 @@ export type Capability =
   | "budget:write"
   | "settings:write"
   | "member:manage"
-  | "member:manage_admin"
   | "ownership:transfer"
   | "audit:read"
 
 // Every role implicitly has read access to its family's data (enforced by being
 // an active member at all). These sets cover the *mutating* / privileged
 // capabilities each role adds on top of read.
+//
+// NOTE (ADR-0036 amendment): the owner/admin boundary for role *assignment* is
+// not encoded as a capability. `member:manage` gates the membership server fns,
+// and `assignableRoles`/`canManageTarget` in family-members.ts assert the
+// target's current role and the role being assigned; `member:manage_admin` was
+// removed here as unreferenced vocabulary.
 const ROLE_CAPABILITIES: Record<FamilyRole, ReadonlySet<Capability>> = {
   owner: new Set<Capability>([
     "ledger:write",
@@ -28,7 +33,6 @@ const ROLE_CAPABILITIES: Record<FamilyRole, ReadonlySet<Capability>> = {
     "budget:write",
     "settings:write",
     "member:manage",
-    "member:manage_admin",
     "ownership:transfer",
     "audit:read",
   ]),

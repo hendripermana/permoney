@@ -102,7 +102,8 @@ describe("family membership & role authorization (PER-144)", () => {
       members.some((m) => m.userId === added.id && m.role === "member")
     ).toBe(true)
 
-    // An admin may NOT assign the admin role (member:manage_admin is owner-only).
+    // An admin may NOT assign the admin role (owner-only; see
+    // assignableRoles/canManageTarget in family-members.ts).
     const adminUser = await factories.createUser({ familyId: null })
     await addMemberForFamily({
       data: {

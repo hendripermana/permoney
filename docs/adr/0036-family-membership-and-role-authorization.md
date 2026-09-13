@@ -1,15 +1,15 @@
 # ADR-0036 — Family membership and role authorization model
 
-|                   |                                                                                                              |
-| ----------------- | ------------------------------------------------------------------------------------------------------------ |
-| **Status**        | Accepted                                                                                                     |
-| **Date**          | 2026-06-20                                                                                                   |
-| **Accepted**      | 2026-06-20                                                                                                   |
-| **Deciders**      | Hendri Permana                                                                                               |
-| **Supersedes**    | PER-98, PER-114 (design)                                                                                     |
-| **Superseded by** | —                                                                                                            |
-| **Amended by**    | ADR-0037 (§2 adds `budget:write`); ADR-0044 §7 (PER-181 — §4 `SplitEntry`/`Transfer` policy shape corrected) |
-| **Amends**        | ADR-0008 §8; ADR-0010 (User actor); ADR-0014 (role split)                                                    |
+|                   |                                                                                                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Status**        | Accepted                                                                                                                                                                                   |
+| **Date**          | 2026-06-20                                                                                                                                                                                 |
+| **Accepted**      | 2026-06-20                                                                                                                                                                                 |
+| **Deciders**      | Hendri Permana                                                                                                                                                                             |
+| **Supersedes**    | PER-98, PER-114 (design)                                                                                                                                                                   |
+| **Superseded by** | —                                                                                                                                                                                          |
+| **Amended by**    | ADR-0037 (§2 adds `budget:write`); ADR-0044 §7 (PER-181 — §4 `SplitEntry`/`Transfer` policy shape corrected); §2 amendment (2026-09-13 — `member:manage_admin` removed as dead vocabulary) |
+| **Amends**        | ADR-0008 §8; ADR-0010 (User actor); ADR-0014 (role split)                                                                                                                                  |
 
 ## Context
 
@@ -388,3 +388,26 @@ tests (PER-86 harness, `docs/testing.md`). New coverage:
   re-add path.
 - **Fold the whole contract into ADR-0008.** Keeps the domain model in one doc
   but buries the security/auth contract; a standalone ADR keeps it discoverable.
+
+## Amendment — `member:manage_admin` removed as dead vocabulary (2026-09-13)
+
+§2 declared the `member:manage_admin` capability as "what encodes" the
+owner-only promote/demote boundary. In the shipped code that token never had a
+gate: `requireCapability("member:manage_admin")` had zero call sites, and
+neither `roleCan` nor the `can()` closure was ever consulted with it, so the
+owner-role grant was vocabulary nothing read.
+
+The boundary itself has always been enforced, just elsewhere: the membership
+server fns are gated by `requireCapability("member:manage")`, and
+`assignableRoles` / `canManageTarget` in `src/server/family-members.ts` assert
+both the actor's assignable role set and the target row's current role — an
+admin can neither touch an `owner`/`admin` row nor promote anyone past
+`member`/`viewer`. The integration test that pins this behaviour
+(`tests/integration/family-membership.integration.ts`, "admin cannot mint an
+admin") passes unchanged.
+
+The capability was therefore removed from the closed vocabulary
+(`src/server/middleware/authz.ts`) rather than kept as a token nothing reads.
+The invariant the §2 table describes is unchanged; only its encoding is now
+stated accurately. Splitting the promote/demote gate into its own capability
+would be a new decision, not a recovery of an existing one.
