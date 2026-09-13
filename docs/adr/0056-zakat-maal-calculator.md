@@ -44,7 +44,7 @@ hard-code):**
   "85 grams" — that is a rounding simplification, not a competing
   scholarly position; 87.48g, per AAOIFI Shari'a Standard No. 35, is the
   precise figure this ADR uses.)
-- A "strong debt" (*dayn qawī* — a loan or trade-goods receivable owed by a
+- A "strong debt" (_dayn qawī_ — a loan or trade-goods receivable owed by a
   solvent, acknowledging debtor) is zakatable annually to the person owed
   the money. A "weak debt" (uncertain/disputed, or owed for services) is
   only zakatable in the year it is actually collected.
