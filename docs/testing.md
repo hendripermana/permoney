@@ -12,7 +12,16 @@ vp run test:unit:coverage    # unit suite plus M2 finance-domain coverage gate
 vp run test:integration      # real Postgres integration suite
 vp run test:e2e              # Playwright browser E2E suite
 vp run test:ci               # CI-safe unit + integration gate
+vp run test:all              # the full CI gate, run locally in one command
 ```
+
+`test:all` chains the same five jobs CI runs — `check`, `test:unit:coverage`,
+`test:integration`, `test:e2e`, and `build` — so a developer can reproduce the
+merge gate before pushing. It is the broadest local command, not the fastest:
+it needs the local Postgres (`vp run db:up`), a Playwright Chromium install
+(`vp exec playwright install chromium`), and the same
+`PERMONEY_TEST_ADMIN_PASSWORD` the integration/E2E suites use. `test:ci` keeps
+its narrower unit+integration scope for tooling that depends on it.
 
 Unit tests must keep importing Vitest utilities from `vite-plus/test`.
 Integration tests use their own config at `vitest.integration.config.ts` and
