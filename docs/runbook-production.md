@@ -51,19 +51,18 @@ for why Postgres is self-hosted here instead of managed.
    `psql -f` continues past errors by default.
 6. The runtime `app` image only ships the traced `.output/` — it does NOT
    contain the Prisma CLI or a full `node_modules`, so migrations/seeding
-   can't run through it. Build the intermediate `build` stage as its own
-   image instead (reuses the exact same layer cache):
+   can't run through it. `docker-compose.prod.yml` defines a `migrate`
+   service for exactly this (CommandCode audit finding #9 — this used to be
+   an ad-hoc `docker build --target build` + hand-typed `docker run`, one
+   skipped step away from shipping an app version against a stale schema;
+   now it's a tracked, versioned Compose service instead). It builds the same
+   Dockerfile's `build` stage (full node_modules + Prisma CLI + migrations),
+   reads `DATABASE_URL` from `PERMONEY_SEED_PRIVILEGED_DATABASE_URL` in
+   `.env` (the `permoney_migrator` role — never `permoney_app`), and is
+   gated behind a `migrate` Compose profile so a bare `up -d` can never start
+   it as a long-running container:
    ```bash
-   docker build --target build -t permoney-prod-migrator:latest .
-   ```
-   Then run migrations through it, on the same Docker network, with
-   `DATABASE_URL` pointed at `permoney_migrator` (never `permoney_app` — the
-   app role must never run migrations):
-   ```bash
-   docker run --rm --network permoney-prod_permoney_prod_net \
-     -e DATABASE_URL="postgres://permoney_migrator:<migrator-password>@postgres:5432/permoney_prod" \
-     permoney-prod-migrator:latest \
-     node node_modules/prisma/build/index.js migrate deploy
+   docker compose -f docker-compose.prod.yml --profile migrate run --rm migrate
    ```
 7. Provision roles, PASS 2 (after migrating): re-run the same
    `provision-postgres-roles.sql` invocation from step 5. This time the
@@ -71,18 +70,13 @@ for why Postgres is self-hosted here instead of managed.
    actually closes that gap. Verify with the script's own trailing
    `SELECT ... FROM pg_roles` output: both roles must show
    `rolsuper = f, rolbypassrls = f`.
-8. Seed system data only, using the same migrator image (note: it's
-   `./node_modules/.bin/tsx`, run directly so its own shebang invokes node —
-   `node node_modules/.bin/tsx ...` fails with a syntax error, since that file
-   is a shell shim, not a JS entrypoint):
+8. Seed system data only, via the same pattern's `seed` service (never
+   `prisma db seed` — that also creates a demo tenant, see
+   `prisma/seed-production.ts`'s header comment; this service's `command`
+   invokes `seed-production.ts` directly):
    ```bash
-   docker run --rm --network permoney-prod_permoney_prod_net \
-     -e DATABASE_URL="..." -e PERMONEY_SEED_PRIVILEGED_DATABASE_URL="postgres://permoney_migrator:<migrator-password>@postgres:5432/permoney_prod" \
-     permoney-prod-migrator:latest \
-     ./node_modules/.bin/tsx prisma/seed-production.ts
+   docker compose -f docker-compose.prod.yml --profile seed run --rm seed
    ```
-   This must NEVER be `prisma db seed` (that also creates a demo tenant — see
-   `prisma/seed-production.ts`'s header comment).
 9. `docker compose -f docker-compose.prod.yml up -d app`.
 10. Confirm the existing Caddy block for `permana.icu` (already present,
     proxying to `127.0.0.1:3005`) now gets a real response instead of 502:
@@ -94,15 +88,19 @@ for why Postgres is self-hosted here instead of managed.
 ```bash
 cd /home/ubuntu/permoney-prod
 git fetch origin && git checkout main && git pull
-docker compose -f docker-compose.prod.yml build app
-docker build --target build -t permoney-prod-migrator:latest .
-docker run --rm --network permoney-prod_permoney_prod_net \
-  -e DATABASE_URL="postgres://permoney_migrator:<migrator-password>@postgres:5432/permoney_prod" \
-  permoney-prod-migrator:latest \
-  node node_modules/prisma/build/index.js migrate deploy
+docker compose -f docker-compose.prod.yml build app migrate
+docker compose -f docker-compose.prod.yml --profile migrate run --rm migrate
 docker compose -f docker-compose.prod.yml up -d app
 curl -s http://127.0.0.1:3005/api/health   # expect {"status":"ok"}
 ```
+
+The `migrate` service (CommandCode audit finding #9) replaces the old
+hand-typed `docker build --target build -t permoney-prod-migrator:latest .`
++ `docker run` two-liner with a tracked Compose service — same underlying
+mechanism (the runtime `app` image has no Prisma CLI, so migrations run
+through the `build` stage instead), but no longer reconstructed from memory
+on every release. It exits 0 immediately when there is nothing to migrate,
+so running it on every deploy — migration-bearing or not — is always safe.
 
 If the new release adds a migration that creates a new audit/immutable-ledger
 table, re-run `deploy/provision-postgres-roles.sql` afterward (pass 2 style)

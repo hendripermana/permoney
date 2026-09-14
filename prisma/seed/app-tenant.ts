@@ -29,9 +29,32 @@ function resolveDatabaseUrl(explicit?: string): string {
   return url
 }
 
+// This phase upserts a hardcoded demo password onto a fixed, well-known email
+// (DEMO_USER_EMAIL). Unlike `seed-production.ts` (system categories only, safe
+// to run on a live database), running THIS against production would silently
+// overwrite a real owner's credential with "password123" — an instant account
+// takeover. NODE_ENV=production is the standing convention this repo already
+// uses to distinguish environments (see auth.server.ts, db.server.ts); refuse
+// by default and require an explicit, deliberate opt-in to override it.
+function assertNotProduction(): void {
+  if (
+    process.env.NODE_ENV === "production" &&
+    process.env.PERMONEY_ALLOW_DEMO_SEED !== "true"
+  ) {
+    throw new Error(
+      "🚨 REFUSING to run the demo-tenant seed with NODE_ENV=production. " +
+        `It would overwrite ${DEMO_USER_EMAIL}'s password with a hardcoded ` +
+        "demo value. Use `prisma/seed-production.ts` (system data only) for " +
+        "production. If this is genuinely intentional, set " +
+        "PERMONEY_ALLOW_DEMO_SEED=true explicitly."
+    )
+  }
+}
+
 export async function seedAppTenant(
   options: SeedAppTenantOptions = {}
 ): Promise<{ familyId: string }> {
+  assertNotProduction()
   const adapter = new PrismaPg({
     connectionString: resolveDatabaseUrl(options.databaseUrl),
   })
