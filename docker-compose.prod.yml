@@ -84,6 +84,67 @@ services:
     networks:
       - permoney_prod_net
 
+  # CommandCode audit finding #9 — the `app` runtime image ships ONLY the
+  # traced `.output/` (see the Dockerfile's header note: no repo source, no
+  # Prisma CLI, no migrations folder), so `prisma migrate deploy` can never
+  # run through it. Before this service existed, every release with a
+  # migration required hand-typing `docker build --target build -t
+  # permoney-prod-migrator:latest .` plus a `docker run` with the migrator
+  # DATABASE_URL pasted into an `-e` flag — a manual ritual with no tracked
+  # definition, one skipped/mistyped step away from shipping an app version
+  # against a stale schema. This service builds the SAME Dockerfile's `build`
+  # stage (full node_modules + Prisma CLI + migrations/, discarded by the
+  # final `app` image) as a normal, versioned Compose service instead.
+  #
+  # `restart: "no"` + a dedicated `migrate` profile: it must NEVER be a
+  # long-running container, and a bare `docker compose up -d` (no service
+  # name) must never start it — invoke it explicitly:
+  #   docker compose -f docker-compose.prod.yml --profile migrate run --rm migrate
+  # Exits 0 with nothing to do when there are no pending migrations, so it is
+  # safe to run on every deploy, migration or not.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: build
+    container_name: permoney_prod_migrate
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # The MIGRATOR role, never `permoney_app` (DATABASE_URL above) — the
+      # app role must never run schema migrations. See
+      # docs/runbook-production.md's role-provisioning step.
+      DATABASE_URL: ${PERMONEY_SEED_PRIVILEGED_DATABASE_URL:?PERMONEY_SEED_PRIVILEGED_DATABASE_URL is required to run migrations — the migrator role connection string, never permoney_app}
+    command: ["node", "node_modules/prisma/build/index.js", "migrate", "deploy"]
+    networks:
+      - permoney_prod_net
+    profiles:
+      - migrate
+
+  # Same rationale as `migrate` above, for `prisma/seed-production.ts`
+  # (system categories only — see that file's header comment for why it must
+  # never be `prisma db seed`, which also creates a demo tenant). Idempotent,
+  # safe to re-run after a migration adds new system categories.
+  seed:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: build
+    container_name: permoney_prod_seed
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${PERMONEY_SEED_PRIVILEGED_DATABASE_URL:?PERMONEY_SEED_PRIVILEGED_DATABASE_URL is required to seed system data}
+    command: ["./node_modules/.bin/tsx", "prisma/seed-production.ts"]
+    networks:
+      - permoney_prod_net
+    profiles:
+      - seed
+
 networks:
   permoney_prod_net:
     driver: bridge
