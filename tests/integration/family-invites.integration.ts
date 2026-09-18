@@ -164,8 +164,8 @@ describe("family invitation by email (ADR-0057)", () => {
     )
 
     for (const other of [withoutAccount.created, inOtherFamily.created]) {
-      expect(Object.keys(other).sort()).toEqual(
-        Object.keys(withAccount.created).sort()
+      expect(Object.keys(other).sort((a, b) => a.localeCompare(b))).toEqual(
+        Object.keys(withAccount.created).sort((a, b) => a.localeCompare(b))
       )
       expect(other.role).toBe(withAccount.created.role)
       expect(other.status).toBe(withAccount.created.status)
