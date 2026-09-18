@@ -43,8 +43,28 @@ export const signupFn = createServerFn({ method: "POST" })
       },
       headers: request.headers,
     })
+
+    // ADR-0057: a valid invite for THIS email puts the new account straight
+    // into the inviting family (skipping "create your own family" onboarding).
+    // The core re-reads the new user's email from the DB and requires it to
+    // equal the invite's; any mismatch/stale/expired token is ignored and the
+    // signup proceeds normally. Never blocks account creation.
+    let inviteApplied = false
+    if (data.inviteToken && res?.user?.id) {
+      const [{ prisma }, { applyInviteAfterSignup }] = await Promise.all([
+        import("./db.server"),
+        import("./family-invites"),
+      ])
+      inviteApplied = await applyInviteAfterSignup(prisma, {
+        userId: res.user.id,
+        rawToken: data.inviteToken,
+      })
+    }
+
     return {
-      redirectTo: "/onboarding" as const,
+      redirectTo: inviteApplied
+        ? ("/dashboard" as const)
+        : ("/onboarding" as const),
       success: true,
       user: res?.user,
     }

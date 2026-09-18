@@ -10,9 +10,10 @@ import {
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { useServerFn } from "@tanstack/react-start"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { signupFn } from "@/server/auth-fns"
-import { Link, useRouter } from "@tanstack/react-router"
+import { getInviteByTokenFn } from "@/server/family-invites"
+import { Link, useRouter, useSearch } from "@tanstack/react-router"
 
 export function SignUpForm({
   className,
@@ -21,6 +22,21 @@ export function SignUpForm({
   const router = useRouter()
   const queryClient = useQueryClient()
   const signup = useServerFn(signupFn)
+  // ADR-0057: when the user arrives through a family-invite link, the email is
+  // prefilled from the invite and locked; the token rides along to signupFn.
+  const { inviteToken } = useSearch({ strict: false })
+  const inviteQuery = useQuery({
+    queryKey: ["family-invite", inviteToken],
+    enabled: Boolean(inviteToken),
+    retry: false,
+    refetchOnWindowFocus: false,
+    queryFn: async () =>
+      await getInviteByTokenFn({ data: { token: inviteToken ?? "" } }),
+  })
+  const invitedEmail =
+    inviteQuery.data?.invite.status === "valid"
+      ? inviteQuery.data.invite.email
+      : null
 
   const mutation = useMutation({
     mutationFn: async (formData: FormData) => {
@@ -28,7 +44,17 @@ export function SignUpForm({
       const username = formData.get("username") as string
       const email = formData.get("email") as string
       const password = formData.get("password") as string
-      return signup({ data: { fullname, username, email, password } })
+      return signup({
+        data: {
+          fullname,
+          username,
+          email,
+          password,
+          // Only send the token when the invite is valid and the email is the
+          // invited one; otherwise this is a normal signup.
+          inviteToken: invitedEmail ? inviteToken : undefined,
+        },
+      })
     },
     onSuccess: async (result) => {
       await Promise.all([queryClient.invalidateQueries(), router.invalidate()])
@@ -82,13 +108,24 @@ export function SignUpForm({
               <Field>
                 <FieldLabel htmlFor="email">Email</FieldLabel>
                 <Input
+                  // Remount when the invited email resolves so the locked
+                  // value is applied to an uncontrolled input.
+                  key={invitedEmail ?? "free-email"}
                   id="email"
                   name="email"
                   type="email"
                   autoComplete="email"
                   placeholder="name@example.com"
+                  defaultValue={invitedEmail ?? undefined}
+                  readOnly={invitedEmail !== null}
                   required
                 />
+                {invitedEmail ? (
+                  <FieldDescription>
+                    This invitation was sent to this address, so it can&apos;t
+                    be changed.
+                  </FieldDescription>
+                ) : null}
               </Field>
               <Field>
                 <FieldLabel htmlFor="password">Password</FieldLabel>
