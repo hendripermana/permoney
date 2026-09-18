@@ -96,11 +96,12 @@ curl -s http://127.0.0.1:3005/api/health   # expect {"status":"ok"}
 
 The `migrate` service (CommandCode audit finding #9) replaces the old
 hand-typed `docker build --target build -t permoney-prod-migrator:latest .`
-+ `docker run` two-liner with a tracked Compose service — same underlying
-mechanism (the runtime `app` image has no Prisma CLI, so migrations run
-through the `build` stage instead), but no longer reconstructed from memory
-on every release. It exits 0 immediately when there is nothing to migrate,
-so running it on every deploy — migration-bearing or not — is always safe.
+
+- `docker run` two-liner with a tracked Compose service — same underlying
+  mechanism (the runtime `app` image has no Prisma CLI, so migrations run
+  through the `build` stage instead), but no longer reconstructed from memory
+  on every release. It exits 0 immediately when there is nothing to migrate,
+  so running it on every deploy — migration-bearing or not — is always safe.
 
 If the new release adds a migration that creates a new audit/immutable-ledger
 table, re-run `deploy/provision-postgres-roles.sql` afterward (pass 2 style)
