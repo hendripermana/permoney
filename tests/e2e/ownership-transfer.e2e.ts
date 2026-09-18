@@ -4,6 +4,7 @@ import {
   signUpWithoutOnboarding,
   waitForHydration,
 } from "./support/onboarding"
+import { seedFamilyInvite } from "./support/seed-invite"
 import { createServerFunctionMatcher } from "./support/server-fn-recorder"
 
 // PER-271 — transferOwnershipFn (ADR-0036 §6) was fully implemented server
@@ -33,18 +34,28 @@ test.describe("ownership transfer (PER-271)", () => {
 
     // Sign the heir up in a SEPARATE browser context — signing up on the
     // owner's own `page` would replace the owner's session with the new
-    // account's. The heir's own page is not needed again after this: the
-    // owner performs every remaining action (add member, confirm transfer)
-    // from their own, untouched `page`.
+    // account's. The heir's page stays open: the heir accepts an invite from
+    // it below, exactly as a real invitee would.
     const heirContext = await browser.newContext()
-    const heir = await signUpWithoutOnboarding(await heirContext.newPage())
+    const heirPage = await heirContext.newPage()
+    const heir = await signUpWithoutOnboarding(heirPage)
+
+    // ADR-0057: the only way into a family is an accepted email invite. The
+    // emailed token is unreadable from here, so seed the invite row directly
+    // and drive the real accept UI with it.
+    const token = await seedFamilyInvite({
+      inviterEmail: owner.email,
+      inviteeEmail: heir.email,
+    })
+    await heirPage.goto(`/invite/accept?token=${token}`)
+    await waitForHydration(heirPage)
+    await heirPage.getByRole("button", { name: "Accept invitation" }).click()
+    await expect(heirPage).toHaveURL(/\/dashboard(?:\?.*)?$/)
     await heirContext.close()
 
-    // Add the second identity as a plain member of the owner's family.
+    // The heir now appears in the owner's member list.
     await page.goto("/settings/members")
     await waitForHydration(page)
-    await page.getByLabel("Email").fill(heir.email)
-    await page.getByRole("button", { name: "Add member" }).click()
     await expect(page.getByRole("table").getByText(heir.email)).toBeVisible()
 
     // Owner-only action is visible.
@@ -87,14 +98,23 @@ test.describe("ownership transfer (PER-271)", () => {
     const attackerPage = await attackerContext.newPage()
     const attacker = await signUpWithoutOnboarding(attackerPage)
 
-    // Owner adds the attacker as an admin — a fairly privileged non-owner
-    // role, to prove even `member:manage` doesn't imply `ownership:transfer`.
+    // The attacker joins as an admin (via a seeded invite they accept in
+    // their own session) — a fairly privileged non-owner role, to prove even
+    // `member:manage` doesn't imply `ownership:transfer`.
+    const token = await seedFamilyInvite({
+      inviterEmail: owner.email,
+      inviteeEmail: attacker.email,
+      role: "admin",
+    })
+    await attackerPage.goto(`/invite/accept?token=${token}`)
+    await waitForHydration(attackerPage)
+    await attackerPage
+      .getByRole("button", { name: "Accept invitation" })
+      .click()
+    await expect(attackerPage).toHaveURL(/\/dashboard(?:\?.*)?$/)
+
     await page.goto("/settings/members")
     await waitForHydration(page)
-    await page.getByLabel("Email").fill(attacker.email)
-    await page.getByRole("combobox", { name: "Role" }).click()
-    await page.getByRole("option", { name: "admin", exact: true }).click()
-    await page.getByRole("button", { name: "Add member" }).click()
     await expect(
       page.getByRole("table").getByText(attacker.email)
     ).toBeVisible()
