@@ -83,3 +83,73 @@ describe("fallbackMap sweep", () => {
     expect(mod.fallbackMap.size).toBe(1)
   })
 })
+
+// ADR-0057 — the two invite tiers, plus proof the pre-existing tiers keep
+// their exact identifier/limit behavior.
+describe("invite rate-limit tiers (ADR-0057)", () => {
+  const requestFrom = (ip: string) =>
+    new Request("http://localhost", { headers: { "cf-connecting-ip": ip } })
+
+  async function freshLocalModule() {
+    process.env.NODE_ENV = "test"
+    delete process.env.UPSTASH_REDIS_REST_URL
+    delete process.env.UPSTASH_REDIS_REST_TOKEN
+    return await freshRateLimitModule()
+  }
+
+  test("invite: 10 per window per inviting user, 11th rejected; other users unaffected", async () => {
+    const mod = await freshLocalModule()
+    for (let index = 0; index < 10; index += 1) {
+      await mod.checkRateLimit(requestFrom("9.9.9.9"), "user-a", "invite")
+    }
+    await expect(
+      mod.checkRateLimit(requestFrom("9.9.9.9"), "user-a", "invite")
+    ).rejects.toBeInstanceOf(mod.RateLimitError)
+    // Keyed by user, not IP: the same user from a NEW IP is still limited...
+    await expect(
+      mod.checkRateLimit(requestFrom("8.8.8.8"), "user-a", "invite")
+    ).rejects.toBeInstanceOf(mod.RateLimitError)
+    // ...and a different user from the original IP is not.
+    await mod.checkRateLimit(requestFrom("9.9.9.9"), "user-b", "invite")
+  })
+
+  test("invite requires the inviting user id", async () => {
+    const mod = await freshLocalModule()
+    await expect(
+      mod.checkRateLimit(requestFrom("9.9.9.9"), undefined, "invite")
+    ).rejects.toThrow(/inviting user id/)
+  })
+
+  test("invite_lookup: 30 per window per client IP, 31st rejected", async () => {
+    const mod = await freshLocalModule()
+    for (let index = 0; index < 30; index += 1) {
+      await mod.checkRateLimit(
+        requestFrom("7.7.7.7"),
+        undefined,
+        "invite_lookup"
+      )
+    }
+    await expect(
+      mod.checkRateLimit(requestFrom("7.7.7.7"), undefined, "invite_lookup")
+    ).rejects.toBeInstanceOf(mod.RateLimitError)
+    await mod.checkRateLimit(requestFrom("6.6.6.6"), undefined, "invite_lookup")
+  })
+
+  test("login/signup keep their limits and ip:key identifiers", async () => {
+    const mod = await freshLocalModule()
+    for (let index = 0; index < 5; index += 1) {
+      await mod.checkRateLimit(requestFrom("5.5.5.5"), "a@b.c", "login")
+    }
+    await expect(
+      mod.checkRateLimit(requestFrom("5.5.5.5"), "a@b.c", "login")
+    ).rejects.toBeInstanceOf(mod.RateLimitError)
+    expect(mod.fallbackMap.has("rl:login:5.5.5.5:a@b.c")).toBe(true)
+
+    for (let index = 0; index < 3; index += 1) {
+      await mod.checkRateLimit(requestFrom("4.4.4.4"), "x@y.z", "signup")
+    }
+    await expect(
+      mod.checkRateLimit(requestFrom("4.4.4.4"), "x@y.z", "signup")
+    ).rejects.toBeInstanceOf(mod.RateLimitError)
+  })
+})

@@ -31,6 +31,9 @@ const RESET_TABLES = [
   "Session",
   "AuthAccount",
   "Verification",
+  // ADR-0057: non-RLS, FK-linked to Family + User (so CASCADE would reach it
+  // anyway) — listed explicitly so a reset never depends on that.
+  "FamilyInvite",
   "User",
   "Family",
 ] as const
