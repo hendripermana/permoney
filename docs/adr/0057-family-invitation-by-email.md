@@ -1,20 +1,20 @@
 # ADR-0057 — Family invitation by email
 
-|                   |                                                                |
-| ----------------- | -------------------------------------------------------------- |
-| **Status**        | Accepted                                                        |
-| **Date**          | 2026-09-14                                                      |
-| **Accepted**      | 2026-09-14                                                      |
-| **Deciders**      | Hendri Permana                                                  |
-| **Supersedes**    | —                                                                |
-| **Superseded by** | —                                                                |
+|                   |                                                                          |
+| ----------------- | ------------------------------------------------------------------------ |
+| **Status**        | Accepted                                                                 |
+| **Date**          | 2026-09-14                                                               |
+| **Accepted**      | 2026-09-14                                                               |
+| **Deciders**      | Hendri Permana                                                           |
+| **Supersedes**    | —                                                                        |
+| **Superseded by** | —                                                                        |
 | **Amends**        | ADR-0036 §3 (`FamilyMember.status='invited'` reserved slot, never built) |
 
 ## Context
 
 `addMemberForFamily` (`src/server/family-members.ts`) is the only way to add a family member today, and it has two real problems surfaced by a whole-repo coherence audit (CommandCode, 2026-09-13, finding #11):
 
-1. **Email-existence oracle.** The target user must already have a Permoney account (`MemberNotFoundError` if not) — any caller with `member:manage` capability (an owner/admin of *some* family) can probe arbitrary emails and learn from the response whether that email has a Permoney account at all.
+1. **Email-existence oracle.** The target user must already have a Permoney account (`MemberNotFoundError` if not) — any caller with `member:manage` capability (an owner/admin of _some_ family) can probe arbitrary emails and learn from the response whether that email has a Permoney account at all.
 2. **Non-consensual auto-join.** If the target user exists but has no active family yet (`User.familyId IS NULL` — freshly signed up, mid-onboarding, or just revoked from another family per the PR #350 fix), inviting them makes them an active member of the inviter's family immediately, with no acceptance step.
 
 ADR-0036 already reserved `FamilyMember.status = 'invited'` for "the future invitation flow" but never built it, and its schema can't actually hold a pending invite for an email with no `User` row yet — `FamilyMember.userId` is a required FK. That gap is why `addMemberForFamily` fell back to "target must already exist" in the first place.
@@ -51,8 +51,9 @@ model FamilyInvite {
 
 **Why a new table, not reusing `FamilyMember.status='invited'` as ADR-0036 originally sketched:** `FamilyMember.userId` is required — there is no row to create until a `User` exists. `FamilyInvite` deliberately holds only `email` (no `userId`), so it can represent "someone we invited who may not have signed up yet" — the exact case ADR-0036 didn't have a schema for.
 
-**Why NOT RLS-scoped:** the accept-flow's core lookup — "does this raw token from the URL correspond to a live invite?" — runs before the visitor is a member of the target family (that's the entire point of an invite). A `scopedTenantTransaction` can't apply here because there's no membership yet to derive `app.family_id` from. This mirrors the codebase's own existing precedent: `Family` and `User` are *also* not RLS-protected (see `prisma/seed/app-tenant.ts`'s comment: "Family is not RLS-protected (auth-gated)"). Access control for `FamilyInvite` is enforced in application code instead:
-- The **token-lookup path** (`getInviteByTokenFn`, `acceptFamilyInviteFn`) is a bearer-capability model: possessing the unguessable 256-bit token *is* the authorization to read that one row, the same trust model as a password-reset link or an email-verification link. `tokenHash` is a SHA-256 digest of 32 cryptographically random bytes (`node:crypto.randomBytes(32).toString("base64url")`) — the raw token is embedded in the email link and never stored; only its hash is persisted, so a database leak alone can't be used to accept invitations.
+**Why NOT RLS-scoped:** the accept-flow's core lookup — "does this raw token from the URL correspond to a live invite?" — runs before the visitor is a member of the target family (that's the entire point of an invite). A `scopedTenantTransaction` can't apply here because there's no membership yet to derive `app.family_id` from. This mirrors the codebase's own existing precedent: `Family` and `User` are _also_ not RLS-protected (see `prisma/seed/app-tenant.ts`'s comment: "Family is not RLS-protected (auth-gated)"). Access control for `FamilyInvite` is enforced in application code instead:
+
+- The **token-lookup path** (`getInviteByTokenFn`, `acceptFamilyInviteFn`) is a bearer-capability model: possessing the unguessable 256-bit token _is_ the authorization to read that one row, the same trust model as a password-reset link or an email-verification link. `tokenHash` is a SHA-256 digest of 32 cryptographically random bytes (`node:crypto.randomBytes(32).toString("base64url")`) — the raw token is embedded in the email link and never stored; only its hash is persisted, so a database leak alone can't be used to accept invitations.
 - The **management path** (list/revoke/resend pending invites) is gated by `requireCapability("member:manage")` plus an explicit `WHERE familyId = context.familyId` in every query, matching how `Family`/`User` reads are already scoped by hand elsewhere in this codebase.
 
 ### Flow
@@ -105,6 +106,7 @@ No email-sending capability exists anywhere in this codebase today. Resend is th
 ### Signup integration
 
 `signupFn` (`src/server/auth-fns.ts`) gains an optional `inviteToken` input. When present and valid for the signed-up email:
+
 - Skip the normal `redirectTo: "/onboarding"` response.
 - In the same database transaction as the invite-accept logic (mirroring `initializeOnboardingForUser`'s shape in `onboarding-service.ts`: lock the row, set the tenant GUC to the invite's family, create the `FamilyMember` row, set `User.familyId`, mark `FamilyInvite.acceptedAt`, write `AuditLog`), then redirect straight to the dashboard.
 - If the token turns out invalid/expired/already-accepted at the moment of signup (a race — someone could sign up separately before finishing the invite flow), signup still succeeds as a normal account creation; the invite silently doesn't apply, and the user lands on normal onboarding. Never block account creation on a stale invite token.
