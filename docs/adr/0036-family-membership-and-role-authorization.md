@@ -95,16 +95,16 @@ column merely selects the active one).
 Four roles. Capabilities are a closed vocabulary; `ROLE_CAPABILITIES` is a
 static map derived from this table (the single source of truth in code).
 
-| Capability                                                   | owner | admin | member | viewer |
-| ------------------------------------------------------------ | :---: | :---: | :----: | :----: |
-| `*:read` (ledger, accounts, reports, members)                |  ✅   |  ✅   |   ✅   |   ✅   |
-| `ledger:write` (txn create/update/delete, bulk, import)      |  ✅   |  ✅   |   ✅   |   ❌   |
-| `account:write` (create/update/archive)                      |  ✅   |  ✅   |   ✅   |   ❌   |
-| `settings:write` (family currency\*, timezone, name)         |  ✅   |  ✅   |   ❌   |   ❌   |
-| `member:manage` (invite/add, remove, set member/viewer role) |  ✅   |  ✅¹  |   ❌   |   ❌   |
-| `member:manage_admin` (promote/demote admin & owner)         |  ✅   |  ❌   |   ❌   |   ❌   |
-| `ownership:transfer` / family delete                         |  ✅   |  ❌   |   ❌   |   ❌   |
-| `audit:read` (view audit log)                                |  ✅   |  ✅   |   ❌   |   ❌   |
+| Capability                                                 | owner | admin | member | viewer |
+| ---------------------------------------------------------- | :---: | :---: | :----: | :----: |
+| `*:read` (ledger, accounts, reports, members)              |  ✅   |  ✅   |   ✅   |   ✅   |
+| `ledger:write` (txn create/update/delete, bulk, import)    |  ✅   |  ✅   |   ✅   |   ❌   |
+| `account:write` (create/update/archive)                    |  ✅   |  ✅   |   ✅   |   ❌   |
+| `settings:write` (family currency\*, timezone, name)       |  ✅   |  ✅   |   ❌   |   ❌   |
+| `member:manage` (invite, remove, set member/viewer role)   |  ✅   |  ✅¹  |   ❌   |   ❌   |
+| `member:manage_admin` (promote/demote admin & owner)       |  ✅   |  ❌   |   ❌   |   ❌   |
+| `ownership:transfer` / family delete                       |  ✅   |  ❌   |   ❌   |   ❌   |
+| `audit:read` (view audit log)                              |  ✅   |  ✅   |   ❌   |   ❌   |
 
 \* Base reporting currency is immutable after onboarding (ADR-0035); `settings:write`
 covers the still-mutable family settings.
@@ -245,11 +245,18 @@ FROM "Transaction" WHERE "familyId" = ...)`. That shape is a
 `status ∈ {active, invited, revoked}` (DB CHECK), with `invitedAt / joinedAt /
 revokedAt` timestamps.
 
-- **Add** (`member:manage`): look up an existing `User` by email within the
-  tenant transaction; create/reactivate the `FamilyMember` row as
-  `status='active'`, `joinedAt=now`. There is **no email/acceptance round-trip
-  in this slice** — `invited` is a reserved status for the future invitation
-  flow (PER-98 follow-up). Adding a non-existent email is a validation error.
+- **Add**: the original immediate "add by email" path (`addMemberForFamily` /
+  `addMemberFn`) has been **superseded by ADR-0057** — it had two security
+  flaws: an **email-existence oracle** (requiring the target to already have an
+  account revealed whether an arbitrary email was registered) and
+  **non-consensual auto-join** (an existing account with no family was made a
+  member instantly with no acceptance step). New members now join via the
+  **email-invitation flow** (ADR-0057): an owner/admin invites an email,
+  Permoney emails a link with an unguessable token, and the invitee explicitly
+  accepts by either signing in (existing account) or signing up through the
+  link (new account). Nobody joins a family without accepting. The `invited`
+  status reserved in this ADR's original version is now used by `FamilyInvite`
+  rows before acceptance, not `FamilyMember`.
 - **Remove** (`member:manage`): soft-revoke — set `status='revoked'`,
   `revokedAt=now`. The row and its timeline are kept; the RLS guard
   (`status='active'`) and `familyMiddleware` reject the revoked user
@@ -276,9 +283,12 @@ owner — unacceptable for money infrastructure. Plain promotion (owner-only,
 
 ### 7. Membership module, idempotency, and audit
 
-A new deep module `src/server/family-members.ts` exposes
+The membership module `src/server/family-members.ts` originally exposed
 `addMemberFn / updateMemberRoleFn / removeMemberFn / transferOwnershipFn`
-(mutations) and `getMembersFn` (read). Each mutation:
+(mutations) and `getMembersFn` (read). **`addMemberFn` has been removed** and
+replaced by the invitation system in `src/server/family-invites.ts`
+(ADR-0057). The remaining membership mutations (`updateMemberRoleFn`,
+`removeMemberFn`, `transferOwnershipFn`) each:
 
 - runs in one `RunInTenantTransaction(familyId, userId, …)`;
 - **validates tenant-owned references** (the target `User`/`FamilyMember`
@@ -329,7 +339,9 @@ slice small (no `preload()` / `ssr:false` ceremony).
 ### Positive
 
 - Multi-user families are real and durable; per-account sharing, invitations,
-  and advisors can layer on without re-architecting tenancy.
+  and advisors can layer on without re-architecting tenancy. The email
+  invitation flow envisioned as "future work" in the original version of this
+  ADR has been fully implemented (ADR-0057).
 - Membership drives access at **both** the app layer (capability) and the DB
   layer (RLS membership guard) — defense in depth.
 - The acting user is already distinct from the tenant in `AuditLog`; membership
