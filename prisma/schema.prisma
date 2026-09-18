@@ -64,6 +64,8 @@ model Family {
   // ADR-0056 — Zakat Maal calculator.
   zakatSettings ZakatSettings?
   zakatPayers   ZakatPayer[]
+  // ADR-0057 — Family invitation by email.
+  invites       FamilyInvite[]
 }
 
 // ADR-0036: first-class family membership + role authorization.
@@ -103,6 +105,44 @@ model FamilyMember {
   @@index([userId])
 }
 
+// ADR-0057 — Family invitation by email.
+//
+// Holds a pending (or resolved) invite for an EMAIL, not a User — the exact
+// case `FamilyMember` cannot represent, since `FamilyMember.userId` is a
+// required FK and there is no row to create until a `User` exists. Deliberately
+// NOT RLS-scoped, matching the `Family`/`User` precedent (see
+// prisma/seed/app-tenant.ts): the accept-flow's core lookup ("does this raw
+// token from the URL correspond to a live invite?") runs before the visitor is
+// a member of the target family, so there is no membership yet to derive
+// app.family_id from. Access control is enforced in application code instead —
+// a bearer-capability model (possessing the unguessable token authorizes
+// reading that one row) for the token-lookup/accept path, and
+// requireCapability("member:manage") + an explicit `WHERE familyId` for the
+// management (list/revoke/resend) path. See migration 20260914120000_family_invite
+// for the SQL contract.
+model FamilyInvite {
+  id          String    @id @default(cuid())
+  familyId    String
+  email       String // normalized: trim + lowercase
+  role        String    @default("member") // 'owner' | 'admin' | 'member' | 'viewer' (DB CHECK, same domain as FamilyMember.role)
+  tokenHash   String    @unique // sha256(rawToken), hex — the raw token is NEVER persisted
+  invitedById String
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  family    Family @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  invitedBy User   @relation("FamilyInviteInvitedBy", fields: [invitedById], references: [id], onDelete: Cascade)
+
+  // A PARTIAL UNIQUE (familyId, email) WHERE acceptedAt IS NULL AND revokedAt IS
+  // NULL ("at most one live invite per family+email") is created in raw SQL
+  // (migration `family_invite`) — Prisma cannot express the predicate.
+  @@index([familyId, email])
+  @@index([email])
+}
+
 model User {
   id              String    @id @default(cuid())
   email           String    @unique
@@ -117,6 +157,10 @@ model User {
   family        Family?       @relation(fields: [familyId], references: [id])
   memberships   FamilyMember[] @relation("FamilyMembership")
   invitedMembers FamilyMember[] @relation("FamilyMemberInvitedBy")
+  // ADR-0057 — invites this user has SENT (as an owner/admin), not received
+  // (received invites are looked up by email, not a FK — the invitee may not
+  // have a User row yet).
+  sentFamilyInvites FamilyInvite[] @relation("FamilyInviteInvitedBy")
   transactions  Transaction[]
   // PER-83 Slice 1 — reverse relation for `Transaction.reconciledById`.
   reconciledTransactions Transaction[] @relation("TransactionReconciledBy")
