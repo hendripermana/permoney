@@ -29,7 +29,6 @@ import { isUniqueConstraintError, uuidV7Schema } from "./mutation-kit"
 // higher-privileged row. The DB last-owner trigger is the final backstop.
 // =============================================================================
 
-const ADD_MEMBER_ENDPOINT = "addMemberFn"
 const UPDATE_MEMBER_ROLE_ENDPOINT = "updateMemberRoleFn"
 const REMOVE_MEMBER_ENDPOINT = "removeMemberFn"
 const TRANSFER_OWNERSHIP_ENDPOINT = "transferOwnershipFn"
@@ -94,7 +93,10 @@ function canManageTarget(
   return false
 }
 
-function assertCanAssignRole(actorRole: FamilyRole, role: FamilyRole): void {
+export function assertCanAssignRole(
+  actorRole: FamilyRole,
+  role: FamilyRole
+): void {
   if (!assignableRoles(actorRole).has(role)) {
     throw new MembershipForbiddenError(
       `Role ${actorRole} may not assign the role ${role}`
@@ -102,7 +104,7 @@ function assertCanAssignRole(actorRole: FamilyRole, role: FamilyRole): void {
   }
 }
 
-function assertCanManageTarget(
+export function assertCanManageTarget(
   actorRole: FamilyRole,
   targetRole: FamilyRole
 ): void {
@@ -198,157 +200,18 @@ export const getMembersFn = createServerFn({ method: "GET" })
   })
 
 // ===========================================================================
-// ADD MEMBER
+// ADD MEMBER — removed (ADR-0057)
+//
+// The direct "add an existing account by email" path (addMemberForFamily /
+// addMemberFn) was an email-existence oracle and auto-joined users without
+// consent. New members now arrive through the email-invitation flow in
+// `family-invites.ts`; revoke / role-change / transfer below are unchanged.
 // ===========================================================================
-
-const addMemberInputSchema = z.object({
-  email: z.string().trim().toLowerCase().email(),
-  role: roleSchema.default("member"),
-  idempotencyKey: uuidV7Schema,
-})
-
-type AddMemberInput = z.input<typeof addMemberInputSchema>
 
 interface ActorContext {
   id: string
   role: FamilyRole
 }
-
-export async function addMemberForFamily({
-  data: rawData,
-  familyId,
-  actor,
-  runInTenantTransaction = scopedTenantTransaction,
-}: {
-  data: AddMemberInput
-  familyId: string
-  actor: ActorContext
-  runInTenantTransaction?: typeof scopedTenantTransaction
-}): Promise<SerializedFamilyMember> {
-  const data = addMemberInputSchema.parse(rawData)
-  // Only owners may mint admins/owners; admins may add member/viewer only.
-  assertCanAssignRole(actor.role, data.role)
-
-  const requestHash = await hashCanonicalPayload({
-    email: data.email,
-    role: data.role,
-  })
-  const auditCtx = await createAuditContext(
-    { user: { id: actor.id, familyId } },
-    data.idempotencyKey
-  )
-
-  const runOnce = async () =>
-    await runInTenantTransaction(familyId, actor.id, async (tx) => {
-      const replay =
-        await replayIdempotentEndpointResponse<SerializedFamilyMember>(tx, {
-          endpoint: ADD_MEMBER_ENDPOINT,
-          familyId,
-          key: data.idempotencyKey,
-          requestHash,
-        })
-      if (replay) return replay
-
-      // The target user must already exist (no email-invitation flow in this
-      // slice — `invited` status is reserved for it). User is not RLS-scoped.
-      const targetUser = await tx.user.findUnique({
-        where: { email: data.email },
-        select: { id: true, familyId: true },
-      })
-      if (!targetUser) {
-        throw new MemberNotFoundError(`No user exists with email ${data.email}`)
-      }
-
-      const existing = await tx.familyMember.findUnique({
-        where: { familyId_userId: { familyId, userId: targetUser.id } },
-        select: { id: true, role: true, status: true },
-      })
-      // Re-managing an existing row obeys the same target-role rule.
-      if (existing) {
-        assertCanManageTarget(actor.role, existing.role as FamilyRole)
-      }
-
-      const member = await tx.familyMember.upsert({
-        where: { familyId_userId: { familyId, userId: targetUser.id } },
-        update: {
-          role: data.role,
-          status: "active",
-          revokedAt: null,
-          joinedAt: new Date(),
-          invitedById: actor.id,
-        },
-        create: {
-          familyId,
-          userId: targetUser.id,
-          role: data.role,
-          status: "active",
-          joinedAt: new Date(),
-          invitedById: actor.id,
-        },
-        select: MEMBER_SELECT,
-      })
-
-      // A user with no active family yet adopts this one as their active
-      // pointer so they can actually act in it. Users already pointing at a
-      // family keep that pointer (multi-family is reserved, not built here).
-      if (!targetUser.familyId) {
-        await tx.user.update({
-          where: { id: targetUser.id },
-          data: { familyId },
-        })
-      }
-
-      const serialized = serializeMember(member)
-      await auditLog(tx, auditCtx, {
-        action: existing ? "update" : "create",
-        entityType: "FamilyMember",
-        entityId: member.id,
-        before: existing
-          ? { role: existing.role, status: existing.status }
-          : null,
-        after: {
-          userId: member.userId,
-          role: member.role,
-          status: member.status,
-        },
-      })
-      await persistIdempotentEndpointResponse(tx, {
-        endpoint: ADD_MEMBER_ENDPOINT,
-        familyId,
-        key: data.idempotencyKey,
-        requestHash,
-        response: serialized,
-      })
-      return serialized
-    })
-
-  try {
-    return await runOnce()
-  } catch (error) {
-    if (!isUniqueConstraintError(error)) throw error
-    const replay = await scopedTenantTransaction(familyId, actor.id, (tx) =>
-      replayIdempotentEndpointResponse<SerializedFamilyMember>(tx, {
-        endpoint: ADD_MEMBER_ENDPOINT,
-        familyId,
-        key: data.idempotencyKey,
-        requestHash,
-      })
-    )
-    if (!replay) throw error
-    return replay
-  }
-}
-
-export const addMemberFn = createServerFn({ method: "POST" })
-  .middleware([requireCapability("member:manage")])
-  .inputValidator((data: AddMemberInput) => addMemberInputSchema.parse(data))
-  .handler(async ({ data, context }) => {
-    return await addMemberForFamily({
-      data,
-      familyId: context.familyId,
-      actor: { id: context.user.id, role: context.role },
-    })
-  })
 
 // ===========================================================================
 // UPDATE ROLE

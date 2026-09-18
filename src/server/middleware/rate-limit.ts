@@ -109,19 +109,58 @@ const getRateLimiter = (
 const loginLimiter = getRateLimiter("rl:login", 5, 15 * 60 * 1000)
 // signup: 3 req / 1 h
 const signupLimiter = getRateLimiter("rl:signup", 3, 60 * 60 * 1000)
+// ADR-0057 invite: 10 invites (create + resend) / 1 h, keyed by the INVITING
+// USER (not the IP) — the limiter exists to blunt email-bombing an arbitrary
+// address from one account, and a rotating IP must not reset it.
+const inviteLimiter = getRateLimiter("rl:invite", 10, 60 * 60 * 1000)
+// ADR-0057 invite_lookup: 30 lookups / 15 min per client IP. The token lookup
+// is unauthenticated (the invitee has no session yet), so IP is the only key.
+const inviteLookupLimiter = getRateLimiter(
+  "rl:invite_lookup",
+  30,
+  15 * 60 * 1000
+)
 
-export async function checkRateLimit(
-  request: Request,
-  _key?: string,
-  type: "login" | "signup" = "login"
+export type RateLimitType = "login" | "signup" | "invite" | "invite_lookup"
+
+async function enforce(
+  limiter: ReturnType<typeof getRateLimiter>,
+  identifier: string
 ): Promise<void> {
-  const ip = getTrustedClientIp(request.headers) || "127.0.0.1"
-  const identifier = _key ? `${ip}:${_key}` : ip
-
-  const limiter = type === "signup" ? signupLimiter : loginLimiter
-
   const { success, reset, remaining } = await limiter.limit(identifier)
   if (!success) {
     throw new RateLimitError({ resetAt: new Date(reset), remaining })
   }
+}
+
+/**
+ * ADR-0057 — per-inviting-user limit shared by create and resend. Needs no
+ * request (the key is the user id), so the domain functions can enforce it
+ * directly and integration tests exercise it without an HTTP context.
+ */
+export async function checkInviteRateLimit(userId: string): Promise<void> {
+  await enforce(inviteLimiter, userId)
+}
+
+export async function checkRateLimit(
+  request: Request,
+  _key?: string,
+  type: RateLimitType = "login"
+): Promise<void> {
+  if (type === "invite") {
+    if (!_key) {
+      throw new Error("The invite rate limit requires the inviting user id")
+    }
+    return await checkInviteRateLimit(_key)
+  }
+
+  const ip = getTrustedClientIp(request.headers) || "127.0.0.1"
+
+  if (type === "invite_lookup") {
+    return await enforce(inviteLookupLimiter, ip)
+  }
+
+  const identifier = _key ? `${ip}:${_key}` : ip
+  const limiter = type === "signup" ? signupLimiter : loginLimiter
+  await enforce(limiter, identifier)
 }
