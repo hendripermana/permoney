@@ -1,15 +1,15 @@
 # ADR-0036 — Family membership and role authorization model
 
-|                   |                                                                                                                                                                                            |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Status**        | Accepted                                                                                                                                                                                   |
-| **Date**          | 2026-06-20                                                                                                                                                                                 |
-| **Accepted**      | 2026-06-20                                                                                                                                                                                 |
-| **Deciders**      | Hendri Permana                                                                                                                                                                             |
-| **Supersedes**    | PER-98, PER-114 (design)                                                                                                                                                                   |
-| **Superseded by** | —                                                                                                                                                                                          |
-| **Amended by**    | ADR-0037 (§2 adds `budget:write`); ADR-0044 §7 (PER-181 — §4 `SplitEntry`/`Transfer` policy shape corrected); §2 amendment (2026-09-13 — `member:manage_admin` removed as dead vocabulary) |
-| **Amends**        | ADR-0008 §8; ADR-0010 (User actor); ADR-0014 (role split)                                                                                                                                  |
+|                   |                                                                                                                                                                                                                                                                    |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Status**        | Accepted                                                                                                                                                                                                                                                           |
+| **Date**          | 2026-06-20                                                                                                                                                                                                                                                         |
+| **Accepted**      | 2026-06-20                                                                                                                                                                                                                                                         |
+| **Deciders**      | Hendri Permana                                                                                                                                                                                                                                                     |
+| **Supersedes**    | PER-98, PER-114 (design)                                                                                                                                                                                                                                           |
+| **Superseded by** | —                                                                                                                                                                                                                                                                  |
+| **Amended by**    | ADR-0037 (§2 adds `budget:write`); ADR-0044 §7 (PER-181 — §4 `SplitEntry`/`Transfer` policy shape corrected); §2 amendment (2026-09-13 — `member:manage_admin` removed as dead vocabulary); ADR-0057 (2026-09-18 — §3 direct add-by-email replaced by invitations) |
+| **Amends**        | ADR-0008 §8; ADR-0010 (User actor); ADR-0014 (role split)                                                                                                                                                                                                          |
 
 ## Context
 
@@ -411,3 +411,23 @@ The capability was therefore removed from the closed vocabulary
 The invariant the §2 table describes is unchanged; only its encoding is now
 stated accurately. Splitting the promote/demote gate into its own capability
 would be a new decision, not a recovery of an existing one.
+
+## Amendment — direct add-by-email replaced by invitations (ADR-0057, 2026-09-18)
+
+§3's "Add" operation looked up an existing `User` by email and made them an
+active member immediately, with no acceptance step. That path
+(`addMemberForFamily` / `addMemberFn`) is removed. It had two flaws: an
+email-existence oracle (requiring the target to already have an account
+revealed whether an arbitrary email was registered) and a non-consensual
+auto-join (an existing account with no family became a member instantly).
+
+[ADR-0057](./0057-family-invitation-by-email.md) replaces it with an email
+invitation flow: an owner/admin invites an email, the invitee accepts
+explicitly — by signing in as the invited address, or by signing up through the
+link — and only then becomes a member. Pending invites live in a separate
+`FamilyInvite` table, because a `FamilyMember` row cannot exist before a `User`
+does (`FamilyMember.userId` is a required FK). `FamilyMember.status = 'invited'`
+therefore stays reserved and unused. The role-assignment rules in this ADR
+(only an owner may mint an admin or owner; an admin may add member/viewer) are
+unchanged and are re-applied to invitations. Removing a member, changing a
+role, and transferring ownership are unchanged.
