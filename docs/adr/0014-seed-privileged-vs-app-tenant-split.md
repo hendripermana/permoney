@@ -103,7 +103,9 @@ The orchestrator runs phase 1 then phase 2 sequentially. `vp run db:seed` stays 
 **Managed-Postgres production.** The deploy operator must satisfy two requirements, both documented in `.env.example`:
 
 1. The role that runs `prisma migrate deploy` either has `CREATEROLE` (so the migration can create `permoney_system_maintainer`) **or** the platform pre-creates `permoney_system_maintainer` and grants it to the migration runner before deploy. The migration's `IF NOT EXISTS` guard makes the pre-created case a no-op.
-2. The role behind `PERMONEY_SEED_PRIVILEGED_DATABASE_URL` is a member of `permoney_system_maintainer`. If migrations and seed run under the same privileged role, `GRANT ... TO CURRENT_USER` already satisfies this and `PERMONEY_SEED_PRIVILEGED_DATABASE_URL` can be left unset (falls back to `DATABASE_URL`). The app runtime role behind the production `DATABASE_URL` must **not** be a member.
+2. The role behind `PERMONEY_SEED_PRIVILEGED_DATABASE_URL` is a member of `permoney_system_maintainer`. If migrations and seed run under the same privileged role, `GRANT ... TO CURRENT_USER` already satisfies this. The app runtime role behind the production `DATABASE_URL` must **not** be a member.
+
+**Self-hosted production (tracked Compose services).** `docker-compose.prod.yml` defines `migrate` and `seed` services (gated behind Compose profiles, never long-running) that build the same Dockerfile's `build` stage (full `node_modules` + Prisma CLI + migrations, discarded by the final `app` image). Both read their `DATABASE_URL` from `PERMONEY_SEED_PRIVILEGED_DATABASE_URL` (enforced via Compose's `:?` required-variable check) and run as the `permoney_migrator` role — never `permoney_app`. Invoked via `docker compose --profile migrate run --rm migrate` and `docker compose --profile seed run --rm seed`. This replaces the previous hand-typed `docker build --target build` + `docker run` ritual with a tracked, versioned Compose service. See `docs/runbook-production.md` for the full deploy sequence.
 
 No `ALTER ROLE ... BYPASSRLS` is ever required. That is the whole point: the production seed path runs under a `NOBYPASSRLS` role.
 
