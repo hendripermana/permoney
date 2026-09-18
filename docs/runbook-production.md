@@ -183,6 +183,31 @@ the crontab to get cron's own failure emails). Wiring an actual push/email
 alert is a follow-up ticket once a notification channel exists — this runbook
 entry is intentionally NOT inventing one.
 
+## Family invitation email (ADR-0057)
+
+Inviting a family member sends an email through [Resend](https://resend.com).
+Unlike the rate limiter, this **fails loudly**: with no working sender, every
+invite attempt errors and no invite row is left behind. One-time setup before
+the first real invite:
+
+1. Create a Resend account and an API key with "Sending access".
+2. In Resend, add the `permana.icu` sending domain and create the SPF/DKIM DNS
+   records it lists in the Cloudflare-managed zone; wait until Resend shows the
+   domain as **Verified**.
+3. Add to the production `.env` (see `.env.example`):
+   ```
+   RESEND_API_KEY=re_...
+   RESEND_FROM_EMAIL="Permoney <invites@permana.icu>"
+   ```
+   `BETTER_AUTH_URL` (already set to `https://permana.icu`) is reused as the
+   origin of the accept link — if it is unset in production, creating an invite
+   errors rather than guessing a host.
+4. Restart the app. Smoke test: invite a second address you control from
+   Settings → Family members, click the emailed link, accept.
+
+A committed-after-send failure can leave a dead link in someone's inbox; that is
+harmless (the token was never persisted, so the link is simply invalid).
+
 ## Restore (tested, non-negotiable)
 
 **Monthly**, and immediately after any schema-changing migration, run the

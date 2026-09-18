@@ -335,16 +335,16 @@ export async function createFamilyInviteForFamily({
         )
       }
 
-      const [family, inviter] = await Promise.all([
-        tx.family.findUniqueOrThrow({
-          where: { id: familyId },
-          select: { name: true },
-        }),
-        tx.user.findUniqueOrThrow({
-          where: { id: actor.id },
-          select: { name: true, email: true },
-        }),
-      ])
+      // Sequential on purpose: one interactive-transaction connection, and
+      // pg rejects overlapping queries on it (see with-family.ts).
+      const family = await tx.family.findUniqueOrThrow({
+        where: { id: familyId },
+        select: { name: true },
+      })
+      const inviter = await tx.user.findUniqueOrThrow({
+        where: { id: actor.id },
+        select: { name: true, email: true },
+      })
 
       const rawToken = generateInviteToken()
       const invite = await tx.familyInvite.create({
