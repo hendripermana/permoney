@@ -573,7 +573,7 @@ export function TradeDialog({
                   id="trade-quantity"
                   value={quantity}
                   onChange={setQuantity}
-                  placeholder="e.g. 2.018"
+                  placeholder="e.g. 1354.5"
                   required
                 />
                 {/* Sell-side quick allocation: "sell half of it" is how people

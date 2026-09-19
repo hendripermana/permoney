@@ -306,7 +306,7 @@ export function HoldingFormDialog({
               id="holding-quantity"
               value={quantity}
               onChange={setQuantity}
-              placeholder="e.g. 2.018"
+              placeholder="e.g. 1354.5"
               required
             />
             <p className="text-xs text-muted-foreground">
