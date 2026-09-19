@@ -71,4 +71,53 @@ test.describe("holdings UI (PER-232)", () => {
       await page.getByText(/Rp\s2,400,000\.00/).count()
     ).toBeGreaterThanOrEqual(2)
   })
+
+  // Real production bug: an Indonesian user typed the Bibit unit count "1.354"
+  // (dot = thousands separator) and the strict dot-decimal parser silently
+  // stored 1.354 units — 1000x wrong. The quantity field must now refuse to
+  // guess: show both readings, block Save, and only submit the chosen one.
+  test("ambiguous quantity 1.354 asks which reading, then saves 1,354 units", async ({
+    page,
+  }) => {
+    await onboard(page)
+
+    const name = `Reksadana ${Date.now().toString(36)}`
+    await page.goto("/accounts")
+    await waitForHydration(page)
+    await page.getByRole("button", { name: "New account" }).click()
+    await page.getByLabel("Name").fill(name)
+    await page.getByRole("combobox", { name: "Account type" }).click()
+    await page.getByRole("option", { name: "Tracked Asset" }).click()
+    await page.getByRole("button", { name: "Create" }).click()
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+    await page.getByRole("button", { name: `Open ${name}` }).click()
+    await page.waitForURL(/\/accounts\/[^/]+$/, { timeout: 15000 })
+
+    await page.getByRole("button", { name: "Add holding" }).click()
+    const dialog = page.getByRole("dialog")
+    await dialog.getByLabel("Instrument name").fill("Fund")
+    await dialog.getByLabel(/Average unit cost/i).fill("1000")
+    await dialog.getByLabel(/Last price/i).fill("1000")
+
+    // Ambiguous: both readings offered, Save blocked.
+    await dialog.getByLabel("Quantity").fill("1.354")
+    const choices = dialog.getByRole("group", {
+      name: "Which reading did you mean",
+    })
+    await expect(choices).toBeVisible()
+    await expect(
+      dialog.getByRole("button", { name: "Add holding" })
+    ).toBeDisabled()
+
+    // Pick the thousands reading (the Indonesian meaning of "1.354").
+    await choices
+      .getByRole("button", { name: /one thousand three hundred fifty-four/ })
+      .click()
+    await expect(dialog.getByText(/Read as: 1,354 units/)).toBeVisible()
+    await dialog.getByRole("button", { name: "Add holding" }).click()
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+
+    // 1,354 units × Rp 1,000 = Rp 1,354,000 (NOT 1.354 units = Rp 1,354).
+    await expect(page.getByText(/Rp\s1,354,000\.00/).first()).toBeVisible()
+  })
 })
