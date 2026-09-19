@@ -199,10 +199,16 @@ the first real invite:
    RESEND_API_KEY=re_...
    RESEND_FROM_EMAIL="Permoney <invites@permana.icu>"
    ```
+   Write them as `KEY=value` with **no spaces around `=`**: Compose tolerates
+   `KEY = value`, but a shell that `source`s the file does not (it runs `KEY`
+   as a command). `docker-compose.prod.yml` forwards both to the `app`
+   container explicitly — Compose has no `env_file` here, so a variable that
+   is not listed under `app.environment` never reaches the app.
    `BETTER_AUTH_URL` (already set to `https://permana.icu`) is reused as the
    origin of the accept link — if it is unset in production, creating an invite
    errors rather than guessing a host.
-4. Restart the app. Smoke test: invite a second address you control from
+4. Recreate the app so it picks up the new environment (`docker compose -f docker-compose.prod.yml up -d app` — a plain
+   `restart` does NOT reload `.env`). Smoke test: invite a second address you control from
    Settings → Family members, click the emailed link, accept.
 
 A committed-after-send failure can leave a dead link in someone's inbox; that is
