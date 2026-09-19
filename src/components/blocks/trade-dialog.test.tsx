@@ -22,6 +22,10 @@ import { TradeDialog } from "./trade-dialog"
 // `1.354` was silently 1.354 units. The cash total under the form must follow
 // the RESOLVED reading, and Record buy stays blocked while it is ambiguous.
 
+// Full-dialog render (Radix Dialog + Select + date field) on a cold jsdom is
+// slow enough to brush the 5s default when the whole suite runs in parallel.
+vi.setConfig({ testTimeout: 30_000 })
+
 beforeEach(() => {
   recordTradeFn.mockClear()
 })
@@ -82,7 +86,7 @@ describe("TradeDialog quantity field", () => {
     typeQuantity("1.354")
 
     expect(
-      screen.getByRole("group", { name: "Choose how to read this quantity" })
+      screen.getByRole("group", { name: "Which reading did you mean" })
     ).toBeTruthy()
     expect(submitButton().disabled).toBe(true)
     expect(screen.getByTestId("trade-cash-total").textContent).toBe("—")

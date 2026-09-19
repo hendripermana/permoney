@@ -30,6 +30,10 @@ import { HoldingFormDialog } from "./holding-form-dialog"
 // quantity field now has to (a) never guess an ambiguous reading, (b) block
 // Save until the user picks one, and (c) leave already-canonical input alone.
 
+// Full-dialog render (Radix Dialog + Select + date field) on a cold jsdom is
+// slow enough to brush the 5s default when the whole suite runs in parallel.
+vi.setConfig({ testTimeout: 30_000 })
+
 beforeEach(() => {
   upsertHoldingFn.mockClear()
 })
@@ -93,7 +97,7 @@ describe("HoldingFormDialog quantity field", () => {
 
     // Both readings are offered, in words a non-technical user can tell apart.
     const choices = screen.getByRole("group", {
-      name: "Choose how to read this quantity",
+      name: "Which reading did you mean",
     })
     expect(choices.textContent).toMatch(/one point three five four/)
     expect(choices.textContent).toMatch(/one thousand three hundred fifty-four/)

@@ -70,7 +70,7 @@ export function QuantityInput({
       {parsed.status === "ambiguous" ? (
         <div
           role="group"
-          aria-label="Choose how to read this quantity"
+          aria-label="Which reading did you mean"
           className="flex flex-col gap-1.5 rounded-lg border border-dashed p-2"
         >
           <p className="text-xs text-muted-foreground">
