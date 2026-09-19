@@ -69,12 +69,12 @@ export async function onboard(
 /**
  * Sign up a fresh user and stop at /onboarding — deliberately WITHOUT
  * completing it. The account is authenticated (a real session exists) but
- * family-less (`User.familyId = null`), exactly the shape `addMemberFn`
- * expects for "an existing Permoney account with no active family yet" (see
- * `src/server/family-members.ts`'s `addMemberForFamily` doc comment): adding
- * them to another family adopts it as their active pointer. Used by specs
- * that need a second, genuinely distinct authenticated identity to add as a
- * non-owner member of a first user's family (role-authorization e2e specs).
+ * family-less (`User.familyId = null`), exactly the shape the ADR-0057
+ * invite-accept flow expects for "an existing Permoney account with no active
+ * family yet": accepting an invite adopts the inviting family as their active
+ * pointer. Used by specs that need a second, genuinely distinct authenticated
+ * identity to join a first user's family as a non-owner member (see
+ * `seedFamilyInvite` in ./seed-invite.ts).
  */
 export async function signUpWithoutOnboarding(page: Page): Promise<Identity> {
   const identity = createIdentity()

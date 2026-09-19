@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input"
 import { useServerFn } from "@tanstack/react-start"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { loginFn } from "@/server/auth-fns"
-import { Link, useRouter } from "@tanstack/react-router"
+import { Link, useRouter, useSearch } from "@tanstack/react-router"
 
 export function LoginForm({
   className,
@@ -21,6 +21,8 @@ export function LoginForm({
   const router = useRouter()
   const queryClient = useQueryClient()
   const login = useServerFn(loginFn)
+  // ADR-0057: present when the user came from a family-invite link.
+  const { inviteToken } = useSearch({ strict: false })
 
   const mutation = useMutation({
     mutationFn: async (formData: FormData) => {
@@ -30,6 +32,13 @@ export function LoginForm({
     },
     onSuccess: async (result) => {
       await Promise.all([queryClient.invalidateQueries(), router.invalidate()])
+      if (inviteToken) {
+        await router.navigate({
+          to: "/invite/accept",
+          search: { token: inviteToken },
+        })
+        return
+      }
       await router.navigate({ to: result.redirectTo })
     },
   })
@@ -94,7 +103,11 @@ export function LoginForm({
               </Field>
               <FieldDescription className="mt-4 text-center">
                 Don&apos;t have an account?{" "}
-                <Link to="/signup" className="font-medium underline">
+                <Link
+                  to="/signup"
+                  search={inviteToken ? { inviteToken } : {}}
+                  className="font-medium underline"
+                >
                   Sign up here
                 </Link>
               </FieldDescription>

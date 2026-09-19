@@ -1,7 +1,8 @@
 import * as React from "react"
 import { createFileRoute } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Crown, UserPlus, Users } from "lucide-react"
+import { Crown, MailPlus, RefreshCw, Users } from "lucide-react"
+import { toast } from "sonner"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
@@ -44,8 +45,14 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { createUuidV7 } from "@/lib/uuid-v7"
+import { INVITE_TTL_DAYS } from "@/server/invite-token"
 import {
-  addMemberFn,
+  createFamilyInviteFn,
+  listFamilyInvitesFn,
+  resendFamilyInviteFn,
+  revokeFamilyInviteFn,
+} from "@/server/family-invites"
+import {
   getMembersFn,
   removeMemberFn,
   transferOwnershipFn,
@@ -54,8 +61,10 @@ import {
 import { getSettingsOverviewFn, SETTINGS_OVERVIEW_KEY } from "@/server/settings"
 
 const MEMBERS_KEY = ["family-members"] as const
+const INVITES_KEY = ["family-invites"] as const
 
 type Member = Awaited<ReturnType<typeof getMembersFn>>[number]
+type PendingInvite = Awaited<ReturnType<typeof listFamilyInvitesFn>>[number]
 
 // Owner is intentionally absent from the assignable list — ownership moves only
 // through the dedicated transfer flow (ADR-0036), never a casual role change.
@@ -94,6 +103,10 @@ function MembersPage() {
     (member) => member.email === overview?.profile.email
   )
   const isCurrentUserOwner = currentMember?.role === "owner"
+  // Owners and admins hold `member:manage`; the server enforces it on every
+  // invite endpoint, this only avoids showing controls that would be rejected.
+  const canManageMembers =
+    currentMember?.role === "owner" || currentMember?.role === "admin"
 
   return (
     <TooltipProvider>
@@ -119,7 +132,12 @@ function MembersPage() {
               </div>
             </div>
 
-            <AddMemberCard />
+            {canManageMembers ? (
+              <>
+                <InviteByEmailCard />
+                <PendingInvitesCard />
+              </>
+            ) : null}
 
             <MembersTableCard members={members ?? []} isLoading={isLoading} />
 
@@ -136,14 +154,17 @@ function MembersPage() {
   )
 }
 
-function AddMemberCard() {
+// ADR-0057 — invitation by email. The success message is intentionally the
+// same whether or not the address already has a Permoney account: the endpoint
+// must not act as an account-existence oracle.
+function InviteByEmailCard() {
   const queryClient = useQueryClient()
   const [email, setEmail] = React.useState("")
   const [role, setRole] = React.useState<AssignableRole>("member")
 
   const mutation = useMutation({
     mutationFn: async () =>
-      await addMemberFn({
+      await createFamilyInviteFn({
         data: {
           email: email.trim().toLowerCase(),
           role,
@@ -153,17 +174,18 @@ function AddMemberCard() {
     onSuccess: () => {
       setEmail("")
       setRole("member")
-      void queryClient.invalidateQueries({ queryKey: MEMBERS_KEY })
+      toast.success("Invitation sent")
+      void queryClient.invalidateQueries({ queryKey: INVITES_KEY })
     },
   })
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Add a member</CardTitle>
+        <CardTitle>Invite by email</CardTitle>
         <CardDescription>
-          Enter the email of an existing Permoney account. They are added with
-          the role you choose.
+          We email them a link that expires in {INVITE_TTL_DAYS} days. They join
+          your family with the role you choose only after they accept.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -175,9 +197,9 @@ function AddMemberCard() {
           }}
         >
           <div className="grid gap-1.5">
-            <Label htmlFor="member-email">Email</Label>
+            <Label htmlFor="invite-email">Email</Label>
             <Input
-              id="member-email"
+              id="invite-email"
               type="email"
               placeholder="person@example.com"
               value={email}
@@ -186,12 +208,12 @@ function AddMemberCard() {
             />
           </div>
           <div className="grid gap-1.5">
-            <Label htmlFor="member-role">Role</Label>
+            <Label htmlFor="invite-role">Role</Label>
             <Select
               value={role}
               onValueChange={(value) => setRole(value as AssignableRole)}
             >
-              <SelectTrigger id="member-role" className="w-40">
+              <SelectTrigger id="invite-role" className="w-40">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -207,8 +229,8 @@ function AddMemberCard() {
             type="submit"
             disabled={mutation.isPending || email.trim() === ""}
           >
-            <UserPlus className="size-4" aria-hidden />
-            {mutation.isPending ? "Adding…" : "Add member"}
+            <MailPlus className="size-4" aria-hidden />
+            {mutation.isPending ? "Sending…" : "Send invitation"}
           </Button>
           {mutation.isError ? (
             <p className="w-full text-sm text-destructive">
@@ -218,6 +240,143 @@ function AddMemberCard() {
         </form>
       </CardContent>
     </Card>
+  )
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000
+const HOUR_MS = 60 * 60 * 1000
+
+function formatSpan(ms: number): string {
+  const days = Math.floor(ms / DAY_MS)
+  if (days >= 1) return `${days} day${days === 1 ? "" : "s"}`
+  const hours = Math.max(1, Math.floor(ms / HOUR_MS))
+  return `${hours} hour${hours === 1 ? "" : "s"}`
+}
+
+function PendingInvitesCard() {
+  const { data: invites, isLoading } = useQuery({
+    queryKey: INVITES_KEY,
+    queryFn: async () => await listFamilyInvitesFn(),
+  })
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Pending invites</CardTitle>
+        <CardDescription>
+          Invitations that have been sent but not accepted yet.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">Loading invites…</p>
+        ) : (invites ?? []).length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No pending invitations.
+          </p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Invitee</TableHead>
+                <TableHead>Role</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(invites ?? []).map((invite) => (
+                <PendingInviteRow key={invite.id} invite={invite} />
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function PendingInviteRow({ invite }: { invite: PendingInvite }) {
+  const queryClient = useQueryClient()
+  const now = Date.now()
+  const invitedAgo = formatSpan(now - new Date(invite.createdAt).getTime())
+  const expiresIn = formatSpan(new Date(invite.expiresAt).getTime() - now)
+
+  const revoke = useMutation({
+    mutationFn: async () =>
+      await revokeFamilyInviteFn({
+        data: { inviteId: invite.id, idempotencyKey: createUuidV7() },
+      }),
+    onSuccess: () => {
+      toast.success("Invitation cancelled")
+      void queryClient.invalidateQueries({ queryKey: INVITES_KEY })
+    },
+  })
+
+  const resend = useMutation({
+    mutationFn: async () =>
+      await resendFamilyInviteFn({
+        data: { inviteId: invite.id, idempotencyKey: createUuidV7() },
+      }),
+    onSuccess: () => {
+      toast.success("Invitation sent")
+      void queryClient.invalidateQueries({ queryKey: INVITES_KEY })
+    },
+  })
+
+  const busy = revoke.isPending || resend.isPending
+  const error = revoke.error ?? resend.error
+
+  return (
+    <TableRow>
+      <TableCell>
+        <div className="flex flex-col">
+          <span className="font-medium">{invite.email}</span>
+          <span className="text-sm text-muted-foreground">
+            Invited {invitedAgo} ago by {invite.invitedByName}
+          </span>
+        </div>
+        {error ? (
+          <p className="mt-1 text-sm text-destructive">
+            {(error as Error).message}
+          </p>
+        ) : null}
+      </TableCell>
+      <TableCell>
+        <Badge className={ROLE_BADGE[invite.role] ?? ROLE_BADGE.member}>
+          {invite.role}
+        </Badge>
+      </TableCell>
+      <TableCell className="text-sm">
+        {invite.status === "expired" ? (
+          <span className="text-destructive">Expired</span>
+        ) : (
+          <span className="text-muted-foreground">Expires in {expiresIn}</span>
+        )}
+      </TableCell>
+      <TableCell className="text-right">
+        <div className="flex justify-end gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => resend.mutate()}
+          >
+            <RefreshCw className="size-4" aria-hidden />
+            {resend.isPending ? "Sending…" : "Resend"}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-destructive hover:text-destructive"
+            disabled={busy}
+            onClick={() => revoke.mutate()}
+          >
+            {revoke.isPending ? "Revoking…" : "Revoke"}
+          </Button>
+        </div>
+      </TableCell>
+    </TableRow>
   )
 }
 
@@ -390,7 +549,7 @@ function TransferOwnershipCard({
       <CardContent>
         {candidates.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            There&apos;s no one else to hand ownership to yet — add another
+            There&apos;s no one else to hand ownership to yet — invite another
             member first.
           </p>
         ) : (

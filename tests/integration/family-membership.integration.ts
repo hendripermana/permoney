@@ -10,7 +10,6 @@ import {
   LastOwnerError,
   MemberNotFoundError,
   MembershipForbiddenError,
-  addMemberForFamily,
   getMembersForFamily,
   removeMemberForFamily,
   transferOwnershipForFamily,
@@ -57,17 +56,20 @@ describe("family membership & role authorization (PER-144)", () => {
     }
   }
 
-  const addOutsider = async (familyId: string, ownerId: string) => {
-    const user = await factories.createUser({ familyId: null })
-    const member = await addMemberForFamily({
-      data: {
-        email: user.email,
-        role: "member",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
+  // ADR-0057 removed the direct add-member path (the only way in is now an
+  // accepted email invite, covered in family-invites.integration.ts). These
+  // role/authorization tests only need a second/third member to EXIST, so seed
+  // the membership directly through the factories.
+  const addOutsider = async (
+    familyId: string,
+    _ownerId: string,
+    role: "member" | "admin" | "viewer" = "member"
+  ) => {
+    const user = await factories.createUser({ familyId })
+    const member = await factories.createFamilyMember({
       familyId,
-      actor: { id: ownerId, role: "owner" },
-      runInTenantTransaction: runner(ownerId),
+      userId: user.id,
+      role,
     })
     return { user, member }
   }
@@ -90,7 +92,7 @@ describe("family membership & role authorization (PER-144)", () => {
   // -------------------------------------------------------------------------
   // Role enforcement
   // -------------------------------------------------------------------------
-  test("owner can add a member; admin cannot mint an admin; member/viewer cannot manage", async () => {
+  test("owner can promote to admin; admin cannot mint an admin; member/viewer cannot manage", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
     const { user: added } = await addOutsider(owner.family.id, owner.user.id)
 
@@ -102,22 +104,15 @@ describe("family membership & role authorization (PER-144)", () => {
       members.some((m) => m.userId === added.id && m.role === "member")
     ).toBe(true)
 
-    // An admin may NOT assign the admin role (owner-only; see
-    // assignableRoles/canManageTarget in family-members.ts).
-    const adminUser = await factories.createUser({ familyId: null })
-    await addMemberForFamily({
-      data: {
-        email: adminUser.email,
-        role: "member",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      actor: { id: owner.user.id, role: "owner" },
-      runInTenantTransaction: runner(owner.user.id),
-    })
+    const { user: adminUser } = await addOutsider(
+      owner.family.id,
+      owner.user.id,
+      "admin"
+    )
+    // The owner may mint an admin.
     await updateMemberRoleForFamily({
       data: {
-        userId: adminUser.id,
+        userId: added.id,
         role: "admin",
         idempotencyKey: factories.createIdempotencyKey(),
       },
@@ -126,11 +121,13 @@ describe("family membership & role authorization (PER-144)", () => {
       runInTenantTransaction: runner(owner.user.id),
     })
 
-    const newcomer = await factories.createUser({ familyId: null })
+    // An admin may NOT assign the admin role (owner-only; see
+    // assignableRoles/canManageTarget in family-members.ts).
+    const newcomer = await addOutsider(owner.family.id, owner.user.id)
     await expect(
-      addMemberForFamily({
+      updateMemberRoleForFamily({
         data: {
-          email: newcomer.email,
+          userId: newcomer.user.id,
           role: "admin",
           idempotencyKey: factories.createIdempotencyKey(),
         },
@@ -141,43 +138,31 @@ describe("family membership & role authorization (PER-144)", () => {
     ).rejects.toBeInstanceOf(MembershipForbiddenError)
 
     // A plain member may not manage members at all.
+    const { user: plainMember } = await addOutsider(
+      owner.family.id,
+      owner.user.id
+    )
     await expect(
-      addMemberForFamily({
+      updateMemberRoleForFamily({
         data: {
-          email: newcomer.email,
-          role: "member",
+          userId: newcomer.user.id,
+          role: "viewer",
           idempotencyKey: factories.createIdempotencyKey(),
         },
         familyId: owner.family.id,
-        actor: { id: added.id, role: "member" },
-        runInTenantTransaction: runner(added.id),
+        actor: { id: plainMember.id, role: "member" },
+        runInTenantTransaction: runner(plainMember.id),
       })
     ).rejects.toBeInstanceOf(MembershipForbiddenError)
   })
 
   test("admin cannot manage an owner row", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const adminUser = await factories.createUser({ familyId: null })
-    await addMemberForFamily({
-      data: {
-        email: adminUser.email,
-        role: "member",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      actor: { id: owner.user.id, role: "owner" },
-      runInTenantTransaction: runner(owner.user.id),
-    })
-    await updateMemberRoleForFamily({
-      data: {
-        userId: adminUser.id,
-        role: "admin",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      actor: { id: owner.user.id, role: "owner" },
-      runInTenantTransaction: runner(owner.user.id),
-    })
+    const { user: adminUser } = await addOutsider(
+      owner.family.id,
+      owner.user.id,
+      "admin"
+    )
 
     await expect(
       removeMemberForFamily({
@@ -233,7 +218,7 @@ describe("family membership & role authorization (PER-144)", () => {
   // -------------------------------------------------------------------------
   // Revocation revokes access immediately + re-add reactivates the same row
   // -------------------------------------------------------------------------
-  test("removing a member revokes membership and access immediately; re-add reactivates", async () => {
+  test("removing a member revokes membership and access immediately", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
     const { user: member } = await addOutsider(owner.family.id, owner.user.id)
 
@@ -260,25 +245,6 @@ describe("family membership & role authorization (PER-144)", () => {
       (tx) => tx.account.findMany()
     )
     expect(visibleAfterRevoke).toHaveLength(0)
-
-    // Re-add flips the SAME row back to active (unique holds, no duplicate).
-    await addMemberForFamily({
-      data: {
-        email: member.email,
-        role: "member",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      actor: { id: owner.user.id, role: "owner" },
-      runInTenantTransaction: runner(owner.user.id),
-    })
-    expect(
-      await resolveActiveMembership(owner.family.id, member.id)
-    ).not.toBeNull()
-    const rows = await harness.withFamily(owner.family.id, (tx) =>
-      tx.familyMember.findMany({ where: { userId: member.id } })
-    )
-    expect(rows).toHaveLength(1)
   })
 
   // -------------------------------------------------------------------------
@@ -366,10 +332,8 @@ describe("family membership & role authorization (PER-144)", () => {
       runInTenantTransaction: runner(owner.user.id),
     })
 
-    // Scoped to action:"update" — the heir's row already carries a "create"
-    // audit from addOutsider's addMemberForFamily (same entityId, since the
-    // membership row that was created is the very row this transfer promotes),
-    // which entityId-only filtering would otherwise double-count.
+    // Scoped to action:"update" so the assertion counts exactly the promote +
+    // demote audit rows this transfer wrote.
     const audits = await harness.withFamily(owner.family.id, (tx) =>
       tx.auditLog.findMany({
         where: {
@@ -517,23 +481,27 @@ describe("family membership & role authorization (PER-144)", () => {
   // -------------------------------------------------------------------------
   test("replaying a membership mutation with the same key does not double-write", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const target = await factories.createUser({ familyId: null })
+    const { user: target, member } = await addOutsider(
+      owner.family.id,
+      owner.user.id
+    )
     const key = factories.createIdempotencyKey()
 
-    const first = await addMemberForFamily({
-      data: { email: target.email, role: "member", idempotencyKey: key },
+    const first = await updateMemberRoleForFamily({
+      data: { userId: target.id, role: "viewer", idempotencyKey: key },
       familyId: owner.family.id,
       actor: { id: owner.user.id, role: "owner" },
       runInTenantTransaction: runner(owner.user.id),
     })
-    const replay = await addMemberForFamily({
-      data: { email: target.email, role: "member", idempotencyKey: key },
+    const replay = await updateMemberRoleForFamily({
+      data: { userId: target.id, role: "viewer", idempotencyKey: key },
       familyId: owner.family.id,
       actor: { id: owner.user.id, role: "owner" },
       runInTenantTransaction: runner(owner.user.id),
     })
 
     expect(replay.id).toBe(first.id)
+    expect(first.id).toBe(member.id)
     const rows = await harness.withFamily(owner.family.id, (tx) =>
       tx.familyMember.findMany({ where: { userId: target.id } })
     )
@@ -579,10 +547,10 @@ describe("family membership & role authorization (PER-144)", () => {
   // user's active-family pointer keeps pointing at the (now revoked) family
   // forever. That both breaks familyMiddleware's session resolution (it reads
   // User.familyId, not an explicit familyId argument) and blocks re-invites,
-  // since addMemberForFamily only repoints a user's familyId when it is
+  // since accepting an invite only repoints a user's familyId when it is
   // currently null.
   // -------------------------------------------------------------------------
-  test("revoking a member clears User.familyId so they can be re-invited to another family", async () => {
+  test("revoking a member clears User.familyId (and audits it)", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
     const { user: member } = await addOutsider(owner.family.id, owner.user.id)
 
@@ -628,43 +596,19 @@ describe("family membership & role authorization (PER-144)", () => {
       familyId: owner.family.id,
     })
 
-    // Re-invite to a DIFFERENT family now succeeds and repoints the user's
-    // active family — this is the exact path that was permanently blocked
-    // before the fix (targetUser.familyId was never null, so
-    // addMemberForFamily's `if (!targetUser.familyId)` guard never fired).
-    const otherOwner = await factories.createAuthenticatedOnboardedUser()
-    await addMemberForFamily({
-      data: {
-        email: member.email,
-        role: "member",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: otherOwner.family.id,
-      actor: { id: otherOwner.user.id, role: "owner" },
-      runInTenantTransaction: runner(otherOwner.user.id),
-    })
-
-    const afterReinvite = await harness.prisma.user.findUniqueOrThrow({
-      where: { id: member.id },
-      select: { familyId: true },
-    })
-    expect(afterReinvite.familyId).toBe(otherOwner.family.id)
-
-    // familyMiddleware resolves membership from the user's OWN familyId
-    // pointer, not a caller-supplied one — proving the pointer itself (not
-    // just the FamilyMember row) now leads to an active membership.
-    expect(
-      await resolveActiveMembership(otherOwner.family.id, member.id)
-    ).not.toBeNull()
+    // The other half of this fix — a revoked user being re-invited (to this or
+    // another family) and accepting cleanly — lives in
+    // family-invites.integration.ts, since ADR-0057 replaced the add-member
+    // path with the invite flow.
   })
 
-  test("adding a non-existent user surfaces MemberNotFoundError", async () => {
+  test("removing a user who is not a member surfaces MemberNotFoundError", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
+    const stranger = await factories.createUser({ familyId: null })
     await expect(
-      addMemberForFamily({
+      removeMemberForFamily({
         data: {
-          email: "ghost@permoney.local",
-          role: "member",
+          userId: stranger.id,
           idempotencyKey: factories.createIdempotencyKey(),
         },
         familyId: owner.family.id,

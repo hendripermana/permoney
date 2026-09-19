@@ -79,6 +79,13 @@ services:
       # closed), so the app still boots without it; the daily refresh just
       # won't run until it's set. See docs/adr/0050-market-data-ingestion.md §4.
       MARKET_DATA_REFRESH_SECRET: ${MARKET_DATA_REFRESH_SECRET:-}
+      # ADR-0057 family invitations: Resend API key + from-address. Compose only
+      # forwards variables listed here (there is no env_file), so without these
+      # two lines a correct `.env` still never reaches the container. Optional
+      # at boot — unset means the invite feature fails LOUDLY at send time (see
+      # src/server/email.server.ts) rather than the app refusing to start.
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-}
     ports:
       - "127.0.0.1:3005:3005"
     networks:
