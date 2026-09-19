@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/select"
 import { DialogDateTimeField } from "@/components/blocks/dialog-date-time-field"
 import { MoneyInput } from "@/components/blocks/money-input"
+import { QuantityInput } from "@/components/blocks/quantity-input"
 import { formatCurrency } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
 import {
@@ -31,6 +32,7 @@ import {
 } from "@/lib/holdings"
 import { INSTRUMENT_KIND_OPTIONS, type InstrumentKind } from "@/lib/instruments"
 import { parseMoneyInput, toDecimalString } from "@/lib/money"
+import { parseQuantityInput } from "@/lib/quantity-input"
 import { cn } from "@/lib/utils"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import type { HoldingRecord } from "@/routes/_protected/-account-holdings"
@@ -136,6 +138,14 @@ export function SwitchDialog({
     return parsed !== null && parsed > 0n ? parsed : null
   }, [isQuantityBasis, amount, currencyCode])
 
+  // Locale-aware reading of the typed quantity of A. Only an unambiguous `ok`
+  // reading feeds the preview or the wire; ambiguous ("1.354") / invalid text
+  // is explained by <QuantityInput> itself and blocks submit.
+  const parsedQuantity = React.useMemo(
+    () => parseQuantityInput(quantity),
+    [quantity]
+  )
+
   // Live preview of the switch: proceeds + realized gain (A side) and units
   // acquired (B side) — pure derivation, no effect. Mirrors exactly what
   // `recordSwitchForFamily` computes server-side.
@@ -145,12 +155,8 @@ export function SwitchDialog({
     let fromUnitsScaled: bigint
     let proceedsMinor: bigint
     if (isQuantityBasis) {
-      if (quantity.trim() === "") return { kind: "empty" }
-      try {
-        fromUnitsScaled = quantityToScaled(quantity.trim())
-      } catch {
-        return { kind: "invalid", reason: "Enter a valid quantity." }
-      }
+      if (parsedQuantity.status !== "ok") return { kind: "empty" }
+      fromUnitsScaled = quantityToScaled(parsedQuantity.value)
       if (fromUnitsScaled <= 0n) {
         return {
           kind: "invalid",
@@ -200,7 +206,7 @@ export function SwitchDialog({
     fromHolding,
     fromUnitPriceMinor,
     isQuantityBasis,
-    quantity,
+    parsedQuantity,
     amountMinor,
     toUnitPriceMinor,
   ])
@@ -241,8 +247,8 @@ export function SwitchDialog({
         toUnitPrice: toUnitPriceMinor.toString(),
         date: date.toISOString(),
         idempotencyKey: createUuidV7(),
-        ...(isQuantityBasis
-          ? { quantity: quantity.trim() }
+        ...(isQuantityBasis && parsedQuantity.status === "ok"
+          ? { quantity: parsedQuantity.value }
           : { amount: (amountMinor as bigint).toString() }),
       }
       if (creatingInstrument) {
@@ -392,11 +398,10 @@ export function SwitchDialog({
             {isQuantityBasis ? (
               <div className="flex flex-col gap-2">
                 <Label htmlFor="switch-quantity">Quantity</Label>
-                <Input
+                <QuantityInput
                   id="switch-quantity"
-                  inputMode="decimal"
                   value={quantity}
-                  onChange={(e) => setQuantity(e.target.value)}
+                  onChange={setQuantity}
                   placeholder="e.g. 2.018"
                   required
                 />

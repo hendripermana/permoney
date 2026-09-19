@@ -22,6 +22,7 @@ import {
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { DialogDateTimeField } from "@/components/blocks/dialog-date-time-field"
 import { MoneyInput } from "@/components/blocks/money-input"
+import { QuantityInput } from "@/components/blocks/quantity-input"
 import { formatCurrency } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
 import {
@@ -33,6 +34,7 @@ import {
 } from "@/lib/holdings"
 import { INSTRUMENT_KIND_OPTIONS, type InstrumentKind } from "@/lib/instruments"
 import { parseMoneyInput, toDecimalString } from "@/lib/money"
+import { parseQuantityInput } from "@/lib/quantity-input"
 import { cn } from "@/lib/utils"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import type { HoldingRecord } from "@/routes/_protected/-account-holdings"
@@ -200,6 +202,14 @@ export function TradeDialog({
     return parsed !== null && parsed > 0n ? parsed : null
   }, [amount, currencyCode])
 
+  // Locale-aware reading of the typed quantity. Only an unambiguous `ok`
+  // reading ever feeds the preview or the wire; an ambiguous ("1.354") or
+  // invalid text is explained by <QuantityInput> itself and blocks submit.
+  const parsedQuantity = React.useMemo(
+    () => parseQuantityInput(quantity),
+    [quantity]
+  )
+
   // Live preview of the trade — whichever of {quantity, amount} the user did
   // NOT type is derived here, via the SAME pure helpers the server uses, so the
   // previewed numbers are exactly what posts. Pure derivation, no effect.
@@ -228,12 +238,8 @@ export function TradeDialog({
     let quantityScaled: bigint
     let cashMinor: bigint
     if (isQuantityBasis) {
-      if (quantity.trim() === "") return { kind: "empty" }
-      try {
-        quantityScaled = quantityToScaled(quantity.trim())
-      } catch {
-        return { kind: "invalid", reason: "Enter a valid quantity." }
-      }
+      if (parsedQuantity.status !== "ok") return { kind: "empty" }
+      quantityScaled = quantityToScaled(parsedQuantity.value)
       if (quantityScaled <= 0n) {
         return {
           kind: "invalid",
@@ -277,7 +283,7 @@ export function TradeDialog({
     return { kind: "valid", cashMinor, quantityScaled }
   }, [
     isQuantityBasis,
-    quantity,
+    parsedQuantity,
     amountMinor,
     unitPriceMinor,
     isBuy,
@@ -336,12 +342,14 @@ export function TradeDialog({
         fundingAccountId,
         side,
         cashAmount: preview.cashMinor.toString(),
-        // Quantity basis sends exactly what the user typed (unchanged wire
-        // behavior); amount basis sends the derived units at the column's own
-        // fixed 8-dp scale, so nothing is lost or re-rounded server-side.
-        quantity: isQuantityBasis
-          ? quantity.trim()
-          : scaledToQuantityString(preview.quantityScaled),
+        // Quantity basis sends the canonical dot-decimal reading of what the
+        // user typed (the one shown under the field); amount basis sends the
+        // derived units at the column's own fixed 8-dp scale, so nothing is
+        // lost or re-rounded server-side.
+        quantity:
+          isQuantityBasis && parsedQuantity.status === "ok"
+            ? parsedQuantity.value
+            : scaledToQuantityString(preview.quantityScaled),
         unitPrice: unitPriceMinor.toString(),
         // Full timestamp, not a bare calendar day: `Transaction.date` has always
         // been a DateTime and the schema coerces one, so the exact minute the
@@ -561,11 +569,10 @@ export function TradeDialog({
             {isQuantityBasis ? (
               <div className="flex flex-col gap-2">
                 <Label htmlFor="trade-quantity">Quantity</Label>
-                <Input
+                <QuantityInput
                   id="trade-quantity"
-                  inputMode="decimal"
                   value={quantity}
-                  onChange={(e) => setQuantity(e.target.value)}
+                  onChange={setQuantity}
                   placeholder="e.g. 2.018"
                   required
                 />

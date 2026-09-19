@@ -299,6 +299,9 @@ export function quantityInWords(canonical: string): string | null {
   if (rest > 0) parts.push(belowThousandInWords(rest))
   const wholeWords = parts.length === 0 ? "zero" : parts.join(" ")
   if (fraction === undefined) return wholeWords
-  const digits = [...fraction].map((digit) => ONES[Number(digit)]).join(" ")
+  const digits = fraction
+    .split("")
+    .map((digit) => ONES[Number(digit)])
+    .join(" ")
   return `${wholeWords} point ${digits}`
 }

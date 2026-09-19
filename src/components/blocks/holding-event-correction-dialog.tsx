@@ -11,11 +11,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { DialogDateTimeField } from "@/components/blocks/dialog-date-time-field"
 import { DialogLoadingOrError } from "@/components/blocks/dialog-loading-state"
 import { MoneyInput } from "@/components/blocks/money-input"
+import { QuantityInput } from "@/components/blocks/quantity-input"
 import { formatCurrency } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
 import {
@@ -25,6 +25,10 @@ import {
   unitsFromAmountScaled,
 } from "@/lib/holdings"
 import { parseMoneyInput, toDecimalString } from "@/lib/money"
+import {
+  parseQuantityInput,
+  unambiguousQuantityText,
+} from "@/lib/quantity-input"
 import { cn } from "@/lib/utils"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import {
@@ -162,7 +166,10 @@ function SwitchCorrectionForm({
   const currencyCode = details.currency as CurrencyCode
   const locked = details.notLatestReason !== null
 
-  const [quantity, setQuantity] = React.useState<string>(details.quantity)
+  // Prefill stays unambiguous (see trade-correction-dialog.tsx).
+  const [quantity, setQuantity] = React.useState<string>(() =>
+    unambiguousQuantityText(details.quantity)
+  )
   const [fromUnitPrice, setFromUnitPrice] = React.useState<string>(
     toDecimalString(BigInt(details.fromUnitPriceMinor), currencyCode)
   )
@@ -175,6 +182,13 @@ function SwitchCorrectionForm({
   )
   const [submitting, setSubmitting] = React.useState(false)
 
+  // Locale-aware reading of the typed quantity; only an unambiguous `ok`
+  // reading feeds the preview or the wire (see <QuantityInput>).
+  const parsedQuantity = React.useMemo(
+    () => parseQuantityInput(quantity),
+    [quantity]
+  )
+
   // Live proceeds (units of A × A's price) and the units of B they buy — the
   // SAME pure folds `recordSwitchWithinTx` uses, so nothing shown here can
   // disagree with what posts. Realized gain is NOT previewed: it needs fund A's
@@ -185,7 +199,7 @@ function SwitchCorrectionForm({
     | { kind: "valid"; proceedsMinor: bigint; toUnitsScaled: bigint }
   >(() => {
     if (
-      quantity.trim() === "" ||
+      parsedQuantity.status !== "ok" ||
       fromUnitPrice.trim() === "" ||
       toUnitPrice.trim() === ""
     ) {
@@ -205,12 +219,7 @@ function SwitchCorrectionForm({
         reason: "Enter a valid price for the destination fund.",
       }
     }
-    let scaled: bigint
-    try {
-      scaled = quantityToScaled(quantity.trim())
-    } catch {
-      return { kind: "invalid", reason: "Enter a valid quantity." }
-    }
+    const scaled = quantityToScaled(parsedQuantity.value)
     if (scaled <= 0n) {
       return { kind: "invalid", reason: "Quantity must be greater than zero." }
     }
@@ -226,7 +235,7 @@ function SwitchCorrectionForm({
       }
     }
     return { kind: "valid", proceedsMinor, toUnitsScaled }
-  }, [quantity, fromUnitPrice, toUnitPrice, currencyCode])
+  }, [parsedQuantity, fromUnitPrice, toUnitPrice, currencyCode])
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
@@ -245,13 +254,18 @@ function SwitchCorrectionForm({
       setError("Enter valid unit prices.")
       return
     }
+    // `preview` is only "valid" for an unambiguous quantity; re-narrow for TS.
+    if (parsedQuantity.status !== "ok") {
+      setError("Enter a valid quantity.")
+      return
+    }
     setSubmitting(true)
     try {
       await correctHoldingEventFn({
         data: {
           kind: "switch",
           eventId: details.eventId,
-          quantity: quantity.trim(),
+          quantity: parsedQuantity.value,
           fromUnitPrice: fromPrice.toString(),
           toUnitPrice: toPrice.toString(),
           date: date.toISOString(),
@@ -284,11 +298,10 @@ function SwitchCorrectionForm({
       <div className="grid grid-cols-2 gap-3">
         <div className="flex flex-col gap-2">
           <Label htmlFor="switch-correction-quantity">Quantity</Label>
-          <Input
+          <QuantityInput
             id="switch-correction-quantity"
-            inputMode="decimal"
             value={quantity}
-            onChange={(e) => setQuantity(e.target.value)}
+            onChange={setQuantity}
             disabled={locked}
             required
           />
