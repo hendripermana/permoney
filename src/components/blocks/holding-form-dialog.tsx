@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { MoneyInput } from "@/components/blocks/money-input"
+import { QuantityInput } from "@/components/blocks/quantity-input"
 import type { CurrencyCode } from "@/lib/data/currencies"
 import {
   INSTRUMENT_KIND_OPTIONS,
@@ -28,6 +29,10 @@ import {
   type InstrumentKind,
 } from "@/lib/instruments"
 import { parseMoneyInput, toDecimalString } from "@/lib/money"
+import {
+  parseQuantityInput,
+  unambiguousQuantityText,
+} from "@/lib/quantity-input"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import type { HoldingRecord } from "@/routes/_protected/-account-holdings"
 import {
@@ -62,10 +67,13 @@ function majorFromMinor(minor: string | null, currency: CurrencyCode): string {
 }
 
 // Trim trailing zeros from a fixed-scale quantity string ("2.01800000" → "2.018")
-// for a cleaner edit prefill; a bare integer keeps no decimal point.
+// for a cleaner edit prefill; a bare integer keeps no decimal point. A trimmed
+// value like "1.354" would re-read as AMBIGUOUS (thousands vs decimal) in the
+// quantity field, so it is passed through `unambiguousQuantityText` ("1.3540",
+// same value) — opening an edit dialog must never demand a choice.
 function trimQuantity(quantity: string): string {
   if (!quantity.includes(".")) return quantity
-  return quantity.replace(/\.?0+$/, "")
+  return unambiguousQuantityText(quantity.replace(/\.?0+$/, ""))
 }
 
 export function HoldingFormDialog({
@@ -105,6 +113,13 @@ export function HoldingFormDialog({
   >(editing?.instrument.marketInstrumentId ?? null)
   const [error, setError] = React.useState<string | null>(null)
   const [submitting, setSubmitting] = React.useState(false)
+
+  // Locale-aware reading of the typed quantity (ok / ambiguous / invalid /
+  // empty). Only an unambiguous `ok` reading is ever submitted.
+  const parsedQuantity = React.useMemo(
+    () => parseQuantityInput(quantity),
+    [quantity]
+  )
 
   // Same-currency series only (cross-currency auto-pricing is a later slice).
   const { data: marketInstruments, refetch: refetchMarketInstruments } =
@@ -164,7 +179,13 @@ export function HoldingFormDialog({
       // as CANONICAL major-unit decimals (`toMinorUnits`). Canonicalize the
       // user's forgiving input (e.g. "5.000" / "5,000" / "Rp 5.000") through
       // `parseMoneyInput` → `toDecimalString` so the value the server stores is
-      // EXACTLY the one previewed under the field. Quantity is units, not money.
+      // EXACTLY the one previewed under the field. Quantity is units, not money,
+      // but the same rule holds: the server only ever sees the canonical
+      // dot-decimal reading the user saw under the field (never a raw guess).
+      if (parsedQuantity.status !== "ok") {
+        throw new Error("Enter a valid quantity.")
+      }
+      const quantityValue = parsedQuantity.value
       const avgCostMoney = parseMoneyInput(avgUnitCost, currencyCode)
       if (avgCostMoney === null) {
         throw new Error("Enter a valid average unit cost.")
@@ -185,7 +206,7 @@ export function HoldingFormDialog({
           data: {
             holdingId: editing.id,
             accountId,
-            quantity: quantity.trim(),
+            quantity: quantityValue,
             avgUnitCost: avgUnitCostValue,
             lastPrice: lastPriceValue,
             marketInstrumentId,
@@ -197,7 +218,7 @@ export function HoldingFormDialog({
           data: {
             accountId,
             instrument: { kind, name: name.trim() },
-            quantity: quantity.trim(),
+            quantity: quantityValue,
             avgUnitCost: avgUnitCostValue,
             lastPrice: lastPriceValue,
             marketInstrumentId,
@@ -215,7 +236,7 @@ export function HoldingFormDialog({
 
   const submitDisabled =
     submitting ||
-    quantity.trim() === "" ||
+    parsedQuantity.status !== "ok" ||
     avgUnitCost.trim() === "" ||
     (!editing && name.trim() === "")
 
@@ -281,12 +302,11 @@ export function HoldingFormDialog({
 
           <div className="flex flex-col gap-2">
             <Label htmlFor="holding-quantity">Quantity</Label>
-            <Input
+            <QuantityInput
               id="holding-quantity"
-              inputMode="decimal"
               value={quantity}
-              onChange={(e) => setQuantity(e.target.value)}
-              placeholder="e.g. 2.018"
+              onChange={setQuantity}
+              placeholder="e.g. 1354.5"
               required
             />
             <p className="text-xs text-muted-foreground">

@@ -11,7 +11,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
   Select,
@@ -23,6 +22,7 @@ import {
 import { DialogDateTimeField } from "@/components/blocks/dialog-date-time-field"
 import { DialogLoadingOrError } from "@/components/blocks/dialog-loading-state"
 import { MoneyInput } from "@/components/blocks/money-input"
+import { QuantityInput } from "@/components/blocks/quantity-input"
 import { formatCurrency } from "@/lib/currency"
 import type { CurrencyCode } from "@/lib/data/currencies"
 import {
@@ -34,6 +34,10 @@ import {
   unitsFromAmountScaled,
 } from "@/lib/holdings"
 import { parseMoneyInput, toDecimalString } from "@/lib/money"
+import {
+  parseQuantityInput,
+  unambiguousQuantityText,
+} from "@/lib/quantity-input"
 import { cn } from "@/lib/utils"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import {
@@ -161,7 +165,11 @@ function TradeCorrectionForm({
     details.fundingAccountId
   )
   const [basis, setBasis] = React.useState<Basis>("quantity")
-  const [quantity, setQuantity] = React.useState<string>(details.quantity)
+  // Prefill stays unambiguous (a stored "1.354" must not open with a
+  // thousands-vs-decimal prompt); the server's 8-dp form already is.
+  const [quantity, setQuantity] = React.useState<string>(() =>
+    unambiguousQuantityText(details.quantity)
+  )
   const [amount, setAmount] = React.useState<string>(() =>
     toDecimalString(BigInt(details.cashAmountMinor), currencyCode)
   )
@@ -177,6 +185,13 @@ function TradeCorrectionForm({
   const [submitting, setSubmitting] = React.useState(false)
 
   const isQuantityBasis = basis === "quantity"
+
+  // Locale-aware reading of the typed quantity; only an unambiguous `ok`
+  // reading feeds the preview or the wire (see <QuantityInput>).
+  const parsedQuantity = React.useMemo(
+    () => parseQuantityInput(quantity),
+    [quantity]
+  )
 
   const unitPriceMinor = React.useMemo<bigint | null>(() => {
     if (unitPrice.trim() === "") return null
@@ -203,24 +218,20 @@ function TradeCorrectionForm({
   >(() => {
     if (unitPriceMinor === null) return { kind: "empty" }
     if (isQuantityBasis) {
-      if (quantity.trim() === "") return { kind: "empty" }
-      try {
-        const scaled = quantityToScaled(quantity.trim())
-        if (scaled <= 0n) return { kind: "invalid" }
-        return {
-          kind: "valid",
-          minor: holdingCostMinor(scaled, unitPriceMinor),
-          quantityScaled: scaled,
-        }
-      } catch {
-        return { kind: "invalid" }
+      if (parsedQuantity.status !== "ok") return { kind: "empty" }
+      const scaled = quantityToScaled(parsedQuantity.value)
+      if (scaled <= 0n) return { kind: "invalid" }
+      return {
+        kind: "valid",
+        minor: holdingCostMinor(scaled, unitPriceMinor),
+        quantityScaled: scaled,
       }
     }
     if (amountMinor === null) return { kind: "empty" }
     const quantityScaled = unitsFromAmountScaled(amountMinor, unitPriceMinor)
     if (quantityScaled <= 0n) return { kind: "invalid" }
     return { kind: "valid", minor: amountMinor, quantityScaled }
-  }, [isQuantityBasis, quantity, amountMinor, unitPriceMinor])
+  }, [isQuantityBasis, parsedQuantity, amountMinor, unitPriceMinor])
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
@@ -244,12 +255,14 @@ function TradeCorrectionForm({
           fundingAccountId,
           side,
           cashAmount: cashPreview.minor.toString(),
-          // Quantity basis sends exactly what the user typed; amount basis
-          // sends the derived units at the column's own fixed 8-dp scale
-          // (mirrors `TradeDialog`'s submit) so nothing is re-rounded.
-          quantity: isQuantityBasis
-            ? quantity.trim()
-            : scaledToQuantityString(cashPreview.quantityScaled),
+          // Quantity basis sends the canonical reading of what the user
+          // typed; amount basis sends the derived units at the column's own
+          // fixed 8-dp scale (mirrors `TradeDialog`'s submit) so nothing is
+          // re-rounded.
+          quantity:
+            isQuantityBasis && parsedQuantity.status === "ok"
+              ? parsedQuantity.value
+              : scaledToQuantityString(cashPreview.quantityScaled),
           unitPrice: price.toString(),
           tradeDate: date.toISOString(),
           idempotencyKey: createUuidV7(),
@@ -362,11 +375,10 @@ function TradeCorrectionForm({
         {isQuantityBasis ? (
           <div className="flex flex-col gap-2">
             <Label htmlFor="trade-correction-quantity">Quantity</Label>
-            <Input
+            <QuantityInput
               id="trade-correction-quantity"
-              inputMode="decimal"
               value={quantity}
-              onChange={(e) => setQuantity(e.target.value)}
+              onChange={setQuantity}
               disabled={details.notLatestReason !== null}
               required
             />
