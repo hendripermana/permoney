@@ -3,7 +3,6 @@ import type { PrismaClient } from "@prisma/client"
 import { z } from "zod"
 import { auditLog, auditLogs, createAuditContext } from "./middleware/audit"
 import { errorLogMiddleware } from "./middleware/error-log"
-import { logEvent } from "./log.server"
 import {
   authMiddleware,
   requireCapability,
@@ -1107,29 +1106,37 @@ export const acceptFamilyInviteFn = createServerFn({ method: "POST" })
  * throws and never blocks signup — a token that is stale, mismatched with the
  * signup email, or otherwise unusable is ignored and the caller proceeds as a
  * normal signup (the invite, if still live, can be accepted later from the
- * link). Returns whether the invite was actually applied.
+ * link).
+ *
+ * F1 audit S5.1: an UNEXPECTED failure is reported as
+ * `reason: "unexpected"` for the caller to log, rather than logged here. This
+ * module is client-reachable (the members settings route imports it), so it
+ * must not import `log.server` — the Vite import-protection fence rejects a
+ * `.server` edge from any client-graph file, and it is right to: the import
+ * would be replaced by a stub client-side. Its only server-only edge is the
+ * middleware chain, which is server-only by construction.
  */
+export type InviteAfterSignupOutcome =
+  | { applied: true }
+  | { applied: false; reason: "not_applicable" }
+  | { applied: false; reason: "unexpected"; errorName: string }
+
 export async function applyInviteAfterSignup(
   client: PrismaClient,
   { userId, rawToken }: { userId: string; rawToken: string }
-): Promise<boolean> {
+): Promise<InviteAfterSignupOutcome> {
   try {
     await acceptFamilyInviteForUser(client, { userId, rawToken })
-    return true
+    return { applied: true }
   } catch (error) {
-    if (
-      !(error instanceof FamilyInviteError) &&
-      !(error instanceof z.ZodError)
-    ) {
-      // Unexpected failure: surface the class only — never the token.
-      // F1 audit S5.1: via the structured logger, which emits `errorName`
-      // (i.e. exactly the class) and deliberately nothing else.
-      logEvent({
-        level: "error",
-        event: "invite_apply_after_signup_failed",
-        errorName: error instanceof Error ? error.name : "unknown",
-      })
+    if (error instanceof FamilyInviteError || error instanceof z.ZodError) {
+      return { applied: false, reason: "not_applicable" }
     }
-    return false
+    // Surface the CLASS only — never the token, never the message.
+    return {
+      applied: false,
+      reason: "unexpected",
+      errorName: error instanceof Error ? error.name : "unknown",
+    }
   }
 }

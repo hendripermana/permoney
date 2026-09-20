@@ -1,5 +1,4 @@
 import type { Prisma } from "@prisma/client"
-import { logEvent } from "../log.server"
 
 export interface SerializableRetryEvent {
   attempt: number
@@ -90,6 +89,15 @@ export async function withSerializableRetry<T>(
 
       // F1 audit S5.1: structured, so a retry storm is greppable and countable
       // (`event:serializable_retry`) instead of free text.
+      //
+      // Imported DYNAMICALLY on purpose: this module is reached from
+      // client-graph files (server-fn helper modules), and a static
+      // `.server.ts` edge would be rejected by the TanStack Start
+      // import-protection fence — see `src/server/middleware/with-family.ts`
+      // for the same idiom. The branch is the retry path, so the extra
+      // resolution cost is paid only when a retry actually happens (and the
+      // module registry caches it after the first time).
+      const { logEvent } = await import("../log.server")
       logEvent({
         level: "warn",
         event: "serializable_retry",

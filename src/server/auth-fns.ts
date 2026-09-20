@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start"
 import { signupSchema, loginSchema } from "./auth-schemas"
+import { logEvent } from "./log.server"
 import { errorLogMiddleware } from "./middleware/error-log"
 import { getSession, requireSession } from "./middleware/session"
 import {
@@ -57,10 +58,21 @@ export const signupFn = createServerFn({ method: "POST" })
         import("./db.server"),
         import("./family-invites"),
       ])
-      inviteApplied = await applyInviteAfterSignup(prisma, {
+      const outcome = await applyInviteAfterSignup(prisma, {
         userId: res.user.id,
         rawToken: data.inviteToken,
       })
+      inviteApplied = outcome.applied
+      if (!outcome.applied && outcome.reason === "unexpected") {
+        // F1 audit S5.1: logged HERE, in a server-only handler, because
+        // `family-invites.ts` is client-reachable and must not import
+        // `log.server`. Class name only — never the token or the message.
+        logEvent({
+          level: "error",
+          event: "invite_apply_after_signup_failed",
+          errorName: outcome.errorName,
+        })
+      }
     }
 
     return {
