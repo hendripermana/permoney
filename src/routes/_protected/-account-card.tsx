@@ -225,7 +225,7 @@ export function AccountCard({
               variant="ghost"
               disabled={busy}
               onClick={onValuation}
-              aria-label={cashLike ? "Reconcile account" : "Update value"}
+              aria-label="Set real balance"
             >
               {cashLike ? (
                 <Scale className="size-4" />

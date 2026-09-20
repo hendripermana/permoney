@@ -1048,7 +1048,7 @@ function AccountDetailPage() {
               onClick={() => setDetailDialog("valuation")}
             >
               <Scale className="size-4" />
-              {cashLike ? "Reconcile" : "Update value"}
+              Set real balance
             </Button>
           )}
           <Button
@@ -1243,7 +1243,7 @@ function AccountDetailPage() {
                   onClick={() => setReconcileMode((prev) => !prev)}
                 >
                   <ListChecks className="size-4" />
-                  Reconcile mode
+                  Match my statement
                 </Button>
               </div>
             </div>

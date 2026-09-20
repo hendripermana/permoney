@@ -36,14 +36,14 @@ test.describe("investment performance (PER-229)", () => {
 
     // Record a higher market value → unrealized gain of 5,000,000 (+25%).
     await page
-      .getByRole("button", { name: "Update value", exact: true })
+      .getByRole("button", { name: "Set real balance", exact: true })
       .click()
     const dialog = page.getByRole("dialog")
     await expect(
-      dialog.getByRole("heading", { name: "Update value" })
+      dialog.getByRole("heading", { name: "Set real balance" })
     ).toBeVisible()
     await dialog.getByLabel(/New value/i).fill("25000000")
-    await dialog.getByRole("button", { name: "Update value" }).click()
+    await dialog.getByRole("button", { name: "Set real balance" }).click()
     await expect(page.getByRole("dialog")).toHaveCount(0)
 
     await expect(page.getByText(/\+Rp\s+5,000,000\.00/).first()).toBeVisible()

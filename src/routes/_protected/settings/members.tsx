@@ -71,6 +71,23 @@ type PendingInvite = Awaited<ReturnType<typeof listFamilyInvitesFn>>[number]
 const ASSIGNABLE_ROLES = ["admin", "member", "viewer"] as const
 type AssignableRole = (typeof ASSIGNABLE_ROLES)[number]
 
+// Plain-language role labels (F1 audit B2). The STORED values stay the enum —
+// `admin`/`member`/`viewer` are what the server, the RLS policies and the
+// invitation rows use — but nobody should have to guess what "viewer" entails
+// when choosing it for their partner. Pickers use the long label; the compact
+// badge uses the short one.
+const ROLE_LABEL: Record<AssignableRole, string> = {
+  admin: "Admin — manage people",
+  member: "Member — add and edit transactions",
+  viewer: "Viewer — read only",
+}
+const ROLE_SHORT_LABEL: Record<string, string> = {
+  owner: "Owner",
+  admin: "Admin",
+  member: "Member",
+  viewer: "Viewer",
+}
+
 const ROLE_BADGE: Record<string, string> = {
   owner: "bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200",
   admin: "bg-sky-100 text-sky-900 dark:bg-sky-950 dark:text-sky-200",
@@ -219,7 +236,7 @@ function InviteByEmailCard() {
               <SelectContent>
                 {ASSIGNABLE_ROLES.map((value) => (
                   <SelectItem key={value} value={value}>
-                    {value}
+                    {ROLE_LABEL[value]}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -344,7 +361,7 @@ function PendingInviteRow({ invite }: { invite: PendingInvite }) {
       </TableCell>
       <TableCell>
         <Badge className={ROLE_BADGE[invite.role] ?? ROLE_BADGE.member}>
-          {invite.role}
+          {ROLE_SHORT_LABEL[invite.role] ?? invite.role}
         </Badge>
       </TableCell>
       <TableCell className="text-sm">
@@ -459,7 +476,7 @@ function MemberRow({ member }: { member: Member }) {
       </TableCell>
       <TableCell>
         {isOwner ? (
-          <Badge className={ROLE_BADGE.owner}>owner</Badge>
+          <Badge className={ROLE_BADGE.owner}>{ROLE_SHORT_LABEL.owner}</Badge>
         ) : (
           <Select
             value={member.role}
@@ -474,7 +491,7 @@ function MemberRow({ member }: { member: Member }) {
             <SelectContent>
               {ASSIGNABLE_ROLES.map((value) => (
                 <SelectItem key={value} value={value}>
-                  {value}
+                  {ROLE_LABEL[value]}
                 </SelectItem>
               ))}
             </SelectContent>

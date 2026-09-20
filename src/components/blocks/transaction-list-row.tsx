@@ -225,7 +225,7 @@ export function TransactionListRow({
               // be reconciled at all, so no checkbox renders for it.
               <span
                 className="text-[10px] text-muted-foreground italic"
-                title="Pending transactions can't be reconciled yet"
+                title="Pending transactions can't be matched yet"
               >
                 —
               </span>
@@ -235,8 +235,8 @@ export function TransactionListRow({
                 onCheckedChange={(val) => reconcile.onToggle(!!val)}
                 aria-label={
                   trx.status === "RECONCILED"
-                    ? "Unreconcile transaction"
-                    : "Reconcile transaction"
+                    ? "Unmatch transaction"
+                    : "Match transaction"
                 }
               />
             )

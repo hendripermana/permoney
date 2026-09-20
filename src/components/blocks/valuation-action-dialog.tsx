@@ -104,9 +104,7 @@ export function ValuationActionDialog({
       <DialogContent>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <DialogHeader>
-            <DialogTitle>
-              {cashLike ? "Reconcile account" : "Update value"}
-            </DialogTitle>
+            <DialogTitle>Set real balance</DialogTitle>
             <DialogDescription>
               {cashLike
                 ? "Enter the real-world balance. This becomes your account's new balance immediately, recorded as an audited reconciliation — your transaction history is never rewritten."
@@ -192,7 +190,7 @@ export function ValuationActionDialog({
               type="submit"
               disabled={submitting || valueInput.trim() === ""}
             >
-              {submitting ? "Saving…" : cashLike ? "Reconcile" : "Update value"}
+              {submitting ? "Saving…" : "Set real balance"}
             </Button>
           </DialogFooter>
         </form>

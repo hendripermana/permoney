@@ -105,10 +105,14 @@ async function setupReconciledAccount(
   await page.waitForURL(/\/accounts\/[^/]+$/, { timeout: 15000 })
 
   // Establish a live `ground_truth` anchor dated TODAY.
-  await page.getByRole("button", { name: "Reconcile", exact: true }).click()
+  await page
+    .getByRole("button", { name: "Set real balance", exact: true })
+    .click()
   const reconcileDialog = page.getByRole("dialog")
   await reconcileDialog.getByLabel(/Real balance/i).fill(reconciledValue)
-  await reconcileDialog.getByRole("button", { name: "Reconcile" }).click()
+  await reconcileDialog
+    .getByRole("button", { name: "Set real balance" })
+    .click()
   await expect(page.getByRole("dialog")).toHaveCount(0)
 
   return { accountName }
