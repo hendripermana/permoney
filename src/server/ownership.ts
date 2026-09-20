@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
+import { holdingValueMinor, quantityToScaled } from "@/lib/holdings"
 import type { OwnerRef } from "@/lib/ownership"
 import { auditLog, type AuditContext } from "./middleware/audit"
 import {
@@ -245,6 +246,81 @@ export const listOwnerCandidatesFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
   .handler(async ({ context }) => {
     return await listOwnerCandidatesForFamily({
+      familyId: context.familyId,
+      userId: context.user.id,
+    })
+  })
+
+// -----------------------------------------------------------------------------
+// Wealth-by-person inputs (ADR-0058 D3). A pure READ — derived on read, no
+// persistence, no idempotency key or audit row (like `computeZakatFn` and the
+// reporting reads). The attribution itself lives in `src/lib/wealth-by-person.ts`
+// and runs client-side over the SAME account records the net-worth card uses;
+// this only supplies what the account list does not carry: the people, and the
+// value of every holding that has its own owner.
+// -----------------------------------------------------------------------------
+
+export interface WealthOwnershipInputs {
+  people: Array<{ id: string; displayName: string }>
+  /** Holdings WITH an owner only; value in the account's currency, minor units. */
+  ownedHoldings: Array<{
+    accountId: string
+    ownerPersonId: string
+    valueMinor: string
+  }>
+}
+
+export async function getWealthOwnershipInputsForFamily({
+  familyId,
+  userId,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  familyId: string
+  userId: string
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<WealthOwnershipInputs> {
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
+    const people = await tx.zakatPayer.findMany({
+      where: { familyId },
+      select: { id: true, displayName: true },
+      orderBy: { id: "asc" },
+    })
+    const holdings = await tx.holding.findMany({
+      where: { familyId, ownerPersonId: { not: null } },
+      select: {
+        accountId: true,
+        ownerPersonId: true,
+        quantity: true,
+        avgUnitCostMinor: true,
+        lastPriceMinor: true,
+      },
+      orderBy: { id: "asc" },
+    })
+    return {
+      people,
+      ownedHoldings: holdings.flatMap((h) =>
+        h.ownerPersonId === null
+          ? []
+          : [
+              {
+                accountId: h.accountId,
+                ownerPersonId: h.ownerPersonId,
+                // Same value formula as `serializeHolding` (src/server/holdings.ts).
+                valueMinor: holdingValueMinor(
+                  quantityToScaled(h.quantity.toFixed(8)),
+                  h.lastPriceMinor ?? h.avgUnitCostMinor
+                ).toString(),
+              },
+            ]
+      ),
+    }
+  })
+}
+
+export const getWealthOwnershipInputsFn = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .handler(async ({ context }) => {
+    return await getWealthOwnershipInputsForFamily({
       familyId: context.familyId,
       userId: context.user.id,
     })

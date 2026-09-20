@@ -38,6 +38,9 @@ export function useOwnerCandidates(): {
   const { data } = useQuery({
     queryKey: OWNER_CANDIDATES_QUERY_KEY,
     queryFn: () => listOwnerCandidatesFn(),
+    // People and members change on other routes (Zakat settings, invites);
+    // refetch on mount rather than trusting the default 1-minute cache.
+    staleTime: 0,
   })
   return {
     candidates: data?.candidates ?? [],
@@ -114,8 +117,8 @@ export function AccountOwnerFields({
     <div className="flex flex-col gap-3 rounded-md border p-3">
       <Label>Ownership</Label>
       <p className="text-xs text-muted-foreground">
-        Who this account belongs to. It drives wealth by person and Zakat. Leave
-        it unset if it isn't anyone's in particular.
+        Who this account belongs to. It drives wealth by person. Leave it unset
+        if it isn't anyone's in particular.
       </p>
       <div className="grid gap-3 sm:grid-cols-2">
         <OwnerSelect

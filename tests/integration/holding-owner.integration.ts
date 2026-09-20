@@ -12,7 +12,10 @@ import {
   recordTradeForFamily,
   upsertHoldingForFamily,
 } from "@/server/holdings"
-import { OwnerMemberNotActiveError } from "@/server/ownership"
+import {
+  OwnerMemberNotActiveError,
+  getWealthOwnershipInputsForFamily,
+} from "@/server/ownership"
 import { TenantReferenceError } from "@/server/validation/tenant-references"
 import {
   createZakatPayerForFamily,
@@ -425,5 +428,55 @@ describe("holding owner (ADR-0058 D2)", () => {
     expect((await holdingRow(owner, moved.toHoldingId))?.ownerPersonId).toBe(
       rahayu.id
     )
+  })
+  test("wealth inputs list the family's people and ONLY owned holdings, valued like the holdings view", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const other = await factories.createAuthenticatedOnboardedUser()
+    const account = await makeInvestmentAccount(factories, owner)
+    const otherAccount = await makeInvestmentAccount(factories, other)
+    const rahayu = await addPerson(owner, "Rahayu")
+    const outsider = await addPerson(other, "Outsider")
+
+    // 10 units @ Rp 1,000 avg, last price Rp 1,500 -> value Rp 15,000.
+    await upsertHoldingForFamily({
+      data: {
+        accountId: account.id,
+        instrument: { kind: "mutual_fund", name: "Owned fund" },
+        quantity: "10",
+        avgUnitCost: "1000",
+        lastPrice: "1500",
+        owner: { personId: rahayu.id },
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+    await addHolding(owner, account.id) // no owner: must not be listed
+    await upsertHoldingForFamily({
+      data: {
+        accountId: otherAccount.id,
+        instrument: { kind: "mutual_fund", name: "Theirs" },
+        quantity: "1",
+        avgUnitCost: "1",
+        owner: { personId: outsider.id },
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: other.family.id,
+      user: other.user,
+    })
+
+    const inputs = await getWealthOwnershipInputsForFamily({
+      familyId: owner.family.id,
+      userId: owner.user.id,
+      runInTenantTransaction: (f, u, fn) => harness.withMember(f, u, fn),
+    })
+    expect(inputs.people).toEqual([{ id: rahayu.id, displayName: "Rahayu" }])
+    expect(inputs.ownedHoldings).toEqual([
+      {
+        accountId: account.id,
+        ownerPersonId: rahayu.id,
+        valueMinor: "1500000", // 10 x Rp 1,500 in sen
+      },
+    ])
   })
 })
