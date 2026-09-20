@@ -1052,9 +1052,9 @@ looked.
 Add `Valuation.observedAt TIMESTAMP(3) NULL`.
 
 - A `ground_truth` anchor of an anchor type, written when its `valuationDate`
-  is the **same UTC calendar day as the write instant**, records `observedAt =
-createdAt` — one instant, passed in once (`createValuationWithinTx`'s
-  `writtenAt`), never two `now()` calls.
+  is the **same UTC calendar day as the write instant**, records
+  `observedAt = createdAt` — one instant, passed in once
+  (`createValuationWithinTx`'s `writtenAt`), never two `now()` calls.
 - Back-dated anchors (`valuationDate` on an earlier day), every `derived`
   anchor, every `opening`, and `market` observations keep `observedAt = NULL`.
 - Predicate. `derived` is unchanged (PER-276 formula). For `ground_truth`:
