@@ -2,8 +2,9 @@
 
 |                |                                                                                         |
 | -------------- | --------------------------------------------------------------------------------------- |
-| **Status**     | Proposed                                                                                |
+| **Status**     | Accepted                                                                                |
 | **Date**       | 2026-08-04                                                                              |
+| **Accepted**   | 2026-08-05                                                                              |
 | **Deciders**   | Hendri Permana                                                                          |
 | **Amends**     | ADR-0008 (domain/ledger boundaries), ADR-0034/0043 (valuations), ADR-0050 (market data) |
 | **Supersedes** | PER-239 account-level opt-in valuation (folded in)                                      |
@@ -341,3 +342,28 @@ price/unit` from the quote store instead of at cost.
 - **Deferred:** the scheduled refresh worker (PER-237 — this slice exposes an
   explicit "Refresh prices" action only), real scraper adapters (PER-235
   gold-local; reksadana NAV), and cross-currency quote → holding.
+
+## Amendment — implementation shipped; `HoldingLot` was never built (2026-09-20)
+
+**Status corrected from Proposed to Accepted.** The holdings domain shipped
+starting 2026-08-05 (PER-232, `Instrument` + `Holding` + value = Σ holdings) and
+was extended by ADR-0054 (holdings-account operational coherence) and the
+market-price link (`tests/integration/holding-market-prices.integration.ts`).
+
+**Dead reference, recorded rather than rewritten:** the two mentions of
+`HoldingLot` above (the domain-model list, and the "New tenant-scoped schema"
+risk line) describe Slice 5 as it was planned. There is **no `HoldingLot`
+model in `prisma/schema.prisma`, no migration that ever created one, and no
+code that reads or writes lots.** The shipped cost basis is average cost, on
+`Holding`:
+
+- `avgUnitCostMinor` — cost per ONE unit, in minor units of the instrument's
+  quote currency (≥ 0, DB CHECK); cost basis = quantity × this.
+- `lastPriceMinor` — the manual current price per one unit (NULL until the
+  user enters one; value then falls back to cost basis and gain is 0).
+
+So the "v1 may aggregate to a single average-cost lot" allowance is what
+actually shipped, and the FIFO/exact-lot and realized-gain-by-lot work remains
+unbuilt. This note does not change the decision — it records that one clause of
+it was not implemented, so the next reader does not go looking for a table that
+does not exist.
