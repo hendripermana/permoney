@@ -301,3 +301,12 @@ netdata (`:19999`) is bound to `127.0.0.1` only — reachable exclusively via
 (`SELECT 1`). Returns `{"status":"ok"}` / 200, or `{"status":"error"}` / 503.
 Wired into the Dockerfile's `HEALTHCHECK` and safe to point external
 uptime-monitoring at directly (it does not require auth).
+
+## Dependency audit
+
+There is no dependency-audit step in CI, on purpose — the findings are all
+transitive dev-tooling dependencies (most of them owned by `vite-plus` or
+`prisma`, and unfixable from this repository), the set is permanently red
+rather than flaky, and Dependabot's security alerts are the actionable
+channel. The measurement, the rule for when a finding _is_ actioned, and the
+re-check triggers are in [`docs/dependency-audit.md`](./dependency-audit.md).
