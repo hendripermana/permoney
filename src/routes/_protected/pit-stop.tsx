@@ -59,15 +59,14 @@ function PitStopPage() {
         <SidebarInset>
           <SiteHeader />
           <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
+            {/* The page title ("Pit Stop") is the SiteHeader's <h1>, fed by the
+                route's staticData; a second <h1> here would duplicate it. */}
             <div className="flex items-center gap-3">
               <Gauge className="size-6 text-emerald-500" aria-hidden />
-              <div>
-                <h1 className="text-xl font-semibold">Pit Stop</h1>
-                <p className="text-sm text-muted-foreground">
-                  Tell Permoney what each account really holds right now. It
-                  corrects the balance without inventing transactions.
-                </p>
-              </div>
+              <p className="text-sm text-muted-foreground">
+                Tell Permoney what each account really holds right now. It
+                corrects the balance without inventing transactions.
+              </p>
             </div>
 
             {isLoading ? (
