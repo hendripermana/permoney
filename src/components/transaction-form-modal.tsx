@@ -34,10 +34,20 @@ import {
   TagMultiSelect,
   type TagMultiSelectItem,
 } from "@/components/blocks/tag-multi-select"
+import { MoneyInput } from "@/components/blocks/money-input"
 import {
+  ZERO_MONEY,
+  addMoney,
+  absMoney,
   decodeMoney,
+  parseMoneyInput,
+  subMoney,
+  sumMoney,
+  toDecimalString,
+  toMoney,
+  // Still used by the (frozen) BackdatedAnchorBanner's anchor-value label,
+  // which is display-only.
   toDisplayNumber,
-  toMinorUnits,
   type Money,
 } from "@/lib/money"
 import {
@@ -50,6 +60,7 @@ import {
   deriveTransferKindForAccounts,
   parseAccountType,
 } from "@/lib/liability-semantics"
+import { formatCurrency } from "@/lib/currency"
 import { CURRENCIES, type CurrencyCode } from "@/lib/data/currencies"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import {
@@ -108,7 +119,11 @@ import {
 const splitEntrySchema = z.object({
   id: z.string(), // client-generated UUID untuk React key
   description: z.string(),
-  amount: z.number().min(0),
+  // F1 audit S1: RAW user text, parsed to Money once at submit by
+  // `parseMoneyInput` (the same locale-agnostic parser every other money
+  // dialog uses). A `number` here meant the browser's own number parsing
+  // decided what "50.000" meant — it means 50000 in id-ID, 50 in en-US.
+  amount: z.string().default(""),
   categoryId: z.string().optional(),
   merchantId: z.string().optional(),
 })
@@ -126,7 +141,10 @@ interface OptimisticTransactionRelationDraft {
 
 const transactionSchema = z.object({
   type: z.enum(["expense", "income", "transfer"]),
-  amount: z.number().min(1, "Amount is required"),
+  // F1 audit S1: money fields hold RAW user text and are parsed once at submit.
+  // `min(1)` on a number could not reject a blank field, and `Number()` had
+  // already destroyed the locale reading before validation ever ran.
+  amount: z.string().min(1, "Amount is required"),
   description: z.string().min(1, "Description is required"),
   accountId: z.string().min(1, "Source Account is required"),
   categoryId: z.string().optional(),
@@ -137,13 +155,15 @@ const transactionSchema = z.object({
   // Enterprise: Transaction Lifecycle Status
   status: z.enum(["PENDING", "CLEARED", "RECONCILED"]).default("CLEARED"),
   // Enterprise: Multi-Currency Transfer (Implied Rate Architecture)
-  // destinationAmount hanya diisi saat transfer antar akun dengan mata uang berbeda
-  destinationAmount: z.number().positive().optional(),
+  // destinationAmount hanya diisi saat transfer antar akun dengan mata uang
+  // berbeda — and since F1 audit S1 (server side) it is REQUIRED there: a
+  // same-number fallback silently reinterpreted an IDR figure as USD.
+  destinationAmount: z.string().optional(),
   // PER-247 (generalizing PER-147 / ADR-0035 §6): optional fee on ANY
   // transfer (top-up/e-wallet/bank charge, or FX spread on cross-currency).
   // Denominated in the fee-bearing account's currency; posts a separate
   // `transfer_fee`/`fx_fee` expense row server-side, linked to the Transfer.
-  feeAmount: z.number().nonnegative().optional(),
+  feeAmount: z.string().optional(),
   feeCategoryId: z.string().optional(),
   // Which side bears the fee (default: the source account). Constrained to
   // the two transfer accounts in this form; the server accepts any
@@ -156,7 +176,7 @@ const transactionSchema = z.object({
   // either transfer side is a balanceSource="valuation" account — prefilled
   // client-side as latest ∓ amount (see NewValuationValueField), editable.
   // Left undefined, the server computes the same prefill from fresher data.
-  newValuationValue: z.number().optional(),
+  newValuationValue: z.string().optional(),
   // PER-267 / ADR-0043's PER-264 amendment — the "also update balance" override.
   // Undefined (the default) = "Record (balance unchanged)": submit normally, no
   // balance-override intent at all. Present only when the user explicitly
@@ -291,25 +311,39 @@ const transactionStatusOptions: Array<{
 ]
 
 /**
- * Coerce an EditAmount (which may be Money/bigint OR a JS number) to the
- * decimal-major number the HTML input expects. Currency drives the scale
- * for the bigint case.
+ * F1 audit S1: turn a stored amount into the RAW TEXT the money inputs hold.
+ *
+ * Exact by construction for the bigint case: `toDecimalString` divides the
+ * minor units with BigInt arithmetic, so `368912.71` round-trips as
+ * "368912.71" — the old `toDisplayNumber` path went through a JS double and
+ * could return "368912.71000000001", which the parser would then reject or
+ * silently re-read. Plain numbers (legacy callers, transient state) are
+ * stringified as-is.
  */
-function editAmountToInputNumber(amount: EditAmount, currency: string): number {
+function editAmountToInputString(amount: EditAmount, currency: string): string {
   if (typeof amount === "bigint") {
     const code = currency as CurrencyCode
-    if (CURRENCIES[code]) return toDisplayNumber(amount as Money, code)
-    // Unknown currency: assume scale 100 (the modal majority case)
-    return Number(amount) / 100
+    if (CURRENCIES[code]) return toDecimalString(amount as Money, code)
+    // Unknown currency: assume scale 100 (the modal majority case). Integer
+    // math only — a float fallback would reintroduce the precision loss.
+    const negative = amount < 0n
+    const abs = absMoney(amount)
+    const whole = abs / 100n
+    const fraction = abs % 100n
+    const fractionText = fraction.toString().padStart(2, "0").replace(/0+$/, "")
+    const sign = negative ? "-" : ""
+    return fractionText === ""
+      ? `${sign}${whole.toString()}`
+      : `${sign}${whole.toString()}.${fractionText}`
   }
-  return amount
+  return String(amount)
 }
 
 function createBlankSplitEntry(): SplitEntryValue {
   return {
     id: createUuidV7(),
     description: "",
-    amount: 0,
+    amount: "",
     categoryId: "",
     merchantId: "",
   }
@@ -543,21 +577,28 @@ function AmountAccountFields({
                   )
                 }}
               </form.Subscribe>
-              <Input
-                id={field.name}
-                name={field.name}
-                type="number"
-                className="pl-7 text-lg font-bold"
-                value={field.state.value || ""}
-                onBlur={field.handleBlur}
-                onChange={(e) => field.handleChange(Number(e.target.value))}
-                aria-invalid={field.state.meta.errors.length > 0}
-                aria-describedby={
-                  field.state.meta.errors.length > 0
-                    ? `${field.name}-error`
-                    : undefined
-                }
-              />
+              <form.Subscribe selector={(state) => state.values.accountId}>
+                {(currentAccountId) => (
+                  <MoneyInput
+                    id={field.name}
+                    name={field.name}
+                    inputClassName="pl-7 text-lg font-bold"
+                    currency={
+                      (formData?.accounts.find((a) => a.id === currentAccountId)
+                        ?.currency ?? "IDR") as CurrencyCode
+                    }
+                    value={field.state.value}
+                    onBlur={field.handleBlur}
+                    onChange={field.handleChange}
+                    aria-invalid={field.state.meta.errors.length > 0}
+                    aria-describedby={
+                      field.state.meta.errors.length > 0
+                        ? `${field.name}-error`
+                        : undefined
+                    }
+                  />
+                )}
+              </form.Subscribe>
             </div>
             <FieldError
               id={`${field.name}-error`}
@@ -968,34 +1009,68 @@ function DestinationAmountField({
                   <span className="absolute top-2.5 left-3 text-sm font-medium text-muted-foreground">
                     {getCurrencySymbol(dstAccount.currency)}
                   </span>
-                  <Input
+                  <MoneyInput
                     id="destination-amount"
                     name="destination-amount"
-                    type="number"
-                    className="pl-8 text-lg font-bold"
+                    inputClassName="pl-8 text-lg font-bold"
+                    currency={dstAccount.currency as CurrencyCode}
                     placeholder="0"
                     value={field.state.value ?? ""}
                     onBlur={field.handleBlur}
-                    onChange={(e) =>
-                      field.handleChange(
-                        e.target.value ? Number(e.target.value) : undefined
-                      )
-                    }
+                    onChange={field.handleChange}
                   />
                 </div>
-                {field.state.value && sourceAmount > 0 && (
-                  <p className="text-xs font-medium text-blue-600 dark:text-blue-400">
-                    Implied rate: 1 {srcAccount.currency} ={" "}
-                    {(field.state.value / sourceAmount).toLocaleString(
-                      "en-US",
-                      {
-                        minimumFractionDigits: 4,
-                        maximumFractionDigits: 4,
-                      }
-                    )}{" "}
-                    {dstAccount.currency}
-                  </p>
-                )}
+                {(() => {
+                  // F1 audit S1: both sides are parsed with the SAME
+                  // locale-agnostic parser the submit path uses, so the rate
+                  // shown is the rate that will be recorded.
+                  const destinationRaw = field.state.value ?? ""
+                  if (destinationRaw.trim() === "") return null
+                  const sourceMinor = parseMoneyInput(
+                    sourceAmount,
+                    srcAccount.currency as CurrencyCode
+                  )
+                  const destinationMinor = parseMoneyInput(
+                    destinationRaw,
+                    dstAccount.currency as CurrencyCode
+                  )
+                  if (
+                    sourceMinor === null ||
+                    destinationMinor === null ||
+                    sourceMinor === 0n
+                  ) {
+                    return null
+                  }
+                  const rateText = (
+                    Number((destinationMinor * 10000n) / sourceMinor) / 10000
+                  ).toLocaleString("en-US", {
+                    minimumFractionDigits: 4,
+                    maximumFractionDigits: 4,
+                  })
+                  // Within 1% of parity — exact integer test, no float. A
+                  // 1:1 mix-up (destination amount typed in the SOURCE
+                  // currency) is by far the most common cross-currency error,
+                  // and it silently records a ~16,000× wrong destination leg.
+                  // Soft warning only: some pairs genuinely trade near par.
+                  const nearParity =
+                    destinationMinor * 100n >= sourceMinor * 99n &&
+                    destinationMinor * 100n <= sourceMinor * 101n
+                  return (
+                    <>
+                      <p className="text-xs font-medium text-blue-600 dark:text-blue-400">
+                        Implied rate: 1 {srcAccount.currency} = {rateText}{" "}
+                        {dstAccount.currency}
+                      </p>
+                      {nearParity && (
+                        <p className="text-xs font-medium text-amber-600 dark:text-amber-500">
+                          That is almost exactly 1:1 — double-check the
+                          destination amount is in {dstAccount.currency}, not{" "}
+                          {srcAccount.currency}.
+                        </p>
+                      )}
+                    </>
+                  )
+                })()}
               </div>
             )}
           </form.Field>
@@ -1131,19 +1206,18 @@ function TransferContextFields({
                         bearerAccount?.currency ?? srcAccount.currency
                       )}
                     </span>
-                    <Input
+                    <MoneyInput
                       id="transfer-fee-amount"
                       name="transfer-fee-amount"
-                      type="number"
-                      className="pl-8 font-semibold"
+                      inputClassName="pl-8 font-semibold"
+                      currency={
+                        (bearerAccount?.currency ??
+                          srcAccount.currency) as CurrencyCode
+                      }
                       placeholder="0"
                       value={field.state.value ?? ""}
                       onBlur={field.handleBlur}
-                      onChange={(e) =>
-                        field.handleChange(
-                          e.target.value ? Number(e.target.value) : undefined
-                        )
-                      }
+                      onChange={field.handleChange}
                     />
                   </div>
                 </div>
@@ -1258,15 +1332,26 @@ function NewValuationValueField({
 
         const trackedAccount = srcIsValuation ? srcAccount : dstAccount
         const trackedCurrency = trackedAccount.currency as CurrencyCode
-        const trackedDisplayBalance = toDisplayNumber(
-          trackedAccount.balance,
-          trackedCurrency
+        const trackedBalance = toMoney(trackedAccount.balance)
+        // F1 audit S1: money math, not floats — and the prefill is rendered as
+        // the same raw text the field holds, so it round-trips through
+        // `parseMoneyInput` exactly (a float prefill could show
+        // "5000000.000000001" and then fail to parse).
+        const parsedAmount = parseMoneyInput(
+          amount,
+          (srcIsValuation ? srcAccount : dstAccount).currency as CurrencyCode
         )
         // Redemption (tracked -> cash): the withdrawal reduces the tracked
         // value. Contribution (cash -> tracked): it increases it.
-        const prefill = srcIsValuation
-          ? trackedDisplayBalance - amount
-          : trackedDisplayBalance + amount
+        const prefill =
+          parsedAmount === null
+            ? ""
+            : toDecimalString(
+                srcIsValuation
+                  ? subMoney(trackedBalance, parsedAmount)
+                  : addMoney(trackedBalance, parsedAmount),
+                trackedCurrency
+              )
 
         return (
           <form.Field name="newValuationValue">
@@ -1289,18 +1374,14 @@ function NewValuationValueField({
                     <span className="absolute top-2.5 left-3 text-sm font-medium text-muted-foreground">
                       {getCurrencySymbol(trackedCurrency)}
                     </span>
-                    <Input
+                    <MoneyInput
                       id="new-valuation-value"
                       name="new-valuation-value"
-                      type="number"
-                      className="pl-8 text-lg font-bold"
-                      value={displayValue}
+                      inputClassName="pl-8 text-lg font-bold"
+                      currency={trackedCurrency as CurrencyCode}
+                      value={field.state.value ?? displayValue}
                       onBlur={field.handleBlur}
-                      onChange={(e) =>
-                        field.handleChange(
-                          e.target.value ? Number(e.target.value) : undefined
-                        )
-                      }
+                      onChange={field.handleChange}
                     />
                   </div>
                 </div>
@@ -1835,8 +1916,10 @@ function SplitAllocationStatus({
   currency,
 }: {
   isBalanced: boolean
-  remaining: number
-  currency: string
+  // F1 audit S1: Money (bigint minor units), not a float — the status line is
+  // the split panel's only feedback, so it must state the exact remainder.
+  remaining: Money
+  currency: CurrencyCode
 }) {
   if (isBalanced) {
     return (
@@ -1852,10 +1935,7 @@ function SplitAllocationStatus({
       <p className="flex items-center gap-1.5 rounded-md bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 dark:bg-amber-950/30 dark:text-amber-400">
         <span>○</span>
         <span>
-          Remaining{" "}
-          <strong>
-            {getCurrencySymbol(currency)} {remaining.toLocaleString("en-US")}
-          </strong>{" "}
+          Remaining <strong>{formatCurrency(remaining, currency)}</strong>{" "}
           unallocated
         </span>
       </p>
@@ -1867,10 +1947,7 @@ function SplitAllocationStatus({
       <span>✕</span>
       <span>
         Over allocated by{" "}
-        <strong>
-          {getCurrencySymbol(currency)}{" "}
-          {Math.abs(remaining).toLocaleString("en-US")}
-        </strong>
+        <strong>{formatCurrency(absMoney(remaining), currency)}</strong>
       </span>
     </p>
   )
@@ -1908,13 +1985,34 @@ function SplitEntriesPanel({
 
   return (
     <form.Subscribe selector={(state) => state.values.amount}>
-      {(parentAmount) => {
+      {(parentAmountText) => {
         // When the allocation is fully balanced, promote the whole panel frame
         // to emerald (matching the status line), else keep the amber "still
         // allocating" frame. Light + dark variants.
-        const splitTotal = splitEntries.reduce((s, e) => s + e.amount, 0)
-        const remaining = parentAmount - splitTotal
-        const isBalanced = remaining === 0 && parentAmount > 0
+        //
+        // F1 audit S1: each raw string is parsed with the SAME locale-agnostic
+        // `parseMoneyInput` the server-side contract uses, then summed as
+        // MONEY — exact, per ADR-0001. The previous number sum carried a
+        // 0.01 epsilon and could not represent >2^53 minor units.
+        const splitCurrency = selectedAccountCurrency as CurrencyCode
+        const isKnownCurrency = Boolean(CURRENCIES[splitCurrency])
+        const parentAmount =
+          isKnownCurrency && parentAmountText.trim() !== ""
+            ? parseMoneyInput(parentAmountText, splitCurrency)
+            : null
+        const parsedEntryAmounts = splitEntries.map((entry) =>
+          isKnownCurrency && entry.amount.trim() !== ""
+            ? parseMoneyInput(entry.amount, splitCurrency)
+            : null
+        )
+        const splitTotal = sumMoney(
+          parsedEntryAmounts.filter(
+            (amount): amount is Money => amount !== null
+          )
+        )
+        const parentMoney = parentAmount ?? ZERO_MONEY
+        const remaining = subMoney(parentMoney, splitTotal)
+        const isBalanced = remaining === 0n && parentMoney > 0n
 
         return (
           <div
@@ -1990,13 +2088,18 @@ function SplitEntriesPanel({
                     aria-label="Amount for split entry"
                     name={`split-amount-${entry.id}`}
                     id={`split-amount-${entry.id}`}
-                    type="number"
+                    // F1 audit S1: raw text, parsed with `parseMoneyInput` at
+                    // submit — never `Number()`. No per-row preview here: the
+                    // allocation status below already shows the exact
+                    // remaining amount in the transaction currency, and a
+                    // preview line would not fit the 6rem column.
+                    inputMode="decimal"
                     placeholder="0"
                     className="h-8 text-right text-sm font-semibold"
-                    value={entry.amount || ""}
+                    value={entry.amount}
                     onChange={(e) =>
                       updateSplitEntry(entry.id, {
-                        amount: Number(e.target.value),
+                        amount: e.target.value,
                       })
                     }
                   />
@@ -2026,7 +2129,7 @@ function SplitEntriesPanel({
             <SplitAllocationStatus
               isBalanced={isBalanced}
               remaining={remaining}
-              currency={selectedAccountCurrency}
+              currency={splitCurrency}
             />
           </div>
         )
@@ -2166,6 +2269,7 @@ function TagsField({
 
 function TransactionActionBar({
   activeTab,
+  currency,
   form,
   isEditMode,
   isSplit,
@@ -2175,6 +2279,8 @@ function TransactionActionBar({
   splitEntries,
 }: {
   activeTab: TransactionType
+  /** Transaction currency — the split gate compares exact minor units. */
+  currency: CurrencyCode
   form: TransactionFormInstance
   isEditMode: boolean
   isSplit: boolean
@@ -2185,11 +2291,26 @@ function TransactionActionBar({
 }) {
   return (
     <form.Subscribe selector={(state) => state.values.amount}>
-      {(parentAmount) => {
-        const splitTotal = splitEntries.reduce((s, e) => s + e.amount, 0)
-        const remaining = parentAmount - splitTotal
+      {(parentAmountText) => {
+        // F1 audit S1: exact bigint parity (matches `split-parity.ts` on the
+        // server and ADR-0001's no-epsilon rule); the old float comparison
+        // could both wave through a real mismatch and block a real match.
+        const parentMinor = parseMoneyInput(parentAmountText, currency)
+        const splitMinor = sumMoney(
+          splitEntries
+            .map((entry) =>
+              entry.amount.trim() === ""
+                ? null
+                : parseMoneyInput(entry.amount, currency)
+            )
+            .filter((amount): amount is Money => amount !== null)
+        )
+        const remaining = subMoney(parentMinor ?? ZERO_MONEY, splitMinor)
         const isSaveDisabled =
-          locked || (isSplit && activeTab !== "transfer" && remaining !== 0)
+          locked ||
+          (isSplit &&
+            activeTab !== "transfer" &&
+            (parentMinor === null || remaining !== 0n))
 
         return (
           <div className="mt-6 flex items-center justify-between border-t pt-4">
@@ -2259,7 +2380,7 @@ function useTransactionFormModalController({
       ? editData.splitEntries.map((e) => ({
           id: e.id,
           description: e.description,
-          amount: editAmountToInputNumber(e.amount, editCurrency),
+          amount: editAmountToInputString(e.amount, editCurrency),
           categoryId: e.categoryId,
           merchantId: e.merchantId,
         }))
@@ -2443,13 +2564,11 @@ function useTransactionFormModalController({
   const defaultFormValues: TransactionFormValues = isEditMode
     ? {
         type: editData.type,
-        // Convert Money (bigint) → decimal-major for the HTML input. abs()
-        // on the resulting number is a fallback for the unlikely number-input
-        // path; bigint amounts from the collection are already pre-abs'd by
-        // the route's onEdit handler.
-        amount: Math.abs(
-          editAmountToInputNumber(editData.amount, editCurrency)
-        ),
+        // F1 audit S1: exact Money → raw text (no float, no abs() repair).
+        // Collection amounts are already pre-abs'd by the route's onEdit
+        // handler; a negative raw text here would be parsed faithfully and
+        // rejected by the server, which is the honest outcome.
+        amount: editAmountToInputString(editData.amount, editCurrency),
         description: editData.description,
         accountId: editData.accountId,
         categoryId: editData.categoryId ?? "",
@@ -2463,7 +2582,7 @@ function useTransactionFormModalController({
         // canonical Transfer row (exposed on the ledger record as
         // transferPurpose / transferFee).
         feeAmount: editData.transferFee
-          ? editAmountToInputNumber(
+          ? editAmountToInputString(
               decodeMoney(editData.transferFee.amount),
               editData.transferFee.currency
             )
@@ -2477,7 +2596,8 @@ function useTransactionFormModalController({
       }
     : {
         type: "expense" as const,
-        amount: 0,
+        // F1 audit S1: blank raw text, not 0 — the field is parsed once at submit.
+        amount: "",
         description: "",
         accountId: defaultAccountId ?? "",
         categoryId: "",
@@ -2524,6 +2644,24 @@ function useTransactionFormModalController({
       // already green. What remains here are the *cross-field* rules.
       setFormError(null)
 
+      // F1 audit S1: currency + raw-text parsing, derived once at the top of
+      // the submit path. `parseMoneyInput` is the single parser (shared with
+      // every other money dialog); these values feed the parity gate below,
+      // the field validation, and the payload.
+      const sourceCurrency = (formData?.accounts.find(
+        (a) => a.id === value.accountId
+      )?.currency ?? "IDR") as CurrencyCode
+      const destCurrency =
+        value.type === "transfer" && value.toAccountId
+          ? ((formData?.accounts.find((a) => a.id === value.toAccountId)
+              ?.currency ?? null) as CurrencyCode | null)
+          : null
+      const splitRowMinors: Array<Money | null> = splitEntries.map((entry) =>
+        entry.amount.trim() === ""
+          ? null
+          : parseMoneyInput(entry.amount, sourceCurrency)
+      )
+
       // Cross-field rule: split mode total must equal the parent amount,
       // and every split row must have a description. The submit button is
       // already disabled when split is unbalanced (see action bar), so this
@@ -2536,10 +2674,19 @@ function useTransactionFormModalController({
           form.setFieldValue("description", "Split Transaction")
           value.description = "Split Transaction"
         }
-        const splitTotal = splitEntries.reduce((sum, e) => sum + e.amount, 0)
-        if (Math.abs(splitTotal - value.amount) > 0.01) {
+        // F1 audit S1: exact parity in Money (ADR-0001 — no epsilon). The
+        // numbers are parsed below, before submission, so a malformed row is
+        // already rejected by then.
+        const splitParentMinor = parseMoneyInput(value.amount, sourceCurrency)
+        const splitTotalMinor = sumMoney(
+          splitRowMinors.filter((amount): amount is Money => amount !== null)
+        )
+        if (
+          splitParentMinor !== null &&
+          sumMoney([splitParentMinor]) !== splitTotalMinor
+        ) {
           setFormError(
-            `Split total (${splitTotal.toLocaleString()}) must equal the transaction amount (${value.amount.toLocaleString()}).`
+            `Split total (${toDecimalString(splitTotalMinor, sourceCurrency)}) must equal the transaction amount (${toDecimalString(splitParentMinor, sourceCurrency)}).`
           )
           return
         }
@@ -2549,35 +2696,121 @@ function useTransactionFormModalController({
         }
       }
 
-      try {
-        // === MONEY CONVERSION (post-ADR-0001) ===
-        // The form binds to <input type="number"> so `value.amount` is a
-        // decimal-major JS number (e.g. 15000 means Rp 15,000). Before the
-        // optimistic insert/update, convert to `Money` (bigint minor units)
-        // using the source account's currency. This is the ONLY conversion
-        // boundary on the client; everything downstream sees Money.
-        const sourceCurrency =
-          formData?.accounts.find((a) => a.id === value.accountId)?.currency ??
-          "IDR"
-        const destCurrency =
-          value.type === "transfer" && value.toAccountId
-            ? (formData?.accounts.find((a) => a.id === value.toAccountId)
-                ?.currency ?? null)
-            : null
-
-        const toMoney = (n: number, code: string): Money => {
-          const c = code as CurrencyCode
-          if (CURRENCIES[c]) return toMinorUnits(n.toString(), c)
-          // Fallback: treat as IDR-style ×100 currency to avoid runtime crash
-          // for an unknown code; the server's Zod will reject if it's bogus.
-          return BigInt(Math.round(n * 100)) as Money
+      // === MONEY CONVERSION (post-ADR-0001) ===
+      // F1 audit S1: the ONLY client-side conversion boundary, and it parses
+      // RAW USER TEXT with `parseMoneyInput` — the same locale-agnostic parser
+      // every other money dialog uses. Previously the `<input type="number">`
+      // had already destroyed the locale reading before this line ran, so
+      // "50.000" (id-ID for 50,000) was stored as 50 — a silent 1000×
+      // understatement in the app's most-used field. Blank or malformed input
+      // now BLOCKS the submit with a message naming the field, instead of being
+      // coerced into a wrong magnitude.
+      const parseMoneyField = (
+        raw: string | undefined,
+        code: string,
+        label: string
+      ): { money: Money | null; error: string | null } => {
+        if (raw === undefined || raw.trim() === "") {
+          return { money: null, error: null }
         }
+        const c = code as CurrencyCode
+        if (!CURRENCIES[c]) {
+          return {
+            money: null,
+            error: `${label}: currency "${code}" is not supported.`,
+          }
+        }
+        const parsed = parseMoneyInput(raw, c)
+        if (parsed === null) {
+          return {
+            money: null,
+            error: `${label} "${raw}" is not a valid amount.`,
+          }
+        }
+        return { money: parsed, error: null }
+      }
 
-        const amountMoney: Money = toMoney(value.amount, sourceCurrency)
-        const destAmountMoney: Money | null =
-          value.destinationAmount != null && destCurrency
-            ? toMoney(value.destinationAmount, destCurrency)
-            : null
+      const amountField = parseMoneyField(
+        value.amount,
+        sourceCurrency,
+        "Amount"
+      )
+      const destinationField =
+        value.type === "transfer" && destCurrency !== null
+          ? parseMoneyField(
+              value.destinationAmount,
+              destCurrency,
+              "Destination amount"
+            )
+          : { money: null, error: null }
+      const feeBearerCurrency =
+        value.type === "transfer"
+          ? (formData?.accounts.find(
+              (a) => a.id === (value.feeBearerAccountId || value.accountId)
+            )?.currency ?? sourceCurrency)
+          : sourceCurrency
+      const feeField = parseMoneyField(
+        value.feeAmount,
+        feeBearerCurrency,
+        "Transfer fee"
+      )
+      const trackedCurrencyForValuation =
+        formData?.accounts.find((a) => a.id === value.accountId)
+          ?.balanceSource === "valuation"
+          ? sourceCurrency
+          : (destCurrency ?? sourceCurrency)
+      const newValuationField = parseMoneyField(
+        value.newValuationValue,
+        trackedCurrencyForValuation,
+        "New tracked value"
+      )
+      const splitRowFieldErrors = isSplit
+        ? splitEntries
+            .map(
+              (entry, index) =>
+                parseMoneyField(
+                  entry.amount,
+                  sourceCurrency,
+                  `Split row ${index + 1} amount`
+                ).error
+            )
+            .filter((error): error is string => error !== null)
+        : []
+      const firstParseError =
+        amountField.error ??
+        destinationField.error ??
+        feeField.error ??
+        newValuationField.error ??
+        splitRowFieldErrors[0] ??
+        null
+      if (firstParseError !== null) {
+        setFormError(firstParseError)
+        return
+      }
+      const amountMoney = amountField.money
+      if (amountMoney === null) {
+        // Blank, or a value the parser rejected (already surfaced above for
+        // the malformed case).
+        setFormError("Amount is required.")
+        return
+      }
+      const destAmountMoney: Money | null = destinationField.money
+      // Cross-currency transfers MUST state the destination amount (F1 audit
+      // S1, server-enforced too). Blocked here as well so the user gets the
+      // message before an optimistic row appears and is rolled back.
+      if (
+        value.type === "transfer" &&
+        destCurrency !== null &&
+        sourceCurrency !== destCurrency &&
+        destAmountMoney === null
+      ) {
+        setFormError(
+          `This transfer moves ${sourceCurrency} into a ${destCurrency} account — enter the exact destination amount.`
+        )
+        return
+      }
+
+      try {
         // Transfer fee (PER-247): ANY transfer can carry a fee (top-up /
         // e-wallet / bank charge, or FX spread cross-currency). Denominated
         // in the fee bearer's currency (default: the source account); the
@@ -2589,14 +2822,12 @@ function useTransactionFormModalController({
                 (a) => a.id === (value.feeBearerAccountId || value.accountId)
               ) ?? null)
             : null
+        // Parsed (and validated) above; a blank or zero fee stays absent.
         const feeMoney: Money | null =
           value.type === "transfer" &&
-          value.feeAmount != null &&
-          value.feeAmount > 0
-            ? toMoney(
-                value.feeAmount,
-                feeBearerAccount?.currency ?? sourceCurrency
-              )
+          feeField.money !== null &&
+          feeField.money > 0n
+            ? feeField.money
             : null
         // PER-196 / ADR-0048 §1: only sent when the user manually edited the
         // prefill (NewValuationValueField leaves the field undefined until
@@ -2604,18 +2835,8 @@ function useTransactionFormModalController({
         // balanceSource="valuation", never a delta. Harmlessly ignored
         // server-side for a non-valuation-linked transfer.
         const newValuationValueString: string | null =
-          value.type === "transfer" && value.newValuationValue != null
-            ? (() => {
-                const trackedCurrency =
-                  formData?.accounts.find((a) => a.id === value.accountId)
-                    ?.balanceSource === "valuation"
-                    ? sourceCurrency
-                    : (destCurrency ?? sourceCurrency)
-                return toMoney(
-                  value.newValuationValue as number,
-                  trackedCurrency
-                ).toString()
-              })()
+          value.type === "transfer" && newValuationField.money !== null
+            ? newValuationField.money.toString()
             : null
         const selectedAccount = formData?.accounts.find(
           (a) => a.id === value.accountId
@@ -2703,11 +2924,12 @@ function useTransactionFormModalController({
           isSplit: value.type === "transfer" ? false : isSplit,
           splitEntries:
             isSplit && value.type !== "transfer"
-              ? splitEntries.map((e) => ({
+              ? splitEntries.map((e, index) => ({
                   // Include client-side id agar React punya key stabil di optimistic state
                   id: e.id,
                   description: e.description,
-                  amount: toMoney(e.amount, sourceCurrency),
+                  // Validated before submit (see the parse block above).
+                  amount: splitRowMinors[index] ?? ZERO_MONEY,
                   categoryId: e.categoryId || null,
                   merchantId: e.merchantId || null,
                 }))
@@ -3290,6 +3512,11 @@ export function TransactionFormModal({
             </fieldset>
             <TransactionActionBar
               activeTab={activeTab}
+              currency={
+                (formData?.accounts.find(
+                  (a) => a.id === form.getFieldValue("accountId")
+                )?.currency ?? "IDR") as CurrencyCode
+              }
               form={form}
               isEditMode={isEditMode}
               isSplit={isSplit}
