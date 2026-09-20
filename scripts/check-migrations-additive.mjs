@@ -33,10 +33,17 @@ import {
 const MIGRATIONS_PATHSPEC = "prisma/migrations/*/migration.sql"
 const FALLBACK_BASES = ["origin/main", "main", "origin/master"]
 
+// Fixed, root-owned directories only (SonarCloud S4036): the guard must not
+// resolve `git` through a caller-controlled PATH. Same list the integration
+// harness uses for its own child processes.
+const FIXED_COMMAND_PATH =
+  "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 function git(args) {
   return execFileSync("git", args, {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, PATH: FIXED_COMMAND_PATH },
   })
 }
 

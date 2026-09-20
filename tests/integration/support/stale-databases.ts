@@ -74,7 +74,7 @@ export function selectStaleDatabases(
         options.nowMs - candidate.createdAtMs >= options.maxAgeMs
     )
     .map((candidate) => candidate.name)
-    .sort()
+    .sort((a, b) => a.localeCompare(b))
 }
 
 export interface CleanupStaleTestDatabasesResult {
