@@ -60,6 +60,11 @@ export async function onboard(
       .getByLabel("Base reporting currency")
       .selectOption(options.currency)
   }
+  // F1 audit B2: the base currency is confirmed explicitly now (it is a
+  // one-way door), so the gate must be satisfied before Get Started enables.
+  await page
+    .getByRole("checkbox", { name: /reports will always be in/i })
+    .click()
   await page.getByRole("button", { name: "Get Started" }).click()
   await expect(page).toHaveURL(/\/dashboard(?:\?.*)?$/)
   await waitForHydration(page)
