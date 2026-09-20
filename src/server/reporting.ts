@@ -230,6 +230,11 @@ export async function getNetWorthSeriesForFamily({
         // series fall back to `derived` for every anchor and diverge from
         // `computeCanonicalBalance`.
         provenance: true,
+        // ADR-0043 amendment (2026-09-20): the ground_truth boundary instant.
+        // Same rule as `provenance` above — omitting it would make the series
+        // fall back to the legacy date-only boundary and diverge from
+        // `computeCanonicalBalance` for same-day reconciles.
+        observedAt: true,
       },
     })
     const transactions = await tx.transaction.findMany({
@@ -259,6 +264,7 @@ export async function getNetWorthSeriesForFamily({
         createdAt: row.createdAt,
         type: row.type,
         provenance: row.provenance,
+        observedAt: row.observedAt,
       })),
       transactions: transactions.map((row) => ({
         accountId: row.accountId,

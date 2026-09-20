@@ -4,7 +4,9 @@ import { z } from "zod"
 import { allowsNegativeAssetBalance, type AccountType } from "@/lib/accounts"
 import {
   ANCHOR_VALUATION_TYPES,
+  groundTruthBoundary,
   isAnchorValuationType,
+  isObservedNow,
   toAnchorProvenance,
   type AnchorProvenance,
 } from "@/lib/net-worth"
@@ -198,6 +200,9 @@ export interface SerializedValuation {
   value: string
   currency: string
   valuationDate: string
+  // ADR-0043 amendment (2026-09-20): ISO instant of the observation for a
+  // same-day ground_truth anchor; null for legacy / back-dated / derived rows.
+  observedAt: string | null
   type: string
   source: string
   note: string | null
@@ -218,6 +223,7 @@ function serializeValuation(valuation: Valuation): SerializedValuation {
     value: valuation.value.toString(),
     currency: valuation.currency,
     valuationDate: valuation.valuationDate.toISOString().slice(0, 10),
+    observedAt: valuation.observedAt?.toISOString() ?? null,
     type: valuation.type,
     source: valuation.source,
     note: valuation.note,
@@ -326,17 +332,22 @@ interface AnchorValuation {
   createdAt: Date
   // PER-264: which half of that predicate actually applies. See `AnchorBound`.
   provenance: AnchorProvenance
+  // ADR-0043 amendment (2026-09-20): when, within `valuationDate`, a
+  // ground_truth anchor was observed. NULL = legacy date-only anchor.
+  observedAt: Date | null
 }
 
-// An anchor's identity for flow segmentation (PER-201 / PER-264): its asserted
-// date (date-only), the wall-clock instant the row was written, and where its
-// asserted value came from. Both `AnchorValuation` (the balance path) and the
+// An anchor's identity for flow segmentation (PER-201 / PER-264 / observedAt): its
+// asserted date (date-only), the wall-clock instant the row was written, where
+// its asserted value came from, and — for a same-day ground_truth anchor — the
+// instant it was observed. Both `AnchorValuation` (the balance path) and the
 // raw anchor rows the drift check reads satisfy it, so one predicate serves
 // both boundaries (ADR-0043 §6).
 interface AnchorBound {
   valuationDate: Date
   createdAt: Date
   provenance: AnchorProvenance
+  observedAt: Date | null
 }
 
 // PER-276 — `Valuation.valuationDate` is `@db.Date` (stored at midnight, no
@@ -365,7 +376,9 @@ function startOfNextCalendarDay(valuationDate: Date): Date {
 //   afterAnchor(A)(t) ≡ A.provenance = "derived"
 //                          ? (t.date >= startOfNextCalendarDay(A.valuationDate)
 //                             OR t.createdAt > A.createdAt)
-//                          : (t.date > A.valuationDate)
+//                          : (t.date > groundTruthBoundary(A))
+//                            where groundTruthBoundary(A) = A.observedAt
+//                                                        ?? A.valuationDate
 //
 // DERIVED anchors keep PER-201's disjunction, corrected for calendar-day
 // granularity (PER-276, below). Such an anchor's value was COMPUTED by summing
@@ -405,7 +418,17 @@ function startOfNextCalendarDay(valuationDate: Date): Date {
 // (the income was recorded before the anchor), so it stays absorbed and the
 // balance is 200,001.
 //
-// GROUND_TRUTH anchors segment by DATE ONLY, deliberately UNCHANGED by PER-276:
+// GROUND_TRUTH anchors carry no createdAt disjunct, deliberately UNCHANGED by
+// PER-276. Their boundary is `observedAt` when the anchor recorded the instant
+// it was observed (ADR-0043 amendment 2026-09-20: a same-UTC-day reconcile
+// stamps `observedAt = createdAt`, so a transaction dated before that instant
+// is ABSORBED — it was already inside the number the human read — while one
+// dated later that day still counts), else the midnight of `valuationDate`
+// (legacy, back-dated and pre-migration anchors: byte-for-byte the rule below).
+// The prose that follows describes that legacy date-only rule, which is now the
+// `observedAt IS NULL` branch:
+//
+// GROUND_TRUTH anchors without `observedAt` segment by DATE ONLY:
 // their value is an INDEPENDENT observation of reality — a human reading their
 // real wallet balance during "Reconcile account", or (later) a bank-fetched
 // statement — which already reflected every event up to that instant whether
@@ -459,7 +482,8 @@ async function sumTransactionFlowAfterAnchor(
       // afterAnchor(after) — see the predicate above. `derived` compares
       // CALENDAR DAYS on its date disjunct (PER-276: >= the start of the next
       // day, not > the anchor's midnight instant) OR createdAt; `ground_truth`
-      // stays date-only, comparing raw instants (unchanged, by design).
+      // has no createdAt disjunct and compares the transaction INSTANT with the
+      // anchor's `observedAt`, falling back to its date's midnight.
       ...(after.provenance === "derived"
         ? {
             OR: [
@@ -467,7 +491,7 @@ async function sumTransactionFlowAfterAnchor(
               { createdAt: { gt: after.createdAt } },
             ],
           }
-        : { date: { gt: after.valuationDate } }),
+        : { date: { gt: groundTruthBoundary(after) } }),
       // ¬afterAnchor(through) — De Morgan of the same branch, so both segment
       // boundaries stay on this one predicate (ADR-0043 §6). ANDs with the
       // clause above via Prisma's implicit-AND of top-level keys, except where
@@ -481,7 +505,7 @@ async function sumTransactionFlowAfterAnchor(
                 { createdAt: { lte: through.createdAt } },
               ],
             }
-          : { AND: [{ date: { lte: through.valuationDate } }] }
+          : { AND: [{ date: { lte: groundTruthBoundary(through) } }] }
         : {}),
     },
   })
@@ -517,6 +541,7 @@ export async function latestValuation(
       valuationDate: true,
       createdAt: true,
       provenance: true,
+      observedAt: true,
     },
   })
   return latest
@@ -525,6 +550,7 @@ export async function latestValuation(
         valuationDate: latest.valuationDate,
         createdAt: latest.createdAt,
         provenance: toAnchorProvenance(latest.provenance),
+        observedAt: latest.observedAt,
       }
     : null
 }
@@ -662,6 +688,7 @@ export async function computeCanonicalBalanceAsOf(
         valuationDate: asOfDate,
         createdAt: asOfDate,
         provenance: "ground_truth",
+        observedAt: null,
       }
     )
     return addMoney(priorAnchor.value, flow)
@@ -681,6 +708,7 @@ export async function computeCanonicalBalanceAsOf(
       valuationDate: true,
       createdAt: true,
       provenance: true,
+      observedAt: true,
     },
   })
   if (nextAnchorRow === null) return toMoney(0n)
@@ -693,11 +721,13 @@ export async function computeCanonicalBalanceAsOf(
       valuationDate: asOfDate,
       createdAt: asOfDate,
       provenance: "ground_truth",
+      observedAt: null,
     },
     {
       valuationDate: nextAnchorRow.valuationDate,
       createdAt: nextAnchorRow.createdAt,
       provenance: toAnchorProvenance(nextAnchorRow.provenance),
+      observedAt: nextAnchorRow.observedAt,
     }
   )
   return subMoney(toMoney(nextAnchorRow.value), flowBeforeNextAnchor)
@@ -854,7 +884,13 @@ export async function createValuationWithinTx(
   // free text for "Other") on the very row it explains, without this
   // function knowing anything about callers other than "some extra audit
   // context, if any."
-  auditMetadata?: Record<string, unknown>
+  auditMetadata?: Record<string, unknown>,
+  // ADR-0043 amendment (2026-09-20) — the ONE instant this write happened. It
+  // is both the row's `createdAt` and, for a same-UTC-day ground_truth anchor,
+  // its `observedAt`, so the two can never disagree by a clock tick. Injected
+  // (rather than calling `new Date()` inline) for exactly that reason and so a
+  // caller/test can pin it.
+  writtenAt: Date = new Date()
 ): Promise<{ serialized: SerializedValuation; valuation: Valuation }> {
   if (!PUBLIC_VALUATION_TYPE_SET.has(data.type)) {
     throw new ValuationError(
@@ -915,7 +951,18 @@ export async function createValuationWithinTx(
 
   // Base-currency projection (PER-147 / ADR-0035 §4/§7), keyed off the
   // valuation date so historical net worth stays stable.
-  const valuationDate = data.valuationDate ?? new Date()
+  const valuationDate = data.valuationDate ?? writtenAt
+  // ADR-0043 amendment (2026-09-20): a ground_truth anchor observed "now" (its
+  // valuationDate is the UTC day of this write) records WHEN, so a transaction
+  // already logged earlier that day is absorbed instead of counted again. A
+  // back-dated or `derived` anchor, and every `market` observation, keeps NULL
+  // and the exact legacy semantics (see the migration and ADR-0043).
+  const observedAt =
+    isAnchorValuationType(valuationType) &&
+    provenance === "ground_truth" &&
+    isObservedNow(valuationDate, writtenAt)
+      ? writtenAt
+      : null
   const baseCurrency = await getFamilyBaseCurrency(tx, familyId)
   const projection = await computeBaseProjectionForAmount(tx, familyId, {
     amount: signedValue,
@@ -939,6 +986,12 @@ export async function createValuationWithinTx(
       normalBalance: normalBalanceForClass(account.accountClass),
       allowsNegativeAsset: accountAllowsNegative,
       createdById: user.id,
+      // Pin createdAt to the SAME instant only when an observedAt is recorded, so
+      // the two can never differ by a clock tick. Every other row (derived,
+      // back-dated, opening, market) keeps the column's own default exactly as
+      // before — no change to the clock PER-201's derived-anchor ordering
+      // (anchor.createdAt > every promoted row's) has always relied on.
+      ...(observedAt ? { createdAt: writtenAt, observedAt } : {}),
       baseValue: projection.baseAmount,
       baseCurrency: projection.baseCurrency,
       fxRateScaled: projection.fxRateScaled,
@@ -1228,8 +1281,10 @@ async function detectAnchorChainDrift(
       source: true,
       // PER-264: the chain check segments with the SAME branched predicate as
       // the balance formula (ADR-0043 §6's one-segmentation-function rule), so
-      // it needs each anchor's provenance on both segment boundaries.
+      // it needs each anchor's provenance (and observedAt) on both segment
+      // boundaries.
       provenance: true,
+      observedAt: true,
     },
   })
 
@@ -1455,11 +1510,17 @@ export interface GroundTruthAnchorView {
   currency: string
   valuationDate: string
   value: string
-  // Count of non-deleted transactions dated strictly after `valuationDate` —
-  // the ground_truth branch of the shared `afterAnchor` predicate is date-only
-  // (ADR-0043's PER-264 amendment), so this is exactly what the balance
+  // Count of non-deleted transactions dated strictly after the anchor's
+  // boundary (`observedAt`, else `valuationDate`'s midnight) — the ground_truth
+  // branch of the shared `afterAnchor` predicate (ADR-0043's PER-264 amendment
+  // + 2026-09-20 observedAt amendment), so this is exactly what the balance
   // formula already sums, just counted instead of summed.
   transactionsAfter: number
+  // ADR-0043 amendment (2026-09-20): ISO instant of the observation when the
+  // anchor recorded one (same-day reconcile), else null (legacy / back-dated).
+  // Lets the transaction form ask "is this entry's date/time at or before what
+  // the human looked at?" with the server's exact boundary.
+  observedAt: string | null
 }
 
 export async function getLatestGroundTruthAnchorForFamily({
@@ -1491,7 +1552,7 @@ export async function getLatestGroundTruthAnchorForFamily({
         accountId,
         familyId,
         deletedAt: null,
-        date: { gt: anchor.valuationDate },
+        date: { gt: groundTruthBoundary(anchor) },
       },
     })
 
@@ -1501,6 +1562,7 @@ export async function getLatestGroundTruthAnchorForFamily({
       valuationDate: anchor.valuationDate.toISOString().slice(0, 10),
       value: anchor.value.toString(),
       transactionsAfter,
+      observedAt: anchor.observedAt?.toISOString() ?? null,
     }
   })
 }

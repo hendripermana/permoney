@@ -2,6 +2,7 @@ import { describe, expect, test } from "vite-plus/test"
 import {
   balanceOverrideInputSchema,
   BALANCE_OVERRIDE_REASON_VALUES,
+  isAbsorbedByAnchor,
   isOnOrBeforeAnchorDate,
   OTHER_BALANCE_OVERRIDE_REASON,
 } from "./balance-override"
@@ -68,5 +69,34 @@ describe("isOnOrBeforeAnchorDate (PER-267 banner predicate)", () => {
     expect(
       isOnOrBeforeAnchorDate(new Date("2026-08-28T00:00:01"), "2026-08-27")
     ).toBe(false)
+  })
+})
+
+describe("isAbsorbedByAnchor (observedAt-aware banner predicate)", () => {
+  test("with observedAt: absorbed iff dated at or before that instant", () => {
+    const anchor = {
+      valuationDate: "2026-09-20",
+      observedAt: "2026-09-20T14:00:00.000Z",
+    }
+    expect(
+      isAbsorbedByAnchor(new Date("2026-09-20T12:00:00.000Z"), anchor)
+    ).toBe(true)
+    expect(
+      isAbsorbedByAnchor(new Date("2026-09-20T14:00:00.000Z"), anchor)
+    ).toBe(true)
+    // Logged for LATER the same day: a genuine post-observation event.
+    expect(
+      isAbsorbedByAnchor(new Date("2026-09-20T14:00:00.001Z"), anchor)
+    ).toBe(false)
+  })
+
+  test("without observedAt: falls back to the legacy calendar-day rule", () => {
+    const anchor = { valuationDate: "2026-08-27", observedAt: null }
+    expect(isAbsorbedByAnchor(new Date("2026-08-11T00:00:00"), anchor)).toBe(
+      true
+    )
+    expect(isAbsorbedByAnchor(new Date("2026-08-27T15:30:00"), anchor)).toBe(
+      false
+    )
   })
 })

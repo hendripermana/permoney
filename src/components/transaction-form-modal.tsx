@@ -55,7 +55,7 @@ import { createUuidV7 } from "@/lib/uuid-v7"
 import {
   balanceOverrideInputSchema,
   BALANCE_OVERRIDE_REASONS,
-  isOnOrBeforeAnchorDate,
+  isAbsorbedByAnchor,
   OTHER_BALANCE_OVERRIDE_REASON,
   type BalanceOverrideReason,
 } from "@/lib/balance-override"
@@ -1380,7 +1380,7 @@ function BackdatedAnchorBannerInner({
     React.useState<BalanceOverrideReason | null>(null)
   const [otherNote, setOtherNote] = React.useState("")
 
-  if (!anchor || !isOnOrBeforeAnchorDate(date, anchor.valuationDate)) {
+  if (!anchor || !isAbsorbedByAnchor(date, anchor)) {
     return null
   }
 

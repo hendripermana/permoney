@@ -1020,3 +1020,114 @@ calendar days under the two conventions. This is orthogonal to the raw-
 instant-vs-date bug this amendment fixes (it existed identically before and
 after this change), is not covered by PER-276's acceptance criteria, and is
 left as a documented follow-up rather than folded into this fix.
+
+## Amendment — `Valuation.observedAt`: when, within its day, a ground-truth anchor was observed (2026-09-20)
+
+Appended, not rewritten; everything above stands except where this section
+says otherwise. Read together with the PER-264 and PER-276 amendments.
+
+### Problem
+
+`ground_truth` segments post-anchor flow by date only: `t.date >
+A.valuationDate`. `valuationDate` is a `DATE` (midnight) but `Transaction.date`
+is a real instant (the transaction form defaults to `new Date()` and has a Time
+field). So an interactive reconcile carries no notion of _when_ it happened
+inside its own day, and every same-day transaction has a real time that is
+numerically greater than that day's midnight. Repro: account 150,000; an
+expense of 50,000 dated `new Date()`; the user then reconciles to 100,000 —
+the balance the wallet really shows, which already contains the expense. The
+expense is dated later than the anchor's midnight, so the balance formula
+counts it again: the account ends at 50,000, not 100,000. The single "Reconcile
+account" dialog behaves identically. (The in-memory fold `isAfterAnchor`
+compared calendar-day strings and therefore treated the same-day row as
+absorbed, so the DB and the client disagreed for such an anchor.)
+
+The PER-267 intent behind the date-only rule stays valid — a transaction a
+human logs for _later_ that same day genuinely happened after they looked at
+their wallet. What was missing is that the anchor did not know _when_ they
+looked.
+
+### Decision
+
+Add `Valuation.observedAt TIMESTAMP(3) NULL`.
+
+- A `ground_truth` anchor of an anchor type, written when its `valuationDate`
+  is the **same UTC calendar day as the write instant**, records
+  `observedAt = createdAt` — one instant, passed in once
+  (`createValuationWithinTx`'s `writtenAt`), never two `now()` calls.
+- Back-dated anchors (`valuationDate` on an earlier day), every `derived`
+  anchor, every `opening`, and `market` observations keep `observedAt = NULL`.
+- Predicate. `derived` is unchanged (PER-276 formula). For `ground_truth`:
+
+```
+afterAnchor(A)(t) ≡ A.provenance = "derived"
+                       ? (t.date >= startOfNextCalendarDay(A.valuationDate)
+                          OR t.createdAt > A.createdAt)
+                       : (t.date > groundTruthBoundary(A))
+
+groundTruthBoundary(A) = A.observedAt ?? A.valuationDate      -- instant / midnight
+```
+
+- A transaction dated exactly at `observedAt` is absorbed (strict `>`), the
+  same strictness as before.
+- There is still ONE segmentation function (§6). `¬afterAnchor(through)` is the
+  De Morgan of the same branch for both provenances, so the ANCHOR_CHAIN check
+  bounds a segment with `t.date <= groundTruthBoundary(through)`. The boundary
+  rule itself lives in one pure helper (`groundTruthBoundary`,
+  `src/lib/net-worth.ts`) shared by the Prisma `where`, the account-anchor view's
+  `transactionsAfter` count, the balance-override gate
+  (`applyBalanceOverride`), the client banner (`isAbsorbedByAnchor`), and the
+  in-memory fold.
+- Two reconciles the same day: the later one is the latest anchor (existing
+  `valuationDate desc, createdAt desc` tie-break) and the chain segment between
+  them is `(A.observedAt, B.observedAt]`.
+- The database enforces the domain: CHECK `valuation_observed_at_domain` —
+  `observedAt` may only be set on a `ground_truth` row and only when its UTC day
+  equals `valuationDate`.
+
+### What is unchanged
+
+- **Legacy anchors.** Every pre-existing row has `observedAt = NULL` and is
+  segmented by the exact previous rule (`t.date > midnight of valuationDate`).
+- **Derived anchors** (Sure import, Σ-holdings, balance-preserving seed,
+  `opening`): the PER-201/PER-276 date-or-createdAt rule, untouched. A fresh
+  Sure import stays zero-drift by the same argument as before.
+- **The PER-264 asymmetry.** `ground_truth` still has no `createdAt` disjunct: a
+  forgotten transaction dated before the observation and entered later is
+  still absorbed, never re-counted.
+- **Transfer legs** are still evaluated independently against their own
+  account's anchor.
+- The incremental balance path and the PER-265 flush-time rebuild are
+  unchanged; they call the same `computeCanonicalBalance`.
+
+### Deploy safety
+
+The migration adds one nullable column and one CHECK that a NULL always
+satisfies. It performs no backfill and no `UPDATE`, so no existing row's
+`observedAt`, and therefore no existing row's segmentation, balance or
+ANCHOR_CHAIN result, changes on deploy. Only anchors written after the deploy
+can carry `observedAt`, and only when observed "now".
+
+### The in-memory fold now matches the DB for `ground_truth` (corrects a note above)
+
+The PER-276 section states the fold's `isAfterAnchor` "needed no logic
+change" because it compared calendar-day strings. For `derived` that remains
+true and unchanged. For `ground_truth` it was in fact a divergence: the DB
+counted a same-day row dated after the anchor's midnight, the fold treated it
+as absorbed. The fold now compares the row's instant against the same
+`groundTruthBoundary` (legacy anchor: midnight of its UTC day, exactly the
+DB's rule; new anchor: `observedAt`), so a historical series point for a
+legacy same-day anchor can now differ from what it displayed before, in the
+direction of what `Account.balance` already was. A family timezone ahead of UTC
+can put a row on the _next local day_ yet _before_ `observedAt`; the fold
+handles that edge explicitly rather than by day granularity.
+
+### Caveat — UTC day, not the user's local day
+
+"Same day" is the UTC calendar day, consistent with the `DATE` column and
+`startOfNextCalendarDay`. A user whose local date is already the next UTC day
+(00:00-07:00 in WIB) who picks "today" sends a `valuationDate` one UTC day
+ahead of the write instant. That anchor is not effective until UTC midnight and
+has no `observedAt`; it behaves under the legacy date-only rule, exactly as
+before this amendment. The reconcile dialog omits `valuationDate`, so the
+default (now) is always the write's own UTC day and records `observedAt`.
