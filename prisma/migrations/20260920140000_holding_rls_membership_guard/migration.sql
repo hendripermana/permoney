@@ -30,38 +30,41 @@
 -- See ADR-0036 §4 (membership boundary) and the tags migration for the
 -- canonical predicate.
 
-DROP POLICY IF EXISTS instrument_tenant_isolation ON "Instrument";
-CREATE POLICY instrument_tenant_isolation ON "Instrument"
-  FOR ALL
-  USING (
-    "familyId" = current_setting('app.family_id', true)::text
-    AND app_is_active_member(
-      current_setting('app.family_id', true)::text,
-      current_setting('app.user_id', true)::text
-    )
-  )
-  WITH CHECK (
-    "familyId" = current_setting('app.family_id', true)::text
-    AND app_is_active_member(
-      current_setting('app.family_id', true)::text,
-      current_setting('app.user_id', true)::text
-    )
-  );
-
-DROP POLICY IF EXISTS holding_tenant_isolation ON "Holding";
-CREATE POLICY holding_tenant_isolation ON "Holding"
-  FOR ALL
-  USING (
-    "familyId" = current_setting('app.family_id', true)::text
-    AND app_is_active_member(
-      current_setting('app.family_id', true)::text,
-      current_setting('app.user_id', true)::text
-    )
-  )
-  WITH CHECK (
-    "familyId" = current_setting('app.family_id', true)::text
-    AND app_is_active_member(
-      current_setting('app.family_id', true)::text,
-      current_setting('app.user_id', true)::text
-    )
-  );
+-- Both tables get the SAME policy, so it is generated once from a table list
+-- (no duplicated predicate to drift). Resulting policy names are exactly the
+-- shipped ones: instrument_tenant_isolation and holding_tenant_isolation.
+DO $$
+DECLARE
+  guarded_table text;
+BEGIN
+  FOREACH guarded_table IN ARRAY ARRAY['Instrument', 'Holding'] LOOP
+    EXECUTE format(
+      'DROP POLICY IF EXISTS %I ON %I',
+      lower(guarded_table) || '_tenant_isolation',
+      guarded_table
+    );
+    EXECUTE format(
+      $policy$
+        CREATE POLICY %I ON %I
+          FOR ALL
+          USING (
+            "familyId" = current_setting('app.family_id', true)::text
+            AND app_is_active_member(
+              current_setting('app.family_id', true)::text,
+              current_setting('app.user_id', true)::text
+            )
+          )
+          WITH CHECK (
+            "familyId" = current_setting('app.family_id', true)::text
+            AND app_is_active_member(
+              current_setting('app.family_id', true)::text,
+              current_setting('app.user_id', true)::text
+            )
+          )
+      $policy$,
+      lower(guarded_table) || '_tenant_isolation',
+      guarded_table
+    );
+  END LOOP;
+END
+$$;
