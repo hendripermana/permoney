@@ -60,6 +60,7 @@ import {
   uuidV7Schema,
   type RunInTenantTransaction,
 } from "./mutation-kit"
+import { groundTruthBoundary } from "@/lib/net-worth"
 import {
   accountHasHoldings,
   createValuationWithinTx,
@@ -1318,7 +1319,10 @@ async function applyBalanceOverride(
   if (
     anchor === null ||
     anchor.provenance !== "ground_truth" ||
-    !(transactionDate.getTime() <= anchor.valuationDate.getTime())
+    // ¬afterAnchor: the entry is excluded iff it is dated at/before the
+    // anchor's boundary (`observedAt`, else `valuationDate`'s midnight) — the
+    // shared ground_truth rule, never a re-derivation of it.
+    !(transactionDate.getTime() <= groundTruthBoundary(anchor).getTime())
   ) {
     throw new ValuationError(
       "Balance override does not apply: this transaction's date is not " +

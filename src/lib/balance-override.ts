@@ -91,6 +91,31 @@ export function isOnOrBeforeAnchorDate(
   return toCalendarDateString(date) < anchorValuationDate
 }
 
+/**
+ * The UI-hint predicate against the WHOLE anchor view (ADR-0043 amendment,
+ * 2026-09-20): would an entry dated `date` be absorbed by the account's
+ * ground-truth anchor, i.e. ¬afterAnchor?
+ *
+ * - Anchor with `observedAt` (a same-day reconcile): absorbed iff `date` is at
+ *   or before that instant — exactly the server's `t.date > observedAt` rule
+ *   negated (`groundTruthBoundary` in `@/lib/net-worth`), so an entry logged
+ *   for LATER that day is correctly NOT flagged.
+ * - Anchor without it (legacy / back-dated): the original calendar-day
+ *   approximation, `isOnOrBeforeAnchorDate`.
+ *
+ * Still a banner hint only; the server re-derives the real condition before
+ * honoring an override.
+ */
+export function isAbsorbedByAnchor(
+  date: Date,
+  anchor: { valuationDate: string; observedAt: string | null }
+): boolean {
+  if (anchor.observedAt !== null) {
+    return date.getTime() <= new Date(anchor.observedAt).getTime()
+  }
+  return isOnOrBeforeAnchorDate(date, anchor.valuationDate)
+}
+
 function toCalendarDateString(date: Date): string {
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, "0")

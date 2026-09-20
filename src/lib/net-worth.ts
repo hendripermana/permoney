@@ -25,7 +25,9 @@ import { convertMinor } from "@/lib/fx"
 // `createdAt > anchor.createdAt` (both disjuncts load-bearing — a live
 // reconciliation asserts a value that ABSORBS all prior-and-already-recorded
 // flow, while a back-dated txn added after that anchor is still counted; see
-// PER-201). A cash account with no anchor at T contributes 0 (pre-inception).
+// PER-201; the exact per-provenance rule — ground_truth is instant-bounded by
+// `observedAt` since 2026-09-20 — is `isAfterAnchor` below). A cash account with
+// no anchor at T contributes 0 (pre-inception).
 // Recognizing reconciliation/manual anchors — not just `opening` — is what fixes
 // PER-204: migrated/reconciled accounts are anchored by `reconciliation`, never
 // `opening`, so the old opening-only fold zeroed every one of them.
@@ -100,41 +102,95 @@ export function toAnchorProvenance(
     : "derived"
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+
 /**
- * The `afterAnchor` predicate (ADR-0043 §2 / PER-201, refined by PER-264), the
- * in-memory twin of the Prisma `where` built in `sumTransactionFlowAfterAnchor`
- * (src/server/valuations.ts). Keep the two shapes identical; the ADR-0038 §6
- * invariant test enforces parity. Dates are compared as YYYY-MM-DD strings
- * (lexicographic == calendar) — both sides of this comparison are ALREADY
- * calendar-day granularity here (`anchorDate`/`txnDate` are formatted strings,
- * never raw instants), so this function never had the PER-276 bug: a same-day
- * `txnDate === anchorDate` correctly fails `txnDate > anchorDate` and falls
- * through to the createdAt disjunct, exactly as the corrected DB predicate now
- * does too. PER-276 only had to change `sumTransactionFlowAfterAnchor`, whose
- * DB-side comparison mixed a raw `Transaction.date` instant against a
- * midnight-truncated `Valuation.valuationDate` — a distinction that doesn't
- * exist here, since both dates are pre-formatted to strings before comparison.
+ * ADR-0043 amendment (2026-09-20) — the instant a `ground_truth` anchor's
+ * segmentation is bounded by: `observedAt` when the anchor recorded WHEN it was
+ * observed, else the legacy midnight of its `valuationDate` (`@db.Date`).
+ *
+ *   afterAnchor(A)(t) for ground_truth ≡ t.date > groundTruthBoundary(A)
+ *
+ * The SINGLE definition of this rule: the Prisma `where` in
+ * `sumTransactionFlowAfterAnchor` (balance formula + ANCHOR_CHAIN `through`
+ * bound), the account-anchor view's `transactionsAfter` count, the balance-
+ * override gate, and the in-memory fold below all call it, so they cannot
+ * disagree about which side of an anchor a transaction sits on (ADR-0043 §6).
+ */
+export function groundTruthBoundary(anchor: {
+  valuationDate: Date
+  observedAt: Date | null
+}): Date {
+  return anchor.observedAt ?? anchor.valuationDate
+}
+
+/**
+ * Should a NEW anchor record `observedAt`? Only when its `valuationDate` is the
+ * same UTC calendar day as the write instant — i.e. the human is observing
+ * "now", so the instant within the day is meaningful. A back-dated valuation
+ * asserts a balance as of a past DAY (the time of day is unknown) and keeps the
+ * legacy date-only rule.
+ *
+ * UTC by design, matching `Valuation.valuationDate` (a UTC-midnight `@db.Date`)
+ * and the server's UTC `startOfNextCalendarDay`. Caveat: a user whose local
+ * date is already the next UTC day (e.g. 00:00-07:00 WIB) picking "today"
+ * sends a valuationDate one UTC day ahead of `now`; that anchor is not yet
+ * effective and, when it becomes so at UTC midnight, has no observedAt. It
+ * falls back to the legacy date-only rule, exactly as before this amendment.
+ */
+export function isObservedNow(valuationDate: Date, writtenAt: Date): boolean {
+  return (
+    valuationDate.toISOString().slice(0, 10) ===
+    writtenAt.toISOString().slice(0, 10)
+  )
+}
+
+/**
+ * The `afterAnchor` predicate (ADR-0043 §2 / PER-201, refined by PER-264 and
+ * the 2026-09-20 observedAt amendment), the in-memory twin of the Prisma
+ * `where` built in `sumTransactionFlowAfterAnchor` (src/server/valuations.ts).
+ * Keep the two shapes identical; the ADR-0038 §6 invariant test enforces
+ * parity.
  *
  *   afterAnchor(A)(t) ≡ A.provenance = "derived"
  *                          ? (t.date > A.valuationDate OR t.createdAt > A.createdAt)
- *                          : (t.date > A.valuationDate)
+ *                          : (t.date > groundTruthBoundary(A))
  *
- * For a `derived` anchor the disjunction is load-bearing in BOTH directions (a
- * future-dated txn recorded before the anchor; a back-dated txn recorded after
- * it — PER-201's fix). For a `ground_truth` anchor the `createdAt` disjunct is
- * exactly the bug: the human already looked at their real wallet, so a
- * transaction dated at/before that observation was ALREADY inside the asserted
- * number and counting it again invents money (PER-264's OVO case).
+ * DERIVED: dates are compared as YYYY-MM-DD strings in the family timezone
+ * (lexicographic == calendar); a same-day `txnDate === anchorDate` fails
+ * `txnDate > anchorDate` and falls through to the createdAt disjunct, exactly
+ * as the DB's PER-276 calendar-day predicate does. The disjunction is
+ * load-bearing in BOTH directions (a future-dated txn recorded before the
+ * anchor; a back-dated txn recorded after it — PER-201's fix).
+ *
+ * GROUND_TRUTH: compared by INSTANT against the anchor's boundary, exactly like
+ * the DB — `Transaction.date` is a real instant, the boundary is `observedAt`
+ * or, for a legacy/back-dated anchor, the midnight starting the anchor's day.
+ * (Before the amendment this twin compared calendar-day strings and so treated
+ * a same-day transaction as absorbed while the DB counted it; the two now
+ * agree.) The createdAt disjunct is still exactly the PER-264 bug: the human
+ * already looked at their real wallet, so a transaction dated at/before that
+ * observation was ALREADY inside the asserted number and counting it again
+ * invents money (PER-264's OVO case).
  */
-function isAfterAnchor(
-  anchorDate: string,
-  anchorCreatedAt: Date,
-  anchorProvenance: AnchorProvenance,
-  txnDate: string,
-  txnCreatedAt: Date
-): boolean {
-  if (txnDate > anchorDate) return true
-  return anchorProvenance === "derived" && txnCreatedAt > anchorCreatedAt
+function isAfterAnchor(anchor: CashAnchor, txn: CashFlowRow): boolean {
+  if (anchor.provenance === "derived") {
+    return txn.date > anchor.date || txn.createdAt > anchor.createdAt
+  }
+  return txn.instantMs > groundTruthBoundaryMs(anchor)
+}
+
+function groundTruthBoundaryMs(anchor: CashAnchor): number {
+  return anchor.observedAt !== null
+    ? anchor.observedAt.getTime()
+    : Date.parse(`${anchor.date}T00:00:00.000Z`)
+}
+
+/** The YYYY-MM-DD calendar day after `date` (pure UTC arithmetic, no DST). */
+function nextCalendarDay(date: string): string {
+  return new Date(Date.parse(`${date}T00:00:00.000Z`) + MS_PER_DAY)
+    .toISOString()
+    .slice(0, 10)
 }
 
 // ---- shared point normalizer ------------------------------------------------
@@ -303,6 +359,9 @@ export interface SeriesValuation {
   // PER-264: raw `Valuation.provenance`. NULL for `market` rows (never an
   // anchor) and for pre-migration rows; `toAnchorProvenance` narrows it.
   provenance: string | null
+  // ADR-0043 amendment (2026-09-20): when, within `valuationDate`, a
+  // ground_truth anchor was observed. NULL/absent = legacy date-only anchor.
+  observedAt?: Date | null
 }
 
 export interface SeriesTransaction {
@@ -371,6 +430,7 @@ export function buildNetWorthSeries(
         date: valuation.valuationDate,
         createdAt: valuation.createdAt,
         provenance: toAnchorProvenance(valuation.provenance),
+        observedAt: valuation.observedAt ?? null,
         value: valuation.value,
       })
       anchorsByAccount.set(valuation.accountId, anchors)
@@ -398,6 +458,7 @@ export function buildNetWorthSeries(
     const list = transactionsByAccount.get(transaction.accountId) ?? []
     list.push({
       date: calendarDateInTimezone(transaction.date, input.timezone),
+      instantMs: transaction.date.getTime(),
       createdAt: transaction.createdAt,
       amount: transaction.amount,
     })
@@ -483,11 +544,13 @@ interface CashAnchor {
   date: string
   createdAt: Date
   provenance: AnchorProvenance
+  observedAt: Date | null
   value: bigint
 }
 
 interface CashFlowRow {
-  date: string
+  date: string // family-timezone calendar day (day-granular fold key)
+  instantMs: number // the real `Transaction.date` instant (ground_truth compare)
   createdAt: Date
   amount: bigint
 }
@@ -500,10 +563,18 @@ interface ActiveAnchor {
   sumThroughAnchorDate: bigint
   // Σ flow dated at/before the anchor date BUT recorded after it — the second
   // (createdAt) disjunct, which the date subtraction above would otherwise drop.
-  // PER-264: identically 0 for a `ground_truth` anchor, whose predicate has no
-  // createdAt disjunct at all — an independently observed balance already
-  // absorbed every at/before-date row, whenever it was entered.
+  // PER-264: for a `ground_truth` anchor this is NOT createdAt-driven — its
+  // predicate has no createdAt disjunct (an independently observed balance
+  // already absorbed every at/before-boundary row, whenever it was entered).
+  // Here it is the rows dated on/before the anchor's DAY that still fall AFTER
+  // its instant boundary (legacy: any same-UTC-day row past midnight; with
+  // `observedAt`: a row dated later that day).
   backdatedAfterAnchor: bigint
+  // ADR-0043 amendment: ground_truth rows whose family-timezone DAY is after
+  // the anchor's day yet whose instant is at/before `observedAt` (only possible
+  // when the family timezone is ahead of UTC). Absorbed, so they must be taken
+  // back out of `sumThroughT − sumThroughAnchorDate` once their day is reached.
+  absorbedAfterAnchorDate: ReadonlyArray<{ date: string; amount: bigint }>
 }
 
 interface CashFoldState {
@@ -540,11 +611,14 @@ function nativeBalanceAt(
 
   // cash-like (ADR-0043 §2 / PER-201, twin of `computeCanonicalBalance`):
   //   balance(T) = anchor.value + Σ { afterAnchor(anchor)(t) ∧ t.date <= T }
-  // The counted set splits into two disjoint pieces (see `isAfterAnchor`):
-  //   (a) strictly-after-date flow: Σ{ anchorDate < date <= T }
+  // The counted set splits into disjoint pieces (see `isAfterAnchor`):
+  //   (a) strictly-after-day flow: Σ{ anchorDate < date <= T }
   //         = sumThroughT − sumThroughAnchorDate
-  //   (b) back-dated-but-later-recorded flow: Σ{ date <= anchorDate ∧
-  //         createdAt > anchorCreatedAt }  — constant per anchor.
+  //         (minus the rare ground_truth rows absorbed by `observedAt` although
+  //          their family-timezone day is later — `absorbedAfterAnchorDate`)
+  //   (b) on/before-anchor-day flow that is still "after": derived rows
+  //         recorded after the anchor (createdAt disjunct); ground_truth rows
+  //         dated past the anchor's instant boundary — constant per anchor.
   const cash = state.cashState.get(account.id)!
   const txns = state.transactionsByAccount.get(account.id) ?? []
   const anchors = state.anchorsByAccount.get(account.id) ?? []
@@ -573,19 +647,24 @@ function nativeBalanceAt(
     // Σ all flow <= T. Before any flow this is 0 (pre-inception, ADR-0038 §4).
     return anchors.length === 0 ? cash.sumThroughT : 0n
   }
+  let absorbedEdge = 0n
+  for (const row of cash.active.absorbedAfterAnchorDate) {
+    if (row.date <= sampleDate) absorbedEdge += row.amount
+  }
   return (
     cash.active.value +
     (cash.sumThroughT - cash.active.sumThroughAnchorDate) +
-    cash.active.backdatedAfterAnchor
+    cash.active.backdatedAfterAnchor -
+    absorbedEdge
   )
 }
 
 /**
- * Precompute an anchor's two constant flow pieces (both Σ bounded by the anchor
- * date). The strictly-after-DATE disjunct of `afterAnchor` is handled by the
- * caller via `sumThroughT − sumThroughAnchorDate`; here we only classify the
- * at/before-date rows, for which `isAfterAnchor` collapses to its createdAt
- * disjunct — the exact rows the date subtraction would otherwise drop.
+ * Precompute an anchor's constant flow pieces. The strictly-after-DAY part of
+ * `afterAnchor` is handled by the caller via `sumThroughT − sumThroughAnchorDate`;
+ * here we classify (a) the at/before-anchor-day rows that are nevertheless
+ * "after" (`backdatedAfterAnchor`) and (b) for ground_truth, the rare later-day
+ * rows that are nevertheless absorbed (`absorbedAfterAnchorDate`).
  */
 function summarizeAnchor(
   anchor: CashAnchor,
@@ -593,20 +672,29 @@ function summarizeAnchor(
 ): ActiveAnchor {
   let sumThroughAnchorDate = 0n
   let backdatedAfterAnchor = 0n
+  const absorbedAfterAnchorDate: Array<{ date: string; amount: bigint }> = []
+  const edgeLimit = nextCalendarDay(anchor.date)
   for (const txn of txns) {
-    if (txn.date > anchor.date) break // txns are date-sorted ascending
+    // txns are date-sorted ascending.
+    if (txn.date > anchor.date) {
+      // Only a ground_truth boundary can absorb a LATER-day row, and only within
+      // one day of the anchor (a timezone ahead of UTC). Everything further out
+      // is strictly after the boundary by construction.
+      if (anchor.provenance === "derived" || txn.date > edgeLimit) break
+      if (!isAfterAnchor(anchor, txn)) {
+        absorbedAfterAnchorDate.push({ date: txn.date, amount: txn.amount })
+      }
+      continue
+    }
     sumThroughAnchorDate += txn.amount
-    if (
-      isAfterAnchor(
-        anchor.date,
-        anchor.createdAt,
-        anchor.provenance,
-        txn.date,
-        txn.createdAt
-      )
-    ) {
+    if (isAfterAnchor(anchor, txn)) {
       backdatedAfterAnchor += txn.amount
     }
   }
-  return { value: anchor.value, sumThroughAnchorDate, backdatedAfterAnchor }
+  return {
+    value: anchor.value,
+    sumThroughAnchorDate,
+    backdatedAfterAnchor,
+    absorbedAfterAnchorDate,
+  }
 }

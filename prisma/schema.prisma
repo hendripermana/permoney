@@ -830,6 +830,15 @@ model Valuation {
   // ANCHOR_CHAIN drift check call.
   provenance String?
 
+  // ADR-0043 amendment (2026-09-20). WHEN, within its day, a `ground_truth`
+  // observation happened. `valuationDate` is date-only, so without this a
+  // transaction logged at 12:00 and reconciled at 14:00 was counted again on
+  // top of the anchor. Written (= createdAt, one instant) only for a
+  // ground_truth anchor whose valuationDate is the UTC day of the write; NULL
+  // for back-dated, derived and every pre-existing row, which keep the exact
+  // legacy date-only segmentation. CHECK `valuation_observed_at_domain`.
+  observedAt DateTime?
+
   // Denormalized normal-balance discriminator: "POSITIVE" | "NEGATIVE", copied
   // from the account at write time so the value-sign rule is a pure table CHECK.
   normalBalance String
