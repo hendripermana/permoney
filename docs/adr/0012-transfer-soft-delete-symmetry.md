@@ -1,13 +1,13 @@
 # ADR-0012 — Transfer soft-delete symmetry and `onDelete: Restrict`
 
-|                   |                |
-| ----------------- | -------------- |
-| **Status**        | Accepted       |
-| **Date**          | 2026-05-29     |
-| **Accepted**      | 2026-05-29     |
-| **Deciders**      | Hendri Permana |
-| **Supersedes**    | —              |
-| **Superseded by** | —              |
+|                   |                                                                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------- |
+| **Status**        | Accepted                                                                                                            |
+| **Date**          | 2026-05-29                                                                                                          |
+| **Accepted**      | 2026-05-29                                                                                                          |
+| **Deciders**      | Hendri Permana                                                                                                      |
+| **Supersedes**    | —                                                                                                                   |
+| **Superseded by** | — (one subsection: see the [Amendment](#amendment--the-interim-reversal-path-is-superseded-by-adr-0032-2026-09-20)) |
 
 ## Context
 
@@ -150,3 +150,26 @@ The filter still treats `Transaction.deletedAt` as the canonical signal; the add
 - ADR-0010 (Tenant composite FK invariants — pattern of explicit FK dependencies)
 - AGENTS.md § 5.A — Transaction Core Architecture, Data Integrity rules
 - Postgres docs: [`ON DELETE RESTRICT`](https://www.postgresql.org/docs/16/ddl-constraints.html#DDL-CONSTRAINTS-FK)
+
+## Amendment — the interim reversal path is superseded by ADR-0032 (2026-09-20)
+
+This ADR has two halves, and only one of them is still current.
+
+**Still current:** the soft-delete symmetry rule itself — a transfer is deleted
+as a unit (both legs + `Transfer.deletedAt` in one tenant transaction), enforced
+by `onDelete: Restrict` and the defense-in-depth filters. That is the decision
+this ADR is named for, and the code and tests still implement it.
+
+**Superseded:** the subsection
+[`Update reversal-and-replace path (interim)`](#update-reversal-and-replace-path-interim)
+above, and the matching bullet in _References_ ("The interim hard-delete
+reversal in `updateTransactionForFamily` still erases the old `Transaction`
+rows. PER-93 redesigns this"). That redesign is **ADR-0032 — Idempotent
+update/delete semantics: soft-delete + new-row supersession**, which shipped
+the replacement (soft-delete plus a new row carrying
+`supersedes`/`supersededBy`, so the old state is never erased).
+
+So: read the symmetry rule here, and read ADR-0032 for what an update does. The
+interim path is kept in the text above as history — the F1 audit's rule for
+this directory is append-only for substance, so the decision text is not
+rewritten.

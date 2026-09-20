@@ -2,9 +2,9 @@
 
 |                   |                                                          |
 | ----------------- | -------------------------------------------------------- |
-| **Status**        | Proposed                                                 |
+| **Status**        | Accepted                                                 |
 | **Date**          | 2026-08-03                                               |
-| **Accepted**      | —                                                        |
+| **Accepted**      | 2026-08-07                                               |
 | **Deciders**      | Hendri Permana                                           |
 | **Supersedes**    | —                                                        |
 | **Superseded by** | —                                                        |
@@ -473,3 +473,34 @@ Files: `src/server/market-data.server.ts`
 refresh" (the cron trigger); `docker-compose.prod.yml` +
 `.env.example` (`MARKET_DATA_REFRESH_SECRET`); real-Postgres
 (`tests/integration/market-data-scheduled-refresh.integration.ts`) tests.
+
+## Amendment — implementation shipped (2026-09-20)
+
+**Status corrected from Proposed to Accepted.** The decision above was
+implemented in PER-233…238 and is in production; the frontmatter was never
+updated (the review that caught this is the F1 audit, B4).
+
+What shipped, and where it deviates from the wording above:
+
+- The canonical store landed as `Instrument` + `MarketInstrument` (the
+  tradable/quotable identity, e.g. a specific fund or gold series) +
+  `MarketQuote` (append-only). The name in the decision text,
+  `InstrumentQuote`, was not used; `MarketQuote` is the shipped table.
+- Raw payload staging is `RawMarketDataFetch` — raw provider payloads are
+  still never canonical (ADR-0008/0039 boundary intact).
+- The provider seam is `MarketDataProvider` in
+  `src/server/market-data.server.ts`, with the graceful-degradation chain the
+  decision required (a provider failure records the failure and writes ZERO
+  quotes).
+- The scheduled refresh runs on the self-hosted box via
+  `src/routes/api/internal/market-data-refresh.ts` +
+  `deploy/refresh-market-data.sh`, documented in
+  `docs/runbook-production.md` ("Market data refresh"), and is exercised by
+  `tests/integration/market-data-scheduled-refresh.integration.ts`.
+- Per-instrument provider **routing** (select a provider per instrument, batch
+  per provider) became its own decision — see ADR-0052, which explicitly
+  reuses this ADR's `ingestMarketDataOnce` pipeline unchanged. Reksadana NAV
+  ingestion is ADR-0053.
+
+No decision text above is rewritten; this note only records that it shipped and
+where the implementation landed.
