@@ -440,13 +440,12 @@ describe("Pit Stop batch reconcile (ADR-0058 D4)", () => {
     expect(await balanceOf(owner, card.id)).toBe(-500000n)
   })
 
-  test("reports matchesActual=false when same-day transactions are counted on top of the anchor (ADR-0043 date-only segmentation)", async () => {
-    // KNOWN LIMITATION, pinned so it cannot regress silently: a ground-truth
-    // anchor is date-only (`t.date > valuationDate`), so a transaction dated
-    // LATER ON THE ANCHOR'S OWN calendar day is post-anchor flow even if it was
-    // recorded before the check. Pit Stop reports the truth (`after`) and flags
-    // it instead of hiding it. If ADR-0043's segmentation is refined to be
-    // instant-aware, this test should flip to `matchesActual: true`.
+  test("absorbs a transaction logged earlier the same day (ADR-0043 observedAt amendment)", async () => {
+    // The defect this used to pin: a ground-truth anchor was date-only, so an
+    // expense logged at 12:00 and checked at 14:00 was counted AGAIN on top of
+    // the asserted balance (150,000 - 50,000 lunch, check says 100,000 -> the
+    // ledger ended at 50,000). The anchor now records WHEN it was observed, so
+    // everything dated before that instant is absorbed.
     const owner = await factories.createAuthenticatedOnboardedUser()
     const bank = await makeAccount(owner, { openingBalance: "150000" })
     await createTransactionForFamily({
@@ -455,7 +454,7 @@ describe("Pit Stop batch reconcile (ADR-0058 D4)", () => {
         amount: "50000",
         description: "Lunch",
         accountId: bank.id,
-        date: new Date(),
+        date: new Date(Date.now() - 2 * 60 * 60 * 1000),
         idempotencyKey: factories.createIdempotencyKey(),
       },
       familyId: owner.family.id,
@@ -468,6 +467,37 @@ describe("Pit Stop batch reconcile (ADR-0058 D4)", () => {
 
     expect(result.results[0]).toMatchObject({
       before: "100000",
+      delta: "0",
+      after: "100000",
+      matchesActual: true,
+    })
+    expect(await balanceOf(owner, bank.id)).toBe(100000n)
+  })
+
+  test("still flags a transaction dated LATER than the check (it genuinely happens after)", async () => {
+    // Residual honest case: an entry dated after the observation instant is
+    // post-anchor flow, so `after` differs from what was asserted. Pit Stop
+    // reports the truth and flags it instead of hiding it.
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const bank = await makeAccount(owner, { openingBalance: "150000" })
+    await createTransactionForFamily({
+      data: {
+        type: "expense",
+        amount: "50000",
+        description: "Dinner (scheduled later today)",
+        accountId: bank.id,
+        date: new Date(Date.now() + 60 * 60 * 1000),
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+    const result = await runBatch(owner, [
+      { accountId: bank.id, actualBalance: "100000" },
+    ])
+
+    expect(result.results[0]).toMatchObject({
       delta: "0",
       after: "50000",
       matchesActual: false,

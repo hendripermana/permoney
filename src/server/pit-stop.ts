@@ -121,9 +121,11 @@ export interface PitStopAccountResult {
    */
   delta: string
   /**
-   * Whether `after` equals the asserted value. Normally true. False only when
-   * transactions dated later on the anchor's own calendar day are counted on
-   * top of the anchor (ADR-0043's date-only ground-truth segmentation).
+   * Whether `after` equals the asserted value. Normally true. False only when a
+   * transaction is dated AFTER the instant the check was made (a same-day entry
+   * scheduled for later): it genuinely happens after the observation, so the
+   * anchor's `observedAt` boundary (ADR-0043 amendment, 2026-09-20) counts it.
+   * Everything logged earlier the same day is absorbed.
    */
   matchesActual: boolean
 }
