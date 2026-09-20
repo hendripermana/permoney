@@ -381,6 +381,24 @@ describe("Zakat Maal calculator (ADR-0056)", () => {
       expect(r2.snapshotNetWealthMinor).toBe(rupiah(40_000_000).toString())
       expect(r1.unattributedAccountIds).toEqual([untagged.id])
       expect(r2.unattributedAccountIds).toEqual([untagged.id])
+      // ADR-0058: the result also carries them once, BY NAME, for the page's
+      // prominent "not counted" notice.
+      expect(result.unattributedAccounts).toEqual([
+        { id: untagged.id, name: untagged.name },
+      ])
+    })
+
+    test("single-payer mode reports no unattributed accounts (implicit 100%)", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      await setHawl(owner)
+      await factories.createAccount({
+        familyId: owner.family.id,
+        accountType: "DEPOSITORY",
+        balance: rupiah(200_000_000),
+      })
+      const result = await compute(owner, AFTER_ANNIVERSARY)
+      expectOk(result)
+      expect(result.unattributedAccounts).toEqual([])
     })
   })
 

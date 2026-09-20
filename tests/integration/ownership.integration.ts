@@ -110,12 +110,11 @@ describe("owner resolution (ADR-0058 D1)", () => {
       owner: { memberUserId: spouse.id },
     })
     const people = await peopleFor(owner.family.id)
-    expect(people).toHaveLength(1)
-    expect(people[0]).toMatchObject({
-      linkedUserId: spouse.id,
-      displayName: "Rahayu",
-    })
-    expect(first.zakatPayerId).toBe(people[0]!.id)
+    // The spouse's person, plus the acting member's own (see the next test).
+    expect(people).toHaveLength(2)
+    const spousePerson = people.find((p) => p.linkedUserId === spouse.id)
+    expect(spousePerson).toMatchObject({ displayName: "Rahayu" })
+    expect(first.zakatPayerId).toBe(spousePerson!.id)
 
     // A second account, resolved through the same member, reuses the person.
     const account2 = await factories.createAccount({
@@ -125,19 +124,52 @@ describe("owner resolution (ADR-0058 D1)", () => {
       owner: { memberUserId: spouse.id },
     })
     expect(second.zakatPayerId).toBe(first.zakatPayerId)
-    expect(await peopleFor(owner.family.id)).toHaveLength(1)
+    expect(await peopleFor(owner.family.id)).toHaveLength(2)
 
-    // Person creation is audited in the same transaction as the tag.
+    // Person creation is audited in the same transaction as the tag: one row
+    // per created person, none for the reuse.
     const audits = await harness.withFamily(owner.family.id, (tx) =>
       tx.auditLog.findMany({
         where: { familyId: owner.family.id, entityType: "ZakatPayer" },
       })
     )
-    expect(audits).toHaveLength(1)
-    expect(audits[0]).toMatchObject({
-      action: "create",
-      entityId: people[0]!.id,
+    expect(audits.map((a) => a.action)).toEqual(["create", "create"])
+    expect(new Set(audits.map((a) => a.entityId))).toEqual(
+      new Set(people.map((p) => p.id))
+    )
+  })
+
+  test("the first on-demand person never stands alone: the acting member gets theirs too", async () => {
+    // With exactly ONE person Zakat runs in single-payer mode and counts every
+    // account toward that person, so creating only the spouse would silently
+    // turn the household head's implicit "Me" into the spouse.
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const spouse = await addMember(owner, "active", "Rahayu")
+    const other = await addMember(owner, "active", "Dina")
+    const [a1, a2] = await Promise.all(
+      [1, 2].map(() => factories.createAccount({ familyId: owner.family.id }))
+    )
+
+    await setOwner(owner, a1!.id, { owner: { memberUserId: spouse.id } })
+    let people = await peopleFor(owner.family.id)
+    expect(new Set(people.map((p) => p.linkedUserId))).toEqual(
+      new Set([owner.user.id, spouse.id])
+    )
+
+    // Not the first person any more: a third member adds only their own.
+    await setOwner(owner, a2!.id, { owner: { memberUserId: other.id } })
+    people = await peopleFor(owner.family.id)
+    expect(people).toHaveLength(3)
+
+    // Assigning to yourself first (no other person yet) creates just yours.
+    const solo = await factories.createAuthenticatedOnboardedUser()
+    const soloAccount = await factories.createAccount({
+      familyId: solo.family.id,
     })
+    await setOwner(solo, soloAccount.id, {
+      owner: { memberUserId: solo.user.id },
+    })
+    expect(await peopleFor(solo.family.id)).toHaveLength(1)
   })
 
   test("a member ref reuses an existing person already linked to that user", async () => {
@@ -225,9 +257,12 @@ describe("owner resolution (ADR-0058 D1)", () => {
       )
     )
 
+    // Exactly one person per user: the spouse's, and the acting member's.
     const people = await peopleFor(owner.family.id)
-    expect(people).toHaveLength(1)
-    for (const r of results) expect(r.zakatPayerId).toBe(people[0]!.id)
+    expect(people).toHaveLength(2)
+    expect(new Set(people.map((p) => p.linkedUserId)).size).toBe(2)
+    const spousePerson = people.find((p) => p.linkedUserId === spouse.id)
+    for (const r of results) expect(r.zakatPayerId).toBe(spousePerson!.id)
   })
 
   test("same idempotency key replays; a different payload under it conflicts", async () => {
@@ -256,8 +291,9 @@ describe("owner resolution (ADR-0058 D1)", () => {
       setOwner(owner, account.id, { owner: null }, key)
     ).rejects.toBeInstanceOf(IdempotencyConflictError)
 
-    // One person, one Account audit row for the tag.
-    expect(await peopleFor(owner.family.id)).toHaveLength(1)
+    // Replay created nothing new (spouse + acting member), one Account audit
+    // row for the tag.
+    expect(await peopleFor(owner.family.id)).toHaveLength(2)
     const accountAudits = await harness.withFamily(owner.family.id, (tx) =>
       tx.auditLog.count({
         where: { familyId: owner.family.id, entityType: "Account" },
@@ -284,16 +320,11 @@ describe("owner resolution (ADR-0058 D1)", () => {
       })
     ).rejects.toBeInstanceOf(AccountOwnershipInvalidError)
 
-    // A genuine joint account with a member co-owner works.
-    const ownerPerson = await createZakatPayerForFamily({
-      data: {
-        displayName: "Hendri",
-        linkedUserId: owner.user.id,
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      userId: owner.user.id,
-    })
+    // A genuine joint account with a member co-owner works. The acting
+    // member's own person already exists (created alongside the spouse's).
+    const ownerPerson = (await peopleFor(owner.family.id)).find(
+      (p) => p.linkedUserId === owner.user.id
+    )!
     const joint = await setOwner(owner, account.id, {
       owner: { personId: ownerPerson.id },
       jointOwner: { memberUserId: spouse.id },
@@ -335,8 +366,10 @@ describe("owner resolution (ADR-0058 D1)", () => {
       userId: owner.user.id,
       runInTenantTransaction: (f, u, fn) => harness.withMember(f, u, fn),
     })
-    expect(after.peopleCount).toBe(1)
-    expect(after.candidates).toHaveLength(2) // owner (member) + Rahayu (person)
+    // Rahayu and the acting member both have a person now; no member is left
+    // over as a separate "member" candidate, and nobody appears twice.
+    expect(after.peopleCount).toBe(2)
+    expect(after.candidates.map((c) => c.kind)).toEqual(["person", "person"])
     expect(
       after.candidates.filter((c) => c.displayName === "Rahayu")
     ).toHaveLength(1)

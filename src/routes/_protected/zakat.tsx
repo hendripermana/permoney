@@ -17,6 +17,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import type { CurrencyCode } from "@/lib/data/currencies"
 import { decodeMoney, formatMoney, sumMoney } from "@/lib/money"
+import { UnattributedAccountsNotice } from "@/components/blocks/zakat-unattributed-notice"
 import { computeZakatFn, type SerializedZakatPayerResult } from "@/server/zakat"
 
 /** Every currency this feature deals in is validated ISO-4217 server-side
@@ -142,6 +143,10 @@ function ResultBody({
           : "Hanafi (start & end) Hawl rule"}
         .
       </div>
+
+      {result.unattributedAccounts.length > 0 && (
+        <UnattributedAccountsNotice accounts={result.unattributedAccounts} />
+      )}
 
       <div className="grid gap-6 lg:grid-cols-2">
         {result.payers.map((payer) => (
@@ -280,8 +285,8 @@ function PayerCard({
             {payer.unattributedAccountIds.length === 1 ? "" : "s"} still need
             {payer.unattributedAccountIds.length === 1 ? "s" : ""} an owner
             before they can be included.{" "}
-            <Link to="/settings/zakat" className="underline">
-              Tag them
+            <Link to="/accounts" className="underline">
+              Set an owner
             </Link>
             .
           </p>

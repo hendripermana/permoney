@@ -909,6 +909,12 @@ export type ComputeZakatResult =
       nisabValueMinor: string
       hawlStartDate: string
       payers: SerializedZakatPayerResult[]
+      /**
+       * ADR-0058 — in-scope accounts with NO owner while the family has 2+
+       * payers: they are excluded from EVERY payer's total. Surfaced once, by
+       * name, so the exclusion is never silent.
+       */
+      unattributedAccounts: Array<{ id: string; name: string }>
     }
 
 function serializePayerResult(
@@ -1193,8 +1199,20 @@ export async function computeZakatForFamily({
       nisabValueMinor: priceResolution.nisabValueMinor.toString(),
       hawlStartDate: settings.hawlStartDate as string,
       payers: results.map(serializePayerResult),
+      unattributedAccounts: unattributedAccountRefs(
+        results[0]?.unattributedAccountIds ?? [],
+        calculationAccounts
+      ),
     }
   })
+}
+
+function unattributedAccountRefs(
+  ids: ReadonlyArray<string>,
+  accounts: ReadonlyArray<{ id: string; name: string }>
+): Array<{ id: string; name: string }> {
+  const byId = new Map(accounts.map((a) => [a.id, a.name]))
+  return ids.map((id) => ({ id, name: byId.get(id) ?? id }))
 }
 
 export const computeZakatFn = createServerFn({ method: "GET" })

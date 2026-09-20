@@ -97,18 +97,64 @@ export async function resolveOwnerRefWithinTx(
     return row.id
   }
 
+  const memberPerson = await getOrCreatePersonForActiveMember(
+    tx,
+    { familyId, auditCtx },
+    ref.memberUserId,
+    "owner_resolver"
+  )
+  if (memberPerson.created && memberPerson.wasFirstPerson) {
+    // ADR-0056 default-behavior rule: with exactly ONE person, Zakat runs in
+    // single-payer mode and counts EVERY account 100% toward that person. If
+    // the first person on-demand-created were the spouse, the household
+    // head's implicit "Me" would silently become the spouse. So the first
+    // on-demand person is never created alone: the acting member (the
+    // implicit "Me" until now) gets their own person in the same
+    // transaction, which puts the family in multi-payer mode where untagged
+    // accounts are excluded and listed, never mis-attributed.
+    const actorId = auditCtx.session.user.id
+    if (actorId !== ref.memberUserId) {
+      await getOrCreatePersonForActiveMember(
+        tx,
+        { familyId, auditCtx },
+        actorId,
+        "owner_resolver_actor"
+      )
+    }
+  }
+  return memberPerson.id
+}
+
+interface MemberPerson {
+  id: string
+  /** This call created the row (it did not exist before). */
+  created: boolean
+  /** The family had no people at all before this call created one. */
+  wasFirstPerson: boolean
+}
+
+async function getOrCreatePersonForActiveMember(
+  tx: TenantTransactionClient,
+  { familyId, auditCtx }: ResolveOwnerRefContext,
+  memberUserId: string,
+  source: "owner_resolver" | "owner_resolver_actor"
+): Promise<MemberPerson> {
   const member = await tx.familyMember.findFirst({
-    where: { familyId, userId: ref.memberUserId, status: "active" },
+    where: { familyId, userId: memberUserId, status: "active" },
     select: { user: { select: { name: true, email: true } } },
   })
-  if (!member) throw new OwnerMemberNotActiveError(ref.memberUserId)
+  if (!member) throw new OwnerMemberNotActiveError(memberUserId)
 
   const existing = await tx.zakatPayer.findFirst({
-    where: { familyId, linkedUserId: ref.memberUserId },
+    where: { familyId, linkedUserId: memberUserId },
     select: { id: true },
   })
-  if (existing) return existing.id
+  if (existing) {
+    return { id: existing.id, created: false, wasFirstPerson: false }
+  }
 
+  const wasFirstPerson =
+    (await tx.zakatPayer.count({ where: { familyId } })) === 0
   const displayName =
     member.user.name.trim() || member.user.email.split("@")[0] || "Member"
   // Native upsert on the unique `linkedUserId`: under Serializable a
@@ -116,13 +162,13 @@ export async function resolveOwnerRefWithinTx(
   // (retried by `scopedTenantTransaction`) or a unique violation (retried by
   // `retryOnOwnerLinkRace`) — never as a second person for the same user.
   const created = await tx.zakatPayer.upsert({
-    where: { linkedUserId: ref.memberUserId },
-    create: { familyId, displayName, linkedUserId: ref.memberUserId },
+    where: { linkedUserId: memberUserId },
+    create: { familyId, displayName, linkedUserId: memberUserId },
     update: {},
     select: { id: true, familyId: true, displayName: true, linkedUserId: true },
   })
   if (created.familyId !== familyId) {
-    throw new OwnerLinkConflictError(ref.memberUserId)
+    throw new OwnerLinkConflictError(memberUserId)
   }
   await auditLog(tx, auditCtx, {
     action: "create",
@@ -132,10 +178,10 @@ export async function resolveOwnerRefWithinTx(
       id: created.id,
       displayName: created.displayName,
       linkedUserId: created.linkedUserId,
-      source: "owner_resolver",
+      source,
     },
   })
-  return created.id
+  return { id: created.id, created: true, wasFirstPerson }
 }
 
 function isOwnerLinkRace(error: unknown): boolean {

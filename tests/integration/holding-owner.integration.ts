@@ -180,12 +180,12 @@ describe("holding owner (ADR-0058 D2)", () => {
     const people = await harness.withFamily(owner.family.id, (tx) =>
       tx.zakatPayer.findMany({ where: { familyId: owner.family.id } })
     )
-    expect(people).toHaveLength(1)
-    expect(people[0]).toMatchObject({
-      linkedUserId: spouse.id,
-      displayName: "Rahayu",
-    })
-    expect(holding.ownerPersonId).toBe(people[0]!.id)
+    // The spouse's person, plus the acting member's own (the first on-demand
+    // person never stands alone — see ownership.integration.ts).
+    expect(people).toHaveLength(2)
+    const spousePerson = people.find((p) => p.linkedUserId === spouse.id)
+    expect(spousePerson).toMatchObject({ displayName: "Rahayu" })
+    expect(holding.ownerPersonId).toBe(spousePerson!.id)
 
     const stranger = await factories.createUser({ familyId: null })
     await expect(
