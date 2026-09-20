@@ -986,8 +986,12 @@ export async function createValuationWithinTx(
       normalBalance: normalBalanceForClass(account.accountClass),
       allowsNegativeAsset: accountAllowsNegative,
       createdById: user.id,
-      createdAt: writtenAt,
-      observedAt,
+      // Pin createdAt to the SAME instant only when an observedAt is recorded, so
+      // the two can never differ by a clock tick. Every other row (derived,
+      // back-dated, opening, market) keeps the column's own default exactly as
+      // before — no change to the clock PER-201's derived-anchor ordering
+      // (anchor.createdAt > every promoted row's) has always relied on.
+      ...(observedAt ? { createdAt: writtenAt, observedAt } : {}),
       baseValue: projection.baseAmount,
       baseCurrency: projection.baseCurrency,
       fxRateScaled: projection.fxRateScaled,
