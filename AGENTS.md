@@ -91,8 +91,27 @@ Agent context is portable across coding tools through versioned repository guida
 
 - [ ] Run `vp install` after pulling remote changes and before getting started.
 - [ ] If `vp` is not installed or `vp install` fails, stop and report the exact error. Do not substitute `npm`, `pnpm`, or `yarn` commands unless the user explicitly asks for that fallback.
-- [ ] Run `vp check` and `vp test` to validate changes.
-- [ ] If `vp check` or `vp test` fails, stop and report the first failing command and error excerpt. Do not claim the task is done until the failure is fixed or the user explicitly approves a partial workaround.
+- [ ] Run `vp run check` to validate changes. That is the real gate: it runs `vp check` (format + lint + typecheck) **and** the guard scripts `scripts/check-no-use-effect.mjs`, `scripts/check-pre-auth-stub.mjs`, and `scripts/check-migrations-additive.mjs`. Bare `vp check` does **not** run the guards.
+- [ ] Run `vp run test:unit:coverage` to validate behaviour. That is the gate CI runs; bare `vp test` skips the coverage threshold.
+- [ ] Run the integration files you touched: `vp test run --config vitest.integration.config.ts <files>` (real Postgres on :5433; see `docs/testing.md`). Unset `NODE_ENV` and `DATABASE_URL` first — a stray `NODE_ENV=production` fails React tests for unrelated reasons, and the harness refuses to run against a non-test `DATABASE_URL`.
+- [ ] If any of the above fails, stop and report the first failing command and error excerpt. Do not claim the task is done until the failure is fixed or the user explicitly approves a partial workaround.
+
+## Migration Safety — destructive DDL needs a marker
+
+`prisma/migrations/**` is append-only history: Prisma records a checksum for every
+applied migration, so editing one that already shipped breaks deploys. New migration
+files are scanned by `scripts/check-migrations-additive.mjs` — wired into both
+`vp run check` and the CI `check` job — for `DROP COLUMN`, `DROP TABLE`,
+`ALTER COLUMN … TYPE` and `SET NOT NULL`. A file that needs one of those must say so
+in the same file:
+
+```sql
+-- @destructive: <why this is safe and what it does>
+```
+
+Prefer additive sequences (add a nullable column → backfill → tighten in a later
+migration) over a destructive edit, and remember the ledger rules above: user-visible
+transaction history is never erased as a correctness mechanism.
 
 ## Long-Horizon Engineering Standard For Agents
 
@@ -253,7 +272,7 @@ As an AI Agent, you MUST follow these architectural rules for the Permoney proje
 
 **Do NOT call `useEffect` directly.** Use `useEffect` only when there is no declarative replacement from the no-use-effect skill, such as subscribing to a browser event or integrating with an external library that requires a side effect.
 
-**MANDATORY:** You MUST consult and strictly follow the [no-use-effect skill](.agents/skills/no-use-effect/SKILL.md) whenever you are dealing with state synchronization or side effects. The skill document provides the exact five replacement patterns required and the specific `useMountEffect` escape hatch.
+**MANDATORY:** You MUST consult and strictly follow the [no-use-effect skill](docs/agents/no-use-effect.md) whenever you are dealing with state synchronization or side effects. That document provides the exact five replacement patterns required and the specific `useMountEffect` escape hatch. It is tracked in the repository on purpose: the skill harness under `.agents/` is gitignored, so a fresh clone would otherwise carry a mandate it cannot read.
 
 ## 2. STRICT TYPESCRIPT (NO `any` ALLOWED)
 
