@@ -223,6 +223,27 @@ cd /home/ubuntu/permoney-prod && set -a && . ./.env.backup && set +a
 ./deploy/restore-postgres.sh verify permoney_prod_<latest-timestamp>.dump
 ```
 
+The monthly run is automated via cron — same mechanism as the backup and
+market-data jobs (no serverless cron on this self-hosted VM, per ADR-0047).
+It runs on the **1st at 04:00 UTC**, i.e. after that morning's 02:00 backup,
+and verifies the newest local dump:
+
+```cron
+0 4 1 * * cd /home/ubuntu/permoney-prod && set -a && . ./.env.backup && set +a && ./deploy/restore-postgres.sh verify "$(ls -1t /home/ubuntu/permoney-prod/backups/permoney_prod_*.dump | head -1)" >> /var/log/permoney_prod_restore_verify.log 2>&1
+```
+
+Why this shape: `RETENTION_DAYS` (default 14) guarantees at least one local
+dump every month, so the verify never needs to fetch from R2; `verify` is
+non-destructive by construction (it restores into the disposable
+`permoney_restore_test` database, prints the sanity counts, and drops it
+again — `permoney_prod` is never opened); and the log line is the durable
+evidence, because a cron failure here is otherwise silent. Check
+`/var/log/permoney_prod_restore_verify.log` for `[restore-verify] scratch DB
+dropped` before recording a month as verified.
+
+If the cron did not run (empty log for the month), run the command above by
+hand and note why — an unverified backup is not a backup.
+
 This restores into a disposable `permoney_restore_test` database, prints
 sanity row counts (`Family`/`Transaction`/`Account`/`AuditLog`), then drops
 the scratch database. It never touches `permoney_prod`. Record the date of
