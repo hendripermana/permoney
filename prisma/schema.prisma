@@ -1298,8 +1298,21 @@ model Holding {
   instrumentId String
   instrument   Instrument @relation(fields: [instrumentId, familyId], references: [id, familyId], onDelete: Restrict, onUpdate: Cascade, map: "Holding_instrumentId_familyId_fkey")
 
+  // ADR-0058 D2 — per-holding owner: which person (`ZakatPayer`) THIS holding's
+  // value belongs to, for a shared portfolio that holds different people's
+  // products. NULL (the default, and what a Buy trade creates) = "same as
+  // account": the effective owner falls back to the account's owner/joint split.
+  // Tenant-safe composite FK (Pattern A, ADR-0010). Prisma's DSL cannot express
+  // it, but the raw migration SQL scopes the SET NULL to just this column
+  // (`ON DELETE SET NULL ("ownerPersonId")`, PG 15+) — a bare composite SET NULL
+  // would also null `familyId`, which is NOT NULL (same reason as
+  // `Account.zakatPayerId`, ADR-0056).
+  ownerPersonId String?
+  ownerPerson   ZakatPayer? @relation("HoldingOwnerPerson", fields: [ownerPersonId, familyId], references: [id, familyId], onDelete: SetNull, onUpdate: Cascade, map: "holding_owner_person_fkey")
+
   @@unique([id, familyId], map: "Holding_id_familyId_key")
   @@index([familyId, accountId])
+  @@index([ownerPersonId])
 }
 
 // ADR-0050 (PER-233) — Market-data ingestion: global, family-neutral price store.
@@ -1509,6 +1522,7 @@ model ZakatPayer {
 
   primaryAccounts Account[] @relation("AccountZakatPayer")
   jointAccounts   Account[] @relation("AccountZakatJointPayer")
+  ownedHoldings   Holding[] @relation("HoldingOwnerPerson")
 
   // Tenant-safe composite FK target for Account.zakatPayerId/zakatJointPayerId
   // (Pattern A, ADR-0010).

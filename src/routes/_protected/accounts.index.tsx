@@ -25,6 +25,7 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { Badge } from "@/components/ui/badge"
 import { AccountCard, ACCOUNT_TYPE_LABEL, PinButton } from "./-account-card"
 import { AccountFormDialog } from "@/components/blocks/account-form-dialog"
+import { WealthByPersonCard } from "@/components/blocks/wealth-by-person-card"
 import { ValuationActionDialog } from "@/components/blocks/valuation-action-dialog"
 import { Button } from "@/components/ui/button"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
@@ -80,7 +81,11 @@ import {
   type AccountViewMode,
 } from "@/lib/account-list-tools"
 import { formatCurrency } from "@/lib/currency"
-import { normalizeNetWorthAt, type PointBalance } from "@/lib/net-worth"
+import {
+  buildLatestRateResolver,
+  normalizeNetWorthAt,
+  type PointBalance,
+} from "@/lib/net-worth"
 import { getLatestFxOverviewFn } from "@/server/fx"
 import { cn } from "@/lib/utils"
 import { createUuidV7 } from "@/lib/uuid-v7"
@@ -336,6 +341,10 @@ function AccountsPage() {
                 accounts={safeAccounts}
                 personDebtAccounts={personDebtAccounts}
               />
+            ) : null}
+
+            {safeAccounts.length > 0 ? (
+              <WealthByPersonCard accounts={safeAccounts} />
             ) : null}
 
             {listedAccounts.length === 0 ? (
@@ -817,17 +826,9 @@ function NetWorthInBaseCard({
         unconverted: [] as Array<{ currency: string; native: bigint }>,
         personDebtNet: null as bigint | null,
       }
-    // The overview is latest-only (one row per pair), so this builds the
-    // fromCurrency -> rate lookup; the first-wins guard keeps it correct even
-    // if a pair ever appears twice.
-    const latest = new Map<string, bigint>()
-    for (const rate of rates ?? []) {
-      if (rate.toCurrency !== base) continue
-      if (!latest.has(rate.fromCurrency)) {
-        latest.set(rate.fromCurrency, BigInt(rate.rateScaled))
-      }
-    }
-    const resolveRate = (currency: string) => latest.get(currency) ?? null
+    // The overview is latest-only (one row per pair); the shared resolver
+    // builds the fromCurrency -> rate lookup for every base-normalized card.
+    const resolveRate = buildLatestRateResolver(rates ?? [], base)
     const toBalances = (rows: ReadonlyArray<AccountRecord>): PointBalance[] =>
       rows.map((account) => ({
         accountClass: account.accountClass,

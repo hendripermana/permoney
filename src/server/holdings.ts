@@ -66,6 +66,11 @@ import {
   uuidV7Schema,
   type RunInTenantTransaction,
 } from "./mutation-kit"
+import {
+  ownerRefSchema,
+  resolveOwnerRefWithinTx,
+  retryOnOwnerLinkRace,
+} from "./ownership"
 import { validateTenantReferences } from "./validation/tenant-references"
 import {
   createValuationWithinTx,
@@ -169,6 +174,11 @@ export const upsertHoldingInputSchema = z.object({
   // is validated to exist, be non-fx, and share the account's currency). The
   // link alone never changes a price — it takes effect on the next refresh.
   marketInstrumentId: z.string().min(1).nullable().optional(),
+  // ADR-0058 D2 — per-holding owner. `undefined` leaves it unchanged on update
+  // (and means "same as account" on create); `null` clears it back to "same as
+  // account"; a ref sets it. A `{ memberUserId }` ref is resolved to that
+  // member's person (get-or-created) inside this transaction.
+  owner: ownerRefSchema.nullable().optional(),
   idempotencyKey: uuidV7Schema,
 })
 
@@ -231,6 +241,13 @@ export interface SerializedHolding {
    * "before" snapshot a trade-correction restores verbatim — never recomputed.
    */
   lastMutationIdempotencyKey: string | null
+  /**
+   * ADR-0058 D2 — the person (`ZakatPayer` id) this holding's value belongs to,
+   * or null = "same as account" (effective owner falls back to the account's
+   * owner/joint split). Part of the audit snapshot; trade-correction restores
+   * never overwrite it on an in-place update.
+   */
+  ownerPersonId: string | null
   /**
    * PER-238 — as-of of the latest MarketQuote for the linked MarketInstrument
    * (ISO string), or null when the holding is not linked / has no quote yet.
@@ -319,6 +336,7 @@ function serializeHolding(holding: HoldingWithInstrument): SerializedHolding {
     gainMinor: gain.toString(),
     returnPct: holdingReturnPct(value, cost),
     lastMutationIdempotencyKey: holding.lastMutationIdempotencyKey,
+    ownerPersonId: holding.ownerPersonId,
     latestMarketQuoteAsOf: null,
     createdAt: holding.createdAt.toISOString(),
     updatedAt: holding.updatedAt.toISOString(),
@@ -622,6 +640,7 @@ export async function upsertHoldingForFamily({
       data.marketInstrumentId === undefined
         ? "__unset__"
         : data.marketInstrumentId,
+    owner: data.owner === undefined ? "__unset__" : data.owner,
     quantity: data.quantity,
   })
   const auditCtx = await createAuditContext(
@@ -664,6 +683,21 @@ export async function upsertHoldingForFamily({
           ? null
           : parseMinor(data.lastPrice, currency, "lastPrice")
 
+      // ADR-0058 D2 — tenant-validate the owner (a person of THIS family, or
+      // an ACTIVE member resolved on demand) before any holding write. FKs
+      // alone are not tenant isolation; the composite DB FK is the backstop.
+      const ownerPersonId: string | null | undefined =
+        data.owner === undefined
+          ? undefined
+          : data.owner === null
+            ? null
+            : await resolveOwnerRefWithinTx(
+                tx,
+                { familyId, auditCtx },
+                data.owner,
+                "owner"
+              )
+
       let holdingId: string
       let resolvedInstrumentId: string
       if (data.holdingId) {
@@ -690,6 +724,7 @@ export async function upsertHoldingForFamily({
             // latest after this out-of-band edit. See the marker's doc
             // comment on `SerializedHolding` / the migration header.
             lastMutationIdempotencyKey: null,
+            ...(ownerPersonId === undefined ? {} : { ownerPersonId }),
           },
           include: { instrument: true },
         })
@@ -719,6 +754,7 @@ export async function upsertHoldingForFamily({
             quantity: data.quantity,
             avgUnitCostMinor,
             lastPriceMinor,
+            ownerPersonId: ownerPersonId ?? null,
           },
           include: { instrument: true },
         })
@@ -773,7 +809,7 @@ export async function upsertHoldingForFamily({
     })
 
   try {
-    return await runOnce()
+    return await retryOnOwnerLinkRace(runOnce)
   } catch (error) {
     if (!isUniqueConstraintError(error)) throw error
     const replay = await scopedTenantTransaction(familyId, user.id, (tx) =>
@@ -1632,6 +1668,9 @@ const holdingSnapshotSchema = z
     // same as an explicit `null`, which is exactly the semantics we want:
     // "not known to be the result of a still-latest tracked mutation."
     lastMutationIdempotencyKey: z.string().nullable().optional(),
+    // ADR-0058 D2 — same missing-key reasoning: every snapshot captured before
+    // the owner column existed has no `ownerPersonId` key at all.
+    ownerPersonId: z.string().nullable().optional(),
   })
   .passthrough()
 
@@ -2018,10 +2057,19 @@ async function restoreHoldingFromSnapshotWithinTx(
     // The trade closed the position to zero (a SELL-to-zero) — recreate it
     // EXACTLY at its "before" snapshot, preserving the original row id so
     // historical references (e.g. prior Distribution/Fee audit rows) still
-    // resolve.
+    // resolve. The owner comes back too — but only if that person still exists
+    // in this family (deleting a person un-owns holdings; a stale id would
+    // violate the composite FK and block the correction).
+    const restoredOwner = holdingBefore.ownerPersonId
+      ? await tx.zakatPayer.findFirst({
+          where: { id: holdingBefore.ownerPersonId, familyId },
+          select: { id: true },
+        })
+      : null
     const created = await tx.holding.create({
       data: {
         id: holdingBefore.id,
+        ownerPersonId: restoredOwner?.id ?? null,
         familyId,
         accountId: holdingBefore.accountId,
         instrumentId: holdingBefore.instrumentId,
@@ -3656,6 +3704,9 @@ async function recordSwitchWithinTx(
         quantity: scaledToQuantityString(addedToUnitsScaled),
         avgUnitCostMinor: newToAvg,
         lastPriceMinor: null,
+        // ADR-0058 D2 — a switch moves the SAME person's money from one fund
+        // into another, so the owner follows the value.
+        ownerPersonId: fromHolding.ownerPersonId,
         // PER-259 Slice 5 — this switch is the FIRST mutation ever on the
         // destination position; stamp it immediately.
         lastMutationIdempotencyKey: data.idempotencyKey,
@@ -4074,6 +4125,8 @@ async function recordPositionMoveWithinTx(
         avgUnitCostMinor: fromHolding.avgUnitCostMinor,
         // Carry the last known price too, rather than losing pricing context.
         lastPriceMinor: fromHolding.lastPriceMinor,
+        // ADR-0058 D2 — the owner travels with a moved position.
+        ownerPersonId: fromHolding.ownerPersonId,
         lastMutationIdempotencyKey: data.idempotencyKey,
       },
       include: { instrument: true },

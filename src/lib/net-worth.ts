@@ -148,6 +148,30 @@ export interface PointBalance {
 /** Resolve a foreign->base rate (scaled) for a currency, or null if none. */
 export type RateResolver = (fromCurrency: string) => bigint | null
 
+/**
+ * Builds the `fromCurrency -> base` rate resolver from a LATEST-only FX overview
+ * (one row per pair; the first-wins guard keeps it correct even if a pair ever
+ * appears twice). Shared by every live card that normalizes to the family base
+ * so they resolve rates identically (ADR-0038 §5, ADR-0058 D3).
+ */
+export function buildLatestRateResolver(
+  rates: ReadonlyArray<{
+    fromCurrency: string
+    toCurrency: string
+    rateScaled: string | bigint
+  }>,
+  baseCurrency: string
+): RateResolver {
+  const latest = new Map<string, bigint>()
+  for (const rate of rates) {
+    if (rate.toCurrency !== baseCurrency) continue
+    if (!latest.has(rate.fromCurrency)) {
+      latest.set(rate.fromCurrency, BigInt(rate.rateScaled))
+    }
+  }
+  return (currency) => latest.get(currency) ?? null
+}
+
 export interface NetWorthBreakdown {
   netWorth: bigint
   assets: bigint

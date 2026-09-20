@@ -21,6 +21,10 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { MoneyInput } from "@/components/blocks/money-input"
+import {
+  OwnerSelect,
+  useOwnerCandidates,
+} from "@/components/blocks/owner-fields"
 import { QuantityInput } from "@/components/blocks/quantity-input"
 import type { CurrencyCode } from "@/lib/data/currencies"
 import {
@@ -29,6 +33,7 @@ import {
   type InstrumentKind,
 } from "@/lib/instruments"
 import { parseMoneyInput, toDecimalString } from "@/lib/money"
+import { OWNER_NONE_KEY, ownerKeyToRef, ownerRefToKey } from "@/lib/ownership"
 import {
   parseQuantityInput,
   unambiguousQuantityText,
@@ -111,6 +116,16 @@ export function HoldingFormDialog({
   const [marketInstrumentId, setMarketInstrumentId] = React.useState<
     string | null
   >(editing?.instrument.marketInstrumentId ?? null)
+  // ADR-0058 D2 — per-holding owner. "Same as account" (none) is the default;
+  // the select only exists when the family has 2+ members/people, and is left
+  // out of the payload entirely otherwise (an update then leaves it unchanged).
+  const { candidates: ownerCandidates, visible: showOwnerSelect } =
+    useOwnerCandidates()
+  const [ownerKey, setOwnerKey] = React.useState<string>(
+    editing?.ownerPersonId
+      ? ownerRefToKey({ personId: editing.ownerPersonId })
+      : OWNER_NONE_KEY
+  )
   const [error, setError] = React.useState<string | null>(null)
   const [submitting, setSubmitting] = React.useState(false)
 
@@ -200,6 +215,9 @@ export function HoldingFormDialog({
         }
         lastPriceValue = toDecimalString(lastPriceMoney, currencyCode)
       }
+      const ownerPayload = showOwnerSelect
+        ? { owner: ownerKeyToRef(ownerKey) }
+        : {}
       if (editing) {
         // Instrument identity is fixed on edit — only quantity/cost/price move.
         await upsertHoldingFn({
@@ -210,6 +228,7 @@ export function HoldingFormDialog({
             avgUnitCost: avgUnitCostValue,
             lastPrice: lastPriceValue,
             marketInstrumentId,
+            ...ownerPayload,
             idempotencyKey: createUuidV7(),
           },
         })
@@ -222,6 +241,7 @@ export function HoldingFormDialog({
             avgUnitCost: avgUnitCostValue,
             lastPrice: lastPriceValue,
             marketInstrumentId,
+            ...ownerPayload,
             idempotencyKey: createUuidV7(),
           },
         })
@@ -345,6 +365,23 @@ export function HoldingFormDialog({
             Price per unit. Leave last price empty to show value at cost (no
             gain fabricated) until you have today&apos;s price.
           </p>
+
+          {showOwnerSelect ? (
+            <div className="flex flex-col gap-2">
+              <OwnerSelect
+                id="holding-owner"
+                label="Owner"
+                value={ownerKey}
+                onValueChange={setOwnerKey}
+                candidates={ownerCandidates}
+                noneLabel="Same as account"
+              />
+              <p className="text-xs text-muted-foreground">
+                Whose money this holding is. &ldquo;Same as account&rdquo; uses
+                the account&apos;s owner.
+              </p>
+            </div>
+          ) : null}
 
           <div className="flex flex-col gap-2">
             <Label>Live price source</Label>
