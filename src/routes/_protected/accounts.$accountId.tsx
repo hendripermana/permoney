@@ -48,6 +48,7 @@ import { getQueryClient } from "@/lib/query-client"
 import { GroundTruthAnchorSubtitle } from "@/components/blocks/ground-truth-anchor-subtitle"
 import { OpeningAsOfSubtitle } from "@/components/blocks/opening-as-of-subtitle"
 import { AccountFormDialog } from "@/components/blocks/account-form-dialog"
+import { useOwnerCandidates } from "@/components/blocks/owner-fields"
 import { ValuationActionDialog } from "@/components/blocks/valuation-action-dialog"
 import {
   HoldingFormDialog,
@@ -273,6 +274,18 @@ function AccountDetailPage() {
   const account = React.useMemo<AccountRecord | undefined>(
     () => accounts?.find((a) => a.id === accountId),
     [accounts, accountId]
+  )
+
+  // ADR-0058 D2 — person id → name for the per-holding owner chip.
+  const { candidates: ownerCandidates } = useOwnerCandidates()
+  const ownerNameById = React.useMemo(
+    () =>
+      new Map(
+        ownerCandidates.flatMap((c) =>
+          "personId" in c.ref ? [[c.ref.personId, c.displayName] as const] : []
+        )
+      ),
+    [ownerCandidates]
   )
 
   // Reuse the SAME ledger filter the /transactions page uses — this list is a
@@ -1124,6 +1137,7 @@ function AccountDetailPage() {
               onMoveHolding={(holding) => setMoveDialog({ holding })}
               onRefreshPrices={handleRefreshPrices}
               refreshingPrices={refreshingPrices}
+              ownerNameById={ownerNameById}
             />
           ) : null}
           {health ? <AccountHealthPanel health={health} /> : null}

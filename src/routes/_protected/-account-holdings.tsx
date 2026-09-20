@@ -12,6 +12,7 @@ import {
   TrendingDown,
   TrendingUp,
   Trash2,
+  User,
   Wallet,
   Zap,
 } from "lucide-react"
@@ -108,6 +109,7 @@ export function HoldingsPanel({
   onMoveHolding,
   onRefreshPrices,
   refreshingPrices,
+  ownerNameById,
 }: Readonly<{
   view: AccountHoldingsView | undefined
   currency: string
@@ -129,6 +131,8 @@ export function HoldingsPanel({
   onMoveHolding: (holding: HoldingRecord) => void
   onRefreshPrices: () => void
   refreshingPrices: boolean
+  /** ADR-0058 D2 — person id → display name, for the per-holding owner chip. */
+  ownerNameById?: ReadonlyMap<string, string>
 }>) {
   const holdings = view?.holdings ?? []
   // Any linked holding means "Refresh prices" can do something.
@@ -222,6 +226,17 @@ export function HoldingsPanel({
                     <Badge variant="secondary" className="shrink-0">
                       {instrumentKindLabel(holding.instrument.kind)}
                     </Badge>
+                    {holding.ownerPersonId !== null &&
+                    ownerNameById?.has(holding.ownerPersonId) ? (
+                      <Badge
+                        variant="outline"
+                        className="shrink-0 gap-1 text-xs"
+                        title="Owner of this holding"
+                      >
+                        <User className="size-3" aria-hidden />
+                        {ownerNameById.get(holding.ownerPersonId)}
+                      </Badge>
+                    ) : null}
                     {holding.instrument.marketInstrumentId !== null ? (
                       <Badge
                         variant="outline"

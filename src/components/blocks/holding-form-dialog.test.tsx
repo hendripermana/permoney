@@ -22,6 +22,17 @@ vi.mock("@/server/holdings", () => ({
   listMarketInstrumentsFn: vi.fn(async () => []),
 }))
 
+// Owner select data (ADR-0058 D2). A one-member family → no candidates → the
+// select stays hidden, which is what the quantity tests below rely on.
+const { listOwnerCandidatesFn } = vi.hoisted(() => ({
+  listOwnerCandidatesFn: vi.fn(async () => ({
+    activeMemberCount: 1,
+    peopleCount: 0,
+    candidates: [] as unknown[],
+  })),
+}))
+vi.mock("@/server/ownership", () => ({ listOwnerCandidatesFn }))
+
 import { HoldingFormDialog } from "./holding-form-dialog"
 
 // The bug (verified on production data): an Indonesian user typed the Bibit
@@ -192,6 +203,7 @@ describe("HoldingFormDialog quantity field", () => {
       gainMinor: "0",
       returnPct: 0,
       lastMutationIdempotencyKey: null,
+      ownerPersonId: null,
       latestMarketQuoteAsOf: null,
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
@@ -217,5 +229,65 @@ describe("HoldingFormDialog quantity field", () => {
         }) as HTMLButtonElement
       ).disabled
     ).toBe(false)
+  })
+})
+
+// ADR-0058 D2 — the per-holding Owner select follows the same visibility rule
+// as the account owner control: 2+ active members OR 2+ people.
+describe("HoldingFormDialog owner select", () => {
+  const twoMembers = {
+    activeMemberCount: 2,
+    peopleCount: 0,
+    candidates: [
+      {
+        ref: { memberUserId: "user-1" },
+        displayName: "Hendri",
+        kind: "member",
+        isMember: true,
+      },
+      {
+        ref: { memberUserId: "user-2" },
+        displayName: "Rahayu",
+        kind: "member",
+        isMember: true,
+      },
+    ] as unknown[],
+  }
+
+  afterEach(() => {
+    listOwnerCandidatesFn.mockImplementation(async () => ({
+      activeMemberCount: 1,
+      peopleCount: 0,
+      candidates: [] as unknown[],
+    }))
+  })
+
+  it("is hidden for a one-member family and leaves `owner` out of the payload", async () => {
+    renderCreateDialog()
+    typeQuantity("10")
+    await waitFor(() => expect(listOwnerCandidatesFn).toHaveBeenCalled())
+    expect(screen.queryByLabelText("Owner")).toBeNull()
+
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(upsertHoldingFn).toHaveBeenCalledTimes(1))
+    const payload = upsertHoldingFn.mock.calls[0]?.[0] as {
+      data: Record<string, unknown>
+    }
+    expect("owner" in payload.data).toBe(false)
+  })
+
+  it("shows for a two-member family, defaults to 'Same as account', and sends owner: null", async () => {
+    listOwnerCandidatesFn.mockImplementation(async () => twoMembers)
+    renderCreateDialog()
+    typeQuantity("10")
+
+    const trigger = await screen.findByLabelText("Owner")
+    expect(trigger.textContent).toContain("Same as account")
+
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(upsertHoldingFn).toHaveBeenCalledTimes(1))
+    expect(upsertHoldingFn.mock.calls[0]?.[0]).toMatchObject({
+      data: { owner: null },
+    })
   })
 })
