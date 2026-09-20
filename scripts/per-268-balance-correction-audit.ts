@@ -111,10 +111,14 @@ function parseArgs(argv: string[]): ParsedArgs {
 function usage(): void {
   console.error(
     "Usage:\n" +
+      "  vp exec tsx scripts/per-268-balance-correction-audit.ts verify\n" +
       "  vp exec tsx scripts/per-268-balance-correction-audit.ts report\n" +
       "  vp exec tsx scripts/per-268-balance-correction-audit.ts stage --apply\n" +
       "  vp exec tsx scripts/per-268-balance-correction-audit.ts apply --family <id> --account <id> --user <id> --apply --i-have-a-backup\n" +
-      "  vp exec tsx scripts/per-268-balance-correction-audit.ts apply-all --family <id> --user <id> --min-grace-days 7 --apply --i-have-a-backup [--force]"
+      "  vp exec tsx scripts/per-268-balance-correction-audit.ts apply-all --family <id> --user <id> --min-grace-days 7 --apply --i-have-a-backup [--force]\n" +
+      "\n" +
+      "`verify` is the read-only, cron-friendly mode: one JSON summary on stdout,\n" +
+      "exit 0 clean / 1 drift / 2 unauditable family. It never writes."
   )
 }
 
@@ -289,9 +293,87 @@ async function runApplyAll(args: ParsedArgs): Promise<void> {
   )
 }
 
+async function runVerify(): Promise<void> {
+  // F1 audit S5.3 — the scheduled, read-only drift check. Same detector as
+  // `report` above (`auditTransactionFlowBalanceAcrossFamilies`); the only
+  // differences are the output format (one JSON object, so a cron log can be
+  // parsed and alerted on) and the exit code contract:
+  //
+  //   0  every family audited, no drift
+  //   1  drift found            (actionable: review, then `stage --apply`)
+  //   2  no drift, but at least one family could NOT be audited (no active
+  //      member to scope RLS as) — "skipped", never "clean"
+  //
+  // Why a second failure code: a family that cannot be scoped is precisely
+  // where drift would hide, so it must not exit 0; but conflating it with real
+  // drift would send the operator looking for a balance problem that may not
+  // exist. Distinguishing them costs one number.
+  //
+  // NEVER writes: no `stage`, no balance update, no audit row.
+  const reports = await auditTransactionFlowBalanceAcrossFamilies()
+
+  const drifted = reports.flatMap((family) =>
+    family.drifted.map((row) => ({
+      accountId: row.accountId,
+      anchorDate: row.anchorDate,
+      anchorProvenance: row.anchorProvenance,
+      anchorSource: row.anchorSource,
+      correctedBalance: row.correctedBalance,
+      driftAmount: row.driftAmount,
+      familyId: family.familyId,
+      previousBalance: row.previousBalance,
+    }))
+  )
+  const unauditable = reports
+    .filter((family) => family.ownerUserId === null)
+    .map((family) => ({ familyId: family.familyId }))
+
+  // Deliberately omits account/family NAMES and owner emails: this line lands
+  // in a long-lived cron log, and an operator can resolve an id when they act.
+  // The interactive `report` mode still prints the human-readable version.
+  const summary = {
+    auditedFamilyCount: reports.length,
+    drifted,
+    driftedAccountCount: drifted.length,
+    event: "balance_drift_verify",
+    generatedAt: new Date().toISOString(),
+    status:
+      drifted.length > 0
+        ? "drift"
+        : unauditable.length > 0
+          ? "unauditable"
+          : "clean",
+    unauditableFamilies: unauditable,
+  }
+
+  console.log(JSON.stringify(summary, null, 2))
+
+  if (summary.status === "drift") {
+    console.error(
+      `Balance drift found on ${drifted.length} account(s). ` +
+        "Review with `report`, then `stage --apply` to notify the household."
+    )
+    process.exitCode = 1
+    return
+  }
+  if (summary.status === "unauditable") {
+    console.error(
+      `${unauditable.length} famil${unauditable.length === 1 ? "y" : "ies"} could not be audited ` +
+        "(no active member to scope RLS as) — drift could be hiding there. " +
+        "Investigate membership before treating this check as clean."
+    )
+    process.exitCode = 2
+    return
+  }
+  process.exitCode = 0
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2))
   switch (args.mode) {
+    case "verify":
+      await runVerify()
+      return
     case "report":
       await runReport()
       return

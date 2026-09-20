@@ -12,6 +12,7 @@ import {
   IconReceipt2,
   IconHandStop,
   IconMoneybag,
+  IconGauge,
 } from "@tabler/icons-react"
 
 import { NavMain, type NavItem } from "@/components/nav-main"
@@ -45,6 +46,11 @@ const BASE_NAV_MAIN: NavItem[] = [
     title: "Accounts & Wallets",
     url: "/accounts",
     icon: IconDatabase,
+  },
+  {
+    title: "Pit Stop",
+    url: "/pit-stop",
+    icon: IconGauge,
   },
   {
     title: "Debts",
