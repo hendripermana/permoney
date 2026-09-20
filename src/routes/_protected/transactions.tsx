@@ -31,6 +31,7 @@ import { cn } from "@/lib/utils"
 import { TransactionFormModal } from "@/components/transaction-form-modal"
 import { TransactionFilterPanel } from "@/components/transaction-filter-panel"
 import { TransactionBulkFAB } from "@/components/transaction-bulk-fab"
+import { ConfirmDeleteDialog } from "@/components/blocks/confirm-delete-dialog"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   transactionCollection,
@@ -259,47 +260,54 @@ function TransactionsPage() {
     getCoreRowModel: getCoreRowModel(),
   })
 
-  const handleBulkDelete = async () => {
+  // F1 audit B2: a real confirmation instead of the browser's `confirm()`.
+  // One dialog serves both deletes; `ids.length` decides the copy.
+  const [pendingDelete, setPendingDelete] = React.useState<{
+    ids: Array<string>
+    error: string | null
+  } | null>(null)
+  const [isDeleting, setIsDeleting] = React.useState(false)
+
+  const handleBulkDelete = () => {
     const ids = Object.keys(rowSelection)
     if (ids.length === 0) return
-    const confirmed = confirm(
-      `Are you sure you want to delete ${ids.length} transactions?`
-    )
-    if (!confirmed) return
+    setPendingDelete({ ids, error: null })
+  }
 
+  const handleInlineDelete = (id: string) => {
+    setPendingDelete({ ids: [id], error: null })
+  }
+
+  /**
+   * Runs the deletion the confirmation dialog asked for. The dialog stays open
+   * (with the failure inside it) if the server rejects, so the household is
+   * never told "done" for a delete that did not happen.
+   */
+  const confirmPendingDelete = async () => {
+    if (!pendingDelete) return
+    const { ids } = pendingDelete
+    setIsDeleting(true)
     try {
       await bulkDeleteTransactionsFn({
         data: { ids, idempotencyKey: createUuidV7() },
       })
       await transactionCollection.utils.refetch()
-      setRowSelection({})
-    } catch (err) {
-      console.error(err)
-      alert("Failed to delete transactions")
-    }
-  }
-
-  const handleInlineDelete = async (id: string) => {
-    const confirmed = confirm(
-      "Are you sure you want to delete this transaction?"
-    )
-    if (!confirmed) return
-
-    try {
-      await bulkDeleteTransactionsFn({
-        data: { ids: [id], idempotencyKey: createUuidV7() },
+      setRowSelection((prev) => {
+        const next = { ...prev }
+        for (const id of ids) delete next[id]
+        return next
       })
-      await transactionCollection.utils.refetch()
-      if (rowSelection[id]) {
-        setRowSelection((prev) => {
-          const next = { ...prev }
-          delete next[id]
-          return next
-        })
-      }
+      setPendingDelete(null)
     } catch (err) {
-      console.error(err)
-      alert("Failed to delete transaction")
+      setPendingDelete({
+        ids,
+        error:
+          err instanceof Error
+            ? err.message
+            : "Could not delete. Please try again.",
+      })
+    } finally {
+      setIsDeleting(false)
     }
   }
 
@@ -813,6 +821,21 @@ function TransactionsPage() {
           />
         </SidebarInset>
       </SidebarProvider>
+      <ConfirmDeleteDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null)
+        }}
+        title={
+          (pendingDelete?.ids.length ?? 0) > 1
+            ? `Delete ${pendingDelete?.ids.length ?? 0} transactions?`
+            : "Delete this transaction?"
+        }
+        description="This cannot be undone from the list. The deletion is recorded in the audit log and any balances it moved are corrected."
+        isPending={isDeleting}
+        error={pendingDelete?.error ?? null}
+        onConfirm={() => void confirmPendingDelete()}
+      />
     </TooltipProvider>
   )
 }

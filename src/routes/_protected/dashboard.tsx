@@ -3,26 +3,15 @@ import { createFileRoute, Link } from "@tanstack/react-router"
 import { useQuery } from "@tanstack/react-query"
 import { useLiveQuery } from "@tanstack/react-db"
 import { z } from "zod"
-import {
-  LayoutDashboard,
-  Plus,
-  RefreshCw,
-  TriangleAlert,
-  Upload,
-} from "lucide-react"
+import { LayoutDashboard, Plus, Upload } from "lucide-react"
 
 import { AppSidebar } from "@/components/app-sidebar"
+import { LoadErrorCard } from "@/components/blocks/load-error-card"
 import { SiteHeader } from "@/components/site-header"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
@@ -387,58 +376,12 @@ function Section<TData>({
   }
   if (query.isError || query.data === undefined) {
     return (
-      <SectionError
+      <LoadErrorCard
         label={label}
-        message={
-          query.error instanceof Error
-            ? query.error.message
-            : `Something went wrong loading ${label}.`
-        }
         isRetrying={query.isFetching}
         onRetry={query.refetch}
       />
     )
   }
   return <>{children(query.data)}</>
-}
-
-function SectionError({
-  label,
-  message,
-  isRetrying,
-  onRetry,
-}: {
-  label: string
-  message: string
-  isRetrying: boolean
-  onRetry: () => void
-}) {
-  return (
-    <Card className="border-destructive/50">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-destructive">
-          <TriangleAlert className="size-5" aria-hidden />
-          Couldn&apos;t load {label}
-        </CardTitle>
-        <CardDescription>
-          If you just pulled this branch, make sure the database migrations have
-          run (<code>vp run db:migrate</code>).
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <p className="mb-3 rounded-md bg-destructive/10 p-3 font-mono text-sm text-destructive">
-          {message}
-        </p>
-        <Button
-          variant="outline"
-          className="w-fit"
-          disabled={isRetrying}
-          onClick={onRetry}
-        >
-          <RefreshCw className="size-4" aria-hidden />
-          {isRetrying ? "Retrying…" : "Retry"}
-        </Button>
-      </CardContent>
-    </Card>
-  )
 }

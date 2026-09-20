@@ -3,7 +3,6 @@ import { createFileRoute } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   PiggyBank,
-  RefreshCw,
   TriangleAlert,
   Archive,
   Clock,
@@ -11,6 +10,7 @@ import {
 } from "lucide-react"
 
 import { AppSidebar } from "@/components/app-sidebar"
+import { LoadErrorCard } from "@/components/blocks/load-error-card"
 import { SiteHeader } from "@/components/site-header"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -112,7 +112,6 @@ function BudgetsPage() {
     data: progress,
     isLoading,
     isError,
-    error,
     refetch,
     isFetching,
   } = useQuery({
@@ -242,12 +241,8 @@ function BudgetsPage() {
             {isLoading ? (
               <p className="text-sm text-muted-foreground">Loading budget…</p>
             ) : isError || !progress ? (
-              <BudgetErrorCard
-                message={
-                  error instanceof Error
-                    ? error.message
-                    : "Something went wrong loading this budget."
-                }
+              <LoadErrorCard
+                label="this budget"
                 isRetrying={isFetching}
                 onRetry={() => void refetch()}
               />
@@ -463,46 +458,6 @@ function BudgetHistoryRow({
         )}
       </div>
     </button>
-  )
-}
-
-function BudgetErrorCard({
-  message,
-  isRetrying,
-  onRetry,
-}: {
-  message: string
-  isRetrying: boolean
-  onRetry: () => void
-}) {
-  return (
-    <Card className="border-destructive/50">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-destructive">
-          <TriangleAlert className="size-5" aria-hidden />
-          Couldn&apos;t load this budget
-        </CardTitle>
-        <CardDescription>
-          The budget data failed to load. If you just pulled this branch, make
-          sure the database migrations have run (<code>vp run db:migrate</code>
-          ).
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <p className="rounded-md bg-destructive/10 p-3 font-mono text-sm text-destructive">
-          {message}
-        </p>
-        <Button
-          variant="outline"
-          className="w-fit"
-          disabled={isRetrying}
-          onClick={onRetry}
-        >
-          <RefreshCw className="size-4" aria-hidden />
-          {isRetrying ? "Retrying…" : "Retry"}
-        </Button>
-      </CardContent>
-    </Card>
   )
 }
 
