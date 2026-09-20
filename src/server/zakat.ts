@@ -32,6 +32,12 @@ import {
 } from "./idempotency-records"
 import { TenantReferenceError } from "./validation/tenant-references"
 import {
+  ownerRefSchema,
+  ownerRefsEqual,
+  resolveOwnerRefWithinTx,
+  retryOnOwnerLinkRace,
+} from "./ownership"
+import {
   isUniqueConstraintError,
   uuidV7Schema,
   type RunInTenantTransaction,
@@ -84,19 +90,6 @@ export class ZakatPayerAlreadyLinkedError extends Error {
       `User ${linkedUserId} is already linked to another ZakatPayer in this family`
     )
   }
-}
-
-async function assertZakatPayerInFamily(
-  tx: TenantTransactionClient,
-  id: string,
-  familyId: string,
-  field: string
-): Promise<void> {
-  const row = await tx.zakatPayer.findFirst({
-    where: { id, familyId },
-    select: { id: true },
-  })
-  if (!row) throw new TenantReferenceError(field, id, familyId)
 }
 
 // -----------------------------------------------------------------------------
@@ -676,12 +669,16 @@ export const deleteZakatPayerFn = createServerFn({ method: "POST" })
 
 const SET_ACCOUNT_ZAKAT_OWNERSHIP_ENDPOINT = "setAccountZakatOwnershipFn"
 
+// ADR-0058 D1 — the ownership contract is expressed as `OwnerRef`s: an
+// existing person (`{ personId }`) OR an active family member
+// (`{ memberUserId }`, whose person is get-or-created in the same
+// transaction). The endpoint keeps its ADR-0056 name; the UI says "Owner".
 export const setAccountZakatOwnershipInputSchema = z
   .object({
     accountId: z.string().min(1),
-    zakatPayerId: z.string().min(1).nullable(),
-    zakatJointPayerId: z.string().min(1).nullable().optional().default(null),
-    zakatJointSharePercent: z
+    owner: ownerRefSchema.nullable(),
+    jointOwner: ownerRefSchema.nullable().optional().default(null),
+    jointSharePercent: z
       .number()
       .int()
       .min(1)
@@ -691,27 +688,22 @@ export const setAccountZakatOwnershipInputSchema = z
       .default(null),
     idempotencyKey: uuidV7Schema,
   })
-  .refine(
-    (d) =>
-      (d.zakatJointPayerId === null) === (d.zakatJointSharePercent === null),
-    {
-      message:
-        "zakatJointPayerId and zakatJointSharePercent must be set together",
-      path: ["zakatJointSharePercent"],
-    }
-  )
-  .refine((d) => d.zakatJointPayerId === null || d.zakatPayerId !== null, {
-    message: "a joint co-owner requires a primary zakatPayerId",
-    path: ["zakatPayerId"],
+  .refine((d) => (d.jointOwner === null) === (d.jointSharePercent === null), {
+    message: "jointOwner and jointSharePercent must be set together",
+    path: ["jointSharePercent"],
+  })
+  .refine((d) => d.jointOwner === null || d.owner !== null, {
+    message: "a joint co-owner requires a primary owner",
+    path: ["owner"],
   })
   .refine(
     (d) =>
-      d.zakatPayerId === null ||
-      d.zakatJointPayerId === null ||
-      d.zakatPayerId !== d.zakatJointPayerId,
+      d.owner === null ||
+      d.jointOwner === null ||
+      !ownerRefsEqual(d.owner, d.jointOwner),
     {
-      message: "an account cannot be jointly owned by the same payer twice",
-      path: ["zakatJointPayerId"],
+      message: "an account cannot be jointly owned by the same person twice",
+      path: ["jointOwner"],
     }
   )
 
@@ -720,6 +712,11 @@ export interface SerializedAccountZakatOwnership {
   zakatPayerId: string | null
   zakatJointPayerId: string | null
   zakatJointSharePercent: number | null
+}
+
+export class AccountOwnershipInvalidError extends Error {
+  override readonly name = "AccountOwnershipInvalidError"
+  readonly statusCode = 400
 }
 
 export async function setAccountZakatOwnershipForFamily({
@@ -754,10 +751,11 @@ export async function setAccountZakatOwnershipForFamily({
         )
       if (replay) return replay
 
-      // PER-94 tenant-reference validation: the account AND both payer ids
-      // must belong to THIS family — foreign keys alone are not tenant
-      // isolation (CLAUDE.md §5A). The composite DB FKs are the backstop;
-      // this is the typed, pre-write guard.
+      // PER-94 tenant-reference validation: the account AND both owners must
+      // belong to THIS family — foreign keys alone are not tenant isolation
+      // (CLAUDE.md §5A). The composite DB FKs are the backstop; this is the
+      // typed, pre-write guard. Member refs are validated as ACTIVE members
+      // and resolved (get-or-create) inside this same transaction.
       const account = await tx.account.findFirst({
         where: { id: data.accountId, familyId, deletedAt: null },
         select: {
@@ -770,20 +768,26 @@ export async function setAccountZakatOwnershipForFamily({
       if (!account) {
         throw new TenantReferenceError("accountId", data.accountId, familyId)
       }
-      if (data.zakatPayerId !== null) {
-        await assertZakatPayerInFamily(
-          tx,
-          data.zakatPayerId,
-          familyId,
-          "zakatPayerId"
-        )
-      }
-      if (data.zakatJointPayerId !== null) {
-        await assertZakatPayerInFamily(
-          tx,
-          data.zakatJointPayerId,
-          familyId,
-          "zakatJointPayerId"
+      const resolveCtx = { familyId, auditCtx }
+      const zakatPayerId =
+        data.owner === null
+          ? null
+          : await resolveOwnerRefWithinTx(tx, resolveCtx, data.owner, "owner")
+      const zakatJointPayerId =
+        data.jointOwner === null
+          ? null
+          : await resolveOwnerRefWithinTx(
+              tx,
+              resolveCtx,
+              data.jointOwner,
+              "jointOwner"
+            )
+      // Two different refs (a person and the member linked to it) can resolve
+      // to the same person; the DB CHECK would reject it, this is the typed
+      // guard.
+      if (zakatPayerId !== null && zakatPayerId === zakatJointPayerId) {
+        throw new AccountOwnershipInvalidError(
+          "an account cannot be jointly owned by the same person twice"
         )
       }
 
@@ -797,9 +801,9 @@ export async function setAccountZakatOwnershipForFamily({
       const updated = await tx.account.update({
         where: { id: data.accountId },
         data: {
-          zakatPayerId: data.zakatPayerId,
-          zakatJointPayerId: data.zakatJointPayerId,
-          zakatJointSharePercent: data.zakatJointSharePercent,
+          zakatPayerId,
+          zakatJointPayerId,
+          zakatJointSharePercent: data.jointSharePercent,
         },
         select: {
           id: true,
@@ -834,7 +838,7 @@ export async function setAccountZakatOwnershipForFamily({
     })
 
   try {
-    return await runOnce()
+    return await retryOnOwnerLinkRace(runOnce)
   } catch (error) {
     if (!isUniqueConstraintError(error)) throw error
     const replay = await scopedTenantTransaction(familyId, userId, (tx) =>

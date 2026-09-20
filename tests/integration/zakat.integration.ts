@@ -137,9 +137,9 @@ describe("Zakat Maal calculator (ADR-0056)", () => {
     await setAccountZakatOwnershipForFamily({
       data: {
         accountId,
-        zakatPayerId,
-        zakatJointPayerId: joint?.zakatJointPayerId ?? null,
-        zakatJointSharePercent: joint?.zakatJointSharePercent ?? null,
+        owner: { personId: zakatPayerId },
+        jointOwner: joint ? { personId: joint.zakatJointPayerId } : null,
+        jointSharePercent: joint?.zakatJointSharePercent ?? null,
         idempotencyKey: factories.createIdempotencyKey(),
       },
       familyId: owner.family.id,
