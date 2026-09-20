@@ -95,7 +95,13 @@ const MAX_BUNDLE_BYTES = 64 * 1024 * 1024
 // every currently-`confirmed` row in the batch, so confirming the whole set
 // up front before "promoting per chunk" would silently reproduce a single
 // oversized promote transaction (ADR-0044 §4).
-export const PROMOTE_CHUNK_SIZE = 100
+// Defined in the client-safe shared module so the import wizard's lockstep
+// loop (F1 audit B1) drives the SAME constant — a client route cannot import
+// this server file across the TanStack Start import-protection fence. The
+// integration suite still imports it from here (re-exported below).
+import { PROMOTE_CHUNK_SIZE } from "@/lib/import-promote"
+
+export { PROMOTE_CHUNK_SIZE }
 
 // Per-phase wall-clock timings (ms) — ADR-0044 §5. Permanent import-
 // observability, not throwaway diagnostic code; also what the ADR-0044 §6

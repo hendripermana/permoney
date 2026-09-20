@@ -74,6 +74,7 @@ import { getTransactionFormData } from "@/server/transactions"
 import { formatMoney } from "@/lib/money"
 import { type CurrencyCode } from "@/lib/data/currencies"
 import { createUuidV7 } from "@/lib/uuid-v7"
+import { runLockstepPromotion } from "@/lib/import-promote"
 
 export const Route = createFileRoute("/_protected/import")({
   ssr: false,
@@ -246,9 +247,19 @@ function ImportPage() {
       [row.id]: verdictOf(row) === "confirm" ? "reject" : "confirm",
     }))
 
+  // F1 audit B1: a chunked run takes a while at household volume, so the
+  // wizard shows how far it got — and, after a failure, how far it got is
+  // exactly what the user needs to decide to press Promote again.
+  const [promoteProgress, setPromoteProgress] = React.useState<{
+    promotedCount: number
+    total: number
+  } | null>(null)
+
   const promoteMutation = useMutation({
     mutationFn: async () => {
       if (!batch) throw new Error("No batch loaded.")
+      // Only rows that still need promoting: a resumed run after a failed
+      // chunk must not re-send rows the server already promoted.
       const reviewable = batch.rows.filter(
         (row) => row.rowStatus !== "promoted"
       )
@@ -256,17 +267,29 @@ function ImportPage() {
         rowId: row.id,
         verdict: verdictOf(row),
       }))
-      if (decisions.length > 0) {
-        await reviewImportRowsFn({
-          data: {
-            batchId: batch.batch.id,
-            idempotencyKey: createUuidV7(),
-            decisions,
-          },
-        })
-      }
-      return promoteImportBatchFn({
-        data: { batchId: batch.batch.id, idempotencyKey: createUuidV7() },
+
+      setPromoteProgress({ promotedCount: 0, total: decisions.length })
+
+      // ADR-0044 §4 lockstep: confirm ONE chunk, promote it, then move on.
+      // One oversized call is exactly the 5 s interactive-transaction timeout
+      // this fixes, and confirming ahead would recreate it server-side.
+      return await runLockstepPromotion({
+        decisions,
+        review: async (slice) => {
+          await reviewImportRowsFn({
+            data: {
+              batchId: batch.batch.id,
+              idempotencyKey: createUuidV7(),
+              decisions: slice,
+            },
+          })
+        },
+        promote: () =>
+          promoteImportBatchFn({
+            data: { batchId: batch.batch.id, idempotencyKey: createUuidV7() },
+          }),
+        onProgress: ({ promotedCount, total }) =>
+          setPromoteProgress({ promotedCount, total }),
       })
     },
     onSuccess: async (result) => {
@@ -280,8 +303,19 @@ function ImportPage() {
       )
       void router.navigate({ to: "/transactions" })
     },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "Promotion failed."),
+    onError: async (error) => {
+      // Resumability: re-read the batch so the next attempt filters on the
+      // server's own row statuses (rows already promoted stay promoted, and
+      // each chunk carried its own idempotency key, so nothing double-posts).
+      await batchQuery.refetch()
+      const partial = promoteProgress
+        ? ` Promoted ${promoteProgress.promotedCount} of ${promoteProgress.total} so far — press Promote again to continue.`
+        : ""
+      toast.error(
+        (error instanceof Error ? error.message : "Promotion failed.") + partial
+      )
+    },
+    onSettled: () => setPromoteProgress(null),
   })
 
   const confirmCount = batch
@@ -374,6 +408,7 @@ function ImportPage() {
                 onBack={() => setStep("map")}
                 onPromote={() => promoteMutation.mutate()}
                 promoting={promoteMutation.isPending}
+                promoteProgress={promoteProgress}
               />
             )}
           </div>
@@ -581,9 +616,19 @@ function MapStep({
         <CardContent className="flex flex-col gap-5">
           <div className="space-y-2">
             <Label>Target account</Label>
+            {/* F1 audit B1: this used to be a dead end — it told the
+                household to enable imports somewhere it did not link to. */}
             {accounts.length === 0 ? (
               <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
-                No importable accounts. Enable importing on an account first.
+                No importable accounts yet.{" "}
+                <Link
+                  to="/accounts"
+                  className="font-medium text-foreground underline underline-offset-2"
+                >
+                  Open Accounts
+                </Link>{" "}
+                and turn on <span className="font-medium">Allow imports</span>{" "}
+                for the account this file belongs to — or create one there.
               </p>
             ) : (
               <Select value={targetAccountId} onValueChange={onTargetAccount}>
@@ -904,6 +949,7 @@ function PreviewStep({
   onBack,
   onPromote,
   promoting,
+  promoteProgress,
 }: {
   loading: boolean
   batch: BatchData | undefined
@@ -914,6 +960,7 @@ function PreviewStep({
   onBack: () => void
   onPromote: () => void
   promoting: boolean
+  promoteProgress: { promotedCount: number; total: number } | null
 }) {
   if (loading || !batch) {
     return (
@@ -1021,7 +1068,9 @@ function PreviewStep({
             ) : (
               <CheckCheck size={16} className="mr-2" />
             )}
-            Promote {confirmCount} confirmed
+            {promoting && promoteProgress
+              ? `Promoting ${promoteProgress.promotedCount} of ${promoteProgress.total}…`
+              : `Promote ${confirmCount} confirmed`}
           </Button>
         </div>
       </CardContent>

@@ -632,21 +632,23 @@ export function AccountFormDialog({
             </div>
           ) : null}
 
-          {editing ? (
-            <div className="flex items-start gap-3 rounded-md border p-3">
-              <Checkbox
-                id="is-importable"
-                checked={isImportable}
-                onCheckedChange={(checked) => setIsImportable(checked === true)}
-              />
-              <div className="flex flex-col gap-1">
-                <Label htmlFor="is-importable">Allow imports</Label>
-                <p className="text-xs text-muted-foreground">
-                  Let CSV/QIF imports promote transactions into this account.
-                </p>
-              </div>
+          {/* F1 audit B1: this used to be edit-only, so a household creating
+              its accounts and then going to the import screen hit "no
+              importable accounts" with no way to fix it except editing each
+              account afterwards. The create path already persists the flag. */}
+          <div className="flex items-start gap-3 rounded-md border p-3">
+            <Checkbox
+              id="is-importable"
+              checked={isImportable}
+              onCheckedChange={(checked) => setIsImportable(checked === true)}
+            />
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="is-importable">Allow imports</Label>
+              <p className="text-xs text-muted-foreground">
+                Let CSV/QIF imports promote transactions into this account.
+              </p>
             </div>
-          ) : null}
+          </div>
 
           {showOwnerFields ? (
             <AccountOwnerFields
