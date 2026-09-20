@@ -35,11 +35,19 @@ describe("production degradation logging", () => {
 
     await freshRateLimitModule()
 
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN are not set"
-      ),
-      undefined
+    // F1 audit S5.1: this goes through the structured logger now, so the
+    // assertion is on the JSON line (event name + the fact) rather than on a
+    // free-text console call. Still exactly one line, still on stderr, and it
+    // still must not leak the env var VALUES — only the fact that they are
+    // unset.
+    expect(errorSpy).toHaveBeenCalledTimes(1)
+    const line = JSON.parse(errorSpy.mock.calls[0]?.[0] as string)
+    expect(line).toMatchObject({
+      level: "error",
+      event: "rate_limit_degraded",
+    })
+    expect(line.message).toContain(
+      "UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN are not set"
     )
   })
 

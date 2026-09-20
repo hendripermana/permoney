@@ -182,6 +182,44 @@ the crontab to get cron's own failure emails). Wiring an actual push/email
 alert is a follow-up ticket once a notification channel exists — this runbook
 entry is intentionally NOT inventing one.
 
+## Balance drift audit (PER-268 / F1 audit S5.3)
+
+Daily via cron — same mechanism as the backup and market-data jobs (no
+serverless cron on this self-hosted VM per ADR-0047):
+
+```cron
+20 3 * * * cd /home/ubuntu/permoney-prod && set -a && . ./.env && set +a && docker compose -f docker-compose.prod.yml --profile drift-audit run --rm drift-audit >> /var/log/permoney_prod_drift_audit.log 2>&1
+```
+
+The `drift-audit` Compose service runs the PER-268 detector's read-only
+`verify` mode: it compares every `transaction_flow` account's stored balance
+against the canonical anchor formula (`latest anchor + flows after it`,
+ADR-0043) and prints one JSON summary line with ids and amounts only — no
+names, no emails, since this file is long-lived. **It never writes**: no
+`stage`, no balance update, no audit row.
+
+Exit codes are the signal (cron mails/logs a non-zero exit):
+
+| Exit | Meaning                                                                         | What to do                                                                                                        |
+| ---- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `0`  | every family audited, no drift                                                  | nothing                                                                                                           |
+| `1`  | drift found — stored balance ≠ canonical                                        | run `report` for the human-readable names, then `stage --apply` to notify the household (ADR-0043's PER-268 flow) |
+| `2`  | no drift, but ≥1 family could not be audited (no active member to scope RLS as) | investigate that family's membership: it was SKIPPED, not confirmed clean — drift could be hiding there           |
+
+A non-zero exit is the entire alerting story: there is still no push/email
+channel in this codebase (ADR-0043's "Notify" finding), so **check the log**
+(`grep '"status":"drift"' /var/log/permoney_prod_drift_audit.log`) when
+reviewing the box. Before this job existed the detector was only run by hand,
+which meant drift could sit unnoticed indefinitely — the runbook's own
+"negative balance" incidents were found by looking, not by being told.
+
+Manual equivalent (any time, e.g. after a release that touched balances):
+
+```bash
+cd /home/ubuntu/permoney-prod && set -a && . ./.env && set +a
+docker compose -f docker-compose.prod.yml --profile drift-audit run --rm drift-audit
+```
+
 ## Family invitation email (ADR-0057)
 
 Inviting a family member sends an email through [Resend](https://resend.com).
