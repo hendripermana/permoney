@@ -496,3 +496,199 @@ describe("buildNetWorthSeries", () => {
     expect(pointByDate(jakarta, "2026-01-11").netWorth).toBe(90_000n)
   })
 })
+
+// =============================================================================
+// ground_truth anchors — the instant boundary (ADR-0043 amendment 2026-09-20).
+//
+// afterAnchor(A)(t) for ground_truth ≡ t.date > (A.observedAt ?? midnight of
+// A.valuationDate). The fold must agree with the DB predicate
+// (`sumTransactionFlowAfterAnchor`) row for row (ADR-0038 §6); the integration
+// suite proves that on real Postgres, this pins the pure fold.
+// =============================================================================
+
+describe("buildNetWorthSeries — ground_truth instant boundary", () => {
+  const txn = (accountId: string, amount: bigint, iso: string) => ({
+    accountId,
+    amount,
+    date: new Date(iso),
+    createdAt: new Date(iso),
+  })
+  const groundTruth = (
+    value: bigint,
+    valuationDate: string,
+    observedAtIso: string | null
+  ): SeriesValuation => ({
+    ...valuation(
+      "a",
+      value,
+      valuationDate,
+      "reconciliation",
+      new Date(observedAtIso ?? `${valuationDate}T00:00:00Z`),
+      "ground_truth"
+    ),
+    observedAt: observedAtIso === null ? null : new Date(observedAtIso),
+  })
+  const balanceOn = (
+    day: string,
+    valuations: SeriesValuation[],
+    transactions: ReturnType<typeof txn>[],
+    timezone = "UTC"
+  ): bigint =>
+    pointByDate(
+      buildNetWorthSeries(
+        baseInput({
+          timezone,
+          from: day,
+          to: day,
+          interval: "day",
+          accounts: [cashAccount("a")],
+          valuations,
+          transactions,
+        })
+      ),
+      day
+    ).netWorth
+
+  test("with observedAt: a same-day txn dated before it is absorbed, after it counts, exactly at it is absorbed", () => {
+    const anchor = groundTruth(100_000n, "2026-03-10", "2026-03-10T14:00:00Z")
+    const day = (iso: string, amount: bigint) => [txn("a", amount, iso)]
+    expect(
+      balanceOn("2026-03-10", [anchor], day("2026-03-10T12:00:00Z", -50_000n))
+    ).toBe(100_000n)
+    expect(
+      balanceOn("2026-03-10", [anchor], day("2026-03-10T14:00:00Z", -50_000n))
+    ).toBe(100_000n)
+    expect(
+      balanceOn(
+        "2026-03-10",
+        [anchor],
+        day("2026-03-10T14:00:00.001Z", -50_000n)
+      )
+    ).toBe(50_000n)
+    expect(
+      balanceOn("2026-03-10", [anchor], day("2026-03-10T16:00:00Z", -50_000n))
+    ).toBe(50_000n)
+  })
+
+  test("without observedAt (legacy / back-dated): the boundary is the anchor day's midnight, exactly like the DB", () => {
+    const anchor = groundTruth(100_000n, "2026-03-10", null)
+    // Before midnight (previous day): absorbed.
+    expect(
+      balanceOn(
+        "2026-03-10",
+        [anchor],
+        [txn("a", -1_000n, "2026-03-09T23:59:59Z")]
+      )
+    ).toBe(100_000n)
+    // Exactly midnight: not strictly after -> absorbed.
+    expect(
+      balanceOn(
+        "2026-03-10",
+        [anchor],
+        [txn("a", -1_000n, "2026-03-10T00:00:00Z")]
+      )
+    ).toBe(100_000n)
+    // Any later instant on the anchor's own day counts (the legacy rule the
+    // DB applied; the fold used to treat this as absorbed).
+    expect(
+      balanceOn(
+        "2026-03-10",
+        [anchor],
+        [txn("a", -1_000n, "2026-03-10T09:00:00Z")]
+      )
+    ).toBe(99_000n)
+    expect(
+      balanceOn(
+        "2026-03-11",
+        [anchor],
+        [txn("a", -1_000n, "2026-03-11T09:00:00Z")]
+      )
+    ).toBe(99_000n)
+  })
+
+  test("a ground_truth anchor never counts a before-boundary row via createdAt, however late it was recorded", () => {
+    const anchor = groundTruth(100_000n, "2026-03-10", "2026-03-10T14:00:00Z")
+    const lateEntered = {
+      accountId: "a",
+      amount: -7_000n,
+      date: new Date("2026-03-10T09:00:00Z"),
+      createdAt: new Date("2026-03-20T00:00:00Z"),
+    }
+    expect(balanceOn("2026-03-20", [anchor], [lateEntered])).toBe(100_000n)
+  })
+
+  test("a derived anchor is untouched by observedAt (PER-201 / PER-276 rule)", () => {
+    const derived: SeriesValuation = {
+      ...valuation(
+        "a",
+        200_001n,
+        "2026-03-10",
+        "reconciliation",
+        new Date("2026-03-10T14:00:00Z"),
+        "derived"
+      ),
+      // Even if a row somehow carried it, derived must ignore it (the DB CHECK
+      // forbids it; this pins the fold independently).
+      observedAt: new Date("2026-03-10T23:00:00Z"),
+    }
+    // Same-day txn recorded BEFORE the derived anchor: absorbed.
+    expect(
+      balanceOn(
+        "2026-03-10",
+        [derived],
+        [
+          {
+            accountId: "a",
+            amount: 1n,
+            date: new Date("2026-03-10T12:00:00Z"),
+            createdAt: new Date("2026-03-10T13:00:00Z"),
+          },
+        ]
+      )
+    ).toBe(200_001n)
+    // Same-day txn recorded AFTER it: counted via the createdAt disjunct.
+    expect(
+      balanceOn(
+        "2026-03-10",
+        [derived],
+        [
+          {
+            accountId: "a",
+            amount: -5_000n,
+            date: new Date("2026-03-10T12:00:00Z"),
+            createdAt: new Date("2026-03-10T15:00:00Z"),
+          },
+        ]
+      )
+    ).toBe(195_001n)
+  })
+
+  test("family timezone ahead of UTC: a row on the NEXT local day but before observedAt is still absorbed", () => {
+    // Observed at 03:00 Jakarta on 03-11 (= 20:00Z on 03-10, so the UTC-dated
+    // valuationDate is 03-10). A row at 01:00 Jakarta on 03-11 (18:00Z) is on a
+    // LATER local day than the anchor's date yet BEFORE the observation.
+    const anchor = groundTruth(100_000n, "2026-03-10", "2026-03-10T20:00:00Z")
+    const rows = [
+      txn("a", -9_000n, "2026-03-10T18:00:00Z"), // before observedAt -> absorbed
+      txn("a", -1_000n, "2026-03-10T21:00:00Z"), // after observedAt -> counted
+    ]
+    expect(balanceOn("2026-03-11", [anchor], rows, "Asia/Jakarta")).toBe(
+      99_000n
+    )
+    // On the anchor's own sample day neither row has reached its local day yet
+    // for the 21:00Z one (= 04:00 on 03-11), and the 18:00Z one is absorbed.
+    expect(balanceOn("2026-03-10", [anchor], rows, "Asia/Jakarta")).toBe(
+      100_000n
+    )
+  })
+
+  test("a later same-day reconcile supersedes the earlier one (latest anchor wins)", () => {
+    const first = groundTruth(100_000n, "2026-03-10", "2026-03-10T10:00:00Z")
+    const second = groundTruth(95_000n, "2026-03-10", "2026-03-10T15:00:00Z")
+    const rows = [
+      txn("a", -5_000n, "2026-03-10T12:00:00Z"), // between the two -> absorbed by `second`
+      txn("a", -2_000n, "2026-03-10T16:00:00Z"), // after both -> counted
+    ]
+    expect(balanceOn("2026-03-10", [first, second], rows)).toBe(93_000n)
+  })
+})
