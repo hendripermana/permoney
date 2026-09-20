@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router"
+import { isDirectInternalRequest } from "@/lib/internal-request"
 
 interface MigrationRow {
   migration_name: string
@@ -27,7 +28,12 @@ export const Route = createFileRoute("/api/health")({
   server: {
     handlers: {
       GET: async ({ request }) => {
-        const wantsFull = new URL(request.url).searchParams.get("full") === "1"
+        // `?full=1` discloses the last applied migration and connection counts, so
+        // it answers only a direct internal probe; public callers (anything that
+        // came through the edge) silently get the plain liveness response.
+        const wantsFull =
+          new URL(request.url).searchParams.get("full") === "1" &&
+          isDirectInternalRequest(request.headers)
         try {
           const { prisma } = await import("@/server/db.server")
           await prisma.$queryRaw`SELECT 1`
