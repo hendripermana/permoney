@@ -320,7 +320,10 @@ const transactionStatusOptions: Array<{
  * silently re-read. Plain numbers (legacy callers, transient state) are
  * stringified as-is.
  */
-function editAmountToInputString(amount: EditAmount, currency: string): string {
+export function editAmountToInputString(
+  amount: EditAmount,
+  currency: string
+): string {
   if (typeof amount === "bigint") {
     const code = currency as CurrencyCode
     if (CURRENCIES[code]) return toDecimalString(amount as Money, code)
