@@ -575,6 +575,35 @@ describe("ground-truth anchor observedAt (ADR-0043 amendment 2026-09-20)", () =>
     await expectCoherent(owner, b.id, 50_000n)
   })
 
+  // ---- database is the law --------------------------------------------------
+
+  test("CHECK valuation_observed_at_domain rejects observedAt on a derived row or on another UTC day", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    const account = await makeCash(owner, "150000")
+    await reconcile(owner, account.id, "150000") // same-day ground_truth
+
+    // A derived row (the opening anchor) may never carry observedAt.
+    await expect(
+      harness.withFamily(owner.family.id, (tx) =>
+        tx.valuation.updateMany({
+          where: { accountId: account.id, type: "opening" },
+          data: { observedAt: new Date() },
+        })
+      )
+    ).rejects.toThrow(/valuation_observed_at_domain/)
+
+    // A ground_truth row may not carry an instant on a different UTC day than
+    // its valuationDate.
+    await expect(
+      harness.withFamily(owner.family.id, (tx) =>
+        tx.valuation.updateMany({
+          where: { accountId: account.id, provenance: "ground_truth" },
+          data: { observedAt: new Date(Date.now() - 3 * DAY_MS) },
+        })
+      )
+    ).rejects.toThrow(/valuation_observed_at_domain/)
+  })
+
   // ---- guards / views -------------------------------------------------------
 
   test("the anchor view's transactionsAfter uses the same predicate as the balance", async () => {
