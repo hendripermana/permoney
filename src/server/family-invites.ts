@@ -2,6 +2,8 @@ import { createServerFn } from "@tanstack/react-start"
 import type { PrismaClient } from "@prisma/client"
 import { z } from "zod"
 import { auditLog, auditLogs, createAuditContext } from "./middleware/audit"
+import { errorLogMiddleware } from "./middleware/error-log"
+import { logEvent } from "./log.server"
 import {
   authMiddleware,
   requireCapability,
@@ -815,6 +817,10 @@ export interface InviteViewer {
 // token must stay out of access logs and browser history beyond the page URL
 // the invitee already opened.
 export const getInviteByTokenFn = createServerFn({ method: "POST" })
+  // F1 audit S5.1: public, pre-auth flow (no session yet), so it does not sit
+  // behind authMiddleware — compose the error logger directly, otherwise a
+  // failing invite lookup leaves no server-side trace at all.
+  .middleware([errorLogMiddleware])
   .inputValidator((data: { token: string }) =>
     lookupInviteInputSchema.parse(data)
   )
@@ -1116,10 +1122,13 @@ export async function applyInviteAfterSignup(
       !(error instanceof z.ZodError)
     ) {
       // Unexpected failure: surface the class only — never the token.
-      console.error(
-        "[family-invites] applying an invite after signup failed unexpectedly:",
-        error instanceof Error ? error.name : "unknown error"
-      )
+      // F1 audit S5.1: via the structured logger, which emits `errorName`
+      // (i.e. exactly the class) and deliberately nothing else.
+      logEvent({
+        level: "error",
+        event: "invite_apply_after_signup_failed",
+        errorName: error instanceof Error ? error.name : "unknown",
+      })
     }
     return false
   }

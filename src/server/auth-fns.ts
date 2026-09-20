@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start"
 import { signupSchema, loginSchema } from "./auth-schemas"
+import { errorLogMiddleware } from "./middleware/error-log"
 import { getSession, requireSession } from "./middleware/session"
 import {
   getPostAuthRedirectPath,
@@ -13,8 +14,9 @@ export { signupSchema, loginSchema }
  * Lightweight session+family guard for use in route `beforeLoad`.
  * Returns auth state so the route can redirect without letting the loader run.
  */
-export const getSessionGuardFn = createServerFn({ method: "GET" }).handler(
-  async () => {
+export const getSessionGuardFn = createServerFn({ method: "GET" })
+  .middleware([errorLogMiddleware])
+  .handler(async () => {
     const session = await getSession()
     if (!session?.user) return { authenticated: false, hasFamilyId: false }
     const familyId = readAuthFamilyId(session.user)
@@ -22,10 +24,10 @@ export const getSessionGuardFn = createServerFn({ method: "GET" }).handler(
       authenticated: true,
       hasFamilyId: hasFamilyIdValue(familyId),
     }
-  }
-)
+  })
 
 export const signupFn = createServerFn({ method: "POST" })
+  .middleware([errorLogMiddleware])
   .inputValidator(signupSchema)
   .handler(async ({ data }) => {
     const [{ getRequest }, { auth }, { checkRateLimit }] = await Promise.all([
@@ -71,6 +73,7 @@ export const signupFn = createServerFn({ method: "POST" })
   })
 
 export const loginFn = createServerFn({ method: "POST" })
+  .middleware([errorLogMiddleware])
   .inputValidator(loginSchema)
   .handler(async ({ data }) => {
     const [{ getRequest }, { auth }, { checkRateLimit }] = await Promise.all([
@@ -94,17 +97,19 @@ export const loginFn = createServerFn({ method: "POST" })
     }
   })
 
-export const logoutFn = createServerFn({ method: "POST" }).handler(async () => {
-  const [{ getRequest }, { auth }] = await Promise.all([
-    import("@tanstack/react-start/server"),
-    import("./auth.server"),
-  ])
-  const request = getRequest()
-  await auth.api.signOut({
-    headers: request.headers,
+export const logoutFn = createServerFn({ method: "POST" })
+  .middleware([errorLogMiddleware])
+  .handler(async () => {
+    const [{ getRequest }, { auth }] = await Promise.all([
+      import("@tanstack/react-start/server"),
+      import("./auth.server"),
+    ])
+    const request = getRequest()
+    await auth.api.signOut({
+      headers: request.headers,
+    })
+    return { success: true }
   })
-  return { success: true }
-})
 
 /**
  * M1-7: Guided onboarding initializer.
@@ -123,6 +128,7 @@ export const logoutFn = createServerFn({ method: "POST" }).handler(async () => {
  * Returns the new familyId so the client can redirect to the dashboard.
  */
 export const onboardFn = createServerFn({ method: "POST" })
+  .middleware([errorLogMiddleware])
   .inputValidator((data: unknown) =>
     initializeOnboardingInputSchema.parse(data)
   )

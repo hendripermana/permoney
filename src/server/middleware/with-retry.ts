@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client"
+import { logEvent } from "../log.server"
 
 export interface SerializableRetryEvent {
   attempt: number
@@ -87,11 +88,15 @@ export async function withSerializableRetry<T>(
         nextDelayMs,
       })
 
-      // TODO(M3-5): ganti dengan structured logger + retry metric.
-      console.warn(
-        `[PER-18] Retrying Serializable transaction after ${errorName} ` +
-          `(${retryAttempt}/${maxRetries})`
-      )
+      // F1 audit S5.1: structured, so a retry storm is greppable and countable
+      // (`event:serializable_retry`) instead of free text.
+      logEvent({
+        level: "warn",
+        event: "serializable_retry",
+        errorName,
+        attempt: retryAttempt,
+        maxAttempts: maxRetries,
+      })
 
       if (nextDelayMs > 0) {
         await sleep(nextDelayMs)
