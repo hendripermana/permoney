@@ -7,7 +7,6 @@ import {
   test,
 } from "vite-plus/test"
 import {
-  createImportBatchForFamily,
   getImportBatchForFamily,
   promoteImportBatchForFamily,
   reviewImportRowsForFamily,
@@ -18,6 +17,13 @@ import {
   type IntegrationHarness,
 } from "./support/database"
 import { createTestFactories, type TestFactories } from "./support/factories"
+import {
+  buildImportRow,
+  createImportTenant,
+  createImportTenantRunner,
+  stageImportBatch,
+  type ImportTenant,
+} from "./support/import-fixtures"
 
 /**
  * F1 audit B1 — import review/promote at household volume.
@@ -60,76 +66,37 @@ describe("chunked import promotion (F1 audit B1)", () => {
     await harness.teardown()
   })
 
-  const runner =
-    () =>
-    <T>(
-      familyId: string,
-      userId: string,
-      fn: Parameters<typeof harness.withMember>[2]
-    ) =>
-      harness.withMember(familyId, userId, fn) as Promise<T>
+  const runner = () => createImportTenantRunner(harness)
 
-  async function setupTenant() {
-    const family = await factories.createFamily({
-      name: "Volume Import Family",
-      currency: "IDR",
-    })
-    const user = await factories.createUser({ familyId: family.id })
-    await factories.createFamilyMember({
-      familyId: family.id,
-      userId: user.id,
-      role: "owner",
-    })
-    const account = await factories.createAccount({
-      familyId: family.id,
-      name: "Volume Account",
-      currency: "IDR",
+  const setupTenant = () =>
+    createImportTenant(harness, factories, {
       balance: 0n,
+      name: "Volume Import Family",
     })
-    await harness.withFamily(family.id, (tx) =>
-      tx.account.update({
-        where: { id: account.id },
-        data: { isImportable: true },
-      })
-    )
-    return { familyId: family.id, userId: user.id, accountId: account.id }
-  }
 
-  type Tenant = Awaited<ReturnType<typeof setupTenant>>
+  type Tenant = ImportTenant
 
   function row(index: number) {
-    return {
-      accountId: "",
+    // One distinct description per row: the fingerprint dedup keys on
+    // normalised description, so this keeps every row genuinely promotable
+    // instead of collapsing them into duplicates.
+    return buildImportRow({
       rawPayload: { source: "csv", line: index + 1 },
-      // One distinct description per row: the fingerprint dedup keys on
-      // normalised description, so this keeps all 3,000 rows genuinely
-      // promotable instead of collapsing them into duplicates.
-      date: new Date("2026-06-15T03:00:00.000Z"),
       amount: AMOUNT_MINOR.toString(),
       type: "income" as const,
       description: `Statement line ${index}`,
-    }
-  }
-
-  async function stageBatch(tenant: Tenant, count: number, hash: string) {
-    return await createImportBatchForFamily({
-      data: {
-        sourceKind: "csv_upload",
-        accountId: tenant.accountId,
-        contentHash: hash,
-        idempotencyKey: factories.createIdempotencyKey(),
-        rows: Array.from({ length: count }, (_, index) => ({
-          ...row(index),
-          accountId: tenant.accountId,
-        })),
-      },
-      familyId: tenant.familyId,
-      user: { id: tenant.userId, familyId: tenant.familyId },
-      runInTenantTransaction: runner(),
     })
   }
 
-  /** The decisions the wizard would send: every row that still needs promoting. */
+  async function stageBatch(tenant: Tenant, count: number, hash: string) {
+    return await stageImportBatch(
+      tenant,
+      Array.from({ length: count }, (_, index) => row(index)),
+      { contentHash: hash, runInTenantTransaction: runner() }
+    )
+  }
+
+  /** The decisions the wizard sends: every row that still needs promoting. */
   async function pendingDecisions(tenant: Tenant, batchId: string) {
     const view = await getImportBatchForFamily({
       data: { batchId },
