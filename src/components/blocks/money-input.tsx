@@ -60,20 +60,28 @@ export function MoneyInput({
         onChange={(e) => onChange(e.target.value)}
         {...inputProps}
       />
-      {preview.kind === "empty" ? null : (
-        <p
-          className={cn(
-            "text-xs tabular-nums",
-            preview.kind === "valid"
-              ? "text-muted-foreground"
-              : "text-muted-foreground/70"
-          )}
-        >
-          {preview.kind === "valid"
-            ? `= ${preview.text}`
-            : "Enter a valid amount"}
-        </p>
-      )}
+      {/* The line is always laid out and its height reserved, so the first
+          keystroke cannot grow the surrounding layout. Before this, the preview
+          element appeared only once the field was non-empty — which added ~22px
+          to every dialog that uses a MoneyInput, and because dialogs here are
+          centred, that pushed their footer button down mid-interaction (CI
+          #379: Playwright saw "element is not stable", then "element was
+          detached from the DOM, retrying"). It also stops the form jumping
+          while a household types. */}
+      <p
+        className={cn(
+          "min-h-[1rem] text-xs tabular-nums",
+          preview.kind === "invalid"
+            ? "text-muted-foreground/70"
+            : "text-muted-foreground"
+        )}
+      >
+        {preview.kind === "valid"
+          ? `= ${preview.text}`
+          : preview.kind === "invalid"
+            ? "Enter a valid amount"
+            : ""}
+      </p>
     </div>
   )
 }

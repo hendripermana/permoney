@@ -271,10 +271,32 @@ function AccountDetailPage() {
     q.from({ d: balanceDriftCollection })
   )
 
-  const account = React.useMemo<AccountRecord | undefined>(
+  const liveAccount = React.useMemo<AccountRecord | undefined>(
     () => accounts?.find((a) => a.id === accountId),
     [accounts, accountId]
   )
+
+  // F1 CI fix: the live collection can report NO rows for a moment while a
+  // sync is in flight (the account was just created, so its refetch is still
+  // running). `if (!account) return <skeleton>` below then unmounts the entire
+  // page — including any dialog the user has open, throwing away what they had
+  // typed. That is what CI caught on #379 as the reconcile dialog "detaching
+  // from the DOM" mid-click, and it is the same flicker a real household sees
+  // as a blank page while typing.
+  //
+  // Keep the last row we saw while the collection is EMPTY (a sync in flight).
+  // If the collection has rows and ours is genuinely absent, the account is
+  // really gone and the skeleton is correct.
+  const [lastSeenAccount, setLastSeenAccount] = React.useState<
+    AccountRecord | undefined
+  >(undefined)
+  // Render-phase adjustment (no effect): React re-renders immediately without
+  // committing, and the condition is false once the value is stored.
+  if (liveAccount && liveAccount !== lastSeenAccount) {
+    setLastSeenAccount(liveAccount)
+  }
+  const account =
+    liveAccount ?? ((accounts?.length ?? 0) === 0 ? lastSeenAccount : undefined)
 
   // ADR-0058 D2 — person id → name for the per-holding owner chip.
   const { candidates: ownerCandidates } = useOwnerCandidates()

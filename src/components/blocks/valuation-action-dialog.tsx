@@ -68,8 +68,17 @@ export function ValuationActionDialog({
   const driftMinor = signedTarget === null ? null : signedTarget - currentMinor
 
   // PER-217 — only surface the reserve cell for cash-like assets that have one.
+  //
+  // Keyed off the ACCOUNT (known when the dialog opens), not off the async
+  // balance view: deriving it from `balanceView` meant the fourth cell appeared
+  // one query later, which added a row to the preview grid and — because the
+  // dialog is centred — moved the footer button mid-interaction. Playwright
+  // logged exactly that as "element is not stable", then "element was detached
+  // from the DOM, retrying" (CI #379). Same cell, same values, stable rows.
   const showReserve =
-    cashLike && balanceView?.reserve != null && BigInt(balanceView.reserve) > 0n
+    cashLike &&
+    account.reserveBalance != null &&
+    BigInt(account.reserveBalance) > 0n
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
@@ -101,6 +110,12 @@ export function ValuationActionDialog({
 
   return (
     <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
+      {/* F1 CI fix: the preview cells below render from `balanceView`, which
+          resolves AFTER the dialog mounts — so the centred dialog grew a frame
+          at a time and its submit button was "not stable" (then detached) for
+          Playwright, exactly as CI logged on #379. Bounding the height keeps
+          the box still and scrolls the content instead; every other dialog in
+          the repo already does this. */}
       <DialogContent>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <DialogHeader>
@@ -115,13 +130,13 @@ export function ValuationActionDialog({
           <div className="grid grid-cols-3 gap-3 rounded-md bg-muted/50 p-3 text-sm">
             <div>
               <p className="text-xs text-muted-foreground">Current</p>
-              <p className="font-medium tabular-nums">
+              <p className="font-medium whitespace-nowrap tabular-nums">
                 {formatCurrency(account.balance, account.currency)}
               </p>
             </div>
             <div>
               <p className="text-xs text-muted-foreground">Available</p>
-              <p className="font-medium tabular-nums">
+              <p className="font-medium whitespace-nowrap tabular-nums">
                 {balanceView?.available == null
                   ? "—"
                   : formatCurrency(balanceView.available, account.currency)}
@@ -129,18 +144,20 @@ export function ValuationActionDialog({
             </div>
             <div>
               <p className="text-xs text-muted-foreground">Held</p>
-              <p className="font-medium tabular-nums">
+              <p className="font-medium whitespace-nowrap tabular-nums">
                 {formatCurrency(balanceView?.held ?? "0", account.currency)}
               </p>
             </div>
             {showReserve ? (
               <div>
                 <p className="text-xs text-muted-foreground">Reserved</p>
-                <p className="font-medium tabular-nums">
-                  {formatCurrency(
-                    balanceView?.reserve ?? "0",
-                    account.currency
-                  )}
+                <p className="font-medium whitespace-nowrap tabular-nums">
+                  {balanceView == null
+                    ? "—"
+                    : formatCurrency(
+                        balanceView.reserve ?? "0",
+                        account.currency
+                      )}
                 </p>
               </div>
             ) : null}
@@ -160,15 +177,23 @@ export function ValuationActionDialog({
               placeholder="0"
               autoFocus
             />
-            {cashLike && driftMinor !== null && driftMinor !== 0n ? (
-              <p className="text-xs text-muted-foreground">
-                Balance will change by{" "}
-                <span className="font-medium tabular-nums">
-                  {formatCurrency(driftMinor.toString(), account.currency)}
-                </span>
-                .
-              </p>
-            ) : null}
+            {/* The space is RESERVED so the hint appearing on the first
+                keystroke cannot grow the dialog: it is centred, so any height
+                change moves the footer button under the pointer — which is
+                exactly what Playwright logged as "element is not stable" then
+                "element was detached from the DOM, retrying" (CI #379). Same
+                text, same conditions, no jump while typing. */}
+            <p className="min-h-[1.25rem] text-xs text-muted-foreground">
+              {cashLike && driftMinor !== null && driftMinor !== 0n ? (
+                <>
+                  Balance will change by{" "}
+                  <span className="font-medium whitespace-nowrap tabular-nums">
+                    {formatCurrency(driftMinor.toString(), account.currency)}
+                  </span>
+                  .
+                </>
+              ) : null}
+            </p>
           </div>
 
           {error ? (

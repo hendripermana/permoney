@@ -42,9 +42,16 @@ test.describe("person-to-person debt (PER-212)", () => {
     await expect(page.getByRole("dialog")).toHaveCount(0)
 
     // --- Utang-Piutang shows the person with the right net position ---
-    await expect(page.getByText(personName)).toBeVisible()
-    await expect(page.getByText("They owe you")).toBeVisible()
-    await expect(page.getByText("Rp 500,000.00")).toBeVisible()
+    // Scoped to the person's own row: since the base-currency default is IDR
+    // (F1 audit B2.1), the page's summary strip also shows "They owe you" —
+    // correctly, because the receivable is now convertible in base currency
+    // instead of FX-pending. A page-wide getByText matched all three.
+    const personRow = page.getByRole("button", {
+      name: new RegExp(personName),
+    })
+    await expect(personRow).toContainText(personName)
+    await expect(personRow).toContainText("They owe you")
+    await expect(personRow).toContainText("Rp 500,000.00")
 
     // --- Net-worth card: the grouped "Personal debts (net)" line appears, the
     //     receivable stays OUT of the main Accounts list, and the TOTAL is
@@ -193,7 +200,11 @@ test.describe("person-to-person debt (PER-212)", () => {
 
     // Detail header, net position, and the movement history are all present.
     await expect(page.getByRole("heading", { name: personName })).toBeVisible()
-    await expect(page.getByText("They owe you")).toBeVisible()
+    // Scoped to the "Net position" card rather than the whole page.
+    const netPositionCard = page
+      .locator('[data-slot="card"]')
+      .filter({ has: page.getByText("Net position", { exact: true }) })
+    await expect(netPositionCard.getByText("They owe you")).toBeVisible()
     await expect(page.getByText("Movement history")).toBeVisible()
     await expect(page.getByText(`Lent to ${personName}`)).toBeVisible()
 
