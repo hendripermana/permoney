@@ -6,6 +6,7 @@ import {
   expect,
   test,
 } from "vite-plus/test"
+import type { Account } from "@prisma/client"
 import {
   createTransactionForFamily,
   CrossCurrencyDestinationAmountRequiredError,
@@ -15,7 +16,11 @@ import {
   createIntegrationHarness,
   type IntegrationHarness,
 } from "./support/database"
-import { createTestFactories, type TestFactories } from "./support/factories"
+import {
+  createTestFactories,
+  type AuthenticatedOnboardedUser,
+  type TestFactories,
+} from "./support/factories"
 
 /**
  * F1 audit S1 (guardrails G2) — cross-currency transfers must state the
@@ -63,6 +68,38 @@ async function makeAccounts(ownerFamilyId: string) {
   return { idr, usd }
 }
 
+/**
+ * A valid IDR→USD transfer that states the destination amount — the shape both
+ * the "records both legs" and "edit path rejects..." tests start from. Shared
+ * so the canonical cross-currency payload is written once (F1 audit S1).
+ */
+async function createValidCrossCurrencyTransfer(
+  owner: AuthenticatedOnboardedUser,
+  accounts: { idr: Account; usd: Account },
+  description: string
+) {
+  return createTransactionForFamily({
+    data: {
+      accountId: accounts.idr.id,
+      amount: 1_600_000n,
+      currency: "IDR",
+      date: TEST_DATE,
+      description,
+      destinationAmount: 10_000n,
+      // The DB CHECK `destination_pair_consistency` requires the amount and
+      // its currency as a pair (ADR-0035 §6) — the same shape the modal sends.
+      destinationCurrency: "USD",
+      idempotencyKey: factories.createIdempotencyKey(),
+      isSplit: false,
+      status: "CLEARED",
+      toAccountId: accounts.usd.id,
+      type: "transfer",
+    },
+    familyId: owner.family.id,
+    user: owner.user,
+  })
+}
+
 describe("cross-currency transfers require an explicit destination amount", () => {
   test("create rejects IDR→USD without destinationAmount", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
@@ -102,26 +139,11 @@ describe("cross-currency transfers require an explicit destination amount", () =
     const owner = await factories.createAuthenticatedOnboardedUser()
     const { idr, usd } = await makeAccounts(owner.family.id)
 
-    const created = await createTransactionForFamily({
-      data: {
-        accountId: idr.id,
-        amount: 1_600_000n,
-        currency: "IDR",
-        date: TEST_DATE,
-        description: "IDR to USD with destination amount",
-        destinationAmount: 10_000n,
-        // The DB CHECK `destination_pair_consistency` requires the amount and
-        // its currency as a pair (ADR-0035 §6) — the same shape the modal sends.
-        destinationCurrency: "USD",
-        idempotencyKey: factories.createIdempotencyKey(),
-        isSplit: false,
-        status: "CLEARED",
-        toAccountId: usd.id,
-        type: "transfer",
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
+    const created = await createValidCrossCurrencyTransfer(
+      owner,
+      { idr, usd },
+      "IDR to USD with destination amount"
+    )
 
     const legs = await harness.withFamily(owner.family.id, (tx) =>
       tx.transaction.findMany({
@@ -198,24 +220,11 @@ describe("cross-currency transfers require an explicit destination amount", () =
     const owner = await factories.createAuthenticatedOnboardedUser()
     const { idr, usd } = await makeAccounts(owner.family.id)
 
-    const created = await createTransactionForFamily({
-      data: {
-        accountId: idr.id,
-        amount: 1_600_000n,
-        currency: "IDR",
-        date: TEST_DATE,
-        description: "Valid cross-currency transfer",
-        destinationAmount: 10_000n,
-        destinationCurrency: "USD",
-        idempotencyKey: factories.createIdempotencyKey(),
-        isSplit: false,
-        status: "CLEARED",
-        toAccountId: usd.id,
-        type: "transfer",
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
+    const created = await createValidCrossCurrencyTransfer(
+      owner,
+      { idr, usd },
+      "Valid cross-currency transfer"
+    )
 
     await expect(
       updateTransactionForFamily({
