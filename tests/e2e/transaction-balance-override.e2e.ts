@@ -104,6 +104,17 @@ async function setupReconciledAccount(
   await page.getByRole("button", { name: `Open ${accountName}` }).click()
   await page.waitForURL(/\/accounts\/[^/]+$/, { timeout: 15000 })
 
+  // The detail route is client-only, so the URL commits BEFORE its component
+  // mounts and the list stays on screen for a moment. Wait for a
+  // detail-page-only element first: "Set real balance" exists on BOTH pages
+  // (the card's icon button and the hero's), so clicking before the swap
+  // silently opens the LIST page's dialog — which is then torn down when the
+  // detail page takes over, which is what CI saw as the dialog detaching
+  // mid-click (F1 CI #379).
+  await expect(
+    page.getByRole("link", { name: "Back to accounts" })
+  ).toBeVisible()
+
   // Establish a live `ground_truth` anchor dated TODAY.
   await page
     .getByRole("button", { name: "Set real balance", exact: true })

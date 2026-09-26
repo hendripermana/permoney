@@ -116,6 +116,24 @@ the UI and verify the canonical onboarding contract: signup creates an
 authenticated user without a family, guided onboarding creates the family, and
 protected routes redirect until onboarding is complete.
 
+### Waiting for a client-only route to actually mount
+
+`waitForURL()` is not enough on a route with `ssr: false`. The URL commits when
+the navigation is accepted, and the previous page stays on screen until the new
+route's component mounts — so a spec that navigates to `/accounts/<id>` and
+immediately clicks can still be interacting with the ACCOUNTS LIST.
+
+That is not hypothetical: the list card's icon button and the detail page's hero
+button both read "Set real balance", so an early click opened the list page's
+dialog, which was then torn down when the detail page mounted. Playwright
+reported it as the dialog "detaching from the DOM" mid-click, and it only failed
+when the suite ran end to end (F1 CI #379).
+
+After any `waitForURL()` on a client-only route, assert a page-only element
+first (`getByRole("link", { name: "Back to accounts" })` for the account
+detail, `getByText("Performance")` for the performance panel), then interact.
+Prefer scoping the interaction to a container (`getByRole("dialog")`) as well.
+
 ### What the browser error gate does and does not guarantee
 
 Every spec using `tests/e2e/support/fixtures.ts` fails on:

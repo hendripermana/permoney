@@ -87,7 +87,7 @@ test.describe("transaction-level reconciliation (PER-83 Slice 1)", () => {
     // --- Check the CLEARED row and enter the matching statement balance ---
     await reconcileCheckboxes.click()
     await expect(
-      page.getByRole("checkbox", { name: "Unreconcile transaction" })
+      page.getByRole("checkbox", { name: "Unmatch transaction" })
     ).toBeVisible()
     // The row itself now shows the persisted "Reconciled" badge.
     await expect(page.getByText("Reconciled", { exact: true })).toBeVisible()
@@ -99,9 +99,7 @@ test.describe("transaction-level reconciliation (PER-83 Slice 1)", () => {
     await expect(page.getByText("Matched", { exact: true })).toBeVisible()
 
     // --- Un-reconcile it: the badge and checkbox both revert ---
-    await page
-      .getByRole("checkbox", { name: "Unreconcile transaction" })
-      .click()
+    await page.getByRole("checkbox", { name: "Unmatch transaction" }).click()
     await expect(
       page.getByRole("checkbox", { name: "Match transaction" })
     ).toBeVisible()

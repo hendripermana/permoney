@@ -1,7 +1,7 @@
 import { expect, test } from "./support/fixtures"
 import { onboard, waitForHydration } from "./support/onboarding"
 
-// PER-207 — the "Update value" dialog (and the account-create opening balance)
+// PER-207 — the "Set real balance" dialog (and the account-create opening balance)
 // parsed the user's typed amount with `toMinorUnits`, which expects a canonical
 // decimal and THROWS on user-formatted strings. Because the parse runs at
 // RENDER on every keystroke, a formatted input (e.g. Indonesian "5.571.313,20")
@@ -29,15 +29,15 @@ test.describe("valuation formatted input (PER-207)", () => {
     await page.getByRole("button", { name: "Create" }).click()
     await expect(page.getByRole("dialog")).toHaveCount(0)
 
-    // --- Update value with an Indonesian-formatted amount (the repro) ---
-    await page.getByRole("button", { name: "Update value" }).click()
+    // --- Set real balance with an Indonesian-formatted amount (the repro) ---
+    await page.getByRole("button", { name: "Set real balance" }).click()
     await expect(page.getByRole("dialog")).toBeVisible()
 
     // Typing the formatted value must NOT crash the dialog (the PER-207 bug).
     await page.getByLabel(/New value/).fill("5.571.313,20")
     await page
       .getByRole("dialog")
-      .getByRole("button", { name: "Update value" })
+      .getByRole("button", { name: "Set real balance" })
       .click()
     await expect(page.getByRole("dialog")).toHaveCount(0)
 
