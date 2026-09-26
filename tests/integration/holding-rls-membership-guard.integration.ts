@@ -6,8 +6,6 @@ import {
   expect,
   test,
 } from "vite-plus/test"
-import type { AccountType } from "@/lib/accounts"
-import { createAccountForFamily } from "@/server/accounts"
 import {
   createIntegrationHarness,
   type IntegrationHarness,
@@ -17,6 +15,7 @@ import {
   type AuthenticatedOnboardedUser,
   type TestFactories,
 } from "./support/factories"
+import { makeInvestmentAccount } from "./support/holding-suite-fixtures"
 
 /**
  * F1 audit finding "Security S1" (Phase 1 report, Department 6).
@@ -55,19 +54,6 @@ describe("holding/instrument RLS membership guard (audit S1 / ADR-0036 §4)", ()
   })
 
   // --- arrange -------------------------------------------------------------
-
-  const makeInvestmentAccount = async (owner: AuthenticatedOnboardedUser) =>
-    await createAccountForFamily({
-      data: {
-        name: "Bibit",
-        accountType: "TRACKED_ASSET" as AccountType,
-        accountSubtype: "brokerage",
-        openingBalance: "0",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
 
   /** A user with no family of their own, linked to `owner`'s family as `status`. */
   const addFamilyMemberWithStatus = async (
@@ -146,7 +132,7 @@ describe("holding/instrument RLS membership guard (audit S1 / ADR-0036 §4)", ()
 
   /** An investment account plus one gold instrument and its holding, as `owner`. */
   const seedHolding = async (owner: AuthenticatedOnboardedUser) => {
-    const account = await makeInvestmentAccount(owner)
+    const account = await makeInvestmentAccount(factories, owner)
     const instrument = await createInstrumentAs(
       owner.family.id,
       owner.user.id,

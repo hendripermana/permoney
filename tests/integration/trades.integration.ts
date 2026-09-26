@@ -6,8 +6,6 @@ import {
   expect,
   test,
 } from "vite-plus/test"
-import type { AccountType } from "@/lib/accounts"
-import { createAccountForFamily } from "@/server/accounts"
 import {
   getAccountHoldingsForFamily,
   HoldingError,
@@ -21,11 +19,12 @@ import {
   createIntegrationHarness,
   type IntegrationHarness,
 } from "./support/database"
+import { createTestFactories, type TestFactories } from "./support/factories"
 import {
-  createTestFactories,
-  type AuthenticatedOnboardedUser,
-  type TestFactories,
-} from "./support/factories"
+  balanceOf,
+  makeCashAccount,
+  makeInvestmentAccount,
+} from "./support/holding-suite-fixtures"
 
 // PER-198 / ADR-0051 — Buy / Sell atomic cash ↔ holding trade.
 // Money amounts are in MINOR units (IDR sen). Fixtures use exact-division
@@ -48,44 +47,6 @@ describe("buy/sell trades (PER-198 / ADR-0051)", () => {
     await harness.teardown()
   })
 
-  // A valuation-tracked investment account (TRACKED_ASSET → balanceSource
-  // "valuation").
-  const makeInvestmentAccount = async (owner: AuthenticatedOnboardedUser) =>
-    await createAccountForFamily({
-      data: {
-        name: "Bibit",
-        accountType: "TRACKED_ASSET" as AccountType,
-        accountSubtype: "brokerage",
-        openingBalance: "0",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
-
-  // A cash-like funding account (DEPOSITORY → balanceSource "transaction_flow").
-  // Opening balance 150,000 major = 15,000,000 sen.
-  const makeCashAccount = async (owner: AuthenticatedOnboardedUser) =>
-    await createAccountForFamily({
-      data: {
-        name: "Checking",
-        accountType: "DEPOSITORY" as AccountType,
-        openingBalance: "150000",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
-
-  const balanceOf = (owner: AuthenticatedOnboardedUser, accountId: string) =>
-    harness.withFamily(owner.family.id, async (tx) => {
-      const row = await tx.account.findUniqueOrThrow({
-        where: { id: accountId },
-        select: { balance: true },
-      })
-      return row.balance
-    })
-
   const fundInline = { kind: "mutual_fund" as const, name: "Fund A" }
 
   // --------------------------------------------------------------------------
@@ -93,11 +54,12 @@ describe("buy/sell trades (PER-198 / ADR-0051)", () => {
   // --------------------------------------------------------------------------
   test("BUY: funding −cash, investment +cash via holding, net worth unchanged", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner)
 
-    const cashBefore = await balanceOf(owner, cash.id)
-    const netBefore = cashBefore + (await balanceOf(owner, investment.id))
+    const cashBefore = await balanceOf(harness, owner, cash.id)
+    const netBefore =
+      cashBefore + (await balanceOf(harness, owner, investment.id))
 
     // 100 units × Rp 100.00/unit (10,000 sen) = Rp 10,000 (1,000,000 sen).
     const result = await recordTradeForFamily({
@@ -124,8 +86,8 @@ describe("buy/sell trades (PER-198 / ADR-0051)", () => {
     expect(result.holding?.valueMinor).toBe("1000000") // value at cost
     expect(result.holding?.gainMinor).toBe("0")
 
-    const cashAfter = await balanceOf(owner, cash.id)
-    const investAfter = await balanceOf(owner, investment.id)
+    const cashAfter = await balanceOf(harness, owner, cash.id)
+    const investAfter = await balanceOf(harness, owner, investment.id)
     expect(cashAfter).toBe(cashBefore - 1_000_000n)
     expect(investAfter).toBe(1_000_000n)
     // Net worth unchanged.
@@ -137,8 +99,8 @@ describe("buy/sell trades (PER-198 / ADR-0051)", () => {
   // --------------------------------------------------------------------------
   test("two BUYs of the same instrument blend to the correct average cost", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner)
 
     const first = await recordTradeForFamily({
       data: {
@@ -184,7 +146,7 @@ describe("buy/sell trades (PER-198 / ADR-0051)", () => {
     expect(holding?.avgUnitCostMinor).toBe("15000")
     expect(holding?.costMinor).toBe("3000000")
     expect(view.totalValueMinor).toBe("3000000")
-    expect(await balanceOf(owner, investment.id)).toBe(3_000_000n)
+    expect(await balanceOf(harness, owner, investment.id)).toBe(3_000_000n)
   })
 
   // --------------------------------------------------------------------------
@@ -192,8 +154,8 @@ describe("buy/sell trades (PER-198 / ADR-0051)", () => {
   // --------------------------------------------------------------------------
   test("SELL reduces the position, credits cash, and reports the realized gain", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner)
 
     // Establish 200 units @ avg 15,000 (cost 3,000,000).
     const buy1 = await recordTradeForFamily({
@@ -226,9 +188,9 @@ describe("buy/sell trades (PER-198 / ADR-0051)", () => {
       user: owner.user,
     })
 
-    const cashBeforeSell = await balanceOf(owner, cash.id)
+    const cashBeforeSell = await balanceOf(harness, owner, cash.id)
     const netBeforeSell =
-      cashBeforeSell + (await balanceOf(owner, investment.id))
+      cashBeforeSell + (await balanceOf(harness, owner, investment.id))
 
     // Sell 50 units @ Rp 250.00/unit (25,000 sen) → proceeds 1,250,000.
     const sell = await recordTradeForFamily({
@@ -253,8 +215,8 @@ describe("buy/sell trades (PER-198 / ADR-0051)", () => {
     expect(sell.holding?.avgUnitCostMinor).toBe("15000") // avg unchanged
     expect(sell.holding?.costMinor).toBe("2250000")
 
-    const cashAfter = await balanceOf(owner, cash.id)
-    const investAfter = await balanceOf(owner, investment.id)
+    const cashAfter = await balanceOf(harness, owner, cash.id)
+    const investAfter = await balanceOf(harness, owner, investment.id)
     expect(cashAfter).toBe(cashBeforeSell + 1_250_000n)
     expect(investAfter).toBe(2_250_000n)
     // Net worth moves by exactly the realized gain (cash premium over cost).
@@ -263,8 +225,8 @@ describe("buy/sell trades (PER-198 / ADR-0051)", () => {
 
   test("SELL to zero closes (deletes) the position", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner)
 
     const buy = await recordTradeForFamily({
       data: {
@@ -306,13 +268,13 @@ describe("buy/sell trades (PER-198 / ADR-0051)", () => {
     })
     expect(view.holdings).toHaveLength(0)
     expect(view.totalValueMinor).toBe("0")
-    expect(await balanceOf(owner, investment.id)).toBe(0n)
+    expect(await balanceOf(harness, owner, investment.id)).toBe(0n)
   })
 
   test("SELL more units than held is rejected", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner)
     const buy = await recordTradeForFamily({
       data: {
         investmentAccountId: investment.id,
@@ -350,9 +312,9 @@ describe("buy/sell trades (PER-198 / ADR-0051)", () => {
   // --------------------------------------------------------------------------
   test("replaying the same trade key is a single no-op", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
-    const cashBefore = await balanceOf(owner, cash.id)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner)
+    const cashBefore = await balanceOf(harness, owner, cash.id)
     const key = factories.createIdempotencyKey()
     const payload = {
       data: {
@@ -389,7 +351,9 @@ describe("buy/sell trades (PER-198 / ADR-0051)", () => {
     expect(view.holdings[0]?.quantity).toBe("100.00000000")
 
     // Cash moved exactly once.
-    expect(await balanceOf(owner, cash.id)).toBe(cashBefore - 1_000_000n)
+    expect(await balanceOf(harness, owner, cash.id)).toBe(
+      cashBefore - 1_000_000n
+    )
 
     // Exactly one Transfer + one cash Transaction.
     const counts = await harness.withFamily(owner.family.id, async (tx) => ({
@@ -408,8 +372,8 @@ describe("buy/sell trades (PER-198 / ADR-0051)", () => {
   test("a trade referencing another family's accounts is rejected", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
     const intruder = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner)
 
     await expect(
       recordTradeForFamily({
@@ -439,8 +403,8 @@ describe("buy/sell trades (PER-198 / ADR-0051)", () => {
 
   test("rejects a funding account that is not cash-like", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const otherInvestment = await makeInvestmentAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const otherInvestment = await makeInvestmentAccount(factories, owner)
 
     // Both sides valuation-tracked — the funding side is not cash-like.
     await expect(
@@ -466,8 +430,8 @@ describe("buy/sell trades (PER-198 / ADR-0051)", () => {
   // --------------------------------------------------------------------------
   test("a BUY writes audit rows for every entity it mutates", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner)
     const key = factories.createIdempotencyKey()
 
     await recordTradeForFamily({
@@ -506,8 +470,8 @@ describe("buy/sell trades (PER-198 / ADR-0051)", () => {
   // --------------------------------------------------------------------------
   test("deleting a trade's transaction is rejected and causes no drift", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(owner)
-    const cash = await makeCashAccount(owner)
+    const investment = await makeInvestmentAccount(factories, owner)
+    const cash = await makeCashAccount(factories, owner)
 
     const buy = await recordTradeForFamily({
       data: {
@@ -524,8 +488,8 @@ describe("buy/sell trades (PER-198 / ADR-0051)", () => {
       user: owner.user,
     })
 
-    const cashAfterBuy = await balanceOf(owner, cash.id)
-    const investAfterBuy = await balanceOf(owner, investment.id)
+    const cashAfterBuy = await balanceOf(harness, owner, cash.id)
+    const investAfterBuy = await balanceOf(harness, owner, investment.id)
 
     // Attempt to delete the trade's cash Transaction via the SAME path the UI
     // uses (deleteTransactionFn → deleteTransactionForFamily).
@@ -540,8 +504,8 @@ describe("buy/sell trades (PER-198 / ADR-0051)", () => {
 
     // No drift: funding balance, investment value, and the holding are all
     // exactly as they were after the buy (the delete rolled back entirely).
-    expect(await balanceOf(owner, cash.id)).toBe(cashAfterBuy)
-    expect(await balanceOf(owner, investment.id)).toBe(investAfterBuy)
+    expect(await balanceOf(harness, owner, cash.id)).toBe(cashAfterBuy)
+    expect(await balanceOf(harness, owner, investment.id)).toBe(investAfterBuy)
 
     const view = await getAccountHoldingsForFamily({
       accountId: investment.id,
