@@ -401,12 +401,15 @@ describe("family invitation by email (ADR-0057)", () => {
       familyId: null,
     })
 
+    // F1 audit S5.1: the glue now reports WHY instead of a bare boolean, so
+    // the unexpected-failure case can be logged by its server-only caller
+    // (this module is client-reachable and must not import the logger).
     expect(
       await applyInviteAfterSignup(harness.prisma, {
         userId: fresh.id,
         rawToken: token,
       })
-    ).toBe(true)
+    ).toEqual({ applied: true })
     expect(
       await resolveActiveMembership(owner.family.id, fresh.id)
     ).not.toBeNull()
@@ -433,24 +436,26 @@ describe("family invitation by email (ADR-0057)", () => {
       familyId: null,
     })
 
+    // Every "ignore it and continue" path is `not_applicable`, distinct from
+    // `unexpected` (which the caller logs as a real error).
     expect(
       await applyInviteAfterSignup(harness.prisma, {
         userId: someoneElse.id,
         rawToken: token,
       })
-    ).toBe(false)
+    ).toEqual({ applied: false, reason: "not_applicable" })
     expect(
       await applyInviteAfterSignup(harness.prisma, {
         userId: someoneElse.id,
         rawToken: "garbage",
       })
-    ).toBe(false)
+    ).toEqual({ applied: false, reason: "not_applicable" })
     expect(
       await applyInviteAfterSignup(harness.prisma, {
         userId: someoneElse.id,
         rawToken: "a-well-formed-but-unknown-token-value",
       })
-    ).toBe(false)
+    ).toEqual({ applied: false, reason: "not_applicable" })
 
     // Signup proceeds as a normal, family-less account; the invite is untouched.
     expect(

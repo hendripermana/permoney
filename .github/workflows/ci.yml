@@ -68,7 +68,12 @@ jobs:
   test-integration:
     name: test:integration
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The real-Postgres suite creates one database per file and applies every
+    # migration to each; it grows with every ledger PR and now runs 13-15
+    # minutes on a normal runner. 15 was cancelling healthy runs (#375). 30
+    # leaves headroom; if it ever nears that, shard the suite instead of
+    # raising this again.
+    timeout-minutes: 30
     needs: check
     services:
       postgres:

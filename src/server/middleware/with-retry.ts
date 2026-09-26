@@ -87,11 +87,24 @@ export async function withSerializableRetry<T>(
         nextDelayMs,
       })
 
-      // TODO(M3-5): ganti dengan structured logger + retry metric.
-      console.warn(
-        `[PER-18] Retrying Serializable transaction after ${errorName} ` +
-          `(${retryAttempt}/${maxRetries})`
-      )
+      // F1 audit S5.1: structured, so a retry storm is greppable and countable
+      // (`event:serializable_retry`) instead of free text.
+      //
+      // Imported DYNAMICALLY on purpose: this module is reached from
+      // client-graph files (server-fn helper modules), and a static
+      // `.server.ts` edge would be rejected by the TanStack Start
+      // import-protection fence — see `src/server/middleware/with-family.ts`
+      // for the same idiom. The branch is the retry path, so the extra
+      // resolution cost is paid only when a retry actually happens (and the
+      // module registry caches it after the first time).
+      const { logEvent } = await import("../log.server")
+      logEvent({
+        level: "warn",
+        event: "serializable_retry",
+        errorName,
+        attempt: retryAttempt,
+        maxAttempts: maxRetries,
+      })
 
       if (nextDelayMs > 0) {
         await sleep(nextDelayMs)

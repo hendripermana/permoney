@@ -48,6 +48,7 @@ import {
   type ProviderId,
 } from "@/lib/market-data"
 import { prisma } from "./db.server"
+import { logEvent } from "./log.server"
 
 // -----------------------------------------------------------------------------
 // Provider interface (the vendor seam)
@@ -1558,8 +1559,18 @@ export async function handleInternalMarketDataRefreshRequest(
     const result = await runScheduledMarketDataRefresh()
     return Response.json(result)
   } catch (error) {
+    // F1 audit S5.1: the structured logger. The per-refresh SUMMARY below
+    // (`console.log/error` with the full result object) is deliberately left
+    // as it is: it has an established contract the runbook relies on
+    // (`grep '"degraded":true'`), and the closed log shape cannot carry a
+    // per-provider breakdown.
+    logEvent({
+      level: "error",
+      event: "market_data_refresh_endpoint_crashed",
+      errorName: error instanceof Error ? error.name : "unknown",
+      message: error instanceof Error ? error.message : "refresh failed",
+    })
     const message = error instanceof Error ? error.message : "refresh failed"
-    console.error("[market-data-refresh] crashed", message)
     return Response.json({ error: message }, { status: 500 })
   }
 }
