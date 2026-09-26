@@ -8,7 +8,6 @@ import {
 } from "vite-plus/test"
 import { IDENTITY_RATE } from "@/lib/fx"
 import {
-  createImportBatchForFamily,
   getImportBatchForFamily,
   promoteImportBatchForFamily,
   reviewImportRowsForFamily,
@@ -19,6 +18,14 @@ import {
   type IntegrationHarness,
 } from "./support/database"
 import { createTestFactories, type TestFactories } from "./support/factories"
+import {
+  buildImportRow,
+  createImportTenant,
+  createImportTenantRunner,
+  stageImportBatch,
+  type ImportTenant,
+  type StageImportBatchOptions,
+} from "./support/import-fixtures"
 
 // PER-82 / ADR-0039 — Real-Postgres proof of the import-staging contract:
 // per-file batch dedup, content/canonical/near-duplicate detection, enrich-only
@@ -43,85 +50,22 @@ describe("import staging vertical slice (PER-82)", () => {
     await harness.teardown()
   })
 
-  // Inject the harness tenant runner so domain fns run with both GUCs set to the
-  // acting member — exactly what familyMiddleware does in production.
-  const runner =
-    () =>
-    <T>(
-      familyId: string,
-      userId: string,
-      fn: Parameters<typeof harness.withMember>[2]
-    ) =>
-      harness.withMember(familyId, userId, fn) as Promise<T>
-
-  interface Tenant {
-    familyId: string
-    userId: string
-    accountId: string
-  }
-
-  const setupTenant = async (
+  // Shared scaffolding lives in ./support/import-fixtures (the provider suites
+  // and the promotion suite both stage rows the same way).
+  const runner = () => createImportTenantRunner(harness)
+  type Tenant = ImportTenant
+  const setupTenant = (
     opts: { currency?: string; importable?: boolean } = {}
-  ): Promise<Tenant> => {
-    const family = await factories.createFamily({
-      currency: opts.currency ?? "IDR",
-    })
-    const user = await factories.createUser({ familyId: family.id })
-    await factories.createFamilyMember({
-      familyId: family.id,
-      userId: user.id,
-      role: "owner",
-    })
-    const account = await factories.createAccount({
-      familyId: family.id,
-      currency: opts.currency ?? "IDR",
-      accountType: "DEPOSITORY",
-      // Funded so an expense promotion keeps the ASSET balance >= 0 (the same
-      // account_normal_balance_sign CHECK the canonical path enforces).
-      balance: 1_000_000n,
-    })
-    if (opts.importable !== false) {
-      await harness.withFamily(family.id, (tx) =>
-        tx.account.update({
-          where: { id: account.id },
-          data: { isImportable: true },
-        })
-      )
-    }
-    return { familyId: family.id, userId: user.id, accountId: account.id }
-  }
-
-  const row = (overrides: Record<string, unknown> = {}) => ({
-    accountId: "",
-    rawPayload: { source: "csv", line: 1 },
-    date: new Date("2026-06-15T03:00:00.000Z"),
-    amount: "2500",
-    type: "expense" as const,
-    description: "Starbucks Jakarta",
-    ...overrides,
-  })
-
-  const stage = async (
+  ) => createImportTenant(harness, factories, opts)
+  const row = (overrides: Record<string, unknown> = {}) =>
+    buildImportRow(overrides)
+  const stage = (
     tenant: Tenant,
     rows: Array<Record<string, unknown>>,
-    opts: {
-      contentHash?: string
-      idempotencyKey?: string
-      sourceKind?: string
-      provider?: string
-    } = {}
+    opts: StageImportBatchOptions = {}
   ) =>
-    createImportBatchForFamily({
-      data: {
-        sourceKind: opts.sourceKind ?? "csv_upload",
-        provider: opts.provider,
-        accountId: tenant.accountId,
-        contentHash: opts.contentHash ?? "hash-default",
-        idempotencyKey: opts.idempotencyKey,
-        rows: rows.map((r) => ({ ...r, accountId: tenant.accountId })),
-      },
-      familyId: tenant.familyId,
-      user: { id: tenant.userId, familyId: tenant.familyId },
+    stageImportBatch(tenant, rows, {
+      ...opts,
       runInTenantTransaction: runner(),
     })
 

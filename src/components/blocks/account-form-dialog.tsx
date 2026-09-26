@@ -361,6 +361,7 @@ export function AccountFormDialog({
             openingBalance: openingMinor,
             ...(openingBalanceAsOfDate ? { openingBalanceAsOfDate } : {}),
             institutionName: institutionName.trim() || null,
+            isImportable,
             ...(reserveMinor ? { reserveBalance: reserveMinor } : {}),
             ...(maskValue === undefined ? {} : { mask: maskValue }),
             ...(creditLimitMinor === undefined
@@ -403,7 +404,13 @@ export function AccountFormDialog({
 
   return (
     <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
-      <DialogContent>
+      {/* F1 CI fix: this form is long (type-specific fields, reserve, owner
+          controls) and the create-mode "Allow imports" block pushed the footer
+          past a 720 px viewport — where the dialog is centred and fixed, so
+          Playwright (and a short laptop window) could not reach the Create
+          button at all. Every other dialog in the repo already bounds itself
+          this way; the account form was the outlier. */}
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <DialogHeader>
             <DialogTitle>
@@ -632,21 +639,23 @@ export function AccountFormDialog({
             </div>
           ) : null}
 
-          {editing ? (
-            <div className="flex items-start gap-3 rounded-md border p-3">
-              <Checkbox
-                id="is-importable"
-                checked={isImportable}
-                onCheckedChange={(checked) => setIsImportable(checked === true)}
-              />
-              <div className="flex flex-col gap-1">
-                <Label htmlFor="is-importable">Allow imports</Label>
-                <p className="text-xs text-muted-foreground">
-                  Let CSV/QIF imports promote transactions into this account.
-                </p>
-              </div>
+          {/* F1 audit B1: this used to be edit-only, so a household creating
+              its accounts and then going to the import screen hit "no
+              importable accounts" with no way to fix it except editing each
+              account afterwards. The create path already persists the flag. */}
+          <div className="flex items-start gap-3 rounded-md border p-3">
+            <Checkbox
+              id="is-importable"
+              checked={isImportable}
+              onCheckedChange={(checked) => setIsImportable(checked === true)}
+            />
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="is-importable">Allow imports</Label>
+              <p className="text-xs text-muted-foreground">
+                Let CSV/QIF imports promote transactions into this account.
+              </p>
             </div>
-          ) : null}
+          </div>
 
           {showOwnerFields ? (
             <AccountOwnerFields

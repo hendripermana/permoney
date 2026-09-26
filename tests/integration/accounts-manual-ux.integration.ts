@@ -81,6 +81,44 @@ describe("accounts manual UX vertical slice (PER-143)", () => {
       expect(audits[0]?.familyId).toBe(owner.family.id)
     })
 
+    test("persists isImportable when it is chosen at creation (F1 audit B1)", async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+
+      const created = await createAccountForFamily({
+        data: {
+          name: "Imported Wallet",
+          accountType: "E_WALLET",
+          currency: "IDR",
+          isImportable: true,
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+
+      // The flag is the ADR-0039 §6 gate for promoting staged import rows, so
+      // "chosen at creation" must mean "stored", not "rendered and dropped".
+      expect(created.isImportable).toBe(true)
+
+      const row = await harness.withFamily(owner.family.id, async (tx) =>
+        tx.account.findUniqueOrThrow({ where: { id: created.id } })
+      )
+      expect(row.isImportable).toBe(true)
+
+      // And the default stays false — no accidental opt-in.
+      const plain = await createAccountForFamily({
+        data: {
+          name: "Plain Wallet",
+          accountType: "E_WALLET",
+          currency: "IDR",
+          idempotencyKey: factories.createIdempotencyKey(),
+        },
+        familyId: owner.family.id,
+        user: owner.user,
+      })
+      expect(plain.isImportable).toBe(false)
+    })
+
     test("creates a tracked asset with valuation balance source", async () => {
       const owner = await factories.createAuthenticatedOnboardedUser()
 

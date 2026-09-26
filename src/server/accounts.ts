@@ -188,6 +188,13 @@ export const createAccountInputSchema = z.object({
   statementDay: statementDaySchema.optional(),
   dueDay: dueDaySchema.optional(),
   interestRateBps: interestRateBpsSchema.optional(),
+  // F1 audit B1: the create dialog now offers "Allow imports" (creating the
+  // accounts is the natural moment to answer it), but only the UPDATE schema
+  // accepted the flag — so ticking it at creation was silently dropped and the
+  // household still had to edit each account afterwards. Same contract as the
+  // update schema: promotion of staged import rows requires this gate
+  // (ADR-0039 §6).
+  isImportable: z.boolean().optional(),
   idempotencyKey: uuidV7Schema,
 })
 
@@ -591,6 +598,7 @@ export async function createAccountForFamily({
           currency,
           familyId,
           institutionName: data.institutionName ?? null,
+          isImportable: data.isImportable ?? false,
           name: data.name,
           reserveBalance,
           mask: creditFields.mask,
