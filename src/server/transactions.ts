@@ -1166,6 +1166,51 @@ export class SameAccountTransferError extends Error {
   }
 }
 
+// F1 audit S1 (guardrails G2): a cross-currency transfer MUST state the exact
+// destination amount. Until now both write paths fell back to
+// `data.destinationAmount ?? data.amount`, which reinterpreted the SAME number
+// in the destination currency — for an IDR→USD leg that records roughly
+// 16,000× the intended value, silently, with a matching balance increase on the
+// destination account. The fallback is only sound when both legs share a
+// currency, so it is now gated on exactly that condition (ADR-0035 §6 already
+// required an explicit destination amount for cross-currency transfers; the
+// code simply never enforced it).
+export class CrossCurrencyDestinationAmountRequiredError extends Error {
+  override readonly name = "CrossCurrencyDestinationAmountRequiredError"
+  readonly statusCode = 422
+  readonly fromCurrency: string
+  readonly toCurrency: string
+  constructor(fromCurrency: string, toCurrency: string) {
+    super(
+      `This transfer moves ${fromCurrency} into a ${toCurrency} account, so the exact destination amount is required — ` +
+        `without it the same number would be recorded as ${toCurrency} instead of converted.`
+    )
+    this.fromCurrency = fromCurrency
+    this.toCurrency = toCurrency
+  }
+}
+
+/**
+ * F1 audit S1 (guardrails G2): the single cross-currency destination-amount
+ * guard. A same-currency transfer may fall back to `amount` (the fallback is
+ * exact); across currencies that fallback reinterprets the source figure as the
+ * destination currency, so an explicit amount is required. Shared by the create
+ * and edit (reversal-and-replace) paths so the predicate and the typed error
+ * exist once.
+ */
+function assertCrossCurrencyDestinationAmount(
+  fromCurrency: string,
+  toCurrency: string,
+  destinationAmount: bigint | null | undefined
+): void {
+  if (fromCurrency !== toCurrency && destinationAmount == null) {
+    throw new CrossCurrencyDestinationAmountRequiredError(
+      fromCurrency,
+      toCurrency
+    )
+  }
+}
+
 // PER-279: "RECONCILED" may only ever be written by the audited
 // `setTransactionReconciledFn` (src/server/transaction-reconciliation.ts),
 // which stamps `reconciledAt`/`reconciledById` in the same write. The
@@ -2852,6 +2897,14 @@ export async function createTransactionForFamily({
           })
           const sourceBalanceAfter = sourceMutation.after.balance
 
+          // F1 audit S1: cross-currency requires an explicit destination amount
+          // (the same-currency fallback is exact; across currencies it is a
+          // silent 1000×-class error). Shared guard with the edit path.
+          assertCrossCurrencyDestinationAmount(
+            oldSrcAcc.currency,
+            oldDstAcc.currency,
+            data.destinationAmount
+          )
           // Multi-currency: gunakan destinationAmount jika tersedia, fallback ke amount
           const inAmount = data.destinationAmount ?? data.amount
           // CURRENCY IS DERIVED FROM THE ACCOUNT, NOT THE CLIENT (PER-147).
@@ -3955,6 +4008,14 @@ async function replaceTransactionWithinTenantTransaction(
       toAccount,
     })
 
+    // F1 audit S1: same requirement on the edit path — a transfer edited into a
+    // cross-currency shape without a destination amount is rejected before any
+    // balance moves, exactly like create. Shared guard with the create path.
+    assertCrossCurrencyDestinationAmount(
+      fromAccount.currency,
+      toAccount.currency,
+      data.destinationAmount
+    )
     const inAmount = data.destinationAmount ?? data.amount
     // Each leg is denominated in its own account's native currency, derived
     // server-side (PER-147) — not the client-sent currency, which previously

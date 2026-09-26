@@ -28,6 +28,12 @@ type MoneyInputProps = {
   readonly currency: CurrencyCode
   /** Optional class for the wrapping element (not the input). */
   readonly className?: string
+  /**
+   * Optional class for the inner `<Input>` itself. Needed by callers that
+   * render a currency symbol as an absolutely-positioned sibling and pad the
+   * input to make room for it (the transaction form's money fields).
+   */
+  readonly inputClassName?: string
 } & Omit<
   React.ComponentProps<typeof Input>,
   "value" | "onChange" | "type" | "inputMode" | "className"
@@ -38,6 +44,7 @@ export function MoneyInput({
   onChange,
   currency,
   className,
+  inputClassName,
   ...inputProps
 }: MoneyInputProps) {
   // Pure derivation of the preview — recomputed only when the text or currency
@@ -56,6 +63,7 @@ export function MoneyInput({
     <div className={cn("flex flex-col gap-1.5", className)}>
       <Input
         inputMode="decimal"
+        className={inputClassName}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         {...inputProps}
