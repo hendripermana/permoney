@@ -261,6 +261,27 @@ cd /home/ubuntu/permoney-prod && set -a && . ./.env.backup && set +a
 ./deploy/restore-postgres.sh verify permoney_prod_<latest-timestamp>.dump
 ```
 
+The monthly run is automated via cron — same mechanism as the backup and
+market-data jobs (no serverless cron on this self-hosted VM, per ADR-0047).
+It runs on the **1st at 04:00 UTC**, i.e. after that morning's 02:00 backup,
+and verifies the newest local dump:
+
+```cron
+0 4 1 * * cd /home/ubuntu/permoney-prod && set -a && . ./.env.backup && set +a && ./deploy/restore-postgres.sh verify "$(ls -1t /home/ubuntu/permoney-prod/backups/permoney_prod_*.dump | head -1)" >> /var/log/permoney_prod_restore_verify.log 2>&1
+```
+
+Why this shape: `RETENTION_DAYS` (default 14) guarantees at least one local
+dump every month, so the verify never needs to fetch from R2; `verify` is
+non-destructive by construction (it restores into the disposable
+`permoney_restore_test` database, prints the sanity counts, and drops it
+again — `permoney_prod` is never opened); and the log line is the durable
+evidence, because a cron failure here is otherwise silent. Check
+`/var/log/permoney_prod_restore_verify.log` for `[restore-verify] scratch DB
+dropped` before recording a month as verified.
+
+If the cron did not run (empty log for the month), run the command above by
+hand and note why — an unverified backup is not a backup.
+
 This restores into a disposable `permoney_restore_test` database, prints
 sanity row counts (`Family`/`Transaction`/`Account`/`AuditLog`), then drops
 the scratch database. It never touches `permoney_prod`. Record the date of
@@ -318,3 +339,12 @@ netdata (`:19999`) is bound to `127.0.0.1` only — reachable exclusively via
 (`SELECT 1`). Returns `{"status":"ok"}` / 200, or `{"status":"error"}` / 503.
 Wired into the Dockerfile's `HEALTHCHECK` and safe to point external
 uptime-monitoring at directly (it does not require auth).
+
+## Dependency audit
+
+There is no dependency-audit step in CI, on purpose — the findings are all
+transitive dev-tooling dependencies (most of them owned by `vite-plus` or
+`prisma`, and unfixable from this repository), the set is permanently red
+rather than flaky, and Dependabot's security alerts are the actionable
+channel. The measurement, the rule for when a finding _is_ actioned, and the
+re-check triggers are in [`docs/dependency-audit.md`](./dependency-audit.md).

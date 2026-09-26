@@ -8,6 +8,16 @@ import { nitro } from "nitro/vite"
 const isTestRuntime =
   process.env.VITEST === "true" || process.env.NODE_ENV === "test"
 
+// F1 audit S8.4 — `vp test` used to inherit NODE_ENV from the caller's shell.
+// With `NODE_ENV=production` exported (a common leftover in agent/dev shells),
+// module resolution picks production React builds and every React Testing
+// Library render fails with "React.act is not a function" — 41 failures that
+// look like broken tests but are an environment trap. Pin it for test runs
+// only: `vp build` never sets VITEST, so production builds are unaffected.
+if (isTestRuntime && process.env.NODE_ENV !== "test") {
+  process.env.NODE_ENV = "test"
+}
+
 const tanstackHeadScriptsShim = {
   name: "tanstack-start-injected-head-scripts-shim",
   sharedDuringBuild: true,

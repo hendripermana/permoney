@@ -6,15 +6,28 @@ import { Client as PgClient } from "pg"
 import { Prisma, PrismaClient } from "@prisma/client"
 import { PrismaPg } from "@prisma/adapter-pg"
 import { withSerializableRetry } from "../../../src/server/middleware/with-retry"
+import { cleanupStaleTestDatabases } from "./stale-databases"
 
 const TEST_DATABASE_PREFIX = "permoney_test_"
 const DEFAULT_ADMIN_DATABASE_URL = "postgres://permoney@localhost:5433/postgres"
 const FIXED_COMMAND_PATH =
   "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+// F1 audit S8.4: every tenant-scoped table is listed explicitly. TRUNCATE …
+// CASCADE already reached most of these through the FK graph, but a reset that
+// depends on the graph staying shaped as it is breaks silently the first time
+// someone adds a table whose FK lands outside the cascade — the failure mode is
+// cross-test leakage, which reads as flakiness rather than as a mistake.
+// Deliberately absent: `Iso4217Currency` (mapped `iso_4217_currency`), which is
+// global reference data with no tenant column — wiping it would corrupt the
+// currency registry instead of resetting tenant state.
 const RESET_TABLES = [
   "AuditLog",
   "Transfer",
   "SplitEntry",
+  "TransactionTag",
+  "Tag",
+  "Valuation",
+  "PendingBalanceCorrection",
   "Transaction",
   "IdempotencyRecord",
   "SmartRule",
@@ -27,6 +40,12 @@ const RESET_TABLES = [
   "MarketQuote",
   "MarketInstrument",
   "RawMarketDataFetch",
+  "RawImportedTransaction",
+  "ImportBatchArtifact",
+  "ImportBatch",
+  "FxRateSnapshot",
+  "ZakatPayer",
+  "ZakatSettings",
   "Account",
   "Session",
   "AuthAccount",
@@ -34,6 +53,7 @@ const RESET_TABLES = [
   // ADR-0057: non-RLS, FK-linked to Family + User (so CASCADE would reach it
   // anyway) — listed explicitly so a reset never depends on that.
   "FamilyInvite",
+  "FamilyMember",
   "User",
   "Family",
 ] as const
@@ -102,6 +122,23 @@ export async function createIntegrationHarness(
   process.env.NODE_ENV = "test"
   process.env.DATABASE_URL = resolved.databaseUrl
   process.env.BETTER_AUTH_SECRET ??= randomUUID()
+
+  // F1 audit S8.4: sweep databases left behind by interrupted runs before
+  // creating ours. Strictly bounded — see `stale-databases.ts` for the three
+  // safety rules (no active connections, never this run's database, only
+  // `permoney_test_*`, and fail closed when age is unknowable). Silent when
+  // there is nothing to do, which is the common case.
+  if (resolved.ownsDatabase && resolved.adminDatabaseUrl) {
+    const cleanup = await cleanupStaleTestDatabases({
+      adminDatabaseUrl: resolved.adminDatabaseUrl,
+      keepDatabaseName: resolved.databaseName,
+    })
+    if (cleanup.dropped.length > 0) {
+      console.log(
+        `[integration-harness] swept ${cleanup.dropped.length} stale test database(s): ${cleanup.dropped.join(", ")}`
+      )
+    }
+  }
 
   runMigrations(resolved.databaseUrl)
 
@@ -475,7 +512,7 @@ function replaceCredentials(
   return parsedUrl.toString()
 }
 
-function applyDatabasePassword(
+export function applyDatabasePassword(
   databaseUrl: string,
   password: string | undefined
 ): string {
