@@ -33,6 +33,9 @@ import {
  * These tests pin the behaviour against real Postgres through the harness's
  * non-superuser, RLS-enforced runtime role (the harness asserts the role is
  * neither superuser nor BYPASSRLS — see `assertRuntimeRoleEnforcesRls`).
+ *
+ * Every test shares the same arrange/act helpers below, so a test body is only
+ * the identity it acts as, the operation it attempts, and the assertion.
  */
 describe("holding/instrument RLS membership guard (audit S1 / ADR-0036 §4)", () => {
   let harness: IntegrationHarness
@@ -51,6 +54,8 @@ describe("holding/instrument RLS membership guard (audit S1 / ADR-0036 §4)", ()
     await harness.teardown()
   })
 
+  // --- arrange -------------------------------------------------------------
+
   const makeInvestmentAccount = async (owner: AuthenticatedOnboardedUser) =>
     await createAccountForFamily({
       data: {
@@ -64,86 +69,131 @@ describe("holding/instrument RLS membership guard (audit S1 / ADR-0036 §4)", ()
       user: owner.user,
     })
 
-  const seedHolding = async (owner: AuthenticatedOnboardedUser) => {
-    const account = await makeInvestmentAccount(owner)
-    return await harness.withFamily(owner.family.id, async (tx) => {
-      const instrument = await tx.instrument.create({
+  /** A user with no family of their own, linked to `owner`'s family as `status`. */
+  const addFamilyMemberWithStatus = async (
+    owner: AuthenticatedOnboardedUser,
+    status: "revoked" | "invited"
+  ) => {
+    const member = await factories.createUser({ familyId: null })
+    await factories.createFamilyMember({
+      familyId: owner.family.id,
+      userId: member.id,
+      status,
+    })
+    return member
+  }
+
+  // --- act ----------------------------------------------------------------
+
+  /**
+   * Creates `instrument` rows as the given actor, under that actor's GUCs. The
+   * owner's seeding path and the negative "revoked/stranger cannot write" paths
+   * differ only in the actor, so they share this helper.
+   */
+  const createInstrumentAs = async (
+    familyId: string,
+    actorUserId: string,
+    name: string
+  ) =>
+    await harness.withMember(familyId, actorUserId, async (tx) =>
+      tx.instrument.create({
         data: {
-          familyId: owner.family.id,
+          familyId,
           kind: "metal",
-          name: "Gold",
+          name,
           quoteCurrency: "IDR",
           priceModel: "market",
         },
       })
-      const holding = await tx.holding.create({
-        data: {
-          familyId: owner.family.id,
-          accountId: account.id,
-          instrumentId: instrument.id,
-          quantity: "3",
-          avgUnitCostMinor: 1_000_000n,
-        },
-      })
-      return { account, instrument, holding }
+    )
+
+  /** Creates a `holding` row as the given actor, under that actor's GUCs. */
+  const createHoldingAs = async (
+    familyId: string,
+    actorUserId: string,
+    input: {
+      accountId: string
+      instrumentId: string
+      quantity: string
+      avgUnitCostMinor: bigint
+    }
+  ) =>
+    await harness.withMember(familyId, actorUserId, async (tx) =>
+      tx.holding.create({ data: { familyId, ...input } })
+    )
+
+  /**
+   * Reads every RLS-guarded shape as one actor in a single transaction: the two
+   * table counts, the target holding by id, and its quantity. Negative cases
+   * assert the first three are 0/0/null; the positive case also pins the value.
+   */
+  const readTenantStateAs = async (
+    familyId: string,
+    actorUserId: string,
+    holdingId: string
+  ) =>
+    await harness.withMember(familyId, actorUserId, async (tx) => {
+      const byId = await tx.holding.findFirst({ where: { id: holdingId } })
+      return {
+        holdings: await tx.holding.count(),
+        instruments: await tx.instrument.count(),
+        byId,
+        quantity: byId?.quantity.toString() ?? null,
+      }
     })
+
+  // --- fixtures ------------------------------------------------------------
+
+  /** An investment account plus one gold instrument and its holding, as `owner`. */
+  const seedHolding = async (owner: AuthenticatedOnboardedUser) => {
+    const account = await makeInvestmentAccount(owner)
+    const instrument = await createInstrumentAs(
+      owner.family.id,
+      owner.user.id,
+      "Gold"
+    )
+    const holding = await createHoldingAs(owner.family.id, owner.user.id, {
+      accountId: account.id,
+      instrumentId: instrument.id,
+      quantity: "3",
+      avgUnitCostMinor: 1_000_000n,
+    })
+    return { account, instrument, holding }
   }
+
+  // --- tests ---------------------------------------------------------------
 
   test("active member reads and writes holdings and instruments", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
     const { account, instrument, holding } = await seedHolding(owner)
 
-    const seen = await harness.withMember(
+    const seen = await readTenantStateAs(
       owner.family.id,
       owner.user.id,
-      async (tx) => ({
-        holdings: await tx.holding.count(),
-        instruments: await tx.instrument.count(),
-        quantity: (
-          await tx.holding.findUniqueOrThrow({ where: { id: holding.id } })
-        ).quantity.toString(),
-      })
+      holding.id
     )
     expect(seen.holdings).toBe(1)
     expect(seen.instruments).toBe(1)
     expect(seen.quantity).toBe("3")
 
-    const created = await harness.withMember(
-      owner.family.id,
-      owner.user.id,
-      async (tx) =>
-        await tx.holding.create({
-          data: {
-            familyId: owner.family.id,
-            accountId: account.id,
-            instrumentId: instrument.id,
-            quantity: "1",
-            avgUnitCostMinor: 500n,
-          },
-        })
-    )
+    const created = await createHoldingAs(owner.family.id, owner.user.id, {
+      accountId: account.id,
+      instrumentId: instrument.id,
+      quantity: "1",
+      avgUnitCostMinor: 500n,
+    })
     expect(created.id).toBeTruthy()
   })
 
   test("revoked member cannot read holdings or instruments", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
     const { holding } = await seedHolding(owner)
+    const revoked = await addFamilyMemberWithStatus(owner, "revoked")
 
-    const revoked = await factories.createUser({ familyId: null })
-    await factories.createFamilyMember({
-      familyId: owner.family.id,
-      userId: revoked.id,
-      status: "revoked",
-    })
-
-    const visible = await harness.withMember(
+    const visible = await readTenantStateAs(
       owner.family.id,
       revoked.id,
-      async (tx) => ({
-        holdings: await tx.holding.count(),
-        instruments: await tx.instrument.count(),
-        byId: await tx.holding.findFirst({ where: { id: holding.id } }),
-      })
+      holding.id
     )
     expect(visible.holdings).toBe(0)
     expect(visible.instruments).toBe(0)
@@ -153,40 +203,19 @@ describe("holding/instrument RLS membership guard (audit S1 / ADR-0036 §4)", ()
   test("revoked member cannot write a holding or instrument", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
     const { account, instrument } = await seedHolding(owner)
-
-    const revoked = await factories.createUser({ familyId: null })
-    await factories.createFamilyMember({
-      familyId: owner.family.id,
-      userId: revoked.id,
-      status: "revoked",
-    })
+    const revoked = await addFamilyMemberWithStatus(owner, "revoked")
 
     await expect(
-      harness.withMember(owner.family.id, revoked.id, async (tx) =>
-        tx.holding.create({
-          data: {
-            familyId: owner.family.id,
-            accountId: account.id,
-            instrumentId: instrument.id,
-            quantity: "9",
-            avgUnitCostMinor: 1n,
-          },
-        })
-      )
+      createHoldingAs(owner.family.id, revoked.id, {
+        accountId: account.id,
+        instrumentId: instrument.id,
+        quantity: "9",
+        avgUnitCostMinor: 1n,
+      })
     ).rejects.toThrow()
 
     await expect(
-      harness.withMember(owner.family.id, revoked.id, async (tx) =>
-        tx.instrument.create({
-          data: {
-            familyId: owner.family.id,
-            kind: "metal",
-            name: "Smuggled",
-            quoteCurrency: "IDR",
-            priceModel: "market",
-          },
-        })
-      )
+      createInstrumentAs(owner.family.id, revoked.id, "Smuggled")
     ).rejects.toThrow()
 
     // The owner's rows are untouched by the rejected writes.
@@ -205,49 +234,35 @@ describe("holding/instrument RLS membership guard (audit S1 / ADR-0036 §4)", ()
     const { account, instrument, holding } = await seedHolding(owner)
     const stranger = await factories.createAuthenticatedOnboardedUser()
 
-    const visible = await harness.withMember(
+    const visible = await readTenantStateAs(
       owner.family.id,
       stranger.user.id,
-      async (tx) => ({
-        holdings: await tx.holding.count(),
-        instruments: await tx.instrument.count(),
-        byId: await tx.holding.findFirst({ where: { id: holding.id } }),
-      })
+      holding.id
     )
     expect(visible.holdings).toBe(0)
     expect(visible.instruments).toBe(0)
     expect(visible.byId).toBeNull()
 
     await expect(
-      harness.withMember(owner.family.id, stranger.user.id, async (tx) =>
-        tx.holding.create({
-          data: {
-            familyId: owner.family.id,
-            accountId: account.id,
-            instrumentId: instrument.id,
-            quantity: "1",
-            avgUnitCostMinor: 1n,
-          },
-        })
-      )
+      createHoldingAs(owner.family.id, stranger.user.id, {
+        accountId: account.id,
+        instrumentId: instrument.id,
+        quantity: "1",
+        avgUnitCostMinor: 1n,
+      })
     ).rejects.toThrow()
   })
 
   test("invited-but-not-yet-active member is denied (status is part of the guard)", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
     const { holding } = await seedHolding(owner)
-    const invitee = await factories.createUser({ familyId: null })
-    await factories.createFamilyMember({
-      familyId: owner.family.id,
-      userId: invitee.id,
-      status: "invited",
-    })
+    const invitee = await addFamilyMemberWithStatus(owner, "invited")
 
-    const visible = await harness.withMember(
+    const visible = await readTenantStateAs(
       owner.family.id,
       invitee.id,
-      async (tx) => await tx.holding.findFirst({ where: { id: holding.id } })
+      holding.id
     )
-    expect(visible).toBeNull()
+    expect(visible.byId).toBeNull()
   })
 })

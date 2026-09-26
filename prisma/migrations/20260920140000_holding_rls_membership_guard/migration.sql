@@ -19,51 +19,61 @@
 --     (instrument_tenant_isolation) and :126-129 (holding_tenant_isolation)
 --   and no later migration re-created either policy, so the gap persisted.
 --
--- Fix: policy-only replacement, copied verbatim from the reference pattern in
--- `20260906120000_tags/migration.sql` (which carries the guard on
+-- Fix: policy-only replacement of exactly two policies —
+--   * `instrument_tenant_isolation` on "Instrument"
+--   * `holding_tenant_isolation` on "Holding"
+-- re-created with the ADR-0036 §4 predicate copied verbatim from the reference
+-- pattern in `20260906120000_tags/migration.sql` (which carries the guard on
 -- `tag_tenant_isolation` and `transaction_tag_tenant_isolation`). USING and
 -- WITH CHECK both gain the conjunct, so a non-active member can neither read
--- nor write. ENABLE/FORCE ROW LEVEL SECURITY are already set on both tables
--- and are deliberately left untouched — this migration changes no data and no
--- table shape, so it is safe to apply on a populated database.
+-- nor write.
+--
+-- Both replacements run through ONE copy of the predicate: the (table, policy)
+-- pairs are iterated in a single DO block and the predicate is assembled once
+-- into `tenant_predicate`, then interpolated into both the USING and the WITH
+-- CHECK clause of each policy. Adding the guard to another table means adding a
+-- row to the VALUES list, never another copy of the SQL. `DROP POLICY IF
+-- EXISTS` keeps the block safe to re-run.
+--
+-- ENABLE/FORCE ROW LEVEL SECURITY are already set on both tables and are
+-- deliberately left untouched — this migration changes no data and no table
+-- shape, so it is safe to apply on a populated database.
 --
 -- See ADR-0036 §4 (membership boundary) and the tags migration for the
 -- canonical predicate.
 
--- Both tables get the SAME policy, so it is generated once from a table list
--- (no duplicated predicate to drift). Resulting policy names are exactly the
--- shipped ones: instrument_tenant_isolation and holding_tenant_isolation.
 DO $$
 DECLARE
-  guarded_table text;
+  -- ADR-0036 §4 tenant predicate — plain tenant isolation PLUS the membership
+  -- conjunct. Declared once; both policies below interpolate this exact text
+  -- into their USING and WITH CHECK clauses.
+  tenant_predicate CONSTANT text :=
+    $predicate$"familyId" = current_setting('app.family_id', true)::text
+    AND app_is_active_member(
+      current_setting('app.family_id', true)::text,
+      current_setting('app.user_id', true)::text
+    )$predicate$;
+  target RECORD;
 BEGIN
-  FOREACH guarded_table IN ARRAY ARRAY['Instrument', 'Holding'] LOOP
+  FOR target IN
+    SELECT *
+    FROM (VALUES
+      ('Instrument', 'instrument_tenant_isolation'),
+      ('Holding', 'holding_tenant_isolation')
+    ) AS guarded_policies(table_name, policy_name)
+  LOOP
     EXECUTE format(
       'DROP POLICY IF EXISTS %I ON %I',
-      lower(guarded_table) || '_tenant_isolation',
-      guarded_table
+      target.policy_name,
+      target.table_name
     );
+
     EXECUTE format(
-      $policy$
-        CREATE POLICY %I ON %I
-          FOR ALL
-          USING (
-            "familyId" = current_setting('app.family_id', true)::text
-            AND app_is_active_member(
-              current_setting('app.family_id', true)::text,
-              current_setting('app.user_id', true)::text
-            )
-          )
-          WITH CHECK (
-            "familyId" = current_setting('app.family_id', true)::text
-            AND app_is_active_member(
-              current_setting('app.family_id', true)::text,
-              current_setting('app.user_id', true)::text
-            )
-          )
-      $policy$,
-      lower(guarded_table) || '_tenant_isolation',
-      guarded_table
+      'CREATE POLICY %I ON %I FOR ALL USING (%s) WITH CHECK (%s)',
+      target.policy_name,
+      target.table_name,
+      tenant_predicate,
+      tenant_predicate
     );
   END LOOP;
 END
