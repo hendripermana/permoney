@@ -28,11 +28,7 @@ import {
   type AuthenticatedOnboardedUser,
   type TestFactories,
 } from "./support/factories"
-import {
-  balanceOf,
-  makeCashAccount,
-  makeInvestmentAccount,
-} from "./support/holding-suite-fixtures"
+import { createHoldingSuiteFixtures } from "./support/holding-suite-fixtures"
 
 // PER-259 Slice 5 (second half) / ADR-0054 — edit / delete (correct) a SWITCH
 // or a DIVIDEND REINVEST.
@@ -65,6 +61,12 @@ describe("position-event corrections — switch & dividend reinvest", () => {
   afterAll(async () => {
     await harness.teardown()
   })
+
+  const { makeInvestmentAccount, makeCashAccount, balanceOf } =
+    createHoldingSuiteFixtures(
+      () => harness,
+      () => factories
+    )
 
   const holdingRow = (owner: AuthenticatedOnboardedUser, holdingId: string) =>
     harness.withFamily(owner.family.id, async (tx) =>
@@ -156,8 +158,8 @@ describe("position-event corrections — switch & dividend reinvest", () => {
 
   // A fixture reused by most cases: 100 units of A, 40 of them switched into B.
   const seedSwitch = async (owner: AuthenticatedOnboardedUser) => {
-    const investment = await makeInvestmentAccount(factories, owner)
-    const cash = await makeCashAccount(factories, owner)
+    const investment = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(owner)
     const buy = await buyFundA(owner, investment.id, cash.id)
     const holdingA = buy.holding?.id ?? ""
     const switched = await switchToFundB(owner, investment.id, holdingA)
@@ -181,13 +183,11 @@ describe("position-event corrections — switch & dividend reinvest", () => {
     const seeded = await seedSwitch(owner)
 
     // 60 A @ 10,000 (600,000) + 50 B @ 8,000 (400,000) = 1,000,000.
-    expect(await balanceOf(harness, owner, seeded.investment.id)).toBe(
-      1_000_000n
-    )
+    expect(await balanceOf(owner, seeded.investment.id)).toBe(1_000_000n)
     expect(
       (await holdingsOf(owner, seeded.investment.id)).holdings
     ).toHaveLength(2)
-    const cashAfterSwitch = await balanceOf(harness, owner, seeded.cash.id)
+    const cashAfterSwitch = await balanceOf(owner, seeded.cash.id)
 
     const result = await deleteHoldingEventForFamily({
       data: {
@@ -207,13 +207,9 @@ describe("position-event corrections — switch & dividend reinvest", () => {
     expect(a?.avgUnitCostMinor).toBe(10_000n)
     const view = await holdingsOf(owner, seeded.investment.id)
     expect(view.holdings).toHaveLength(1)
-    expect(await balanceOf(harness, owner, seeded.investment.id)).toBe(
-      1_000_000n
-    )
+    expect(await balanceOf(owner, seeded.investment.id)).toBe(1_000_000n)
     // A switch never touches cash — reversing it must not either.
-    expect(await balanceOf(harness, owner, seeded.cash.id)).toBe(
-      cashAfterSwitch
-    )
+    expect(await balanceOf(owner, seeded.cash.id)).toBe(cashAfterSwitch)
 
     // The event is closed: it leaves the activity list and cannot be reopened.
     expect(await eventsOf(owner, seeded.investment.id)).toHaveLength(0)
@@ -233,8 +229,8 @@ describe("position-event corrections — switch & dividend reinvest", () => {
 
   test("DELETE a switch that CLOSED fund A recreates it with its original id", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(factories, owner)
-    const cash = await makeCashAccount(factories, owner)
+    const investment = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(owner)
     const buy = await buyFundA(owner, investment.id, cash.id)
     const holdingA = buy.holding?.id ?? ""
 
@@ -258,20 +254,20 @@ describe("position-event corrections — switch & dividend reinvest", () => {
     expect(restored?.quantity.toFixed(8)).toBe("100.00000000")
     expect(restored?.avgUnitCostMinor).toBe(10_000n)
     expect((await holdingsOf(owner, investment.id)).holdings).toHaveLength(1)
-    expect(await balanceOf(harness, owner, investment.id)).toBe(1_000_000n)
+    expect(await balanceOf(owner, investment.id)).toBe(1_000_000n)
   })
 
   test("DELETE a dividend reinvest rolls units and cost basis back", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(factories, owner)
-    const cash = await makeCashAccount(factories, owner)
+    const investment = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(owner)
     const buy = await buyFundA(owner, investment.id, cash.id)
     const holdingA = buy.holding?.id ?? ""
-    const cashAfterBuy = await balanceOf(harness, owner, cash.id)
+    const cashAfterBuy = await balanceOf(owner, cash.id)
 
     // 500,000 reinvested @ 10,000 = 50 more units → 150 @ 10,000.
     await reinvestOn(owner, investment.id, holdingA)
-    expect(await balanceOf(harness, owner, investment.id)).toBe(1_500_000n)
+    expect(await balanceOf(owner, investment.id)).toBe(1_500_000n)
 
     const [event] = await eventsOf(owner, investment.id)
     expect(event?.kind).toBe("dividend_reinvest")
@@ -288,9 +284,9 @@ describe("position-event corrections — switch & dividend reinvest", () => {
     const a = await holdingRow(owner, holdingA)
     expect(a?.quantity.toFixed(8)).toBe("100.00000000")
     expect(a?.avgUnitCostMinor).toBe(10_000n)
-    expect(await balanceOf(harness, owner, investment.id)).toBe(1_000_000n)
+    expect(await balanceOf(owner, investment.id)).toBe(1_000_000n)
     // A reinvest moves no external cash — nor does reversing it.
-    expect(await balanceOf(harness, owner, cash.id)).toBe(cashAfterBuy)
+    expect(await balanceOf(owner, cash.id)).toBe(cashAfterBuy)
   })
 
   test("DELETE replay with the same key reverses exactly once", async () => {
@@ -309,15 +305,13 @@ describe("position-event corrections — switch & dividend reinvest", () => {
 
     const a = await holdingRow(owner, seeded.holdingA)
     expect(a?.quantity.toFixed(8)).toBe("100.00000000")
-    expect(await balanceOf(harness, owner, seeded.investment.id)).toBe(
-      1_000_000n
-    )
+    expect(await balanceOf(owner, seeded.investment.id)).toBe(1_000_000n)
   })
 
   test("DELETE with a reused key but a different payload conflicts", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
     const seeded = await seedSwitch(owner)
-    const other = await makeInvestmentAccount(factories, owner)
+    const other = await makeInvestmentAccount(owner)
     const otherBuy = await buyFundA(owner, other.id, seeded.cash.id)
     await switchToFundB(owner, other.id, otherBuy.holding?.id ?? "")
     const [otherEvent] = await eventsOf(owner, other.id)
@@ -363,9 +357,7 @@ describe("position-event corrections — switch & dividend reinvest", () => {
     // Reversed exactly once.
     const a = await holdingRow(owner, seeded.holdingA)
     expect(a?.quantity.toFixed(8)).toBe("100.00000000")
-    expect(await balanceOf(harness, owner, seeded.investment.id)).toBe(
-      1_000_000n
-    )
+    expect(await balanceOf(owner, seeded.investment.id)).toBe(1_000_000n)
   })
 
   // ==========================================================================
@@ -439,9 +431,7 @@ describe("position-event corrections — switch & dividend reinvest", () => {
     // Nothing was reversed: A is still at 60, B still holds the blended units.
     const a = await holdingRow(owner, seeded.holdingA)
     expect(a?.quantity.toFixed(8)).toBe("60.00000000")
-    expect(await balanceOf(harness, owner, seeded.investment.id)).toBe(
-      1_160_000n
-    )
+    expect(await balanceOf(owner, seeded.investment.id)).toBe(1_160_000n)
   })
 
   test("DELETE a switch is rejected when a later SELL CLOSED the BUY leg (fund B)", async () => {
@@ -483,8 +473,8 @@ describe("position-event corrections — switch & dividend reinvest", () => {
 
   test("DELETE a switch is rejected after a reopen-THEN-reclose cascade on the closed leg", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(factories, owner)
-    const cash = await makeCashAccount(factories, owner)
+    const investment = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(owner)
     const buy = await buyFundA(owner, investment.id, cash.id)
     const instrumentA = buy.holding?.instrumentId ?? ""
 
@@ -577,8 +567,8 @@ describe("position-event corrections — switch & dividend reinvest", () => {
 
   test("DELETE a dividend reinvest is rejected after a later trade on the same position", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(factories, owner)
-    const cash = await makeCashAccount(factories, owner)
+    const investment = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(owner)
     const buy = await buyFundA(owner, investment.id, cash.id)
     await reinvestOn(owner, investment.id, buy.holding?.id ?? "")
     const [event] = await eventsOf(owner, investment.id)
@@ -645,8 +635,8 @@ describe("position-event corrections — switch & dividend reinvest", () => {
 
   test("a CASH dividend is not correctable here; it points at the destination account", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(factories, owner)
-    const cash = await makeCashAccount(factories, owner)
+    const investment = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(owner)
     const buy = await buyFundA(owner, investment.id, cash.id)
 
     await recordDistributionForFamily({
@@ -702,9 +692,7 @@ describe("position-event corrections — switch & dividend reinvest", () => {
 
     const a = await holdingRow(owner, seeded.holdingA)
     expect(a?.quantity.toFixed(8)).toBe("60.00000000")
-    expect(await balanceOf(harness, owner, seeded.investment.id)).toBe(
-      1_000_000n
-    )
+    expect(await balanceOf(owner, seeded.investment.id)).toBe(1_000_000n)
   })
 
   // ==========================================================================
@@ -714,7 +702,7 @@ describe("position-event corrections — switch & dividend reinvest", () => {
   test("CORRECT a switch: old event closed, corrected one live, both positions exact", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
     const seeded = await seedSwitch(owner)
-    const cashAfterSwitch = await balanceOf(harness, owner, seeded.cash.id)
+    const cashAfterSwitch = await balanceOf(owner, seeded.cash.id)
 
     // Meant to switch 25 units (not 40), at B = 5,000 (not 8,000):
     // proceeds 250,000 → 50 units of B; A keeps 75 @ 10,000.
@@ -740,12 +728,8 @@ describe("position-event corrections — switch & dividend reinvest", () => {
     expect(a?.quantity.toFixed(8)).toBe("75.00000000")
     expect(a?.avgUnitCostMinor).toBe(10_000n)
     // 75 × 10,000 + 50 × 5,000 = 1,000,000 — value conserved, no cash moved.
-    expect(await balanceOf(harness, owner, seeded.investment.id)).toBe(
-      1_000_000n
-    )
-    expect(await balanceOf(harness, owner, seeded.cash.id)).toBe(
-      cashAfterSwitch
-    )
+    expect(await balanceOf(owner, seeded.investment.id)).toBe(1_000_000n)
+    expect(await balanceOf(owner, seeded.cash.id)).toBe(cashAfterSwitch)
 
     // Exactly ONE open event: the corrected one, under a new id.
     const events = await eventsOf(owner, seeded.investment.id)
@@ -802,16 +786,14 @@ describe("position-event corrections — switch & dividend reinvest", () => {
     // 90 A @ 10,000 + 20 B @ 5,000 = 1,000,000.
     const a = await holdingRow(owner, seeded.holdingA)
     expect(a?.quantity.toFixed(8)).toBe("90.00000000")
-    expect(await balanceOf(harness, owner, seeded.investment.id)).toBe(
-      1_000_000n
-    )
+    expect(await balanceOf(owner, seeded.investment.id)).toBe(1_000_000n)
     expect(await eventsOf(owner, seeded.investment.id)).toHaveLength(1)
   })
 
   test("CORRECT a dividend reinvest re-derives units and cost basis", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(factories, owner)
-    const cash = await makeCashAccount(factories, owner)
+    const investment = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(owner)
     const buy = await buyFundA(owner, investment.id, cash.id)
     const holdingA = buy.holding?.id ?? ""
     await reinvestOn(owner, investment.id, holdingA)
@@ -861,9 +843,7 @@ describe("position-event corrections — switch & dividend reinvest", () => {
 
     const a = await holdingRow(owner, seeded.holdingA)
     expect(a?.quantity.toFixed(8)).toBe("75.00000000")
-    expect(await balanceOf(harness, owner, seeded.investment.id)).toBe(
-      1_000_000n
-    )
+    expect(await balanceOf(owner, seeded.investment.id)).toBe(1_000_000n)
     expect(await eventsOf(owner, seeded.investment.id)).toHaveLength(1)
   })
 
@@ -929,9 +909,7 @@ describe("position-event corrections — switch & dividend reinvest", () => {
     // Atomic: nothing reversed, nothing reapplied.
     const a = await holdingRow(owner, seeded.holdingA)
     expect(a?.quantity.toFixed(8)).toBe("60.00000000")
-    expect(await balanceOf(harness, owner, seeded.investment.id)).toBe(
-      1_160_000n
-    )
+    expect(await balanceOf(owner, seeded.investment.id)).toBe(1_160_000n)
   })
 
   test("CORRECT with the wrong kind is rejected", async () => {
@@ -976,9 +954,7 @@ describe("position-event corrections — switch & dividend reinvest", () => {
 
     const a = await holdingRow(owner, seeded.holdingA)
     expect(a?.quantity.toFixed(8)).toBe("60.00000000")
-    expect(await balanceOf(harness, owner, seeded.investment.id)).toBe(
-      1_000_000n
-    )
+    expect(await balanceOf(owner, seeded.investment.id)).toBe(1_000_000n)
     expect(await eventsOf(owner, seeded.investment.id)).toHaveLength(1)
   })
 
@@ -1012,9 +988,9 @@ describe("position-event corrections — switch & dividend reinvest", () => {
 
   test("the activity list shows switches and reinvests newest-first, scoped to the account", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(factories, owner)
-    const other = await makeInvestmentAccount(factories, owner)
-    const cash = await makeCashAccount(factories, owner)
+    const investment = await makeInvestmentAccount(owner)
+    const other = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(owner)
 
     const buy = await buyFundA(owner, investment.id, cash.id)
     await switchToFundB(owner, investment.id, buy.holding?.id ?? "")
@@ -1082,8 +1058,8 @@ describe("position-event corrections — switch & dividend reinvest", () => {
 
   test("getHoldingEventForCorrection prefills a reinvest with the recorded unit price", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
-    const investment = await makeInvestmentAccount(factories, owner)
-    const cash = await makeCashAccount(factories, owner)
+    const investment = await makeInvestmentAccount(owner)
+    const cash = await makeCashAccount(owner)
     const buy = await buyFundA(owner, investment.id, cash.id)
     await reinvestOn(owner, investment.id, buy.holding?.id ?? "")
     const [event] = await eventsOf(owner, investment.id)

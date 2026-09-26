@@ -4,18 +4,21 @@
  *
  * WHY THIS EXISTS: the SonarCloud PR-quality gate rejects a PR whose
  * `new_duplicated_lines_density` exceeds 3%. It counted one 31-line block — the
- * "Bibit" investment-account helper (together with the suite lifecycle that
- * every integration `describe` repeats) — as copy-paste shared across those
- * three suites, because they all seed the same brokerage + cash accounts. The
- * account helpers are the genuinely shared surface, so they live here once and
- * every involved suite imports them instead of re-declaring them inline.
+ * "Bibit" investment-account helper, together with the suite lifecycle that
+ * every integration `describe` repeats — as copy-paste shared across those
+ * three suites, because all three arrange the same brokerage + cash accounts.
+ * Those helpers are the genuinely shared surface, so they are built here once
+ * and each suite binds them instead of re-declaring them inline.
  *
- * Account creation is NOT re-implemented: this module delegates to
- * `holdings-fixtures.ts` — the suite-agnostic source of the same fixture shapes
- * — so the two cannot drift. It only pins the defaults these suites agree on
- * and adds the family-scoped balance reader that `holdings-fixtures` does not
- * carry (it needs the harness to open the RLS-scoped transaction).
+ * The harness and factories are read lazily (callbacks, not values) because
+ * every suite creates them inside `beforeAll`, i.e. after the `describe` body
+ * that performs the binding has already run.
+ *
+ * Account creation is NOT re-implemented: it delegates to
+ * `holdings-fixtures.ts`, the suite-agnostic source of the same fixture shapes,
+ * so the two cannot drift.
  */
+import type { SerializedAccount } from "@/server/accounts"
 import type { IntegrationHarness } from "./database"
 import type { AuthenticatedOnboardedUser, TestFactories } from "./factories"
 import {
@@ -23,37 +26,43 @@ import {
   makeInvestmentAccount as makeFixtureInvestmentAccount,
 } from "./holdings-fixtures"
 
-/**
- * A valuation-tracked "Bibit" brokerage account (TRACKED_ASSET → balanceSource
- * "valuation") owned by `owner`.
- */
-export const makeInvestmentAccount = (
-  factories: TestFactories,
-  owner: AuthenticatedOnboardedUser
-) => makeFixtureInvestmentAccount(factories, owner, "Bibit")
+/** The arrange helpers the holdings-driven integration suites agree on. */
+export interface HoldingSuiteFixtures {
+  /** A valuation-tracked "Bibit" brokerage account owned by `owner`. */
+  makeInvestmentAccount: (
+    owner: AuthenticatedOnboardedUser
+  ) => Promise<SerializedAccount>
+  /** A cash-like "Checking" funding account (opening 150,000 major). */
+  makeCashAccount: (
+    owner: AuthenticatedOnboardedUser
+  ) => Promise<SerializedAccount>
+  /** `accountId`'s stored balance, read inside `owner`'s family scope. */
+  balanceOf: (
+    owner: AuthenticatedOnboardedUser,
+    accountId: string
+  ) => Promise<bigint>
+}
 
 /**
- * A cash-like "Checking" funding account (DEPOSITORY → balanceSource
- * "transaction_flow"). Opening balance 150,000 major = 15,000,000 sen.
+ * Builds the suite's arrange helpers. Both suppliers are read lazily so a suite
+ * can create its harness and factories in `beforeAll`.
  */
-export const makeCashAccount = (
-  factories: TestFactories,
-  owner: AuthenticatedOnboardedUser
-) => makeFixtureCashAccount(factories, owner, "Checking", "150000")
-
-/**
- * Reads `accountId`'s stored balance from inside `owner`'s family scope; the
- * harness opens the RLS-scoped transaction, so callers never touch GUCs.
- */
-export const balanceOf = async (
-  harness: IntegrationHarness,
-  owner: AuthenticatedOnboardedUser,
-  accountId: string
-): Promise<bigint> =>
-  await harness.withFamily(owner.family.id, async (tx) => {
-    const row = await tx.account.findUniqueOrThrow({
-      where: { id: accountId },
-      select: { balance: true },
-    })
-    return row.balance
-  })
+export function createHoldingSuiteFixtures(
+  getHarness: () => IntegrationHarness,
+  getFactories: () => TestFactories
+): HoldingSuiteFixtures {
+  return {
+    makeInvestmentAccount: (owner) =>
+      makeFixtureInvestmentAccount(getFactories(), owner, "Bibit"),
+    makeCashAccount: (owner) =>
+      makeFixtureCashAccount(getFactories(), owner, "Checking", "150000"),
+    balanceOf: async (owner, accountId) =>
+      await getHarness().withFamily(owner.family.id, async (tx) => {
+        const row = await tx.account.findUniqueOrThrow({
+          where: { id: accountId },
+          select: { balance: true },
+        })
+        return row.balance
+      }),
+  }
+}
