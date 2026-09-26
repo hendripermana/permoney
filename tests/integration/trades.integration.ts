@@ -6,8 +6,6 @@ import {
   expect,
   test,
 } from "vite-plus/test"
-import type { AccountType } from "@/lib/accounts"
-import { createAccountForFamily } from "@/server/accounts"
 import {
   getAccountHoldingsForFamily,
   HoldingError,
@@ -21,11 +19,8 @@ import {
   createIntegrationHarness,
   type IntegrationHarness,
 } from "./support/database"
-import {
-  createTestFactories,
-  type AuthenticatedOnboardedUser,
-  type TestFactories,
-} from "./support/factories"
+import { createTestFactories, type TestFactories } from "./support/factories"
+import { createHoldingSuiteFixtures } from "./support/holding-suite-fixtures"
 
 // PER-198 / ADR-0051 — Buy / Sell atomic cash ↔ holding trade.
 // Money amounts are in MINOR units (IDR sen). Fixtures use exact-division
@@ -48,43 +43,11 @@ describe("buy/sell trades (PER-198 / ADR-0051)", () => {
     await harness.teardown()
   })
 
-  // A valuation-tracked investment account (TRACKED_ASSET → balanceSource
-  // "valuation").
-  const makeInvestmentAccount = async (owner: AuthenticatedOnboardedUser) =>
-    await createAccountForFamily({
-      data: {
-        name: "Bibit",
-        accountType: "TRACKED_ASSET" as AccountType,
-        accountSubtype: "brokerage",
-        openingBalance: "0",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
-
-  // A cash-like funding account (DEPOSITORY → balanceSource "transaction_flow").
-  // Opening balance 150,000 major = 15,000,000 sen.
-  const makeCashAccount = async (owner: AuthenticatedOnboardedUser) =>
-    await createAccountForFamily({
-      data: {
-        name: "Checking",
-        accountType: "DEPOSITORY" as AccountType,
-        openingBalance: "150000",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
-
-  const balanceOf = (owner: AuthenticatedOnboardedUser, accountId: string) =>
-    harness.withFamily(owner.family.id, async (tx) => {
-      const row = await tx.account.findUniqueOrThrow({
-        where: { id: accountId },
-        select: { balance: true },
-      })
-      return row.balance
-    })
+  const { makeInvestmentAccount, makeCashAccount, balanceOf } =
+    createHoldingSuiteFixtures(
+      () => harness,
+      () => factories
+    )
 
   const fundInline = { kind: "mutual_fund" as const, name: "Fund A" }
 

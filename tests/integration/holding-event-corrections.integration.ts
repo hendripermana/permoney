@@ -6,8 +6,6 @@ import {
   expect,
   test,
 } from "vite-plus/test"
-import type { AccountType } from "@/lib/accounts"
-import { createAccountForFamily } from "@/server/accounts"
 import {
   correctHoldingEventForFamily,
   deleteHoldingEventForFamily,
@@ -30,6 +28,7 @@ import {
   type AuthenticatedOnboardedUser,
   type TestFactories,
 } from "./support/factories"
+import { createHoldingSuiteFixtures } from "./support/holding-suite-fixtures"
 
 // PER-259 Slice 5 (second half) / ADR-0054 — edit / delete (correct) a SWITCH
 // or a DIVIDEND REINVEST.
@@ -63,40 +62,11 @@ describe("position-event corrections — switch & dividend reinvest", () => {
     await harness.teardown()
   })
 
-  const makeInvestmentAccount = async (owner: AuthenticatedOnboardedUser) =>
-    await createAccountForFamily({
-      data: {
-        name: "Bibit",
-        accountType: "TRACKED_ASSET" as AccountType,
-        accountSubtype: "brokerage",
-        openingBalance: "0",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
-
-  // Opening balance 150,000 major = 15,000,000 sen.
-  const makeCashAccount = async (owner: AuthenticatedOnboardedUser) =>
-    await createAccountForFamily({
-      data: {
-        name: "Checking",
-        accountType: "DEPOSITORY" as AccountType,
-        openingBalance: "150000",
-        idempotencyKey: factories.createIdempotencyKey(),
-      },
-      familyId: owner.family.id,
-      user: owner.user,
-    })
-
-  const balanceOf = (owner: AuthenticatedOnboardedUser, accountId: string) =>
-    harness.withFamily(owner.family.id, async (tx) => {
-      const row = await tx.account.findUniqueOrThrow({
-        where: { id: accountId },
-        select: { balance: true },
-      })
-      return row.balance
-    })
+  const { makeInvestmentAccount, makeCashAccount, balanceOf } =
+    createHoldingSuiteFixtures(
+      () => harness,
+      () => factories
+    )
 
   const holdingRow = (owner: AuthenticatedOnboardedUser, holdingId: string) =>
     harness.withFamily(owner.family.id, async (tx) =>
