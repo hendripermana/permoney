@@ -93,6 +93,11 @@ export async function signUpWithoutFamily(page: Page): Promise<SignupIdentity> {
 export async function completeOnboarding(page: Page): Promise<SignupIdentity> {
   const identity = await signUpWithoutFamily(page)
 
+  // F1 audit B2: the base currency is confirmed explicitly now (it is a
+  // one-way door), so the gate must be satisfied before Get Started enables.
+  await page
+    .getByRole("checkbox", { name: /reports will always be in/i })
+    .click()
   await page.getByRole("button", { name: "Get Started" }).click()
   await expectDashboardRoute(page)
 

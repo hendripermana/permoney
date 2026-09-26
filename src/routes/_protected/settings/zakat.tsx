@@ -16,6 +16,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { ConfirmDeleteDialog } from "@/components/blocks/confirm-delete-dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
@@ -221,6 +222,11 @@ function ZakatSettingsPage() {
       ),
   })
 
+  const [pendingDelete, setPendingDelete] = React.useState<{
+    id: string
+    displayName: string
+  } | null>(null)
+
   const deletePayer = useMutation({
     mutationFn: (id: string) =>
       deleteZakatPayerFn({ data: { id, idempotencyKey: createUuidV7() } }),
@@ -425,7 +431,12 @@ function ZakatSettingsPage() {
                       onRename={(displayName) =>
                         renamePayer.mutate({ id: payer.id, displayName })
                       }
-                      onDelete={() => deletePayer.mutate(payer.id)}
+                      onDelete={() =>
+                        setPendingDelete({
+                          id: payer.id,
+                          displayName: payer.displayName,
+                        })
+                      }
                     />
                   ))}
 
@@ -493,6 +504,23 @@ function ZakatSettingsPage() {
           </div>
         </SidebarInset>
       </SidebarProvider>
+      <ConfirmDeleteDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null)
+        }}
+        title={`Remove ${pendingDelete?.displayName ?? "this payer"}?`}
+        description="Their Zakat history stays in your records, but they will no longer be counted as a payer on any account."
+        confirmLabel="Remove"
+        pendingLabel="Removing…"
+        isPending={deletePayer.isPending}
+        onConfirm={() => {
+          if (!pendingDelete) return
+          deletePayer.mutate(pendingDelete.id, {
+            onSuccess: () => setPendingDelete(null),
+          })
+        }}
+      />
     </TooltipProvider>
   )
 }

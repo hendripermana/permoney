@@ -3,6 +3,7 @@ import { useServerFn } from "@tanstack/react-start"
 import { useRef, useState, useTransition } from "react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
+import { Checkbox } from "@/components/ui/checkbox"
 import { createUuidV7 } from "@/lib/uuid-v7"
 import { CURRENCIES } from "@/lib/data/currencies"
 import { CURRENCY_OPTIONS } from "@/lib/currency"
@@ -27,7 +28,20 @@ export function OnboardingPage() {
   const submitOnboarding = useServerFn(onboardFn)
   const idempotencyKeyRef = useRef<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [currency, setCurrency] = useState<string>("USD")
+  // F1 audit B2: the previous default was USD, in a product whose primary
+  // market is Indonesia and whose seeded data (categories, Zakat) is IDR-first
+  // — a first-run household had to notice and fix a wrong answer to a question
+  // it could not yet evaluate, on a field that is a one-way door.
+  //
+  // IDR is the honest default here. A locale-derived default was considered
+  // and rejected: the initial render is server-rendered, so reading
+  // `navigator.language` during it would either mismatch on hydration or need
+  // an effect (banned). The country quick-picks and the dropdown stay one
+  // click away for everyone else.
+  const [currency, setCurrency] = useState<string>("IDR")
+  // The explicit confirm step: the dropdown alone was too easy to leave at its
+  // default, and this value can never be changed afterwards.
+  const [currencyConfirmed, setCurrencyConfirmed] = useState(false)
   const [isPending, startTransition] = useTransition()
 
   function getIdempotencyKey() {
@@ -82,7 +96,10 @@ export function OnboardingPage() {
             className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
             value={currency}
             disabled={isPending}
-            onChange={(event) => setCurrency(event.target.value)}
+            onChange={(event) => {
+              setCurrency(event.target.value)
+              setCurrencyConfirmed(false)
+            }}
           >
             {CURRENCY_OPTIONS.map((option) => (
               <option key={option.code} value={option.code}>
@@ -100,7 +117,10 @@ export function OnboardingPage() {
                 key={pick.currency}
                 type="button"
                 disabled={isPending}
-                onClick={() => setCurrency(pick.currency)}
+                onClick={() => {
+                  setCurrency(pick.currency)
+                  setCurrencyConfirmed(false)
+                }}
                 className={
                   "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors " +
                   (currency === pick.currency
@@ -114,16 +134,31 @@ export function OnboardingPage() {
           </div>
         </div>
 
-        <p className="text-xs text-muted-foreground">
-          This is the currency all your reports are measured in. It’s chosen
-          once and can’t be changed later — but you can still add accounts in
-          any currency (USD, EUR, and more).
-        </p>
+        <div className="flex items-start gap-2.5 rounded-md border border-input bg-muted/40 p-3">
+          <Checkbox
+            id="currency-confirm"
+            checked={currencyConfirmed}
+            disabled={isPending}
+            onCheckedChange={(checked) =>
+              setCurrencyConfirmed(checked === true)
+            }
+          />
+          <div className="flex flex-col gap-1">
+            <Label htmlFor="currency-confirm" className="font-medium">
+              I understand: reports will always be in {currency}.
+            </Label>
+            <p className="text-xs text-muted-foreground">
+              Every total, report and trend is measured in {currency}, and this
+              can’t be changed later. You can still add accounts in any currency
+              (USD, EUR, and more) — their amounts get converted for reporting.
+            </p>
+          </div>
+        </div>
       </div>
 
       <Button
         onClick={handleSubmit}
-        disabled={isPending}
+        disabled={isPending || !currencyConfirmed}
         size="lg"
         className="w-full max-w-sm"
       >

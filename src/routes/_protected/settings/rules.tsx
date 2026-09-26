@@ -15,6 +15,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { ConfirmDeleteDialog } from "@/components/blocks/confirm-delete-dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -76,6 +77,11 @@ function RulesPage() {
         error instanceof Error ? error.message : "Could not add rule."
       ),
   })
+
+  const [pendingDelete, setPendingDelete] = React.useState<{
+    id: string
+    keyword: string
+  } | null>(null)
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteSmartRuleFn({ data: { id } }),
@@ -201,7 +207,12 @@ function RulesPage() {
                         </span>
                         <button
                           type="button"
-                          onClick={() => deleteMutation.mutate(rule.id)}
+                          onClick={() =>
+                            setPendingDelete({
+                              id: rule.id,
+                              keyword: rule.keyword,
+                            })
+                          }
                           className="text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:text-destructive"
                           aria-label="Delete rule"
                         >
@@ -234,6 +245,22 @@ function RulesPage() {
           </div>
         </SidebarInset>
       </SidebarProvider>
+
+      <ConfirmDeleteDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null)
+        }}
+        title={`Delete the rule for \u201c${pendingDelete?.keyword ?? ""}\u201d?`}
+        description="Future imports will stop matching this keyword automatically. Transactions it already categorised are not changed."
+        isPending={deleteMutation.isPending}
+        onConfirm={() => {
+          if (!pendingDelete) return
+          deleteMutation.mutate(pendingDelete.id, {
+            onSuccess: () => setPendingDelete(null),
+          })
+        }}
+      />
     </TooltipProvider>
   )
 }

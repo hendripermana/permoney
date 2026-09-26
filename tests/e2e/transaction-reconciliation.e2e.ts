@@ -74,20 +74,20 @@ test.describe("transaction-level reconciliation (PER-83 Slice 1)", () => {
     await expect(page.getByText("Pending", { exact: true })).toBeVisible()
 
     // --- Enter reconcile mode ---
-    await page.getByRole("button", { name: "Reconcile mode" }).click()
+    await page.getByRole("button", { name: "Match my statement" }).click()
     await expect(page.getByText("Enter the statement balance")).toBeVisible()
 
     // Exactly ONE checkbox renders — the PENDING row gets none at all (not
     // merely a disabled one), so this count alone proves the exclusion.
     const reconcileCheckboxes = page.getByRole("checkbox", {
-      name: "Reconcile transaction",
+      name: "Match transaction",
     })
     await expect(reconcileCheckboxes).toHaveCount(1)
 
     // --- Check the CLEARED row and enter the matching statement balance ---
     await reconcileCheckboxes.click()
     await expect(
-      page.getByRole("checkbox", { name: "Unreconcile transaction" })
+      page.getByRole("checkbox", { name: "Unmatch transaction" })
     ).toBeVisible()
     // The row itself now shows the persisted "Reconciled" badge.
     await expect(page.getByText("Reconciled", { exact: true })).toBeVisible()
@@ -99,11 +99,9 @@ test.describe("transaction-level reconciliation (PER-83 Slice 1)", () => {
     await expect(page.getByText("Matched", { exact: true })).toBeVisible()
 
     // --- Un-reconcile it: the badge and checkbox both revert ---
-    await page
-      .getByRole("checkbox", { name: "Unreconcile transaction" })
-      .click()
+    await page.getByRole("checkbox", { name: "Unmatch transaction" }).click()
     await expect(
-      page.getByRole("checkbox", { name: "Reconcile transaction" })
+      page.getByRole("checkbox", { name: "Match transaction" })
     ).toBeVisible()
     await expect(page.getByText("Reconciled", { exact: true })).toHaveCount(0)
   })

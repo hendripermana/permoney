@@ -57,7 +57,9 @@ test.describe("family invitation (ADR-0057)", () => {
     await waitForHydration(page)
     const row = page.getByRole("row", { name: new RegExp(invitee.email) })
     await expect(row).toBeVisible()
-    await expect(row.getByRole("combobox")).toContainText("viewer")
+    // The role picker now reads "Viewer — read only" (F1 audit B2.3); the
+    // stored value is still the lowercase enum.
+    await expect(row.getByRole("combobox")).toContainText(/Viewer/i)
   })
 
   test("an already-used invite link is reported as such", async ({

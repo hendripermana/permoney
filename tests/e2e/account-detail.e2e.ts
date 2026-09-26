@@ -73,14 +73,18 @@ test.describe("account detail (PER-216)", () => {
     // Reconcile opens the shared valuation dialog (which shows the Reserved cell
     // now that a reserve is set), asserts a new real balance, and the hero + the
     // safe-to-spend figure update after the refetch.
-    await page.getByRole("button", { name: "Reconcile", exact: true }).click()
+    await page
+      .getByRole("button", { name: "Set real balance", exact: true })
+      .click()
     const reconcileDialog = page.getByRole("dialog")
     await expect(
-      reconcileDialog.getByRole("heading", { name: "Reconcile account" })
+      reconcileDialog.getByRole("heading", { name: "Set real balance" })
     ).toBeVisible()
     await expect(reconcileDialog.getByText("Reserved")).toBeVisible()
     await reconcileDialog.getByLabel(/Real balance/i).fill("3000000")
-    await reconcileDialog.getByRole("button", { name: "Reconcile" }).click()
+    await reconcileDialog
+      .getByRole("button", { name: "Set real balance" })
+      .click()
     await expect(page.getByRole("dialog")).toHaveCount(0)
     // New balance materialized; safe-to-spend = 3,000,000 − 500,000 = 2,500,000.
     await expect(page.getByText("Rp 3,000,000.00").first()).toBeVisible()

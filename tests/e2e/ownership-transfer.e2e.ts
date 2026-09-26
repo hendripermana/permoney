@@ -74,11 +74,11 @@ test.describe("ownership transfer (PER-271)", () => {
     await expect(
       page
         .getByRole("row", { name: new RegExp(heir.email) })
-        .getByText("owner", { exact: true })
+        .getByText("Owner", { exact: true })
     ).toBeVisible()
 
     const ownerRow = page.getByRole("row", { name: new RegExp(owner.email) })
-    await expect(ownerRow.getByText("owner", { exact: true })).toHaveCount(0)
+    await expect(ownerRow.getByText("Owner", { exact: true })).toHaveCount(0)
 
     // The ex-owner (now admin) no longer sees the Transfer ownership action.
     await expect(
@@ -187,10 +187,10 @@ test.describe("ownership transfer (PER-271)", () => {
     await page.reload()
     await waitForHydration(page)
     const ownerRow = page.getByRole("row", { name: new RegExp(owner.email) })
-    await expect(ownerRow.getByText("owner", { exact: true })).toBeVisible()
+    await expect(ownerRow.getByText("Owner", { exact: true })).toBeVisible()
     const attackerRow = page.getByRole("row", {
       name: new RegExp(attacker.email),
     })
-    await expect(attackerRow.getByText("owner", { exact: true })).toHaveCount(0)
+    await expect(attackerRow.getByText("Owner", { exact: true })).toHaveCount(0)
   })
 })

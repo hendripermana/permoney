@@ -82,9 +82,13 @@ test.describe("valuation-linked transfer (PER-196 / ADR-0048)", () => {
     await page.goto("/transactions")
     await waitForHydration(page)
     // Only transaction on this fresh user's ledger — no scoping needed.
-    // The inline delete button confirms via a native window.confirm().
-    page.once("dialog", (dialog) => void dialog.accept())
+    // F1 audit B2.5 replaced the browser confirm() on the ledger's inline
+    // delete with a real confirmation dialog, so the delete is confirmed in
+    // the dialog rather than through `page.once("dialog")`.
     await page.getByRole("button", { name: "Delete Transaction" }).click()
+    const confirmDelete = page.getByRole("alertdialog")
+    await expect(confirmDelete).toBeVisible()
+    await confirmDelete.getByRole("button", { name: "Delete" }).click()
     await expect(page.getByText(`Pencairan ${suffix}`)).toHaveCount(0)
 
     await page.goto("/accounts")
