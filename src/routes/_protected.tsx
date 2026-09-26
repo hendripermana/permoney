@@ -65,7 +65,12 @@ function ProtectedRoutePending() {
  */
 function ProtectedRouteError({ error, reset }: ErrorComponentProps) {
   if (isBootUnreachableError(error)) {
-    return <BootUnreachablePanel error={error} onReload={() => reset()} />
+    // Deliberately NOT `reset()`: the router's boundary reset re-renders
+    // without re-running this layout's `beforeLoad`, so the panel would sit
+    // there looking like the button did nothing (verified in
+    // `tests/e2e/resilient-boot.e2e.ts`). A boot failure needs a real reload,
+    // which also re-runs the SSR pass. The panel's default does exactly that.
+    return <BootUnreachablePanel error={error} />
   }
 
   return (
