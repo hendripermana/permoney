@@ -361,6 +361,7 @@ export function AccountFormDialog({
             openingBalance: openingMinor,
             ...(openingBalanceAsOfDate ? { openingBalanceAsOfDate } : {}),
             institutionName: institutionName.trim() || null,
+            isImportable,
             ...(reserveMinor ? { reserveBalance: reserveMinor } : {}),
             ...(maskValue === undefined ? {} : { mask: maskValue }),
             ...(creditLimitMinor === undefined
@@ -403,7 +404,13 @@ export function AccountFormDialog({
 
   return (
     <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
-      <DialogContent>
+      {/* F1 CI fix: this form is long (type-specific fields, reserve, owner
+          controls) and the create-mode "Allow imports" block pushed the footer
+          past a 720 px viewport — where the dialog is centred and fixed, so
+          Playwright (and a short laptop window) could not reach the Create
+          button at all. Every other dialog in the repo already bounds itself
+          this way; the account form was the outlier. */}
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <DialogHeader>
             <DialogTitle>

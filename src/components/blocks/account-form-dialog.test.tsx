@@ -171,3 +171,49 @@ describe("AccountFormDialog owner controls (ADR-0058 D1)", () => {
     expect(setAccountZakatOwnershipFn).not.toHaveBeenCalled()
   })
 })
+
+describe("AccountFormDialog create-mode import flag (F1 audit B1)", () => {
+  it("offers 'Allow imports' while CREATING, not only while editing", async () => {
+    withCandidates({ activeMemberCount: 1, peopleCount: 0 })
+    renderDialog({ mode: "create" })
+
+    expect(screen.getByLabelText("Allow imports")).toBeTruthy()
+  })
+
+  it("persists the flag when it is ticked during creation", async () => {
+    withCandidates({ activeMemberCount: 1, peopleCount: 0 })
+    const { onSaved } = renderDialog({ mode: "create" })
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Imported Wallet" },
+    })
+    fireEvent.click(screen.getByLabelText("Allow imports"))
+    fireEvent.click(screen.getByRole("button", { name: "Create" }))
+
+    await waitFor(() => expect(createAccountFn).toHaveBeenCalledTimes(1))
+    const call = createAccountFn.mock.calls[0]?.[0] as {
+      data: { isImportable?: boolean }
+    }
+    expect(call.data.isImportable).toBe(true)
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+  })
+})
+
+describe("AccountFormDialog height bound (CI regression guard)", () => {
+  // The create-mode form is long, and Playwright runs a 1280x720 viewport. The
+  // dialog is centred and FIXED, so an unbounded, taller-than-viewport dialog
+  // puts its footer permanently outside the viewport — scrolling cannot reach a
+  // fixed element. That is exactly how #377 broke `account-detail.e2e.ts` and
+  // `dashboard.e2e.ts`: "element is outside of the viewport" after "done
+  // scrolling", 100+ retries, on a Create button that was visible and enabled.
+  // Every other dialog in the repo already bounds itself; this test is here so
+  // this one cannot quietly stop doing it.
+  it("bounds the content and scrolls it, so the footer stays reachable", () => {
+    withCandidates({ activeMemberCount: 1, peopleCount: 0 })
+    renderDialog({ mode: "create" })
+
+    const dialog = screen.getByRole("dialog")
+    expect(dialog.className).toContain("max-h-[90vh]")
+    expect(dialog.className).toContain("overflow-y-auto")
+  })
+})
