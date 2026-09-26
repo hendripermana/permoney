@@ -65,83 +65,139 @@ export const DESTRUCTIVE_RULES = [
 
 const DOLLAR_QUOTE_PATTERN = /^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/
 
+/** Overwrite `out[from..to)` with spaces, preserving newlines and offsets. */
+function blankRange(out, from, to) {
+  for (let i = from; i < to; i += 1) {
+    if (out[i] !== "\n") {
+      out[i] = " "
+    }
+  }
+}
+
+/** Blank one `-- line comment`; return the index just past it (at the newline). */
+function consumeLineComment(sql, index, out) {
+  const end = sql.indexOf("\n", index)
+  const stop = end === -1 ? sql.length : end
+  blankRange(out, index, stop)
+  return stop
+}
+
+/** Blank one `/* block comment *\/`; return the index just past the closer. */
+function consumeBlockComment(sql, index, out) {
+  const end = sql.indexOf("*/", index + 2)
+  const stop = end === -1 ? sql.length : end + 2
+  blankRange(out, index, stop)
+  return stop
+}
+
+/** Blank one quoted literal/identifier, honoring `''` escapes of a `'` quote. */
+function consumeQuotedLiteral(sql, index, out) {
+  const quote = sql[index]
+  let cursor = index + 1
+  while (cursor < sql.length) {
+    if (sql[cursor] === quote) {
+      if (quote === "'" && sql[cursor + 1] === "'") {
+        cursor += 2
+        continue
+      }
+      break
+    }
+    cursor += 1
+  }
+  const stop = Math.min(cursor + 1, sql.length)
+  blankRange(out, index, stop)
+  return stop
+}
+
+/**
+ * Record one dollar-quoted body (`$$…$$` or `$tag$…$tag$`) without blanking it
+ * yet: whether it executes depends on the statement prefix, decided once the
+ * whole scan is finished. Returns the index just past the closing tag, or
+ * `null` when `$` does not open a dollar quote (the caller advances one char).
+ */
+function consumeDollarQuote(sql, index, bodies) {
+  const opener = DOLLAR_QUOTE_PATTERN.exec(sql.slice(index))
+  if (!opener) {
+    return null
+  }
+  const tag = opener[0]
+  const closeAt = sql.indexOf(tag, index + tag.length)
+  const stop = closeAt === -1 ? sql.length : closeAt + tag.length
+  bodies.push({ start: index, end: stop })
+  return stop
+}
+
+/**
+ * Lexer dispatch table: one entry per token kind, each deciding whether it
+ * starts at `index` (`applies`) and consuming it (`consume`). Extracted from
+ * the former if/else chain so each detector stays independently readable.
+ * The token kinds never overlap, so table order is presentational only.
+ */
+const TOKEN_HANDLERS = [
+  {
+    applies: (sql, index) => sql[index] === "-" && sql[index + 1] === "-",
+    consume: (sql, index, { out }) => consumeLineComment(sql, index, out),
+  },
+  {
+    applies: (sql, index) => sql[index] === "/" && sql[index + 1] === "*",
+    consume: (sql, index, { out }) => consumeBlockComment(sql, index, out),
+  },
+  {
+    applies: (sql, index) => sql[index] === "'" || sql[index] === '"',
+    consume: (sql, index, { out }) => consumeQuotedLiteral(sql, index, out),
+  },
+  {
+    applies: (sql, index) => sql[index] === "$",
+    consume: (sql, index, { bodies }) => consumeDollarQuote(sql, index, bodies),
+  },
+]
+
+/**
+ * Advance past the token starting at `index`, blanking or recording it via the
+ * matching handler. Returns `null` when no token starts here, so the caller
+ * steps one character and keeps scanning.
+ */
+function consumeToken(sql, index, context) {
+  for (const handler of TOKEN_HANDLERS) {
+    if (handler.applies(sql, index)) {
+      const stop = handler.consume(sql, index, context)
+      if (stop !== null) {
+        return stop
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * Blank the dollar-quoted bodies that do NOT execute at migration time
+ * (`CREATE FUNCTION` bodies). A `DO $$…$$` block body does run, so it is left
+ * intact for the statement scan to see through.
+ */
+function blankNonExecutingDollarBodies(sql, out, bodies) {
+  for (const body of bodies) {
+    const statementStart = sql.lastIndexOf(";", body.start) + 1
+    const prefix = sql.slice(statementStart, body.start)
+    const executesAtMigrationTime = /^\s*DO\b/i.test(prefix)
+    if (!executesAtMigrationTime) {
+      blankRange(out, body.start, body.end)
+    }
+  }
+}
+
 /**
  * Blank comments, string literals, quoted identifiers and non-executing
  * dollar-quoted bodies while preserving offsets and line structure.
  */
 export function sanitizeSql(sql) {
   const out = sql.split("")
-  const blank = (from, to) => {
-    for (let i = from; i < to; i += 1) {
-      if (out[i] !== "\n") {
-        out[i] = " "
-      }
-    }
-  }
-
-  const dollarBodies = []
+  const context = { bodies: [], out }
   let index = 0
   while (index < sql.length) {
-    const char = sql[index]
-    const next = sql[index + 1]
-
-    if (char === "-" && next === "-") {
-      const end = sql.indexOf("\n", index)
-      blank(index, end === -1 ? sql.length : end)
-      index = end === -1 ? sql.length : end
-      continue
-    }
-
-    if (char === "/" && next === "*") {
-      const end = sql.indexOf("*/", index + 2)
-      const stop = end === -1 ? sql.length : end + 2
-      blank(index, stop)
-      index = stop
-      continue
-    }
-
-    if (char === "'" || char === '"') {
-      let cursor = index + 1
-      while (cursor < sql.length) {
-        if (sql[cursor] === char) {
-          if (char === "'" && sql[cursor + 1] === "'") {
-            cursor += 2
-            continue
-          }
-          break
-        }
-        cursor += 1
-      }
-      const stop = Math.min(cursor + 1, sql.length)
-      blank(index, stop)
-      index = stop
-      continue
-    }
-
-    if (char === "$") {
-      const opener = DOLLAR_QUOTE_PATTERN.exec(sql.slice(index))
-      if (opener) {
-        const tag = opener[0]
-        const closeAt = sql.indexOf(tag, index + tag.length)
-        const stop = closeAt === -1 ? sql.length : closeAt + tag.length
-        dollarBodies.push({ start: index, end: stop })
-        index = stop
-        continue
-      }
-    }
-
-    index += 1
+    const stop = consumeToken(sql, index, context)
+    index = stop === null ? index + 1 : stop
   }
-
-  for (const body of dollarBodies) {
-    const statementStart = sql.lastIndexOf(";", body.start) + 1
-    const prefix = sql.slice(statementStart, body.start)
-    const executesAtMigrationTime = /^\s*DO\b/i.test(prefix)
-    if (!executesAtMigrationTime) {
-      blank(body.start, body.end)
-    }
-  }
-
+  blankNonExecutingDollarBodies(sql, out, context.bodies)
   return out.join("")
 }
 
