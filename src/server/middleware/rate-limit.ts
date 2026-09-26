@@ -1,6 +1,7 @@
 import { Ratelimit } from "@upstash/ratelimit"
 import { Redis } from "@upstash/redis"
 import { getTrustedClientIp } from "./request-ip"
+import { logEvent } from "../log.server"
 
 export class RateLimitError extends Error {
   public remaining: number
@@ -24,13 +25,18 @@ let redisInitialized = false
 // env var VALUES here, only the fact/error, so this can't leak secrets.
 function logProductionDegradation(reason: string, error?: unknown): void {
   if (process.env.NODE_ENV !== "production") return
-  console.error(
-    `[rate-limit] ${reason} — falling back to a per-process in-memory ` +
-      `rate limiter, which is NOT distributed across instances and resets ` +
-      `on every restart. Brute-force protection is degraded. Set ` +
-      `UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN to restore it.`,
-    error instanceof Error ? error.message : error
-  )
+  // F1 audit S5.1: through the structured logger. `reason` is an internal
+  // string (which env var is missing / that Redis init threw), never a value.
+  logEvent({
+    level: "error",
+    event: "rate_limit_degraded",
+    errorName: error instanceof Error ? error.name : "none",
+    message:
+      `${reason} — falling back to a per-process in-memory rate limiter, ` +
+      `which is NOT distributed across instances and resets on every restart. ` +
+      `Brute-force protection is degraded. Set UPSTASH_REDIS_REST_URL and ` +
+      `UPSTASH_REDIS_REST_TOKEN to restore it.`,
+  })
 }
 
 function getRedis(): Redis | undefined {

@@ -152,6 +152,39 @@ services:
     profiles:
       - seed
 
+  # F1 audit S5.3 — the scheduled balance-drift audit (PER-268 detector,
+  # `auditTransactionFlowBalanceAcrossFamilies`). Read-only: it scans every
+  # family's transaction_flow accounts for stored-vs-canonical balance drift and
+  # prints ONE JSON summary. It exits 0 clean / 1 drift / 2 unauditable family,
+  # so a cron log + a non-zero exit is the whole alerting story until a real
+  # notification channel exists.
+  #
+  # Runs as the APP role (`DATABASE_URL`, non-superuser, RLS-enforced) — never
+  # the migrator/seed role: it needs no DDL and no privileged path, and the
+  # tenant reads must go through RLS GUC scoping exactly as the app does.
+  drift-audit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: build
+    container_name: permoney_prod_drift_audit
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required to audit balances}
+    command:
+      [
+        "./node_modules/.bin/tsx",
+        "scripts/per-268-balance-correction-audit.ts",
+        "verify",
+      ]
+    networks:
+      - permoney_prod_net
+    profiles:
+      - drift-audit
+
 networks:
   permoney_prod_net:
     driver: bridge
