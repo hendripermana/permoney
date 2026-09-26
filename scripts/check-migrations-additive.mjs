@@ -22,6 +22,7 @@
  *   node scripts/check-migrations-additive.mjs [--base <ref>] [--require-base]
  */
 
+import { accessSync, constants } from "node:fs"
 import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import {
@@ -33,17 +34,39 @@ import {
 const MIGRATIONS_PATHSPEC = "prisma/migrations/*/migration.sql"
 const FALLBACK_BASES = ["origin/main", "main", "origin/master"]
 
-// Root-owned system directories only (SonarCloud S4036): the guard must not
-// resolve `git` through a caller-controlled PATH, and /usr/local/* is
-// admin-writable, so it is deliberately absent. git lives in /usr/bin on
-// GitHub runners, Debian/Ubuntu/WSL and macOS.
-const FIXED_COMMAND_PATH = "/usr/bin:/bin"
+// Root-owned locations only, and the executable is passed to execFileSync as an
+// ABSOLUTE path (SonarCloud S4036): resolving `git` through a caller-controlled
+// PATH would let anyone who can write a PATH directory answer for the guard.
+// /usr/local/bin is admin-writable and therefore deliberately absent; macOS
+// developers using a Homebrew git can point PERMONEY_GIT_BIN at it explicitly,
+// which keeps the trust decision with the operator instead of the environment.
+const GIT_CANDIDATES = ["/usr/bin/git", "/bin/git"]
+
+let gitExecutable = null
+
+function resolveGitExecutable() {
+  const override = process.env.PERMONEY_GIT_BIN
+  if (override) {
+    return override
+  }
+  for (const candidate of GIT_CANDIDATES) {
+    try {
+      accessSync(candidate, constants.X_OK)
+      return candidate
+    } catch {
+      // Not executable here — try the next root-owned location.
+    }
+  }
+  throw new Error(
+    `git not found in ${GIT_CANDIDATES.join(", ")}. Set PERMONEY_GIT_BIN to an absolute path to git.`
+  )
+}
 
 function git(args) {
-  return execFileSync("git", args, {
+  gitExecutable ??= resolveGitExecutable()
+  return execFileSync(gitExecutable, args, {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, PATH: FIXED_COMMAND_PATH },
   })
 }
 

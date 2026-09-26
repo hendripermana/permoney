@@ -63,7 +63,7 @@ export const DESTRUCTIVE_RULES = [
   },
 ]
 
-const DOLLAR_QUOTE_PATTERN = /^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/
+const DOLLAR_QUOTE_PATTERN = /^\$[A-Za-z_]\w*\$|^\$\$/
 
 /** Overwrite `out[from..to)` with spaces, preserving newlines and offsets. */
 function blankRange(out, from, to) {
@@ -314,21 +314,19 @@ export function formatScanReport(results, { base } = {}) {
   for (const result of violations) {
     lines.push(`❌ ${result.path}`)
     for (const hit of result.violations) {
-      lines.push(`    line ${hit.line}: ${hit.ruleId} — ${hit.description}`)
-      lines.push(`      ${hit.statement}`)
+      lines.push(
+        `    line ${hit.line}: ${hit.ruleId} — ${hit.description}`,
+        `      ${hit.statement}`
+      )
     }
   }
 
   if (violations.length > 0) {
-    lines.push("")
     lines.push(
-      `❌ MIGRATION GUARD FAILED: ${violations.length} new migration file(s) contain destructive DDL.`
-    )
-    lines.push(
-      "If this is intentional, add a line to each file above containing:"
-    )
-    lines.push("    -- @destructive: <why this is safe and what it does>")
-    lines.push(
+      "",
+      `❌ MIGRATION GUARD FAILED: ${violations.length} new migration file(s) contain destructive DDL.`,
+      "If this is intentional, add a line to each file above containing:",
+      "    -- @destructive: <why this is safe and what it does>",
       "Prefer additive migrations (ADD COLUMN with a default, backfill, then tighten) over destructive ones."
     )
   } else if (allowed.length === 0) {
