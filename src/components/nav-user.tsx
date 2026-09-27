@@ -28,6 +28,31 @@ import { useServerFn } from "@tanstack/react-start"
 import { toast } from "sonner"
 import { logoutFn } from "@/server/auth-fns"
 
+/**
+ * The no-data state of the sidebar identity (PER-186 fetches it on mount).
+ *
+ * It is decorative: an empty `Skeleton` row carries no information, so it must
+ * not be exposed to assistive tech. It used to render as a `disabled`
+ * `SidebarMenuButton` with only skeleton children, and axe reported it on every
+ * protected page as a `button-name` violation (`<button class="…h-14…">` with
+ * no discernible text). Rendering through a Slot keeps the sidebar row geometry
+ * identical while removing the button role entirely, and `aria-hidden` keeps a
+ * screen reader from announcing an empty row.
+ */
+export function SidebarIdentitySkeleton() {
+  return (
+    <SidebarMenuButton asChild size="lg" className="cursor-default">
+      <div aria-hidden="true">
+        <Skeleton className="h-8 w-8 shrink-0 rounded-lg" />
+        <div className="grid flex-1 gap-1.5">
+          <Skeleton className="h-3.5 w-24 rounded" />
+          <Skeleton className="h-3 w-32 rounded" />
+        </div>
+      </div>
+    </SidebarMenuButton>
+  )
+}
+
 // PER-186 — a multi-account user cannot tell which account is live from a name
 // alone (two Permoney accounts belonging to the same person share a display
 // name). Initials come from the email local-part when it's ambiguous, so the
@@ -95,13 +120,7 @@ export function NavUser({ user }: { user: NavUserIdentity | undefined }) {
     return (
       <SidebarMenu>
         <SidebarMenuItem>
-          <SidebarMenuButton size="lg" disabled className="cursor-default">
-            <Skeleton className="h-8 w-8 shrink-0 rounded-lg" />
-            <div className="grid flex-1 gap-1.5">
-              <Skeleton className="h-3.5 w-24 rounded" />
-              <Skeleton className="h-3 w-32 rounded" />
-            </div>
-          </SidebarMenuButton>
+          <SidebarIdentitySkeleton />
         </SidebarMenuItem>
       </SidebarMenu>
     )
