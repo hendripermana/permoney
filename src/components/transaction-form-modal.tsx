@@ -3005,47 +3005,52 @@ function useTransactionFormModalController({
           // Hanya Update UI Lokal (Optimistic)
           // PENTING: Gunakan Immer Draft Pattern — mutate draft, JANGAN reassign!
           // (docs: "Passing an object instead of draft callback silently fails")
-          transactionCollection.update(editData.id, (draft) => {
-            draft.type = payload.type
-            draft.kind = payload.kind
-            draft.amount = payload.amount
-            draft.description = payload.description
-            draft.accountId = payload.accountId
-            draft.categoryId = payload.categoryId
-            draft.toAccountId = payload.toAccountId
-            draft.merchantId = payload.merchantId
-            draft.date = payload.date
-            draft.notes = payload.notes
-            draft.currency = payload.currency
-            ;(draft as Record<string, unknown>)["status"] = payload.status
-            ;(draft as Record<string, unknown>)["destinationAmount"] =
-              payload.destinationAmount
-            ;(draft as Record<string, unknown>)["destinationCurrency"] =
-              payload.destinationCurrency
-            ;(draft as Record<string, unknown>)["attachmentUrl"] =
-              payload.attachmentUrl
-            // PER-247: ephemeral fee + purpose inputs must ride on the draft
-            // so collections.onUpdate can forward them to updateTransactionFn
-            // (they are write-only, not collection columns).
-            ;(draft as Record<string, unknown>)["transferPurpose"] =
-              payload.transferPurpose
-            ;(draft as Record<string, unknown>)["feeAmount"] = payload.feeAmount
-            ;(draft as Record<string, unknown>)["feeAccountId"] =
-              payload.feeAccountId
-            ;(draft as Record<string, unknown>)["feeCategoryId"] =
-              payload.feeCategoryId
-            draft.updatedAt = payload.updatedAt
-            // Immer draft hanya mengenal scalar fields di schema collection-nya.
-            // Relasi dan field baru (account, isSplit, splitEntries) di-cast secara eksplisit.
-            const relationDraft =
-              draft as unknown as OptimisticTransactionRelationDraft
-            relationDraft.account = payload.account
-            relationDraft.toAccount = payload.toAccount
-            relationDraft.category = payload.category
-            relationDraft.merchant = payload.merchant
-            relationDraft.isSplit = payload.isSplit
-            relationDraft.splitEntries = payload.splitEntries
-          })
+          const persistence = transactionCollection.update(
+            editData.id,
+            (draft) => {
+              draft.type = payload.type
+              draft.kind = payload.kind
+              draft.amount = payload.amount
+              draft.description = payload.description
+              draft.accountId = payload.accountId
+              draft.categoryId = payload.categoryId
+              draft.toAccountId = payload.toAccountId
+              draft.merchantId = payload.merchantId
+              draft.date = payload.date
+              draft.notes = payload.notes
+              draft.currency = payload.currency
+              ;(draft as Record<string, unknown>)["status"] = payload.status
+              ;(draft as Record<string, unknown>)["destinationAmount"] =
+                payload.destinationAmount
+              ;(draft as Record<string, unknown>)["destinationCurrency"] =
+                payload.destinationCurrency
+              ;(draft as Record<string, unknown>)["attachmentUrl"] =
+                payload.attachmentUrl
+              // PER-247: ephemeral fee + purpose inputs must ride on the draft
+              // so collections.onUpdate can forward them to updateTransactionFn
+              // (they are write-only, not collection columns).
+              ;(draft as Record<string, unknown>)["transferPurpose"] =
+                payload.transferPurpose
+              ;(draft as Record<string, unknown>)["feeAmount"] =
+                payload.feeAmount
+              ;(draft as Record<string, unknown>)["feeAccountId"] =
+                payload.feeAccountId
+              ;(draft as Record<string, unknown>)["feeCategoryId"] =
+                payload.feeCategoryId
+              draft.updatedAt = payload.updatedAt
+              // Immer draft hanya mengenal scalar fields di schema collection-nya.
+              // Relasi dan field baru (account, isSplit, splitEntries) di-cast secara eksplisit.
+              const relationDraft =
+                draft as unknown as OptimisticTransactionRelationDraft
+              relationDraft.account = payload.account
+              relationDraft.toAccount = payload.toAccount
+              relationDraft.category = payload.category
+              relationDraft.merchant = payload.merchant
+              relationDraft.isSplit = payload.isSplit
+              relationDraft.splitEntries = payload.splitEntries
+            }
+          )
+          await persistence.isPersisted.promise
 
           // PER-145 — tags are a many-to-many relation, so they ride a direct
           // call to `setTransactionTagsFn` rather than the optimistic
@@ -3082,7 +3087,7 @@ function useTransactionFormModalController({
 
           // 2. CUKUP Insert ke UI Lokal saja!
           // Arsitektur kita di collections.ts (onInsert) akan melanjutkannya ke server secara gaib.
-          transactionCollection.insert({
+          const persistence = transactionCollection.insert({
             ...payload,
             id: optimisticId,
             idempotencyKey,
@@ -3125,6 +3130,11 @@ function useTransactionFormModalController({
             // this for real.
             tags: [],
           })
+          // Keep the dialog open until the server accepts the write. TanStack DB
+          // rolls back a rejected optimistic mutation; awaiting the same
+          // transaction makes that rejection visible in the form instead of
+          // closing the dialog and silently losing the user's input.
+          await persistence.isPersisted.promise
         }
 
         setIsOpen(false)
