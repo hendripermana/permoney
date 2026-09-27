@@ -8,6 +8,20 @@ updates:
       time: "08:00"
       timezone: Asia/Jakarta
     open-pull-requests-limit: 10
+    # Toolchain packages that vite-plus OWNS must never be bumped by the bot:
+    # vite-plus bundles its own vitest, and a mismatched coverage provider makes
+    # Vitest run mixed versions and print unreliable coverage (the unit job
+    # fails closed on exactly this drift). Pin it to the bundled version by hand
+    # whenever vite-plus itself moves.
+    ignore:
+      - dependency-name: "@vitest/coverage-v8"
+        # vite-plus, not npm, decides this version. See AGENTS.md ("Do not
+        # install Vitest, Oxlint, Oxfmt or tsdown directly") and the
+        # vite-plus bump policy further down this file.
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
     # Group all non-major updates into one PR per week to reduce noise;
     # majors and security patches still come as individual PRs.
     groups:
