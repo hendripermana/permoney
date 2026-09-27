@@ -1,5 +1,77 @@
+import type { Page } from "@playwright/test"
 import { expect, test } from "./support/fixtures"
 import { onboard, waitForHydration } from "./support/onboarding"
+
+async function createAccount(
+  page: Page,
+  input: {
+    name: string
+    openingBalance?: string
+    type?: "Credit Card"
+  }
+) {
+  await page.getByRole("button", { name: "New account" }).click()
+  await page.getByLabel("Name").fill(input.name)
+  if (input.type) {
+    await page.getByRole("combobox", { name: "Account type" }).click()
+    await page.getByRole("option", { name: input.type }).click()
+  }
+  if (input.openingBalance) {
+    await page.getByLabel("Opening balance").fill(input.openingBalance)
+  }
+  await page.getByRole("button", { name: "Create" }).click()
+  await expect(page.getByRole("dialog")).toHaveCount(0)
+}
+
+async function createPaymentAccounts(
+  page: Page,
+  input: {
+    bankName: string
+    bankBalance: string
+    cardName: string
+    cardDebt?: string
+  }
+) {
+  await page.goto("/accounts")
+  await waitForHydration(page)
+  await createAccount(page, {
+    name: input.bankName,
+    openingBalance: input.bankBalance,
+  })
+  await createAccount(page, {
+    name: input.cardName,
+    openingBalance: input.cardDebt,
+    type: "Credit Card",
+  })
+}
+
+async function submitCardPayment(
+  page: Page,
+  input: {
+    amount: string
+    bankName: string
+    cardName: string
+    note: string
+  }
+) {
+  await page.goto("/transactions")
+  await waitForHydration(page)
+  await page.getByRole("button", { name: "New Transaction" }).click()
+  await page.getByRole("tab", { name: "Transfer" }).click()
+  await page.getByLabel("Transfer Note *").fill(input.note)
+  await page.getByLabel("Amount *").fill(input.amount)
+  await page
+    .locator('select[name="accountId"]')
+    .selectOption({ label: `${input.bankName} (IDR)` })
+  await page
+    .locator('select[name="toAccountId"]')
+    .selectOption({ label: `${input.cardName} (IDR)` })
+  await page.getByRole("button", { name: "Save Transaction" }).click()
+}
+
+async function openAccount(page: Page, name: string) {
+  await page.getByRole("button", { name: `Open ${name}` }).click()
+}
 
 test.describe("credit-card payment transfer", () => {
   test.use({ viewport: { width: 1440, height: 900 } })
@@ -9,42 +81,23 @@ test.describe("credit-card payment transfer", () => {
     page,
   }) => {
     await onboard(page)
-
     const suffix = Date.now().toString(36)
     const bankName = `E2E Payment Bank ${suffix}`
     const cardName = `E2E Credit Card ${suffix}`
     const note = `Pay card ${suffix}`
 
-    await page.goto("/accounts")
-    await waitForHydration(page)
-
-    await page.getByRole("button", { name: "New account" }).click()
-    await page.getByLabel("Name").fill(bankName)
-    await page.getByLabel("Opening balance").fill("2000000")
-    await page.getByRole("button", { name: "Create" }).click()
-    await expect(page.getByRole("dialog")).toHaveCount(0)
-
-    await page.getByRole("button", { name: "New account" }).click()
-    await page.getByLabel("Name").fill(cardName)
-    await page.getByRole("combobox", { name: "Account type" }).click()
-    await page.getByRole("option", { name: "Credit Card" }).click()
-    await page.getByLabel("Opening balance").fill("1000000")
-    await page.getByRole("button", { name: "Create" }).click()
-    await expect(page.getByRole("dialog")).toHaveCount(0)
-
-    await page.goto("/transactions")
-    await waitForHydration(page)
-    await page.getByRole("button", { name: "New Transaction" }).click()
-    await page.getByRole("tab", { name: "Transfer" }).click()
-    await page.getByLabel("Transfer Note *").fill(note)
-    await page.getByLabel("Amount *").fill("400000")
-    await page
-      .locator('select[name="accountId"]')
-      .selectOption({ label: `${bankName} (IDR)` })
-    await page
-      .locator('select[name="toAccountId"]')
-      .selectOption({ label: `${cardName} (IDR)` })
-    await page.getByRole("button", { name: "Save Transaction" }).click()
+    await createPaymentAccounts(page, {
+      bankName,
+      bankBalance: "2000000",
+      cardName,
+      cardDebt: "1000000",
+    })
+    await submitCardPayment(page, {
+      amount: "400000",
+      bankName,
+      cardName,
+      note,
+    })
 
     await expect(page.getByRole("dialog")).toHaveCount(0)
     await expect(page.getByText(note)).toHaveCount(1)
@@ -54,11 +107,10 @@ test.describe("credit-card payment transfer", () => {
 
     await page.goto("/accounts")
     await waitForHydration(page)
-    await page.getByRole("button", { name: `Open ${bankName}` }).click()
+    await openAccount(page, bankName)
     await expect(page.getByText("Rp 1,600,000.00").first()).toBeVisible()
-
     await page.getByRole("link", { name: "Back to accounts" }).click()
-    await page.getByRole("button", { name: `Open ${cardName}` }).click()
+    await openAccount(page, cardName)
     await expect(page.getByText("Rp 600,000.00").first()).toBeVisible()
     await expect(page.getByText(/Needs reconcile|Balance drift/)).toHaveCount(0)
   })
@@ -67,40 +119,21 @@ test.describe("credit-card payment transfer", () => {
     page,
   }) => {
     await onboard(page)
-
     const suffix = Date.now().toString(36)
     const bankName = `E2E Overpay Bank ${suffix}`
     const cardName = `E2E Zero Card ${suffix}`
-    const note = `Rejected overpayment ${suffix}`
 
-    await page.goto("/accounts")
-    await waitForHydration(page)
-    await page.getByRole("button", { name: "New account" }).click()
-    await page.getByLabel("Name").fill(bankName)
-    await page.getByLabel("Opening balance").fill("1000000")
-    await page.getByRole("button", { name: "Create" }).click()
-    await expect(page.getByRole("dialog")).toHaveCount(0)
-
-    await page.getByRole("button", { name: "New account" }).click()
-    await page.getByLabel("Name").fill(cardName)
-    await page.getByRole("combobox", { name: "Account type" }).click()
-    await page.getByRole("option", { name: "Credit Card" }).click()
-    await page.getByRole("button", { name: "Create" }).click()
-    await expect(page.getByRole("dialog")).toHaveCount(0)
-
-    await page.goto("/transactions")
-    await waitForHydration(page)
-    await page.getByRole("button", { name: "New Transaction" }).click()
-    await page.getByRole("tab", { name: "Transfer" }).click()
-    await page.getByLabel("Transfer Note *").fill(note)
-    await page.getByLabel("Amount *").fill("400000")
-    await page
-      .locator('select[name="accountId"]')
-      .selectOption({ label: `${bankName} (IDR)` })
-    await page
-      .locator('select[name="toAccountId"]')
-      .selectOption({ label: `${cardName} (IDR)` })
-    await page.getByRole("button", { name: "Save Transaction" }).click()
+    await createPaymentAccounts(page, {
+      bankName,
+      bankBalance: "1000000",
+      cardName,
+    })
+    await submitCardPayment(page, {
+      amount: "400000",
+      bankName,
+      cardName,
+      note: `Rejected overpayment ${suffix}`,
+    })
 
     const dialog = page.getByRole("dialog")
     await expect(dialog).toBeVisible()
@@ -111,10 +144,10 @@ test.describe("credit-card payment transfer", () => {
 
     await page.goto("/accounts")
     await waitForHydration(page)
-    await page.getByRole("button", { name: `Open ${bankName}` }).click()
+    await openAccount(page, bankName)
     await expect(page.getByText("Rp 1,000,000.00").first()).toBeVisible()
     await page.getByRole("link", { name: "Back to accounts" }).click()
-    await page.getByRole("button", { name: `Open ${cardName}` }).click()
+    await openAccount(page, cardName)
     await expect(page.getByText("Rp 0.00").first()).toBeVisible()
   })
 })
