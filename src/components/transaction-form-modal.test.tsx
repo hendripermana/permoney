@@ -66,6 +66,9 @@ const captured = vi.hoisted(() => {
   return {
     inserts: [] as Array<Record<string, unknown>>,
     updates: [] as Array<Record<string, unknown>>,
+    persistence: {
+      error: null as Error | null,
+    },
     formData: {
       accounts: [
         account({
@@ -111,6 +114,13 @@ vi.mock("@/lib/collections", () => ({
   transactionCollection: {
     insert: (row: Record<string, unknown>) => {
       captured.inserts.push(row)
+      return {
+        isPersisted: {
+          promise: Promise.resolve().then(() => {
+            if (captured.persistence.error) throw captured.persistence.error
+          }),
+        },
+      }
     },
     update: (
       _id: string,
@@ -119,6 +129,11 @@ vi.mock("@/lib/collections", () => ({
       const draft: Record<string, unknown> = {}
       updater(draft)
       captured.updates.push(draft)
+      return {
+        isPersisted: {
+          promise: Promise.resolve(),
+        },
+      }
     },
     delete: () => undefined,
     utils: { refetch: async () => undefined },
@@ -180,6 +195,7 @@ const CASES: ReadonlyArray<{ typed: string; minor: bigint }> = [
 beforeEach(() => {
   captured.inserts.length = 0
   captured.updates.length = 0
+  captured.persistence.error = null
 })
 
 afterEach(cleanup)
@@ -296,6 +312,29 @@ describe("amount field — locale readings reach the ledger exactly", () => {
     await submit()
 
     expect(captured.inserts).toHaveLength(0)
+  })
+})
+
+describe("server persistence feedback", () => {
+  it("keeps the modal open and shows the server error when an optimistic insert rolls back", async () => {
+    captured.persistence.error = new Error(
+      "This payment would take the credit card balance positive."
+    )
+    await openDialog()
+    typeInto(/^Amount \*$/, "1000")
+    fireEvent.change(screen.getByLabelText("Description *"), {
+      target: { value: "Rejected payment" },
+    })
+    selectCategory()
+
+    await submit()
+
+    expect(
+      await screen.findByText(
+        /Could not save transaction: This payment would take the credit card balance positive\./
+      )
+    ).toBeTruthy()
+    expect(screen.getByRole("dialog")).toBeTruthy()
   })
 })
 
