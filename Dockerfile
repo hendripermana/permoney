@@ -1,10 +1,10 @@
 # =============================================================================
 # Permoney — production image (PER-192)
 # =============================================================================
-# Two stages: build the Nitro standalone server (`vp build`, see ADR-0003 and
-# docs/adr/0047-self-hosted-production-postgres.md), then ship only the
-# traced `.output/` runtime — no repo source, no build toolchain, no dev
-# dependencies in the final image.
+# Build the Nitro standalone server (`vp build`, see ADR-0003 and
+# docs/adr/0047-self-hosted-production-postgres.md), then publish separate
+# runtime and migrator targets from the same immutable source SHA. The app image
+# stays limited to the traced `.output/`; only the migrator carries Prisma.
 #
 # ARM64 NOTE (read before rebuilding on a different host): this image bundles
 # native modules (e.g. @node-rs/argon2's Better-Auth password hasher) that
@@ -31,9 +31,8 @@ WORKDIR /app
 # ubuntu-latest runners have both preinstalled already, which is why this
 # never surfaced there).
 RUN apt-get update && apt-get install -y --no-install-recommends git openssl ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN corepack enable
+    && rm -rf /var/lib/apt/lists/* \
+    && corepack enable
 
 # Layer-cache dependency install separately from source changes.
 COPY package.json pnpm-lock.yaml ./
@@ -70,3 +69,12 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+ (process.env.PORT||3005) +'/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 
 CMD ["node", ".output/server/index.mjs"]
+
+# -----------------------------------------------------------------------------
+# The migrator is a separate image: same source SHA, different least-privilege
+# payload. It intentionally contains Prisma's CLI/dependency graph and migration
+# history, none of which belongs in the long-running application image.
+FROM build AS migrate
+ENV NODE_ENV=production
+USER node
+CMD ["node", "node_modules/prisma/build/index.js", "migrate", "deploy"]
