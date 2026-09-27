@@ -236,6 +236,49 @@ export function allowsNegativeAssetBalance(accountType: AccountType): boolean {
   return NEGATIVE_BALANCE_ALLOWED_ACCOUNT_TYPE_SET.has(accountType)
 }
 
+/**
+ * ADR-0045 / DB check `account_normal_balance_sign`: the user-facing message
+ * for a write that would violate the balance-sign invariant, or `null` when
+ * the write stays inside it.
+ *
+ * Mirrors the Postgres CHECK exactly: only DEPOSITORY/E_WALLET assets may
+ * end negative (overdraft); LIABILITY balances (credit card, loan) are
+ * stored as negative amounts and can never end positive. The write path
+ * (`applyAccountBalanceDelta`, src/server/transactions.ts) rejects with this
+ * message as a readable 422 BEFORE Postgres can reject the same write as a
+ * raw `23514` Prisma error — the constraint stays the durable last line of
+ * defense, this is the user-facing front door.
+ */
+export function normalBalanceSignViolationMessage(args: {
+  accountClass: AccountClass
+  accountType: AccountType
+  balance: bigint
+  delta: bigint
+}): string | null {
+  const after = args.balance + args.delta
+  if (
+    args.accountClass === "ASSET" &&
+    after < 0n &&
+    !allowsNegativeAssetBalance(args.accountType)
+  ) {
+    return (
+      `This move would take the ${ACCOUNT_TYPE_LABEL[args.accountType].toLowerCase()} ` +
+      `account below zero, but that account type cannot hold a negative ` +
+      `balance. Only bank and e-wallet accounts may go negative — reduce ` +
+      `the amount or use a different account.`
+    )
+  }
+  if (args.accountClass === "LIABILITY" && after > 0n) {
+    return (
+      `This move would make the ${ACCOUNT_TYPE_LABEL[args.accountType].toLowerCase()} ` +
+      `balance positive, but credit card and loan balances can never be ` +
+      `positive. To reduce what this account owes, record a transfer from ` +
+      `another account into it instead.`
+    )
+  }
+  return null
+}
+
 // PER-239 / ADR-0051 — opt-in holdings tracking eligibility (pure).
 //
 // Genuine INVESTMENT accounts default to balanceSource="transaction_flow"

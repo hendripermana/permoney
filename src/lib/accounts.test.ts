@@ -15,6 +15,7 @@ import {
   isCashLikeAccount,
   isLiabilityAccountType,
   normalizeAccountTaxonomy,
+  normalBalanceSignViolationMessage,
 } from "./accounts"
 
 describe("account taxonomy", () => {
@@ -224,5 +225,100 @@ describe("holdings tracking eligibility (PER-239 / ADR-0051)", () => {
       status: "closed",
     })
     expect(result.eligible).toBe(false)
+  })
+})
+
+describe("normalBalanceSignViolationMessage (ADR-0045 sign invariant)", () => {
+  test("rejects an ASSET that would end below zero when the type forbids it", () => {
+    for (const t of [
+      "CASH",
+      "INVESTMENT",
+      "RECEIVABLE",
+      "TRACKED_ASSET",
+    ] as const) {
+      const msg = normalBalanceSignViolationMessage({
+        accountClass: "ASSET",
+        accountType: t,
+        balance: 100n,
+        delta: -101n,
+      })
+      expect(msg).not.toBeNull()
+      expect(msg).toMatch(/below zero/)
+    }
+  })
+
+  test("allows a DEPOSITORY/E_WALLET overdraft (negative final balance)", () => {
+    for (const t of ["DEPOSITORY", "E_WALLET"] as const) {
+      expect(
+        normalBalanceSignViolationMessage({
+          accountClass: "ASSET",
+          accountType: t,
+          balance: 10n,
+          delta: -1_000n,
+        })
+      ).toBeNull()
+    }
+  })
+
+  test("allows an ASSET that ends exactly at zero", () => {
+    expect(
+      normalBalanceSignViolationMessage({
+        accountClass: "ASSET",
+        accountType: "CASH",
+        balance: 100n,
+        delta: -100n,
+      })
+    ).toBeNull()
+  })
+
+  test("rejects a LIABILITY that would end positive", () => {
+    for (const t of ["CREDIT", "LOAN"] as const) {
+      const msg = normalBalanceSignViolationMessage({
+        accountClass: "LIABILITY",
+        accountType: t,
+        balance: -100n,
+        delta: 101n,
+      })
+      expect(msg).not.toBeNull()
+      expect(msg).toMatch(/positive/)
+    }
+  })
+
+  test("allows a LIABILITY that ends exactly at zero (paid off) or more negative", () => {
+    expect(
+      normalBalanceSignViolationMessage({
+        accountClass: "LIABILITY",
+        accountType: "CREDIT",
+        balance: -100n,
+        delta: 100n,
+      })
+    ).toBeNull()
+    expect(
+      normalBalanceSignViolationMessage({
+        accountClass: "LIABILITY",
+        accountType: "LOAN",
+        balance: -100n,
+        delta: -50n,
+      })
+    ).toBeNull()
+  })
+
+  test("returns null for a zero delta on a lawful account", () => {
+    expect(
+      normalBalanceSignViolationMessage({
+        accountClass: "ASSET",
+        accountType: "CASH",
+        balance: 100n,
+        delta: 0n,
+      })
+    ).toBeNull()
+    expect(
+      normalBalanceSignViolationMessage({
+        accountClass: "LIABILITY",
+        accountType: "CREDIT",
+        balance: -50n,
+        delta: 0n,
+      })
+    ).toBeNull()
   })
 })

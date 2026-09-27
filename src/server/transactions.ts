@@ -18,6 +18,11 @@ import {
   type Money,
 } from "@/lib/money"
 import { deriveTransferFx } from "@/lib/fx"
+import {
+  type AccountClass,
+  type AccountType,
+  normalBalanceSignViolationMessage,
+} from "@/lib/accounts"
 // PER-264 / PER-265 — `.server` hard fence (see that module's header).
 import { markAccountBalanceDirty } from "./anchor-rebuild.server"
 import {
@@ -288,6 +293,8 @@ export type AccountDeltaMap = Record<string, bigint>
 interface AccountBalanceVersion {
   balance: bigint
   balanceSource: string
+  accountClass: string
+  accountType: string
   id: string
   version: number
 }
@@ -779,6 +786,23 @@ export class ValuationAccountLedgerError extends Error {
   }
 }
 
+// ADR-0045: the DB check `account_normal_balance_sign` (only DEPOSITORY/
+// E_WALLET assets may end negative; LIABILITY balances can never end
+// positive) is durable defense — but when a normal single-transaction write
+// trips it, the user currently gets a raw Postgres `23514` Prisma error out
+// of `createTransactionFn` (observed in production: 18× in 15 min on one
+// family). This is the readable 422 `applyAccountBalanceDelta` raises from
+// the same choke point, BEFORE the constraint can fire, so the modal surfaces
+// an actionable message ("would take the cash account below zero…") instead
+// of an opaque database failure. The constraint itself is untouched.
+export class AccountBalanceSignError extends Error {
+  override readonly name = "AccountBalanceSignError"
+  readonly statusCode = 422
+  constructor(message: string) {
+    super(message)
+  }
+}
+
 // PER-196 / ADR-0048 §4: editing a valuation-linked transfer (one
 // Transaction leg + one Valuation leg) is not yet supported — the
 // reversal-and-replace path (replaceTransactionWithinTenantTransaction)
@@ -869,6 +893,24 @@ async function applyAccountBalanceDelta(
 
   await assertIncrementalBalanceWriteAllowed(tx, before)
 
+  // ADR-0045 — reject with a readable 422 the write that the DB invariant
+  // `account_normal_balance_sign` would otherwise reject with a raw Postgres
+  // 23514 (observed in production out of createTransactionFn). The predicate
+  // is pure, so in the common valid case this costs nothing; the GUC read
+  // fires only on the rare would-violate path, where it confirms the write is
+  // NOT a bulk ledger replay (replay legitimately passes through intermediate
+  // balances the live path would reject, via the same transaction-scoped GUC
+  // the CHECK itself bypasses, ADR-0044 §8).
+  const violation = normalBalanceSignViolationMessage({
+    accountClass: before.accountClass as AccountClass,
+    accountType: before.accountType as AccountType,
+    balance: before.balance,
+    delta,
+  })
+  if (violation && !(await isBulkLedgerReplayActive(tx))) {
+    throw new AccountBalanceSignError(violation)
+  }
+
   const update = await tx.account.updateMany({
     where: { id: accountId, familyId, version: before.version },
     data: {
@@ -927,7 +969,14 @@ async function findAccountBalanceVersion(
 ): Promise<AccountBalanceVersion> {
   const account = await tx.account.findFirst({
     where: { id: accountId, familyId },
-    select: { balance: true, balanceSource: true, id: true, version: true },
+    select: {
+      balance: true,
+      balanceSource: true,
+      accountClass: true,
+      accountType: true,
+      id: true,
+      version: true,
+    },
   })
   if (!account) {
     throw new Error(notFoundMessage)
