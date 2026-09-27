@@ -15,6 +15,7 @@ import {
   isCashLikeAccount,
   isLiabilityAccountType,
   normalizeAccountTaxonomy,
+  normalBalanceSignViolationMessage,
 } from "./accounts"
 
 describe("account taxonomy", () => {
@@ -224,5 +225,62 @@ describe("holdings tracking eligibility (PER-239 / ADR-0051)", () => {
       status: "closed",
     })
     expect(result.eligible).toBe(false)
+  })
+})
+
+describe("normalBalanceSignViolationMessage (ADR-0045 sign invariant)", () => {
+  function msg(
+    accountClass: "ASSET" | "LIABILITY",
+    accountType: string,
+    balance: bigint,
+    delta: bigint
+  ) {
+    return normalBalanceSignViolationMessage({
+      accountClass,
+      accountType: accountType as "CASH",
+      balance,
+      delta,
+    })
+  }
+
+  test("rejects an ASSET that would end below zero when the type forbids it", () => {
+    for (const t of [
+      "CASH",
+      "INVESTMENT",
+      "RECEIVABLE",
+      "TRACKED_ASSET",
+    ] as const) {
+      const message = msg("ASSET", t, 100n, -101n)
+      expect(message).not.toBeNull()
+      expect(message).toMatch(/below zero/)
+    }
+  })
+
+  test("allows a DEPOSITORY/E_WALLET overdraft (negative final balance)", () => {
+    for (const t of ["DEPOSITORY", "E_WALLET"] as const) {
+      expect(msg("ASSET", t, 10n, -1_000n)).toBeNull()
+    }
+  })
+
+  test("allows an ASSET that ends exactly at zero", () => {
+    expect(msg("ASSET", "CASH", 100n, -100n)).toBeNull()
+  })
+
+  test("rejects a LIABILITY that would end positive", () => {
+    for (const t of ["CREDIT", "LOAN"] as const) {
+      const message = msg("LIABILITY", t, -100n, 101n)
+      expect(message).not.toBeNull()
+      expect(message).toMatch(/positive/)
+    }
+  })
+
+  test("allows a LIABILITY that ends exactly at zero (paid off) or more negative", () => {
+    expect(msg("LIABILITY", "CREDIT", -100n, 100n)).toBeNull()
+    expect(msg("LIABILITY", "LOAN", -100n, -50n)).toBeNull()
+  })
+
+  test("returns null for a zero delta on a lawful account", () => {
+    expect(msg("ASSET", "CASH", 100n, 0n)).toBeNull()
+    expect(msg("LIABILITY", "CREDIT", -50n, 0n)).toBeNull()
   })
 })
