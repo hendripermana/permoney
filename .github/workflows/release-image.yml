@@ -1,0 +1,156 @@
+name: Release container image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  APP_IMAGE_NAME: hendripermana/permoney
+  MIGRATOR_IMAGE_NAME: hendripermana/permoney-migrate
+
+jobs:
+  release:
+    name: build, push, and smoke test (arm64)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: permoney_smoke
+          POSTGRES_DB: permoney_smoke
+          # Disposable runner-local database; no credential is created or stored.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U permoney_smoke -d permoney_smoke"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Generate application image metadata
+        id: app-meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.APP_IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.title=Permoney
+            org.opencontainers.image.description=Permoney production application
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Generate migrator image metadata
+        id: migrator-meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.MIGRATOR_IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.title=Permoney migrator
+            org.opencontainers.image.description=Permoney schema migrator
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Build and push application image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: runtime
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.app-meta.outputs.tags }}
+          labels: ${{ steps.app-meta.outputs.labels }}
+          cache-from: type=gha,scope=production-arm64
+          cache-to: type=gha,mode=max,scope=production-arm64
+
+      - name: Build and push migrator image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: migrate
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.migrator-meta.outputs.tags }}
+          labels: ${{ steps.migrator-meta.outputs.labels }}
+          cache-from: type=gha,scope=production-arm64
+          cache-to: type=gha,mode=max,scope=production-arm64
+
+      - name: Smoke test pushed SHA images
+        env:
+          APP_IMAGE: ${{ env.REGISTRY }}/${{ env.APP_IMAGE_NAME }}:${{ github.sha }}
+          MIGRATOR_IMAGE: ${{ env.REGISTRY }}/${{ env.MIGRATOR_IMAGE_NAME }}:${{ github.sha }}
+          SMOKE_DATABASE_URL: postgres://permoney_smoke@127.0.0.1:5432/permoney_smoke
+        run: |
+          set -euo pipefail
+          docker pull "$APP_IMAGE"
+          docker pull "$MIGRATOR_IMAGE"
+          docker run --rm --network host \
+            --env DATABASE_URL="$SMOKE_DATABASE_URL" \
+            "$MIGRATOR_IMAGE"
+          container_id="$(docker run --detach --rm \
+            --network host \
+            --env NODE_ENV=production \
+            --env HOST=0.0.0.0 \
+            --env PORT=3005 \
+            --env DATABASE_URL="$SMOKE_DATABASE_URL" \
+            --env BETTER_AUTH_SECRET=ci-smoke-${{ github.run_id }}-${{ github.run_attempt }} \
+            --env BETTER_AUTH_URL=http://127.0.0.1:3005 \
+            "$APP_IMAGE")"
+          trap 'docker logs "$container_id" || true; docker stop "$container_id" >/dev/null 2>&1 || true' EXIT
+
+          for attempt in $(seq 1 30); do
+            if response="$(curl --fail --silent --show-error http://127.0.0.1:3005/api/health)"; then
+              test "$response" = '{"status":"ok"}'
+              exit 0
+            fi
+            if ! docker inspect --format '{{.State.Running}}' "$container_id" | grep -qx true; then
+              echo "Permoney exited before becoming healthy" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+
+          echo "Permoney did not become healthy within 60 seconds" >&2
+          exit 1
+
+      - name: Publish main tags after smoke test
+        env:
+          APP_SHA_IMAGE: ${{ env.REGISTRY }}/${{ env.APP_IMAGE_NAME }}:${{ github.sha }}
+          APP_MAIN_IMAGE: ${{ env.REGISTRY }}/${{ env.APP_IMAGE_NAME }}:main
+          MIGRATOR_SHA_IMAGE: ${{ env.REGISTRY }}/${{ env.MIGRATOR_IMAGE_NAME }}:${{ github.sha }}
+          MIGRATOR_MAIN_IMAGE: ${{ env.REGISTRY }}/${{ env.MIGRATOR_IMAGE_NAME }}:main
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create --tag "$APP_MAIN_IMAGE" "$APP_SHA_IMAGE"
+          docker buildx imagetools create --tag "$MIGRATOR_MAIN_IMAGE" "$MIGRATOR_SHA_IMAGE"

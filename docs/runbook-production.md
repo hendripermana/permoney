@@ -16,11 +16,12 @@ for why Postgres is self-hosted here instead of managed.
   `tls`/auto-TLS directive for this domain — see the network-hardening notes
   below for why the box is intentionally not reachable on 443 from anywhere
   except Cloudflare's own edge IPs.
-- **App**: `docker-compose.prod.yml`, container `permoney_prod_app`, built
-  from the repo's `Dockerfile`, published to `127.0.0.1:3005` only (never
-  `0.0.0.0` — that would let anyone bypass Cloudflare and hit the app
-  directly, the same gap PER-192's network hardening closed for the host
-  firewall).
+- **App**: `docker-compose.prod.yml`, container `permoney_prod_app`, pulled
+  as a native-arm64 image from `ghcr.io/hendripermana/permoney`, published to
+  `127.0.0.1:3005` only (never `0.0.0.0` — that would let anyone bypass
+  Cloudflare and hit the app directly, the same gap PER-192's network
+  hardening closed for the host firewall). The Compose `build` stanza is an
+  emergency fallback only; routine deploys never build on the VM.
 - **Database**: `docker-compose.prod.yml`, container `permoney_prod_pg`
   (Postgres 16), no host-published port — reachable only from `permoney_prod_app`
   over the internal `permoney_prod_net` Docker network.
@@ -38,8 +39,15 @@ for why Postgres is self-hosted here instead of managed.
    BETTER_AUTH_URL=https://permana.icu
    PERMONEY_SEED_PRIVILEGED_DATABASE_URL=postgres://permoney_migrator:<migrator-password>@postgres:5432/permoney_prod
    ```
-3. `docker compose -f docker-compose.prod.yml build` (must run ON the arm64
-   VM — see the Dockerfile's ARM64 note; do not copy an x86-built image over).
+3. Confirm the `Release container image` GitHub Actions workflow has completed
+   successfully on `main`, then pull the released application and migrator:
+   ```bash
+   docker compose -f docker-compose.prod.yml --profile migrate pull app migrate
+   ```
+   Both native-arm64 images come from the same release SHA: the app image is
+   runtime-only, while `permoney-migrate` carries Prisma and migration history.
+   Do not build routinely on the VM; the retained Compose `build` stanza is only
+   for a documented GHCR outage or other break-glass recovery.
 4. `docker compose -f docker-compose.prod.yml up -d postgres` — wait for
    healthy.
 5. Provision roles, PASS 1 (before migrating): run `deploy/provision-postgres-roles.sql`
@@ -49,18 +57,13 @@ for why Postgres is self-hosted here instead of managed.
    2's `.env`. Expect the AuditLog `REVOKE` and the `GRANT ... ON ALL TABLES`
    line to error harmlessly on this pass — no tables exist yet. That's fine;
    `psql -f` continues past errors by default.
-6. The runtime `app` image only ships the traced `.output/` — it does NOT
-   contain the Prisma CLI or a full `node_modules`, so migrations/seeding
-   can't run through it. `docker-compose.prod.yml` defines a `migrate`
-   service for exactly this (CommandCode audit finding #9 — this used to be
-   an ad-hoc `docker build --target build` + hand-typed `docker run`, one
-   skipped step away from shipping an app version against a stale schema;
-   now it's a tracked, versioned Compose service instead). It builds the same
-   Dockerfile's `build` stage (full node_modules + Prisma CLI + migrations),
-   reads `DATABASE_URL` from `PERMONEY_SEED_PRIVILEGED_DATABASE_URL` in
-   `.env` (the `permoney_migrator` role — never `permoney_app`), and is
-   gated behind a `migrate` Compose profile so a bare `up -d` can never start
-   it as a long-running container:
+6. The published migrator image contains the generated Prisma CLI and immutable
+   migration history from the same source SHA as the runtime-only app image.
+   `docker-compose.prod.yml` runs it as a one-shot `migrate` service, reading `DATABASE_URL` from
+   `PERMONEY_SEED_PRIVILEGED_DATABASE_URL` in `.env` (the
+   `permoney_migrator` role — never `permoney_app`). It is gated behind a
+   `migrate` Compose profile so a bare `up -d` can never start it as a
+   long-running container:
    ```bash
    docker compose -f docker-compose.prod.yml --profile migrate run --rm migrate
    ```
@@ -85,23 +88,27 @@ for why Postgres is self-hosted here instead of managed.
 
 ## Deploy (subsequent releases)
 
+Wait for the `Release container image` workflow on `main` to finish. It builds
+natively on GitHub's public arm64 runner, publishes both the full commit SHA and
+`main` tags, and boot-tests the SHA image against a disposable Postgres before
+the workflow succeeds. Then deploy without building on the VM:
+
 ```bash
 cd /home/ubuntu/permoney-prod
-git fetch origin && git checkout main && git pull
-docker compose -f docker-compose.prod.yml build app migrate
+git fetch origin && git checkout main && git pull --ff-only
+docker compose -f docker-compose.prod.yml --profile migrate pull app migrate
 docker compose -f docker-compose.prod.yml --profile migrate run --rm migrate
 docker compose -f docker-compose.prod.yml up -d app
-curl -s http://127.0.0.1:3005/api/health   # expect {"status":"ok"}
+curl --fail --silent --show-error http://127.0.0.1:3005/api/health
+# expect {"status":"ok"}
 ```
 
-The `migrate` service (CommandCode audit finding #9) replaces the old
-hand-typed `docker build --target build -t permoney-prod-migrator:latest .`
-
-- `docker run` two-liner with a tracked Compose service — same underlying
-  mechanism (the runtime `app` image has no Prisma CLI, so migrations run
-  through the `build` stage instead), but no longer reconstructed from memory
-  on every release. It exits 0 immediately when there is nothing to migrate,
-  so running it on every deploy — migration-bearing or not — is always safe.
+`pull app migrate` is intentionally first: Compose resolves the runtime and
+migrator images to the same `${PERMONEY_IMAGE_TAG:-main}`, so both artifacts
+come from one source release. `migrate` exits 0 immediately when there
+is nothing pending, making it safe on every deploy. The retained `build`
+stanzas are break-glass fallbacks only; do not run `docker compose build` in a
+normal deployment.
 
 If the new release adds a migration that creates a new audit/immutable-ledger
 table, re-run `deploy/provision-postgres-roles.sql` afterward (pass 2 style)
@@ -109,16 +116,23 @@ to apply that table's REVOKE — see the SQL file's own caveat comment.
 
 ## Rollback
 
+Pin `PERMONEY_IMAGE_TAG` to a previously published full commit SHA. Do not use
+`main` for a rollback, and do not rebuild on the VM:
+
 ```bash
 cd /home/ubuntu/permoney-prod
-git checkout <previous-known-good-sha>
-docker compose -f docker-compose.prod.yml build app
+export PERMONEY_IMAGE_TAG=<previous-known-good-full-sha>
+docker compose -f docker-compose.prod.yml pull app
 docker compose -f docker-compose.prod.yml up -d app
+curl --fail --silent --show-error http://127.0.0.1:3005/api/health
+# expect {"status":"ok"}
 ```
 
+Keep `PERMONEY_IMAGE_TAG` exported for every subsequent Compose command during
+the incident, or persist that exact SHA in the production `.env` until the
+rollback is intentionally removed. A rollback does **not** run migrations.
 Rolling back past a migration that changed the schema requires restoring the
-matching backup (see below) rather than just rolling back the app image —
-never run a newer schema's migrations backward.
+matching backup (see below) rather than trying to run migrations backward.
 
 ## Backup
 
