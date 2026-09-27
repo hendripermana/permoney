@@ -14,7 +14,11 @@ import {
   createIntegrationHarness,
   type IntegrationHarness,
 } from "./support/database"
-import { createTestFactories, type TestFactories } from "./support/factories"
+import {
+  createTestFactories,
+  type AuthenticatedOnboardedUser,
+  type TestFactories,
+} from "./support/factories"
 
 // ADR-0045 — the DB check `account_normal_balance_sign` is the durable last
 // line of defense, but a write that trips it must surface to the user as a
@@ -58,6 +62,24 @@ describe("balance sign guard (ADR-0045) — readable 422 before the DB 23514", (
     return { account, category, owner }
   }
 
+  async function readAccount(accountId: string, familyId: string) {
+    return harness.withFamily(familyId, (tx) =>
+      tx.account.findUniqueOrThrow({ where: { id: accountId } })
+    )
+  }
+
+  async function attempt(
+    owner: AuthenticatedOnboardedUser,
+    data: Parameters<typeof createTransactionForFamily>[0]["data"]
+  ) {
+    return createTransactionForFamily({
+      data,
+      familyId: owner.family.id,
+      runInTenantTransaction: harness.withMember,
+      user: owner.user,
+    })
+  }
+
   function balancePayload(
     accountId: string,
     type: "expense" | "income",
@@ -78,17 +100,10 @@ describe("balance sign guard (ADR-0045) — readable 422 before the DB 23514", (
     const { account, owner } = await createOwnerWithAccount("CASH", 100n)
 
     await expect(
-      createTransactionForFamily({
-        data: balancePayload(account.id, "expense", 150n),
-        familyId: owner.family.id,
-        runInTenantTransaction: harness.withMember,
-        user: owner.user,
-      })
+      attempt(owner, balancePayload(account.id, "expense", 150n))
     ).rejects.toThrow(AccountBalanceSignError)
 
-    const after = await harness.withFamily(owner.family.id, (tx) =>
-      tx.account.findUniqueOrThrow({ where: { id: account.id } })
-    )
+    const after = await readAccount(account.id, owner.family.id)
     expect(after.balance).toBe(100n)
     const rows = await harness.withFamily(owner.family.id, (tx) =>
       tx.transaction.count({ where: { accountId: account.id } })
@@ -100,17 +115,10 @@ describe("balance sign guard (ADR-0045) — readable 422 before the DB 23514", (
     const { account, owner } = await createOwnerWithAccount("CASH", 100n)
 
     await expect(
-      createTransactionForFamily({
-        data: balancePayload(account.id, "expense", 100n),
-        familyId: owner.family.id,
-        runInTenantTransaction: harness.withMember,
-        user: owner.user,
-      })
+      attempt(owner, balancePayload(account.id, "expense", 100n))
     ).resolves.toEqual(expect.anything())
 
-    const after = await harness.withFamily(owner.family.id, (tx) =>
-      tx.account.findUniqueOrThrow({ where: { id: account.id } })
-    )
+    const after = await readAccount(account.id, owner.family.id)
     expect(after.balance).toBe(0n)
   })
 
@@ -118,17 +126,10 @@ describe("balance sign guard (ADR-0045) — readable 422 before the DB 23514", (
     const { account, owner } = await createOwnerWithAccount("DEPOSITORY", 0n)
 
     await expect(
-      createTransactionForFamily({
-        data: balancePayload(account.id, "expense", 50n),
-        familyId: owner.family.id,
-        runInTenantTransaction: harness.withMember,
-        user: owner.user,
-      })
+      attempt(owner, balancePayload(account.id, "expense", 50n))
     ).resolves.toEqual(expect.anything())
 
-    const after = await harness.withFamily(owner.family.id, (tx) =>
-      tx.account.findUniqueOrThrow({ where: { id: account.id } })
-    )
+    const after = await readAccount(account.id, owner.family.id)
     expect(after.balance).toBe(-50n)
   })
 
@@ -136,17 +137,10 @@ describe("balance sign guard (ADR-0045) — readable 422 before the DB 23514", (
     const { account, owner } = await createOwnerWithAccount("CREDIT", 0n)
 
     await expect(
-      createTransactionForFamily({
-        data: balancePayload(account.id, "income", 50n),
-        familyId: owner.family.id,
-        runInTenantTransaction: harness.withMember,
-        user: owner.user,
-      })
+      attempt(owner, balancePayload(account.id, "income", 50n))
     ).rejects.toThrow(AccountBalanceSignError)
 
-    const after = await harness.withFamily(owner.family.id, (tx) =>
-      tx.account.findUniqueOrThrow({ where: { id: account.id } })
-    )
+    const after = await readAccount(account.id, owner.family.id)
     expect(after.balance).toBe(0n)
   })
 
@@ -154,17 +148,10 @@ describe("balance sign guard (ADR-0045) — readable 422 before the DB 23514", (
     const { account, owner } = await createOwnerWithAccount("CREDIT", -100n)
 
     await expect(
-      createTransactionForFamily({
-        data: balancePayload(account.id, "income", 100n),
-        familyId: owner.family.id,
-        runInTenantTransaction: harness.withMember,
-        user: owner.user,
-      })
+      attempt(owner, balancePayload(account.id, "income", 100n))
     ).resolves.toEqual(expect.anything())
 
-    const after = await harness.withFamily(owner.family.id, (tx) =>
-      tx.account.findUniqueOrThrow({ where: { id: account.id } })
-    )
+    const after = await readAccount(account.id, owner.family.id)
     expect(after.balance).toBe(0n)
   })
 })
