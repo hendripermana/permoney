@@ -15,8 +15,8 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  APP_IMAGE_NAME: hendripermana/permoney
-  MIGRATOR_IMAGE_NAME: hendripermana/permoney-migrate
+  APP_IMAGE_NAME: hendripermana/permoney-app
+  MIGRATOR_IMAGE_NAME: hendripermana/permoney-migrator
 
 jobs:
   release:
