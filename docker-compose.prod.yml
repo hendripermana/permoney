@@ -44,7 +44,7 @@ services:
     # No `ports:` — intentionally not host-published. See header note.
 
   app:
-    image: ghcr.io/hendripermana/permoney:${PERMONEY_IMAGE_TAG:-main}
+    image: ghcr.io/hendripermana/permoney-app:${PERMONEY_IMAGE_TAG:-main}
     # Emergency fallback only. Normal deploys pull the prebuilt native-arm64
     # image from GHCR; use `docker compose build app` only if GHCR is unavailable.
     build:
@@ -109,7 +109,7 @@ services:
   # Exits 0 with nothing to do when there are no pending migrations, so it is
   # safe to run on every deploy, migration or not.
   migrate:
-    image: ghcr.io/hendripermana/permoney-migrate:${PERMONEY_IMAGE_TAG:-main}
+    image: ghcr.io/hendripermana/permoney-migrator:${PERMONEY_IMAGE_TAG:-main}
     # Emergency fallback only. Both targets are built from the same source SHA;
     # the migrator alone carries Prisma's CLI and migration history.
     build:
@@ -137,7 +137,7 @@ services:
   # never be `prisma db seed`, which also creates a demo tenant). Idempotent,
   # safe to re-run after a migration adds new system categories.
   seed:
-    image: ghcr.io/hendripermana/permoney-migrate:${PERMONEY_IMAGE_TAG:-main}
+    image: ghcr.io/hendripermana/permoney-migrator:${PERMONEY_IMAGE_TAG:-main}
     # Normal runs reuse the pulled release image; build is break-glass only.
     build:
       context: .
@@ -167,7 +167,7 @@ services:
   # the migrator/seed role: it needs no DDL and no privileged path, and the
   # tenant reads must go through RLS GUC scoping exactly as the app does.
   drift-audit:
-    image: ghcr.io/hendripermana/permoney-migrate:${PERMONEY_IMAGE_TAG:-main}
+    image: ghcr.io/hendripermana/permoney-migrator:${PERMONEY_IMAGE_TAG:-main}
     # Normal runs reuse the pulled release image; build is break-glass only.
     build:
       context: .

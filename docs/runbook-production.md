@@ -17,7 +17,7 @@ for why Postgres is self-hosted here instead of managed.
   below for why the box is intentionally not reachable on 443 from anywhere
   except Cloudflare's own edge IPs.
 - **App**: `docker-compose.prod.yml`, container `permoney_prod_app`, pulled
-  as a native-arm64 image from `ghcr.io/hendripermana/permoney`, published to
+  as a native-arm64 image from `ghcr.io/hendripermana/permoney-app`, published to
   `127.0.0.1:3005` only (never `0.0.0.0` — that would let anyone bypass
   Cloudflare and hit the app directly, the same gap PER-192's network
   hardening closed for the host firewall). The Compose `build` stanza is an
@@ -45,7 +45,7 @@ for why Postgres is self-hosted here instead of managed.
    docker compose -f docker-compose.prod.yml --profile migrate pull app migrate
    ```
    Both native-arm64 images come from the same release SHA: the app image is
-   runtime-only, while `permoney-migrate` carries Prisma and migration history.
+   runtime-only, while `permoney-migrator` carries Prisma and migration history.
    Do not build routinely on the VM; the retained Compose `build` stanza is only
    for a documented GHCR outage or other break-glass recovery.
 4. `docker compose -f docker-compose.prod.yml up -d postgres` — wait for
