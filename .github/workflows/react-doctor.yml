@@ -13,11 +13,11 @@ jobs:
   react-doctor:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
-      - uses: millionco/react-doctor@d741d58e7831e37c9f6a5528340c103059bd1ccf
+      - uses: millionco/react-doctor@631366777e01637f3c36b8a8c2ae8f19ba1060e8
         with:
           # `token` is not a recognized input for this action (valid inputs:
           # directory/project/scope/blocking/comment/review-comments/
