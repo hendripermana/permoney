@@ -5,6 +5,8 @@ import {
   bulkCreateTransactionsForFamily,
   createTransactionForFamily,
   deleteTransactionForFamily,
+  IdempotencyConflictError,
+  TransactionGoneError,
 } from "@/server/transactions"
 import {
   computeCanonicalBalance,
@@ -31,8 +33,9 @@ import { createTestFactories, type TestFactories } from "./support/factories"
 // found bug becomes a one-line repro, not a mystery.
 //
 // This first slice proves ONE invariant end-to-end (the "tracer bullet" per
-// CLAUDE.md §C): CONSERVATION. Later slices extend the same rig to idempotency
-// replay, delete replay, no-false-drift, tenant isolation, and concurrency.
+// CLAUDE.md §C): CONSERVATION. Slice 2 (this file) adds IDEMPOTENCY REPLAY and
+// Slice 3 DELETE REPLAY to the same rig; later slices extend it further to
+// no-false-drift, tenant isolation, and concurrency.
 //
 // ── CONSERVATION ────────────────────────────────────────────────────────────
 // For a single family, single currency, on transaction-flow accounts:
@@ -57,6 +60,68 @@ import { createTestFactories, type TestFactories } from "./support/factories"
 //
 // Runtime: each op is a real DB round-trip, so numRuns/maxLength are kept modest
 // and are the knobs to turn when we want a deeper (slower) sweep in CI nightly.
+//
+// ── IDEMPOTENCY REPLAY (Slice 2) ────────────────────────────────────────────
+//
+// The user-reported bug class this slice hunts: "I pressed Save, nothing
+// seemed to happen, so I pressed it again — and the transaction posted
+// twice" (network hang, browser hang, double click). The fuzzer now weaves
+// REPLAY ops into the same random sequences and asserts a three-clause
+// contract after every one of them:
+//
+//   C1 — FAITHFUL REPLAY (same key + byte-identical payload) is a pure read:
+//        it returns EXACTLY what the first call returned (not null, not an
+//        error — a retry must be invisible to the user), and it writes
+//        nothing: no new row, no balance movement, no second audit row, no
+//        extra bookkeeping in `Transfer` / `IdempotencyRecord`.
+//        QUALIFIER the fuzzer itself forced (seed 1647655216): the replay
+//        returns the CURRENT persisted row, so if a LATER op in the sequence
+//        legitimately changed that row (a soft-delete), the response reflects
+//        that change. Response equality is therefore asserted only while the
+//        row is untouched since the original call — the user's double-submit
+//        scenario — while "the ledger did not move" is asserted ALWAYS.
+//   C2 — CONFLICT (same key + mutated payload, e.g. amount + 1n) throws
+//        `IdempotencyConflictError` BEFORE touching anything; ledger state is
+//        bit-identical before and after, asserted first because "the state
+//        never moved" is the load-bearing half of the guarantee.
+//   C3 — Both mutation endpoints the sequence generator can reach are
+//        journaled and replayed: create (expense / income / transfer, via
+//        `replayIdempotentTransaction`) and delete (via
+//        `replayIdempotentEndpointResponse`).
+//
+// Deliberately OUT of this slice (later slices own them): parallel replay of
+// the same key (Slice 6 — concurrency), and bulk-delete replay (ADR-0033 pins
+// bulk as all-or-nothing; example-based 410 coverage already lives in
+// bulk-mutation-parity.integration.ts). Every replay op is journaled from a
+// mutation that actually succeeded, so the invariant is only ever asserted
+// over real, applied state.
+//
+// ── DELETE REPLAY (Slice 3) ──────────────────────────────────────────────────
+//
+// ADR-0032 §5: a NEW logical request — a fresh idempotency key — against an
+// already-soft-deleted transaction returns 410 Gone and must NEVER reverse a
+// balance a second time; only the ORIGINAL key replays `{ success: true }`
+// (Slice 2, C3). Deleting twice with the same key was proven in Slice 2;
+// this slice owns the DIFFERENT-key path, which the generator previously
+// could not even reach: `delete` spied its id out of the live list, so a dead
+// row was never re-targeted.
+//
+// The rig reaches that path two ways:
+//
+//   • a random `deleteAgain` op re-issues DELETE under a FRESH key against a
+//     row an earlier op already deleted. It is asserted inline, OUTSIDE the
+//     domain-rejection guard, for the same reason replay ops are: a thrown
+//     TransactionGoneError IS the passing contract here, and the guard's
+//     rejection regex would otherwise swallow it (or rethrow it) instead of
+//     judging it;
+//   • a deterministic TRANSFER seed: a transfer's reversal moves two accounts
+//     in OPPOSITE directions, so a double-reversal nets to ZERO in Σ balances
+//     — CONSERVATION alone is blind to it. That is why `ledgerSnapshot` now
+//     carries PER-ACCOUNT balances, and the seed pins ±amount exactly once.
+//
+// Coverage is a gate, not a lottery (Slice 1's "verified to have teeth"):
+// `withDeleteReplayProbe` guarantees every generated sequence actually FIRES
+// the probe, and `deleteAgainShots > 0` is asserted after `fc.assert`.
 
 const NUM_RUNS = 20
 const MAX_OPS = 8
@@ -87,33 +152,124 @@ type LedgerOp =
   | { kind: "income"; account: number; amount: bigint }
   | { kind: "transfer"; from: number; toOffset: number; amount: bigint }
   | { kind: "delete"; pick: number }
+  // Slice 2: re-issue a JOURNALED mutation — either verbatim (C1) or with a
+  // mutated payload under the same key (C2). `pick` selects the journal entry
+  // at apply time, exactly like `delete`'s selector against live rows.
+  | { kind: "replay"; mode: "faithful" | "conflict"; pick: number }
+  // Slice 3: re-issue DELETE against a row an earlier op ALREADY deleted,
+  // under a FRESH key — ADR-0032 §5's "new logical request" surface. The
+  // passing contract is 410 Gone with zero state movement, so this op's
+  // assertion lives OUTSIDE the domain-rejection guard. `pick` selects from
+  // the dead-row list at apply time.
+  | { kind: "deleteAgain"; pick: number }
 
 const amountArb = fc.bigInt({ min: 1n, max: 1_000_000n })
 const accountArb = fc.nat({ max: NUM_ACCOUNTS - 1 })
+const pickArb = fc.nat({ max: 10_000 })
 
+// Weighted so sequences still BUDGET money (3:3:3 for the balance-movers) while
+// delete (2) and faithful replay (2) stay frequent enough to actually land on a
+// non-empty journal inside an 8-op sequence. Conflict replay is weighted 1:
+// it costs the same two snapshots as a faithful replay but returns less signal
+// per run (the hash-mismatch path is also covered by the example-based
+// idempotency suites), and this file must not become the slow-test problem
+// PER-270 warned about — measured ~65-70s for CONSERVATION at NUM_RUNS=20
+// after Slice 2. `deleteAgain` is weighted 1 for the same cost reason (two
+// snapshots per shot); COVERAGE is not left to this weight — every sequence
+// is guaranteed at least one shot by `withDeleteReplayProbe` below.
 const opArb: fc.Arbitrary<LedgerOp> = fc.oneof(
-  fc.record({
-    kind: fc.constant("expense" as const),
-    account: accountArb,
-    amount: amountArb,
-  }),
-  fc.record({
-    kind: fc.constant("income" as const),
-    account: accountArb,
-    amount: amountArb,
-  }),
-  fc.record({
-    kind: fc.constant("transfer" as const),
-    from: accountArb,
-    // 1..NUM_ACCOUNTS-1, added modulo count => destination is never the source.
-    toOffset: fc.integer({ min: 1, max: NUM_ACCOUNTS - 1 }),
-    amount: amountArb,
-  }),
-  fc.record({
-    kind: fc.constant("delete" as const),
-    pick: fc.nat({ max: 10_000 }),
-  })
+  {
+    weight: 3,
+    arbitrary: fc.record({
+      kind: fc.constant("expense" as const),
+      account: accountArb,
+      amount: amountArb,
+    }),
+  },
+  {
+    weight: 3,
+    arbitrary: fc.record({
+      kind: fc.constant("income" as const),
+      account: accountArb,
+      amount: amountArb,
+    }),
+  },
+  {
+    weight: 3,
+    arbitrary: fc.record({
+      kind: fc.constant("transfer" as const),
+      from: accountArb,
+      // 1..NUM_ACCOUNTS-1, added modulo count => destination is never the source.
+      toOffset: fc.integer({ min: 1, max: NUM_ACCOUNTS - 1 }),
+      amount: amountArb,
+    }),
+  },
+  {
+    weight: 2,
+    arbitrary: fc.record({
+      kind: fc.constant("delete" as const),
+      pick: pickArb,
+    }),
+  },
+  {
+    weight: 2,
+    arbitrary: fc.record({
+      kind: fc.constant("replay" as const),
+      mode: fc.constant("faithful" as const),
+      pick: pickArb,
+    }),
+  },
+  {
+    weight: 1,
+    arbitrary: fc.record({
+      kind: fc.constant("replay" as const),
+      mode: fc.constant("conflict" as const),
+      pick: pickArb,
+    }),
+  },
+  {
+    weight: 1,
+    arbitrary: fc.record({
+      kind: fc.constant("deleteAgain" as const),
+      pick: pickArb,
+    }),
+  }
 )
+
+// Shots fired by `deleteAgain` across the whole property run — asserted > 0
+// after `fc.assert` so "the delete-replay contract was actually exercised"
+// can never be green by luck.
+let deleteAgainShots = 0
+
+/** Post-processing that makes delete-replay coverage a GATE, not a lottery.
+ *
+ * A `deleteAgain` is only meaningful once a row is dead, so the probe is
+ * spliced deterministically right after the LAST delete op of the sequence.
+ * When the generator produced no delete at all, a minimal
+ * [expense → delete → deleteAgain] tail is appended instead: the expense is
+ * tiny (1.000 IDR against a 100M float, so it can never be domain-rejected),
+ * which guarantees the delete has a live row to hit and the probe therefore
+ * always executes. Result: every run contributes at least one shot, and the
+ * `deleteAgainShots > 0` gate is structurally satisfiable — not a
+ * 1-in-many-runs probability. */
+function withDeleteReplayProbe(ops: LedgerOp[]): LedgerOp[] {
+  const next = [...ops]
+  const lastDelete = next.map((op) => op.kind === "delete").lastIndexOf(true)
+  if (lastDelete >= 0) {
+    next.splice(lastDelete + 1, 0, { kind: "deleteAgain", pick: 0 })
+    return next
+  }
+  next.push(
+    { kind: "expense", account: 0, amount: 1_000n },
+    { kind: "delete", pick: 0 },
+    { kind: "deleteAgain", pick: 0 }
+  )
+  return next
+}
+
+const sequenceArb: fc.Arbitrary<LedgerOp[]> = fc
+  .array(opArb, { maxLength: MAX_OPS })
+  .map(withDeleteReplayProbe)
 
 interface Fixture {
   familyId: string
@@ -208,65 +364,113 @@ function isExpectedDomainRejection(error: unknown): boolean {
 async function applyOps(fixture: Fixture, ops: LedgerOp[]): Promise<void> {
   const { familyId, user, accountIds } = fixture
   const liveTxIds: string[] = []
+  // Ids a delete has already taken off the board (Slice 3) — the ONLY rows a
+  // `deleteAgain` op may target.
+  const deletedTxIds: string[] = []
+  // Every mutation that SUCCEEDED, kept replayable verbatim (Slice 2). Only
+  // applied state is ever journaled — a rejected op leaves nothing to replay.
+  const journal: ReplayableMutation[] = []
 
   for (const op of ops) {
+    // Replay ops run OUTSIDE the domain-rejection guard below, deliberately:
+    // a failed `expect` here IS the property failing, and the guard's message
+    // regex (…|balance|…|check|…) would happily swallow it as an "expected
+    // rejection" — turning a red test silently green.
+    if (op.kind === "replay") {
+      if (journal.length === 0) continue
+      const entry = journal[op.pick % journal.length]
+      if (op.mode === "faithful") await assertFaithfulReplay(fixture, entry)
+      else await assertConflictingReplay(fixture, entry)
+      continue
+    }
+
+    // Slice 3 — same placement rationale as replay ops, doubled: here the
+    // PASSING outcome is a thrown TransactionGoneError, so inside the guard it
+    // would not merely risk being swallowed as an "expected rejection", it
+    // would be misjudged instead of asserted.
+    if (op.kind === "deleteAgain") {
+      if (deletedTxIds.length === 0) continue
+      await assertNoDoubleReversal(
+        fixture,
+        deletedTxIds[op.pick % deletedTxIds.length]
+      )
+      deleteAgainShots++
+      continue
+    }
+
     try {
       if (op.kind === "delete") {
         if (liveTxIds.length === 0) continue
         const idx = op.pick % liveTxIds.length
         const id = liveTxIds[idx]
-        await deleteTransactionForFamily({
+        const deleteKey = factories.createIdempotencyKey()
+        const result = await deleteTransactionForFamily({
           id,
-          idempotencyKey: factories.createIdempotencyKey(),
+          idempotencyKey: deleteKey,
           familyId,
           user,
         })
+        // A soft-delete REWRITES this row (deletedAt, updatedAt), so any
+        // create already journaled for it can no longer promise the ORIGINAL
+        // response on replay — only an unmoved ledger. Mark before pushing
+        // the delete entry so the delete's own `{ success: true }` contract
+        // (immutable, replayed from IdempotencyRecord) stays strict.
+        for (const entry of journal) {
+          if (entry.entityId === id) entry.rowTouchedLater = true
+        }
+        journal.push(journalDelete(fixture, id, deleteKey, result))
         liveTxIds.splice(idx, 1)
+        deletedTxIds.push(id)
         continue
       }
 
       const id = factories.createIdempotencyKey()
+      const createKey = factories.createIdempotencyKey()
       if (op.kind === "transfer") {
         const from = op.from % accountIds.length
         const to = (from + op.toOffset) % accountIds.length
-        await createTransactionForFamily({
-          data: {
-            id,
-            idempotencyKey: factories.createIdempotencyKey(),
-            accountId: accountIds[from],
-            toAccountId: accountIds[to],
-            amount: op.amount,
-            currency: "IDR",
-            date: new Date("2026-02-01T00:00:00.000Z"),
-            description: "Fuzz transfer",
-            type: "transfer",
-            isSplit: false,
-            status: "CLEARED",
-          },
+        const payload = {
+          id,
+          idempotencyKey: createKey,
+          accountId: accountIds[from],
+          toAccountId: accountIds[to],
+          amount: op.amount,
+          currency: "IDR",
+          date: new Date("2026-02-01T00:00:00.000Z"),
+          description: "Fuzz transfer",
+          type: "transfer",
+          isSplit: false,
+          status: "CLEARED",
+        }
+        const result = await createTransactionForFamily({
+          data: payload,
           familyId,
           user,
         })
+        journal.push(journalCreate(fixture, payload, createKey, result))
       } else {
-        await createTransactionForFamily({
-          data: {
-            id,
-            idempotencyKey: factories.createIdempotencyKey(),
-            accountId: accountIds[op.account % accountIds.length],
-            amount: op.amount,
-            categoryId:
-              op.kind === "expense"
-                ? fixture.expenseCategoryId
-                : fixture.incomeCategoryId,
-            currency: "IDR",
-            date: new Date("2026-02-01T00:00:00.000Z"),
-            description: `Fuzz ${op.kind}`,
-            type: op.kind,
-            isSplit: false,
-            status: "CLEARED",
-          },
+        const payload = {
+          id,
+          idempotencyKey: createKey,
+          accountId: accountIds[op.account % accountIds.length],
+          amount: op.amount,
+          categoryId:
+            op.kind === "expense"
+              ? fixture.expenseCategoryId
+              : fixture.incomeCategoryId,
+          currency: "IDR",
+          date: new Date("2026-02-01T00:00:00.000Z"),
+          description: `Fuzz ${op.kind}`,
+          type: op.kind,
+          isSplit: false,
+          status: "CLEARED",
+        }
+        const result = await createTransactionForFamily({
+          data: payload,
           familyId,
           user,
         })
+        journal.push(journalCreate(fixture, payload, createKey, result))
       }
       liveTxIds.push(id)
     } catch (error) {
@@ -294,11 +498,244 @@ async function readSums(
   }
 }
 
+// ── SLICE 2 — idempotency replay rig ────────────────────────────────────────
+
+/** A mutation that SUCCEEDED and can therefore be re-issued. The closures
+ * capture the exact payload/key that was used, so "identical payload" is
+ * identical BY CONSTRUCTION — the fuzzer never rebuilds one by hand, which is
+ * the only way a faithful-replay assertion can be trusted. */
+interface ReplayableMutation {
+  key: string
+  /** Whatever the first (successful) call returned — C1's response contract. */
+  result: unknown
+  /** The row this mutation created/removed, so a later delete of the SAME row
+   * can be detected (see `rowTouchedLater`). */
+  entityId: string
+  /** Flipped when a subsequent op mutates the entity: the response contract
+   * then compares against current state, not the original response. */
+  rowTouchedLater: boolean
+  replay: () => Promise<unknown>
+  /** Same key, mutated payload — C2's conflict trigger. */
+  replayDifferentPayload: () => Promise<unknown>
+}
+
+// The journal must keep the COMPLETE payload (a conflict replay re-sends it
+// with one field changed), so the payload type is carried generically from the
+// call site instead of being re-declared here — `createTransactionForFamily`
+// validates `data: unknown` against its Zod schema at runtime anyway.
+function journalCreate<
+  T extends { id: string; idempotencyKey: string; amount: bigint },
+>(
+  fixture: Fixture,
+  payload: T,
+  key: string,
+  result: unknown
+): ReplayableMutation {
+  return {
+    key,
+    result,
+    entityId: payload.id,
+    rowTouchedLater: false,
+    replay: () =>
+      createTransactionForFamily({
+        data: payload,
+        familyId: fixture.familyId,
+        user: fixture.user,
+      }),
+    // The real-world collision: the form was edited (one minor unit more) but
+    // the browser resubmitted the OLD key — must conflict, never post twice.
+    replayDifferentPayload: () =>
+      createTransactionForFamily({
+        data: { ...payload, amount: payload.amount + 1n },
+        familyId: fixture.familyId,
+        user: fixture.user,
+      }),
+  }
+}
+
+function journalDelete(
+  fixture: Fixture,
+  id: string,
+  key: string,
+  result: unknown
+): ReplayableMutation {
+  return {
+    key,
+    result,
+    entityId: id,
+    rowTouchedLater: false,
+    replay: () =>
+      deleteTransactionForFamily({
+        id,
+        idempotencyKey: key,
+        familyId: fixture.familyId,
+        user: fixture.user,
+      }),
+    // A different target under the same key hashes differently, so the
+    // endpoint must reject before it can reverse any balance a second time.
+    replayDifferentPayload: () =>
+      deleteTransactionForFamily({
+        id: factories.createIdempotencyKey(),
+        idempotencyKey: key,
+        familyId: fixture.familyId,
+        user: fixture.user,
+      }),
+  }
+}
+
+/** EVERYTHING a replay could plausibly have touched, read straight from
+ * Postgres in one tenant-scoped pass: balances, the live-amount sum (the C1/C2
+ * conservation halves), raw row counts (a hidden duplicate row would show up
+ * even if its balance delta were somehow zero), the Transfer and
+ * IdempotencyRecord bookkeeping tables, and the audit rows THIS key owns.
+ *
+ * `accountBalances` is the per-account form of `balances` (Slice 3): Σ across
+ * accounts NETS TO ZERO for a transfer reversal, so a transfer
+ * double-reversal — source +x again, destination −x again — is invisible to
+ * the sum but obvious here. Per-account balances are the direct statement of
+ * "no account moved twice"; the sum alone is not. */
+async function ledgerSnapshot(
+  fixture: Fixture,
+  auditKey: string
+): Promise<{
+  balances: bigint
+  accountBalances: Array<readonly [string, bigint]>
+  amounts: bigint
+  rows: number
+  transfers: number
+  idempotencyRecords: number
+  audits: number
+}> {
+  return await harness.withFamily(fixture.familyId, async (tx) => {
+    const accounts = await tx.account.findMany({
+      select: { id: true, balance: true },
+      orderBy: { id: "asc" },
+    })
+    const liveTransactions = await tx.transaction.findMany({
+      where: { deletedAt: null },
+      select: { amount: true },
+    })
+    const rows = await tx.transaction.count()
+    const transfers = await tx.transfer.count()
+    const idempotencyRecords = await tx.idempotencyRecord.count()
+    const audits = await tx.auditLog.count({
+      where: { idempotencyKey: auditKey },
+    })
+    return {
+      balances: accounts.reduce((sum, account) => sum + account.balance, 0n),
+      accountBalances: accounts.map(
+        (account) => [account.id, account.balance] as const
+      ),
+      amounts: liveTransactions.reduce((sum, t) => sum + t.amount, 0n),
+      rows,
+      transfers,
+      idempotencyRecords,
+      audits,
+    }
+  })
+}
+
+/** Direct read of ONE account's balance out of a snapshot — the shape the
+ * transfer seed needs to pin ±amount on each leg individually. */
+function balanceOf(
+  snapshot: Awaited<ReturnType<typeof ledgerSnapshot>>,
+  accountId: string
+): bigint {
+  const entry = snapshot.accountBalances.find(([id]) => id === accountId)
+  if (!entry) throw new Error(`Account ${accountId} missing from snapshot`)
+  return entry[1]
+}
+
+/** C1: a retry must be invisible — same ledger, and (unless a later op
+ * legitimately rewrote the row in between) the same response. */
+async function assertFaithfulReplay(
+  fixture: Fixture,
+  entry: ReplayableMutation
+): Promise<void> {
+  const before = await ledgerSnapshot(fixture, entry.key)
+  let result: unknown = null
+  let thrown: unknown = null
+  try {
+    result = await entry.replay()
+  } catch (error) {
+    thrown = error
+  }
+  const after = await ledgerSnapshot(fixture, entry.key)
+
+  // Order is the argument: prove the ledger never moved FIRST (that is the
+  // guarantee money rests on), then judge what the user's retry would see.
+  expect(after).toEqual(before)
+  expect(thrown).toBeNull()
+  // A replay returns the CURRENT row, not a cached one — so when a later op
+  // (a soft-delete of the same row) legitimately changed it, the response
+  // differs from the original *by design*, and demanding equality here would
+  // encode a wrong contract. The double-submit scenario has no such op, so
+  // untouched rows still get the strict comparison.
+  if (!entry.rowTouchedLater) {
+    expect(result).toEqual(entry.result)
+  }
+}
+
+/** C2: same key, different payload → 409 conflict, state untouched. */
+async function assertConflictingReplay(
+  fixture: Fixture,
+  entry: ReplayableMutation
+): Promise<void> {
+  const before = await ledgerSnapshot(fixture, entry.key)
+  let thrown: unknown = null
+  try {
+    await entry.replayDifferentPayload()
+  } catch (error) {
+    thrown = error
+  }
+  const after = await ledgerSnapshot(fixture, entry.key)
+
+  // Asserted first: even if the error type were wrong, "nothing moved" must
+  // hold unconditionally — a partial write here is the catastrophic case.
+  expect(after).toEqual(before)
+  expect(thrown).toBeInstanceOf(IdempotencyConflictError)
+}
+
+// ── SLICE 3 — delete replay (fresh key against a dead row) ──────────────────
+
+/** ADR-0032 §5's "new logical request": DELETE re-issued under a FRESH key
+ * against a row a previous op already soft-deleted. The passing contract is
+ * 410 `TransactionGoneError` with the ledger bit-identical — per-account
+ * balances included, because a transfer double-reversal nets to zero in Σ and
+ * would slip past the sums.
+ *
+ * Order is the argument (same discipline as `assertFaithfulReplay`): prove
+ * NOTHING moved first — that is the guarantee money rests on — then judge
+ * what the caller saw. */
+async function assertNoDoubleReversal(
+  fixture: Fixture,
+  id: string
+): Promise<void> {
+  const freshKey = factories.createIdempotencyKey()
+  const before = await ledgerSnapshot(fixture, freshKey)
+  let thrown: unknown = null
+  try {
+    await deleteTransactionForFamily({
+      id,
+      idempotencyKey: freshKey,
+      familyId: fixture.familyId,
+      user: fixture.user,
+    })
+  } catch (error) {
+    thrown = error
+  }
+  const after = await ledgerSnapshot(fixture, freshKey)
+
+  expect(after).toEqual(before)
+  expect(thrown).toBeInstanceOf(TransactionGoneError)
+}
+
 describe("ledger invariants (property-based, real Postgres) — PER-208", () => {
   test("CONSERVATION: Σ balances == Σ signed amounts across random op sequences", async () => {
+    deleteAgainShots = 0
     await fc.assert(
       fc
-        .asyncProperty(fc.array(opArb, { maxLength: MAX_OPS }), async (ops) => {
+        .asyncProperty(sequenceArb, async (ops) => {
           const fixture = await seedFixture()
           await applyOps(fixture, ops)
           const { balances, amounts } = await readSums(fixture.familyId)
@@ -309,6 +746,189 @@ describe("ledger invariants (property-based, real Postgres) — PER-208", () => 
         }),
       { numRuns: NUM_RUNS }
     )
+    // Coverage gate (Slice 3): the delete-replay contract above must have
+    // been FIRING during this run — a property that never executed its probe
+    // is green for the wrong reason.
+    expect(deleteAgainShots).toBeGreaterThan(0)
+  })
+
+  // ------------------------------------------------------------------------
+  // Deterministic regression seeds (the random property above owns coverage;
+  // these keep the ORIGINAL bugs readable as one-liners). Slice 2 owns the
+  // first two; Slice 3 owns the transfer delete-replay seed.
+  // ------------------------------------------------------------------------
+
+  test("REGRESSION — double submit: the same form posted twice (network hang) creates ONE transaction", async () => {
+    await harness.reset()
+    const fixture = await seedFixture()
+    const key = factories.createIdempotencyKey()
+    const payload = {
+      id: factories.createIdempotencyKey(),
+      idempotencyKey: key,
+      accountId: fixture.accountIds[0],
+      amount: 42_500n,
+      categoryId: fixture.expenseCategoryId,
+      currency: "IDR",
+      date: new Date("2026-03-04T00:00:00.000Z"),
+      description: "Double-submit regression",
+      type: "expense",
+      isSplit: false,
+      status: "CLEARED",
+    }
+
+    const first = await createTransactionForFamily({
+      data: payload,
+      familyId: fixture.familyId,
+      user: fixture.user,
+    })
+    const afterFirst = await ledgerSnapshot(fixture, key)
+
+    // The real report behind this ticket: the first click looked like nothing
+    // happened (network/browser hang), so the form went out again — identical
+    // payload, identical key. It must land like a no-op.
+    const second = await createTransactionForFamily({
+      data: payload,
+      familyId: fixture.familyId,
+      user: fixture.user,
+    })
+    const afterSecond = await ledgerSnapshot(fixture, key)
+
+    expect(second).toEqual(first) // C1: the retry is invisible to the user
+    expect(afterSecond).toEqual(afterFirst) // C1: not one byte of ledger moved
+    expect(afterSecond.audits).toBe(afterFirst.audits) // no second audit row
+
+    const rowsWithKey = await harness.withFamily(fixture.familyId, (tx) =>
+      tx.transaction.count({ where: { idempotencyKey: key } })
+    )
+    expect(rowsWithKey).toBe(1)
+
+    // Same key, edited amount → conflict, and still zero mutation.
+    let conflict: unknown = null
+    try {
+      await createTransactionForFamily({
+        data: { ...payload, amount: 42_501n },
+        familyId: fixture.familyId,
+        user: fixture.user,
+      })
+    } catch (error) {
+      conflict = error
+    }
+    expect(conflict).toBeInstanceOf(IdempotencyConflictError)
+    expect(await ledgerSnapshot(fixture, key)).toEqual(afterSecond)
+  })
+
+  test("REGRESSION — delete fired twice with the SAME key reverses the balance exactly once", async () => {
+    await harness.reset()
+    const fixture = await seedFixture()
+    const created = await createTransactionForFamily({
+      data: {
+        id: factories.createIdempotencyKey(),
+        idempotencyKey: factories.createIdempotencyKey(),
+        accountId: fixture.accountIds[0],
+        amount: 7_700n,
+        categoryId: fixture.expenseCategoryId,
+        currency: "IDR",
+        date: new Date("2026-03-05T00:00:00.000Z"),
+        description: "Delete-twice regression",
+        type: "expense",
+        isSplit: false,
+        status: "CLEARED",
+      },
+      familyId: fixture.familyId,
+      user: fixture.user,
+    })
+
+    const deleteKey = factories.createIdempotencyKey()
+    const beforeDelete = await ledgerSnapshot(fixture, deleteKey)
+
+    const firstDelete = await deleteTransactionForFamily({
+      id: created.id,
+      idempotencyKey: deleteKey,
+      familyId: fixture.familyId,
+      user: fixture.user,
+    })
+    const afterFirst = await ledgerSnapshot(fixture, deleteKey)
+    const secondDelete = await deleteTransactionForFamily({
+      id: created.id,
+      idempotencyKey: deleteKey,
+      familyId: fixture.familyId,
+      user: fixture.user,
+    })
+    const afterSecond = await ledgerSnapshot(fixture, deleteKey)
+
+    // Reversed exactly once: deleting the 7.700 expense hands back exactly
+    // its magnitude — no more (a second reversal would show 15.400).
+    expect(afterFirst.balances - beforeDelete.balances).toBe(7_700n)
+    expect(secondDelete).toEqual(firstDelete) // C1: same { success: true }
+    expect(afterSecond).toEqual(afterFirst) // no second reversal, ever
+  })
+
+  test("REGRESSION — delete replay: a FRESH key on an already-deleted transfer reverses nothing twice", async () => {
+    await harness.reset()
+    const fixture = await seedFixture()
+    const [sourceId, destId] = fixture.accountIds
+    const created = await createTransactionForFamily({
+      data: {
+        id: factories.createIdempotencyKey(),
+        idempotencyKey: factories.createIdempotencyKey(),
+        accountId: sourceId,
+        toAccountId: destId,
+        amount: 9_900n,
+        currency: "IDR",
+        date: new Date("2026-03-06T00:00:00.000Z"),
+        description: "Delete-replay transfer regression",
+        type: "transfer",
+        isSplit: false,
+        status: "CLEARED",
+      },
+      familyId: fixture.familyId,
+      user: fixture.user,
+    })
+
+    // First press, real ticket (firstKey): one reversal, proven PER ACCOUNT.
+    // A transfer nets to ZERO in Σ balances, so the sums in `ledgerSnapshot`
+    // cannot tell one reversal from two — the per-account legs are the only
+    // honest witness, and this is exactly why the snapshot carries them.
+    const firstKey = factories.createIdempotencyKey()
+    const beforeDelete = await ledgerSnapshot(fixture, firstKey)
+    const firstDelete = await deleteTransactionForFamily({
+      id: created.id,
+      idempotencyKey: firstKey,
+      familyId: fixture.familyId,
+      user: fixture.user,
+    })
+    const afterFirst = await ledgerSnapshot(fixture, firstKey)
+
+    expect(firstDelete).toEqual({ success: true })
+    // Source got its 9.900 back; destination gave back the 9.900 it received.
+    expect(
+      balanceOf(afterFirst, sourceId) - balanceOf(beforeDelete, sourceId)
+    ).toBe(9_900n)
+    expect(
+      balanceOf(afterFirst, destId) - balanceOf(beforeDelete, destId)
+    ).toBe(-9_900n)
+    expect(afterFirst.audits).toBeGreaterThan(0) // the reversal left evidence
+
+    // Second press, DIFFERENT ticket (fresh key) — ADR-0032 §5's "new
+    // logical request": 410 Gone, and not one byte of ledger may move.
+    const freshKey = factories.createIdempotencyKey()
+    const beforeSecond = await ledgerSnapshot(fixture, freshKey)
+    let thrown: unknown = null
+    try {
+      await deleteTransactionForFamily({
+        id: created.id,
+        idempotencyKey: freshKey,
+        familyId: fixture.familyId,
+        user: fixture.user,
+      })
+    } catch (error) {
+      thrown = error
+    }
+    const afterSecond = await ledgerSnapshot(fixture, freshKey)
+
+    expect(afterSecond).toEqual(beforeSecond) // state first: nothing, anywhere
+    expect(thrown).toBeInstanceOf(TransactionGoneError)
+    expect(afterSecond.audits).toBe(0) // no audit row under the fresh key
   })
 })
 
