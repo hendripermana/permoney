@@ -39,7 +39,8 @@ import { createTestFactories, type TestFactories } from "./support/factories"
 // This first slice proves ONE invariant end-to-end (the "tracer bullet" per
 // CLAUDE.md §C): CONSERVATION. Slice 2 (this file) adds IDEMPOTENCY REPLAY,
 // Slice 3 DELETE REPLAY, and Slice 4 NO FALSE DRIFT (valuation accounts) to the
-// same rig; later slices extend it further to tenant isolation and concurrency.
+// same rig; Slices 5 and 6 extend it further to tenant isolation and
+// concurrency.
 //
 // ── CONSERVATION ────────────────────────────────────────────────────────────
 // For a single family, single currency, on transaction-flow accounts:
@@ -94,7 +95,8 @@ import { createTestFactories, type TestFactories } from "./support/factories"
 //        `replayIdempotentEndpointResponse`).
 //
 // Deliberately OUT of this slice (later slices own them): parallel replay of
-// the same key (Slice 6 — concurrency), and bulk-delete replay (ADR-0033 pins
+// the same key — now owned by the CONCURRENCY section (Slice 6, EOF) — and
+// bulk-delete replay (ADR-0033 pins
 // bulk as all-or-nothing; example-based 410 coverage already lives in
 // bulk-mutation-parity.integration.ts). Every replay op is journaled from a
 // mutation that actually succeeded, so the invariant is only ever asserted
@@ -3359,5 +3361,619 @@ describe("tenant isolation (property-based, real Postgres) — PER-208", () => {
     // FIRING during this run — a property that never executed its probe is
     // green for the wrong reason.
     expect(tenantPoisonShots).toBeGreaterThan(0)
+  })
+})
+
+// ── SLICE 6 — concurrency (parallel mutations, no lost update) ──────────────
+//
+// Ticket: "parallel mutations on the same account never lose an update."
+// The example-based suites (concurrency.integration.ts / PER-18,
+// transaction-idempotency, idempotent-mutations) each prove ONE hand-picked
+// race: two transfers, three transfers, a bulk-vs-single pair, update-vs-
+// delete. What nobody enumerates is the ARBITRARY MIX — 2..4 mutations of
+// different kinds issued at the SAME instant against the SAME account, over
+// random amounts, batch after batch.
+//
+// The pg constraint that shapes this rig: a Prisma interactive transaction is
+// ONE pg connection (file docstring of src/server/validation/tenant-references.ts
+// — pg@9 rejects concurrent queries on a single `tx`). So every racer here is
+// its OWN server-function call fired through Promise.allSettled: each one runs
+// its own scopedTenantTransaction → its own pooled connection, and the race is
+// genuinely interleaved transactions on one Postgres — never two queries
+// sharing one connection.
+//
+// Contract after EVERY batch — the "scoreboard", all reads straight from
+// Postgres:
+//   A1 — every racer SETTLES: fulfilled, or rejected with a KNOWN class
+//        (domain rejection; TransactionGoneError from the sibling that won a
+//        same-row tombstone race; BalanceConflictError when the bounded retry
+//        budget is exhausted — each rolls back cleanly, contributing zero
+//        state). An unknown error, or a batch that never settles within
+//        RACE_BATCH_TIMEOUT_MS (deadlock / lost liveness), fails the property.
+//   A2 — NO LOST UPDATE: each account's balance after == before + Σ signed
+//        deltas of the racers that ACTUALLY committed. A committed write that
+//        never lands, or lands twice, breaks this sum directly.
+//   A3 — Account.version after == before + committed mutations on that
+//        account: applyAccountBalanceDelta's optimistic CAS advances the lock
+//        exactly once per applied delta — never twice, never zero. (Fixture
+//        accounts are factory rows with NO anchor, so the ground-truth flush
+//        seam can never add a stray bump: rebuildIfGroundTruthAnchored
+//        returns early on anchor === null.)
+//   A4 — double-submit: ONE idempotency key fired TWICE in parallel — the
+//        "parallel replay of the same key" the Slice 2 docstring deferred to
+//        this slice — commits at most ONCE, counted once in A2/A3 no matter
+//        how many of its fires fulfilled.
+//   A5 — CONSERVATION still holds across the family after every batch: the
+//        backstop that catches a double reversal every individual op
+//        reported as success.
+//
+// Scope guards keeping the scoreboard exact:
+//   • ONE currency (IDR), transaction_flow accounts only (Slice 1's guard);
+//   • `deleteLive` targets SINGLE-LEG rows on the race account only — deleting
+//     a transfer graph moves both accounts at once and is already owned by
+//     PER-18's update-vs-delete race plus this rig's Slice 3 seeds;
+//   • every delete binds its target from the live-row list as it was BEFORE
+//     the batch, so two deletes can race onto the SAME row (exactly one wins;
+//     the loser must report TransactionGoneError), while a row created INSIDE
+//     a batch only becomes deletable in a LATER batch — expectations never
+//     depend on interleaving luck;
+//   • op results are judged by a pure predicate over the rejected reason, and
+//     every scoreboard `expect` runs OUTSIDE any guard afterwards (Slice 2/3
+//     lesson): a failed expectation can never be swallowed as an "expected
+//     rejection" by isExpectedDomainRejection's message regex.
+//
+// Coverage is a gate, not a lottery: `withRaceProbe` guarantees every run's
+// first batch carries a parallel double-submit AND a delete against a seeded
+// live row, and `raceShots` / `doubleSubmitShots` / `raceDeleteShots` are
+// each asserted > 0 after `fc.assert`.
+
+const NUM_RACE_RUNS = 6
+const MAX_RACE_BATCHES = 2
+const MIN_RACE_BATCH_OPS = 2
+const MAX_RACE_BATCH_OPS = 4
+const RACE_BATCH_TIMEOUT_MS = 10_000
+
+type RaceOp =
+  | { kind: "expense"; amount: bigint }
+  | { kind: "income"; amount: bigint }
+  | { kind: "transferOut"; amount: bigint }
+  | { kind: "deleteLive"; pick: number }
+  | { kind: "doubleSubmit"; amount: bigint }
+
+const raceOpArb: fc.Arbitrary<RaceOp> = fc.oneof(
+  {
+    weight: 3,
+    arbitrary: fc.record({
+      kind: fc.constant("expense" as const),
+      amount: amountArb,
+    }),
+  },
+  {
+    weight: 3,
+    arbitrary: fc.record({
+      kind: fc.constant("income" as const),
+      amount: amountArb,
+    }),
+  },
+  {
+    weight: 3,
+    arbitrary: fc.record({
+      kind: fc.constant("transferOut" as const),
+      amount: amountArb,
+    }),
+  },
+  {
+    weight: 2,
+    arbitrary: fc.record({
+      kind: fc.constant("deleteLive" as const),
+      pick: pickArb,
+    }),
+  },
+  {
+    weight: 2,
+    arbitrary: fc.record({
+      kind: fc.constant("doubleSubmit" as const),
+      amount: amountArb,
+    }),
+  }
+)
+
+// Shots across the whole run — each asserted > 0 after `fc.assert` so "the
+// race / same-key double-submit / delete path actually fired" can never be
+// green by luck (same discipline as deleteAgainShots / tenantPoisonShots).
+let raceShots = 0
+let doubleSubmitShots = 0
+let raceDeleteShots = 0
+
+/** Post-processing that makes concurrency coverage a GATE, not a lottery:
+ * every run fires at least one batch, and that first batch always carries a
+ * parallel double-submit plus a delete against a seeded live row. */
+function withRaceProbe(batches: RaceOp[][]): RaceOp[][] {
+  const next = batches.map((batch) => [...batch])
+  if (next.length === 0) next.push([])
+  const first = next[0]!
+  if (first.length < MIN_RACE_BATCH_OPS) {
+    first.push(
+      { kind: "expense", amount: 1_000n },
+      { kind: "income", amount: 1_000n }
+    )
+  }
+  if (!next.some((batch) => batch.some((op) => op.kind === "doubleSubmit"))) {
+    first.push({ kind: "doubleSubmit", amount: 1_000n })
+  }
+  if (!next.some((batch) => batch.some((op) => op.kind === "deleteLive"))) {
+    first.push({ kind: "deleteLive", pick: 0 })
+  }
+  return next
+}
+
+const raceBatchArb: fc.Arbitrary<RaceOp[]> = fc.array(raceOpArb, {
+  minLength: MIN_RACE_BATCH_OPS,
+  maxLength: MAX_RACE_BATCH_OPS,
+})
+
+const raceSequenceArb: fc.Arbitrary<RaceOp[][]> = fc
+  .array(raceBatchArb, { maxLength: MAX_RACE_BATCHES })
+  .map(withRaceProbe)
+
+interface RaceRow {
+  id: string
+  accountId: string
+  /** SIGNED stored amount — the reversal delta of a delete is its negation. */
+  amount: bigint
+}
+
+interface RaceFixture {
+  familyId: string
+  user: { id: string; familyId?: string | null }
+  raceAccountId: string
+  destinationAccountId: string
+  expenseCategoryId: string
+  incomeCategoryId: string
+  /** Single-leg rows on the race account that `deleteLive` may target. */
+  liveRows: RaceRow[]
+}
+
+async function seedRaceFixture(): Promise<RaceFixture> {
+  const owner = await factories.createAuthenticatedOnboardedUser()
+  const familyId = owner.family.id
+
+  // Factory accounts: balance 0n and NO anchor rows — so the ground-truth
+  // flush seam stays inert and Account.version reflects ONLY
+  // applyAccountBalanceDelta (the A3 witness depends on this).
+  const raceAccount = await factories.createAccount({
+    familyId,
+    name: "Race account",
+    accountType: "DEPOSITORY",
+    currency: "IDR",
+    balance: 0n,
+  })
+  const destinationAccount = await factories.createAccount({
+    familyId,
+    name: "Race destination",
+    accountType: "DEPOSITORY",
+    currency: "IDR",
+    balance: 0n,
+  })
+  const expenseCategory = await factories.createCategory({
+    familyId,
+    name: "Race Expense",
+    type: "expense",
+  })
+  const incomeCategory = await factories.createCategory({
+    familyId,
+    name: "Race Income",
+    type: "income",
+  })
+
+  for (const accountId of [raceAccount.id, destinationAccount.id]) {
+    await createTransactionForFamily({
+      data: {
+        id: factories.createIdempotencyKey(),
+        idempotencyKey: factories.createIdempotencyKey(),
+        accountId,
+        amount: OPENING_FLOAT,
+        categoryId: incomeCategory.id,
+        currency: "IDR",
+        date: new Date("2026-01-01T00:00:00.000Z"),
+        description: "Opening float",
+        type: "income",
+        isSplit: false,
+        status: "CLEARED",
+      },
+      familyId,
+      user: owner.user,
+    })
+  }
+
+  // Two small single-leg rows, so `deleteLive` always has a pre-batch target
+  // (the probe's first-batch delete therefore always FIRES) while the float
+  // rows are never delete candidates by accident.
+  const liveRows: RaceRow[] = []
+  for (let index = 0; index < 2; index++) {
+    const id = factories.createIdempotencyKey()
+    await createTransactionForFamily({
+      data: {
+        id,
+        idempotencyKey: factories.createIdempotencyKey(),
+        accountId: raceAccount.id,
+        // Zod demands a POSITIVE input amount (`type` carries the sign to the
+        // stored row) — the STORED row below is what carries −1_000n.
+        amount: 1_000n,
+        categoryId: expenseCategory.id,
+        currency: "IDR",
+        date: new Date("2026-01-15T00:00:00.000Z"),
+        description: "Race seed row",
+        type: "expense",
+        isSplit: false,
+        status: "CLEARED",
+      },
+      familyId,
+      user: owner.user,
+    })
+    liveRows.push({ id, accountId: raceAccount.id, amount: -1_000n })
+  }
+
+  return {
+    familyId,
+    user: owner.user,
+    raceAccountId: raceAccount.id,
+    destinationAccountId: destinationAccount.id,
+    expenseCategoryId: expenseCategory.id,
+    incomeCategoryId: incomeCategory.id,
+    liveRows,
+  }
+}
+
+interface RaceScoreboard {
+  balanceRace: bigint
+  balanceDestination: bigint
+  versionRace: number
+  versionDestination: number
+}
+
+async function readRaceScoreboard(
+  fixture: RaceFixture
+): Promise<RaceScoreboard> {
+  const rows = await harness.withFamily(fixture.familyId, (tx) =>
+    tx.account.findMany({
+      where: {
+        id: { in: [fixture.raceAccountId, fixture.destinationAccountId] },
+      },
+      select: { id: true, balance: true, version: true },
+    })
+  )
+  const race = rows.find((row) => row.id === fixture.raceAccountId)
+  const destination = rows.find(
+    (row) => row.id === fixture.destinationAccountId
+  )
+  if (!race || !destination) {
+    throw new Error("Race scoreboard account missing from fixture family")
+  }
+  return {
+    balanceRace: race.balance,
+    balanceDestination: destination.balance,
+    versionRace: race.version,
+    versionDestination: destination.version,
+  }
+}
+
+interface RaceExpectation {
+  deltaRace: bigint
+  deltaDestination: bigint
+  versionRace: number
+  versionDestination: number
+}
+
+type RaceFireResults = Array<PromiseSettledResult<unknown>>
+
+type RaceOutcome =
+  | { status: "committed" }
+  | { status: "rejected"; reason: unknown }
+
+/** Judge ONE fire: fulfilled → committed; a KNOWN rejection → rejected (it
+ * rolled back cleanly, so it contributes nothing to the scoreboard); anything
+ * else → throw, failing the property. This predicate never wraps an `expect`,
+ * and no scoreboard assertion runs inside it — a failed expectation therefore
+ * can never be reclassified as an "expected rejection". */
+function judgeRaceFire(result: PromiseSettledResult<unknown>): RaceOutcome {
+  if (result.status === "fulfilled") return { status: "committed" }
+  if (isExpectedRaceRejection(result.reason)) {
+    return { status: "rejected", reason: result.reason }
+  }
+  throw result.reason
+}
+
+function isExpectedRaceRejection(error: unknown): boolean {
+  const name = error instanceof Error ? error.name : ""
+  if (name === "TransactionGoneError" || name === "BalanceConflictError") {
+    return true
+  }
+  return isExpectedDomainRejection(error)
+}
+
+function isRaceGoneError(reason: unknown): boolean {
+  return reason instanceof Error && reason.name === "TransactionGoneError"
+}
+
+function removeRaceRow(fixture: RaceFixture, id: string): void {
+  const index = fixture.liveRows.findIndex((row) => row.id === id)
+  if (index >= 0) fixture.liveRows.splice(index, 1)
+}
+
+interface RacePlanItem {
+  /** Runs the racer(s). NEVER rejects — every fire's outcome is carried
+   *  inside a settled result for the scoreboard to judge. */
+  run: () => Promise<RaceFireResults>
+  /** Fold this racer's outcome into the batch expectation. */
+  settle: (results: RaceFireResults, expectation: RaceExpectation) => void
+}
+
+function bindRaceOp(fixture: RaceFixture, op: RaceOp): RacePlanItem {
+  const {
+    familyId,
+    user,
+    raceAccountId,
+    destinationAccountId,
+    expenseCategoryId,
+    incomeCategoryId,
+  } = fixture
+
+  if (op.kind === "deleteLive") {
+    // Bound PRE-batch: two deletes with the same pick race onto the same row,
+    // and a row created inside this batch is not yet a legal target.
+    const target =
+      fixture.liveRows.length > 0
+        ? fixture.liveRows[op.pick % fixture.liveRows.length]
+        : undefined
+    return {
+      run: async () => {
+        if (!target) return []
+        return await Promise.allSettled([
+          deleteTransactionForFamily({
+            id: target.id,
+            idempotencyKey: factories.createIdempotencyKey(),
+            familyId,
+            user,
+          }),
+        ])
+      },
+      settle: (results, expectation) => {
+        if (!target || results.length === 0) return
+        const outcome = judgeRaceFire(results[0]!)
+        raceDeleteShots++
+        if (outcome.status === "committed") {
+          // Single-leg reversal: balance moves by the negation of the row's
+          // signed amount; the optimistic lock advances exactly once.
+          expectation.deltaRace += -target.amount
+          expectation.versionRace += 1
+          removeRaceRow(fixture, target.id)
+          return
+        }
+        // A known loser found the row already tombstoned by a sibling — dead.
+        if (isRaceGoneError(outcome.reason)) removeRaceRow(fixture, target.id)
+        // Any other known rejection rolled back → the row stays live.
+      },
+    }
+  }
+
+  if (op.kind === "doubleSubmit") {
+    // The Slice 2 docstring's deferred promise: ONE idempotency key +
+    // byte-identical payload fired TWICE at the same instant (double click).
+    const id = factories.createIdempotencyKey()
+    const idempotencyKey = factories.createIdempotencyKey()
+    const payload = {
+      id,
+      idempotencyKey,
+      accountId: raceAccountId,
+      amount: op.amount,
+      categoryId: expenseCategoryId,
+      currency: "IDR",
+      date: new Date("2026-02-01T00:00:00.000Z"),
+      description: "Race double submit",
+      type: "expense" as const,
+      isSplit: false,
+      status: "CLEARED" as const,
+    }
+    const fire = () =>
+      createTransactionForFamily({ data: payload, familyId, user })
+    return {
+      run: async () => await Promise.allSettled([fire(), fire()]),
+      settle: (results, expectation) => {
+        doubleSubmitShots++
+        let committed = 0
+        for (const result of results) {
+          if (judgeRaceFire(result).status === "committed") committed += 1
+        }
+        if (committed === 0) return
+        // A4 — at most ONE row per key: count the pair exactly once no
+        // matter how many of its fires fulfilled.
+        expectation.deltaRace += -op.amount
+        expectation.versionRace += 1
+        fixture.liveRows.push({
+          id,
+          accountId: raceAccountId,
+          amount: -op.amount,
+        })
+      },
+    }
+  }
+
+  const id = factories.createIdempotencyKey()
+  const idempotencyKey = factories.createIdempotencyKey()
+
+  if (op.kind === "transferOut") {
+    return {
+      run: async () =>
+        await Promise.allSettled([
+          createTransactionForFamily({
+            data: {
+              id,
+              idempotencyKey,
+              accountId: raceAccountId,
+              toAccountId: destinationAccountId,
+              amount: op.amount,
+              currency: "IDR",
+              date: new Date("2026-02-01T00:00:00.000Z"),
+              description: "Race transfer out",
+              type: "transfer" as const,
+              isSplit: false,
+              status: "CLEARED" as const,
+            },
+            familyId,
+            user,
+          }),
+        ]),
+      settle: (results, expectation) => {
+        if (results.length === 0) return
+        if (judgeRaceFire(results[0]!).status !== "committed") return
+        expectation.deltaRace += -op.amount
+        expectation.deltaDestination += op.amount
+        expectation.versionRace += 1
+        expectation.versionDestination += 1
+        // Transfer graphs are deliberately NOT added to liveRows — the scope
+        // guard above: deleteLive owns single-leg rows only.
+      },
+    }
+  }
+
+  const isExpense = op.kind === "expense"
+  const signedAmount = isExpense ? -op.amount : op.amount
+  return {
+    run: async () =>
+      await Promise.allSettled([
+        createTransactionForFamily({
+          data: {
+            id,
+            idempotencyKey,
+            accountId: raceAccountId,
+            amount: op.amount,
+            categoryId: isExpense ? expenseCategoryId : incomeCategoryId,
+            currency: "IDR",
+            date: new Date("2026-02-01T00:00:00.000Z"),
+            description: `Race ${op.kind}`,
+            type: isExpense ? ("expense" as const) : ("income" as const),
+            isSplit: false,
+            status: "CLEARED" as const,
+          },
+          familyId,
+          user,
+        }),
+      ]),
+    settle: (results, expectation) => {
+      if (results.length === 0) return
+      if (judgeRaceFire(results[0]!).status !== "committed") return
+      expectation.deltaRace += signedAmount
+      expectation.versionRace += 1
+      fixture.liveRows.push({
+        id,
+        accountId: raceAccountId,
+        amount: signedAmount,
+      })
+    },
+  }
+}
+
+/** A batch that never settles is exactly the liveness failure this slice must
+ * surface (deadlock / stuck connection) — fail LOUD and FAST with the batch
+ * shape in the message, instead of hanging until vitest's 120s timeout. */
+async function withRaceTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            new Error(
+              `Race batch did not settle within ${ms}ms — probable deadlock or lost liveness`
+            )
+          )
+        }, ms)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+async function applyRaceBatch(
+  fixture: RaceFixture,
+  batch: RaceOp[]
+): Promise<void> {
+  raceShots++
+  // Bind BEFORE firing: deletes must capture the pre-batch live-row list.
+  const plan = batch.map((op) => bindRaceOp(fixture, op))
+  const before = await readRaceScoreboard(fixture)
+  const expectation: RaceExpectation = {
+    deltaRace: 0n,
+    deltaDestination: 0n,
+    versionRace: 0,
+    versionDestination: 0,
+  }
+
+  const settled = await withRaceTimeout(
+    Promise.all(plan.map((item) => item.run())),
+    RACE_BATCH_TIMEOUT_MS
+  )
+  plan.forEach((item, index) => item.settle(settled[index]!, expectation))
+
+  const after = await readRaceScoreboard(fixture)
+  expect(
+    after.balanceRace,
+    "A2 — race account: balance = Σ committed deltas (lost update?)"
+  ).toBe(before.balanceRace + expectation.deltaRace)
+  expect(
+    after.balanceDestination,
+    "A2 — destination account: balance = Σ committed deltas"
+  ).toBe(before.balanceDestination + expectation.deltaDestination)
+  expect(
+    after.versionRace,
+    "A3 — race account: version = committed mutations (optimistic lock)"
+  ).toBe(before.versionRace + expectation.versionRace)
+  expect(
+    after.versionDestination,
+    "A3 — destination: version = committed mutations"
+  ).toBe(before.versionDestination + expectation.versionDestination)
+
+  // A5 — conservation is the backstop: a double reversal that every
+  // individual op reported as success still breaks Σ balances == Σ amounts.
+  const sums = await readSums(fixture.familyId)
+  expect(sums.balances, "A5 — conservation after every race batch").toBe(
+    sums.amounts
+  )
+}
+
+async function applyRaceBatches(
+  fixture: RaceFixture,
+  batches: RaceOp[][]
+): Promise<void> {
+  for (const batch of batches) {
+    await applyRaceBatch(fixture, batch)
+  }
+}
+
+describe("concurrency (property-based, real Postgres) — PER-208", () => {
+  test("INVARIANT: parallel mutations on the same account never lose an update", async () => {
+    raceShots = 0
+    doubleSubmitShots = 0
+    raceDeleteShots = 0
+    await fc.assert(
+      fc
+        .asyncProperty(raceSequenceArb, async (batches) => {
+          const fixture = await seedRaceFixture()
+          await applyRaceBatches(fixture, batches)
+        })
+        .beforeEach(async () => {
+          await harness.reset()
+        }),
+      { numRuns: NUM_RACE_RUNS }
+    )
+    // Coverage gates (Slice 6): the race, the parallel same-key double-submit
+    // and the delete path must have been FIRING during this run — a property
+    // that never executed its probes is green for the wrong reason.
+    expect(raceShots).toBeGreaterThan(0)
+    expect(doubleSubmitShots).toBeGreaterThan(0)
+    expect(raceDeleteShots).toBeGreaterThan(0)
   })
 })
