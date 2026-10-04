@@ -36,9 +36,11 @@ import { recordFeeFn } from "@/server/holdings"
 // audit, idempotency) is SERVER-side (`recordFeeFn`); this dialog only collects
 // inputs. NO vendor wording.
 //
-// Fees embedded in a Buy/Sell (purchase/redemption load) and NAV-embedded
-// management fees (expense ratios) are already captured elsewhere and are NOT
-// recorded here.
+// Fees embedded in a Buy/Sell are NOT recorded here either: an ITEMIZED
+// sell fee belongs to the trade itself (`recordTradeInputSchema.feeAmount`,
+// a linked `transfer_fee` leg — fee-on-sell, ADR-0054 amendment), an
+// un-itemized load is already inside `cashAmount`, and NAV-embedded
+// management fees (expense ratios) are already inside the price.
 
 export interface FeeSourceAccount {
   id: string

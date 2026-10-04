@@ -3411,8 +3411,30 @@ export async function softDeleteValuationLinkedTransferWithinTx(
   if (!trackedAccountFacts) {
     throw new Error(`Tracked-asset account ${oldValuation.accountId} not found`)
   }
-  const oldCashAccount = await tx.account.findUniqueOrThrow({
-    where: { id: cashTx.accountId },
+
+  // PER-247 / fee-on-sell: the Transfer's optional fee leg (fx_fee /
+  // transfer_fee) is reversed SYMMETRICALLY with the cash leg. Without this,
+  // deleting or correcting a fee'd valuation-linked transfer — a Sell with a
+  // fee, or a fee'd nabung/invest move — would tombstone the cash leg but
+  // leave the fee expense ACTIVE with its account balance still debited: an
+  // orphaned expense nothing can ever remove. Mirrors the classic-transfer
+  // delete's fee handling (PER-147 / PER-247) exactly.
+  const feeTx = transfer.feeTransactionId
+    ? await findOptionalTransactionWithSplitEntries(
+        tx,
+        transfer.feeTransactionId
+      )
+    : null
+
+  // Every account whose balance this reversal touches — the cash leg's, plus
+  // the fee bearer's when it is a different account (dedup'd by the `in`
+  // filter when the fee bearer IS the cash account, the PER-247 default).
+  const affectedAccountIds = [cashTx.accountId]
+  if (feeTx) {
+    affectedAccountIds.push(feeTx.accountId)
+  }
+  const oldAccounts = await tx.account.findMany({
+    where: { id: { in: affectedAccountIds } },
   })
 
   // 1. Reverse the cash leg's balance delta (single formula regardless of
@@ -3425,6 +3447,17 @@ export async function softDeleteValuationLinkedTransferWithinTx(
     notFoundMessage: "Cash account not found or access denied!",
   })
 
+  // 1b. Reverse the fee expense: add back its magnitude on the fee account
+  // (the fee row's amount is negative, so the absolute value undoes it).
+  if (feeTx && feeTx.deletedAt === null) {
+    await applyAccountBalanceDelta(tx, {
+      accountId: feeTx.accountId,
+      delta: absMoney(feeTx.amount),
+      familyId,
+      notFoundMessage: "Transfer fee account not found or access denied!",
+    })
+  }
+
   const deletedAt = new Date()
 
   // 2. Tombstone the cash Transaction.
@@ -3433,6 +3466,16 @@ export async function softDeleteValuationLinkedTransferWithinTx(
     data: { deletedAt },
   })
   if (cashTxUpdate.count !== 1) throw new TransactionGoneError()
+
+  // 2b. Tombstone the fee leg (kept linked from the tombstoned Transfer —
+  // same as the classic-transfer delete; never hard-deleted).
+  if (feeTx && feeTx.deletedAt === null) {
+    const feeUpdate = await tx.transaction.updateMany({
+      where: { id: feeTx.id, familyId, deletedAt: null },
+      data: { deletedAt },
+    })
+    if (feeUpdate.count !== 1) throw new TransactionGoneError()
+  }
 
   // 3. Tombstone the Valuation (never hard-deleted, ADR-0034).
   const valuationUpdate = await tx.valuation.updateMany({
@@ -3470,16 +3513,19 @@ export async function softDeleteValuationLinkedTransferWithinTx(
   })
   if (transferUpdate.count !== 1) throw new TransactionGoneError()
 
-  const [newCashAccount, updatedCashTx, updatedValuation, updatedTransfer] =
+  const [newAccounts, updatedCashTx, updatedValuation, updatedTransfer] =
     await runTenantTransactionQueriesInOrder([
-      () => tx.account.findUniqueOrThrow({ where: { id: cashTx.accountId } }),
+      () =>
+        tx.account.findMany({
+          where: { id: { in: affectedAccountIds } },
+        }),
       () => tx.transaction.findUniqueOrThrow({ where: { id: cashTx.id } }),
       () => tx.valuation.findUniqueOrThrow({ where: { id: oldValuation.id } }),
       () => tx.transfer.findUniqueOrThrow({ where: { id: transfer.id } }),
     ] as const)
 
   await auditLogs(tx, auditCtx, [
-    ...accountBalanceAuditEntries([oldCashAccount], [newCashAccount]),
+    ...accountBalanceAuditEntries(oldAccounts, newAccounts),
     {
       action: "soft_delete",
       entityType: "Transaction",
@@ -3487,6 +3533,19 @@ export async function softDeleteValuationLinkedTransferWithinTx(
       before: cashTx,
       after: updatedCashTx,
     },
+    // The fee leg's own soft-delete snapshot (mirrors the classic-transfer
+    // delete), so the reversal is fully reconstructible from the audit trail.
+    ...(feeTx
+      ? [
+          {
+            action: "soft_delete" as const,
+            entityType: "Transaction",
+            entityId: feeTx.id,
+            before: feeTx,
+            after: await findTransactionWithSplitEntries(tx, feeTx.id),
+          },
+        ]
+      : []),
     {
       action: "soft_delete",
       entityType: "Valuation",
