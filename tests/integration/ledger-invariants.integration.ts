@@ -2834,26 +2834,30 @@ describe("valuation no-false-drift (property-based, real Postgres) — PER-208",
 // and `tenantPoisonShots > 0` is asserted after `fc.assert` — the same gate
 // discipline as `deleteAgainShots` / `valuationTransferShots`.
 
+/** Single source of truth for the cross-family poison variants: the
+ * `TenantOp` union, the `PoisonOp` alias, AND the weighted arb entries are
+ * all derived from this list. Keeping one literal list also stops Sonar's
+ * new-code duplication gate from counting the five near-identical
+ * `{ weight, arbitrary }` blocks that used to be spelled out one by one. */
+const POISON_KINDS = [
+  "poisonAccount",
+  "poisonTransferTo",
+  "poisonCategory",
+  "poisonMerchant",
+  "poisonDelete",
+] as const
+
+type PoisonKind = (typeof POISON_KINDS)[number]
+
 type TenantOp =
   | { kind: "expense"; account: number; amount: bigint }
   | { kind: "income"; account: number; amount: bigint }
   | { kind: "transfer"; from: number; toOffset: number; amount: bigint }
   | { kind: "delete"; pick: number }
   // Poison variants: act AS family A while pointing at family B's rows.
-  | { kind: "poisonAccount" }
-  | { kind: "poisonTransferTo" }
-  | { kind: "poisonCategory" }
-  | { kind: "poisonMerchant" }
-  | { kind: "poisonDelete" }
+  | { kind: PoisonKind }
 
-type PoisonOp = Extract<
-  TenantOp,
-  | { kind: "poisonAccount" }
-  | { kind: "poisonTransferTo" }
-  | { kind: "poisonCategory" }
-  | { kind: "poisonMerchant" }
-  | { kind: "poisonDelete" }
->
+type PoisonOp = Extract<TenantOp, { kind: PoisonKind }>
 
 const NUM_TENANT_RUNS = 8
 const MAX_TENANT_OPS = 4
@@ -2892,26 +2896,10 @@ const tenantOpArb: fc.Arbitrary<TenantOp> = fc.oneof(
       pick: pickArb,
     }),
   },
-  {
+  ...POISON_KINDS.map((kind) => ({
     weight: 1,
-    arbitrary: fc.record({ kind: fc.constant("poisonAccount" as const) }),
-  },
-  {
-    weight: 1,
-    arbitrary: fc.record({ kind: fc.constant("poisonTransferTo" as const) }),
-  },
-  {
-    weight: 1,
-    arbitrary: fc.record({ kind: fc.constant("poisonCategory" as const) }),
-  },
-  {
-    weight: 1,
-    arbitrary: fc.record({ kind: fc.constant("poisonMerchant" as const) }),
-  },
-  {
-    weight: 1,
-    arbitrary: fc.record({ kind: fc.constant("poisonDelete" as const) }),
-  }
+    arbitrary: fc.record({ kind: fc.constant(kind) }),
+  }))
 )
 
 // Shots fired by POISON ops across the whole run — asserted > 0 after
