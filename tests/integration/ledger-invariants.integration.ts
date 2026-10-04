@@ -18,6 +18,7 @@ import {
   detectBalanceDriftForFamily,
   rebuildAccountBalanceForFamily,
 } from "@/server/valuations"
+import { TenantReferenceError } from "@/server/validation/tenant-references"
 import {
   createIntegrationHarness,
   type IntegrationHarness,
@@ -2800,5 +2801,575 @@ describe("valuation no-false-drift (property-based, real Postgres) — PER-208",
     // FIRING during this run — a property that never executed its probe is
     // green for the wrong reason.
     expect(valuationTransferShots).toBeGreaterThan(0)
+  })
+})
+
+// ── SLICE 5 — tenant isolation (cross-family poison) ─────────────────────────
+//
+// Ticket: "operations on family A never read or mutate family B rows (RLS GUC)."
+// The example-based suites (rls-guc-scoping, cross-tenant-fk,
+// tenant-reference-validation) prove one hand-picked cross-family case at a
+// time. What nobody enumerates is the LONG sequence: ordinary family-A
+// operations with a cross-family POISON op spliced in at an arbitrary position
+// — pointing at family B's account / category / merchant, or even issuing
+// DELETE against B's row under A's identity.
+//
+// Contract asserted after every sequence (all reads straight from Postgres):
+//   P1 — every poison op is REJECTED with the precise error class
+//        (TenantReferenceError for cross-family references; "Transaction not
+//        found!" for the delete) — asserted OUTSIDE the domain-rejection
+//        guard, whose message regex would otherwise swallow a failed
+//        expectation as an "expected rejection" (Slice 2/3 lesson).
+//   P2 — family B's entire state (per-account balances, live rows, audits,
+//        idempotency records) is bit-identical before vs after the sequence.
+//   P3 — family A's view never contains a family-B row, while the same rows
+//        ARE visible in B's own scope — the null is isolation, not a broken
+//        fixture.
+//   P4 — family A's own books still balance: poison never corrupts A either.
+//
+// The harness role cannot bypass RLS (tests/integration/support/database.ts
+// refuses to run otherwise), so P3 is a real database-boundary assertion.
+//
+// Coverage gate: `withTenantProbe` guarantees ≥ one poison op per sequence
+// and `tenantPoisonShots > 0` is asserted after `fc.assert` — the same gate
+// discipline as `deleteAgainShots` / `valuationTransferShots`.
+
+type TenantOp =
+  | { kind: "expense"; account: number; amount: bigint }
+  | { kind: "income"; account: number; amount: bigint }
+  | { kind: "transfer"; from: number; toOffset: number; amount: bigint }
+  | { kind: "delete"; pick: number }
+  // Poison variants: act AS family A while pointing at family B's rows.
+  | { kind: "poisonAccount" }
+  | { kind: "poisonTransferTo" }
+  | { kind: "poisonCategory" }
+  | { kind: "poisonMerchant" }
+  | { kind: "poisonDelete" }
+
+type PoisonOp = Extract<
+  TenantOp,
+  | { kind: "poisonAccount" }
+  | { kind: "poisonTransferTo" }
+  | { kind: "poisonCategory" }
+  | { kind: "poisonMerchant" }
+  | { kind: "poisonDelete" }
+>
+
+const NUM_TENANT_RUNS = 8
+const MAX_TENANT_OPS = 4
+const NUM_TENANT_ACCOUNTS = 2
+
+const tenantOpArb: fc.Arbitrary<TenantOp> = fc.oneof(
+  {
+    weight: 2,
+    arbitrary: fc.record({
+      kind: fc.constant("expense" as const),
+      account: fc.nat({ max: NUM_TENANT_ACCOUNTS - 1 }),
+      amount: amountArb,
+    }),
+  },
+  {
+    weight: 2,
+    arbitrary: fc.record({
+      kind: fc.constant("income" as const),
+      account: fc.nat({ max: NUM_TENANT_ACCOUNTS - 1 }),
+      amount: amountArb,
+    }),
+  },
+  {
+    weight: 2,
+    arbitrary: fc.record({
+      kind: fc.constant("transfer" as const),
+      from: fc.nat({ max: NUM_TENANT_ACCOUNTS - 1 }),
+      toOffset: fc.integer({ min: 1, max: NUM_TENANT_ACCOUNTS - 1 }),
+      amount: amountArb,
+    }),
+  },
+  {
+    weight: 1,
+    arbitrary: fc.record({
+      kind: fc.constant("delete" as const),
+      pick: pickArb,
+    }),
+  },
+  {
+    weight: 1,
+    arbitrary: fc.record({ kind: fc.constant("poisonAccount" as const) }),
+  },
+  {
+    weight: 1,
+    arbitrary: fc.record({ kind: fc.constant("poisonTransferTo" as const) }),
+  },
+  {
+    weight: 1,
+    arbitrary: fc.record({ kind: fc.constant("poisonCategory" as const) }),
+  },
+  {
+    weight: 1,
+    arbitrary: fc.record({ kind: fc.constant("poisonMerchant" as const) }),
+  },
+  {
+    weight: 1,
+    arbitrary: fc.record({ kind: fc.constant("poisonDelete" as const) }),
+  }
+)
+
+// Shots fired by POISON ops across the whole run — asserted > 0 after
+// `fc.assert` so "the cross-family path was actually exercised" can never be
+// green by luck.
+let tenantPoisonShots = 0
+
+function isPoisonOp(op: TenantOp): op is PoisonOp {
+  return op.kind.startsWith("poison")
+}
+
+/** Post-processing that makes cross-family coverage a GATE, not a lottery:
+ * every sequence carries ≥ one poison op, so `tenantPoisonShots > 0` is
+ * structurally satisfiable every run (same discipline as `withValuationProbe`). */
+function withTenantProbe(ops: TenantOp[]): TenantOp[] {
+  const next = [...ops]
+  if (next.some(isPoisonOp)) return next
+  next.push({ kind: "poisonAccount" })
+  return next
+}
+
+const tenantSequenceArb: fc.Arbitrary<TenantOp[]> = fc
+  .array(tenantOpArb, { maxLength: MAX_TENANT_OPS })
+  .map(withTenantProbe)
+
+interface TenantFamilyA {
+  familyId: string
+  user: { id: string; familyId?: string | null }
+  accountIds: string[]
+  expenseCategoryId: string
+  incomeCategoryId: string
+}
+
+interface TenantFamilyB {
+  familyId: string
+  accountId: string
+  categoryId: string
+  merchantId: string
+  transactionId: string
+}
+
+interface TenantFixture {
+  familyA: TenantFamilyA
+  familyB: TenantFamilyB
+}
+
+async function seedTenantFixture(): Promise<TenantFixture> {
+  const ownerA = await factories.createAuthenticatedOnboardedUser()
+  const ownerB = await factories.createAuthenticatedOnboardedUser()
+
+  // Family A — the acting tenant: plain transaction_flow accounts seeded the
+  // seedFixture way (opening float as a genuine income row, no anchors), so
+  // scoped conservation is well-defined over whatever ops A applies.
+  const accountIds: string[] = []
+  for (let i = 0; i < NUM_TENANT_ACCOUNTS; i++) {
+    const account = await factories.createAccount({
+      familyId: ownerA.family.id,
+      name: `Tenant A Acc ${i}`,
+      accountType: "DEPOSITORY",
+      currency: "IDR",
+      balance: 0n,
+    })
+    accountIds.push(account.id)
+  }
+  const expenseCategory = await factories.createCategory({
+    familyId: ownerA.family.id,
+    name: "Tenant A Expense",
+    type: "expense",
+  })
+  const incomeCategory = await factories.createCategory({
+    familyId: ownerA.family.id,
+    name: "Tenant A Income",
+    type: "income",
+  })
+  for (const accountId of accountIds) {
+    await createTransactionForFamily({
+      data: {
+        id: factories.createIdempotencyKey(),
+        idempotencyKey: factories.createIdempotencyKey(),
+        accountId,
+        amount: OPENING_FLOAT,
+        categoryId: incomeCategory.id,
+        currency: "IDR",
+        date: new Date("2026-01-01T00:00:00.000Z"),
+        description: "Tenant rig float",
+        type: "income",
+        isSplit: false,
+        status: "CLEARED",
+      },
+      familyId: ownerA.family.id,
+      user: ownerA.user,
+    })
+  }
+
+  // Family B — the bait: real rows in a REAL second tenant, seeded through
+  // factories (each factory call runs inside B's own GUC scope).
+  const bAccount = await factories.createAccount({
+    familyId: ownerB.family.id,
+    name: "Tenant B Account",
+    accountType: "DEPOSITORY",
+    currency: "IDR",
+    balance: 9_000_000n,
+  })
+  const bCategory = await factories.createCategory({
+    familyId: ownerB.family.id,
+    name: "Tenant B Expense",
+    type: "expense",
+  })
+  const bMerchant = await factories.createMerchant({
+    familyId: ownerB.family.id,
+    name: "Tenant B Merchant",
+  })
+  const bTransaction = await factories.createTransaction({
+    familyId: ownerB.family.id,
+    accountId: bAccount.id,
+    userId: ownerB.user.id,
+    amount: -123_456n,
+    categoryId: bCategory.id,
+    merchantId: bMerchant.id,
+    type: "expense",
+  })
+
+  return {
+    familyA: {
+      familyId: ownerA.family.id,
+      user: ownerA.user,
+      accountIds,
+      expenseCategoryId: expenseCategory.id,
+      incomeCategoryId: incomeCategory.id,
+    },
+    familyB: {
+      familyId: ownerB.family.id,
+      accountId: bAccount.id,
+      categoryId: bCategory.id,
+      merchantId: bMerchant.id,
+      transactionId: bTransaction.id,
+    },
+  }
+}
+
+/** Family B's complete witness — read INSIDE B's own GUC scope. Any drift
+ * between the before/after pair means an A-side operation mutated B. */
+async function snapshotFamilyB(fixture: TenantFixture): Promise<{
+  accountBalances: Array<readonly [string, bigint]>
+  amounts: bigint
+  rows: number
+  audits: number
+  idempotencyRecords: number
+}> {
+  return await harness.withFamily(fixture.familyB.familyId, async (tx) => {
+    const accounts = await tx.account.findMany({
+      select: { id: true, balance: true },
+      orderBy: { id: "asc" },
+    })
+    const live = await tx.transaction.findMany({
+      where: { deletedAt: null },
+      select: { amount: true },
+    })
+    return {
+      accountBalances: accounts.map(
+        (account) => [account.id, account.balance] as const
+      ),
+      amounts: live.reduce((sum, row) => sum + row.amount, 0n),
+      rows: await tx.transaction.count(),
+      audits: await tx.auditLog.count(),
+      idempotencyRecords: await tx.idempotencyRecord.count(),
+    }
+  })
+}
+
+/** P1: fire one poison op and assert the PRECISE rejection class. Runs OUTSIDE
+ * the domain-rejection guard on purpose — a failed `expect` here IS the
+ * property failing, and the guard's regex would swallow it as an "expected
+ * rejection", turning a red silently green (Slice 2/3 lesson). A successful
+ * poison (captured === null) fails `toBeInstanceOf` with the op kind printed. */
+async function applyPoisonOp(
+  fixture: TenantFixture,
+  op: PoisonOp
+): Promise<void> {
+  const { familyA, familyB } = fixture
+  tenantPoisonShots++
+
+  let captured: unknown = null
+  try {
+    switch (op.kind) {
+      case "poisonAccount": {
+        await createTransactionForFamily({
+          data: {
+            id: factories.createIdempotencyKey(),
+            idempotencyKey: factories.createIdempotencyKey(),
+            accountId: familyB.accountId,
+            amount: 5_000n,
+            categoryId: familyA.expenseCategoryId,
+            currency: "IDR",
+            date: new Date("2026-02-01T00:00:00.000Z"),
+            description: "Poison: spend on family B's account",
+            type: "expense",
+            isSplit: false,
+            status: "CLEARED",
+          },
+          familyId: familyA.familyId,
+          user: familyA.user,
+        })
+        break
+      }
+      case "poisonTransferTo": {
+        await createTransactionForFamily({
+          data: {
+            id: factories.createIdempotencyKey(),
+            idempotencyKey: factories.createIdempotencyKey(),
+            accountId: familyA.accountIds[0],
+            toAccountId: familyB.accountId,
+            amount: 5_000n,
+            currency: "IDR",
+            date: new Date("2026-02-01T00:00:00.000Z"),
+            description: "Poison: transfer into family B",
+            type: "transfer",
+            isSplit: false,
+            status: "CLEARED",
+          },
+          familyId: familyA.familyId,
+          user: familyA.user,
+        })
+        break
+      }
+      case "poisonCategory": {
+        await createTransactionForFamily({
+          data: {
+            id: factories.createIdempotencyKey(),
+            idempotencyKey: factories.createIdempotencyKey(),
+            accountId: familyA.accountIds[0],
+            amount: 5_000n,
+            categoryId: familyB.categoryId,
+            currency: "IDR",
+            date: new Date("2026-02-01T00:00:00.000Z"),
+            description: "Poison: file under family B's category",
+            type: "expense",
+            isSplit: false,
+            status: "CLEARED",
+          },
+          familyId: familyA.familyId,
+          user: familyA.user,
+        })
+        break
+      }
+      case "poisonMerchant": {
+        await createTransactionForFamily({
+          data: {
+            id: factories.createIdempotencyKey(),
+            idempotencyKey: factories.createIdempotencyKey(),
+            accountId: familyA.accountIds[0],
+            amount: 5_000n,
+            merchantId: familyB.merchantId,
+            currency: "IDR",
+            date: new Date("2026-02-01T00:00:00.000Z"),
+            description: "Poison: tag family B's merchant",
+            type: "expense",
+            isSplit: false,
+            status: "CLEARED",
+          },
+          familyId: familyA.familyId,
+          user: familyA.user,
+        })
+        break
+      }
+      case "poisonDelete": {
+        await deleteTransactionForFamily({
+          id: familyB.transactionId,
+          idempotencyKey: factories.createIdempotencyKey(),
+          familyId: familyA.familyId,
+          user: familyA.user,
+        })
+        break
+      }
+    }
+  } catch (error) {
+    captured = error
+  }
+
+  if (op.kind === "poisonDelete") {
+    // A cross-family id must be INVISIBLE under A's scope: the lookup misses
+    // ("Transaction not found!"). TransactionGoneError would mean the row was
+    // FOUND (wrong tenant saw a dead row); null would mean DELETE succeeded.
+    expect(
+      captured,
+      `poison ${op.kind} must be rejected as not-found, got: ${String(captured)}`
+    ).toBeInstanceOf(Error)
+    expect((captured as Error).message).toMatch(/not found/i)
+    return
+  }
+
+  expect(
+    captured,
+    `poison ${op.kind} was ACCEPTED — cross-family reference allowed! got: ${String(captured)}`
+  ).toBeInstanceOf(TenantReferenceError)
+}
+
+async function applyTenantOps(
+  fixture: TenantFixture,
+  ops: TenantOp[]
+): Promise<void> {
+  const { familyA } = fixture
+  const { familyId, user, accountIds } = familyA
+  const liveTxIds: string[] = []
+
+  for (const op of ops) {
+    // Poison ops carry their own assertions and run OUTSIDE the guard — same
+    // placement rationale as `replay` / `deleteAgain` (see applyOps).
+    if (isPoisonOp(op)) {
+      await applyPoisonOp(fixture, op)
+      continue
+    }
+
+    try {
+      if (op.kind === "delete") {
+        if (liveTxIds.length === 0) continue
+        const idx = op.pick % liveTxIds.length
+        await deleteTransactionForFamily({
+          id: liveTxIds[idx],
+          idempotencyKey: factories.createIdempotencyKey(),
+          familyId,
+          user,
+        })
+        liveTxIds.splice(idx, 1)
+        continue
+      }
+
+      const id = factories.createIdempotencyKey()
+      const idempotencyKey = factories.createIdempotencyKey()
+
+      if (op.kind === "transfer") {
+        const from = op.from % accountIds.length
+        const to = (from + op.toOffset) % accountIds.length
+        await createTransactionForFamily({
+          data: {
+            id,
+            idempotencyKey,
+            accountId: accountIds[from],
+            toAccountId: accountIds[to],
+            amount: op.amount,
+            currency: "IDR",
+            date: new Date("2026-02-01T00:00:00.000Z"),
+            description: "Tenant fuzz transfer",
+            type: "transfer",
+            isSplit: false,
+            status: "CLEARED",
+          },
+          familyId,
+          user,
+        })
+      } else {
+        await createTransactionForFamily({
+          data: {
+            id,
+            idempotencyKey,
+            accountId: accountIds[op.account % accountIds.length],
+            amount: op.amount,
+            categoryId:
+              op.kind === "expense"
+                ? familyA.expenseCategoryId
+                : familyA.incomeCategoryId,
+            currency: "IDR",
+            date: new Date("2026-02-01T00:00:00.000Z"),
+            description: `Tenant fuzz ${op.kind}`,
+            type: op.kind,
+            isSplit: false,
+            status: "CLEARED",
+          },
+          familyId,
+          user,
+        })
+      }
+      liveTxIds.push(id)
+    } catch (error) {
+      if (isExpectedDomainRejection(error)) continue
+      throw error
+    }
+  }
+}
+
+/** The Slice 5 contract, read straight from Postgres after every sequence.
+ * No mutations here, so it runs outside any rejection guard — a failure IS
+ * the property failing, full stop. */
+async function assertTenantIsolation(
+  fixture: TenantFixture,
+  bBefore: Awaited<ReturnType<typeof snapshotFamilyB>>
+): Promise<void> {
+  // P2 — family B is bit-identical: nothing A did touched a B row.
+  const bAfter = await snapshotFamilyB(fixture)
+  expect(bAfter).toEqual(bBefore)
+
+  // P3a — family A's scope never sees a family-B row (RLS + tenant filters).
+  const aView = await harness.withFamily(
+    fixture.familyA.familyId,
+    async (tx) => ({
+      bAccount: await tx.account.findUnique({
+        where: { id: fixture.familyB.accountId },
+      }),
+      bTransaction: await tx.transaction.findUnique({
+        where: { id: fixture.familyB.transactionId },
+      }),
+      bMerchant: await tx.merchant.findUnique({
+        where: { id: fixture.familyB.merchantId },
+      }),
+      accountIds: (await tx.account.findMany({ select: { id: true } })).map(
+        (row) => row.id
+      ),
+    })
+  )
+  expect(aView.bAccount).toBeNull()
+  expect(aView.bTransaction).toBeNull()
+  expect(aView.bMerchant).toBeNull()
+  expect(aView.accountIds).not.toContain(fixture.familyB.accountId)
+
+  // P3b — sanity: the SAME rows are visible in B's own scope, so the nulls
+  // above prove isolation rather than a fixture that never existed.
+  const bVisible = await harness.withFamily(fixture.familyB.familyId, (tx) =>
+    tx.account.findUnique({ where: { id: fixture.familyB.accountId } })
+  )
+  expect(bVisible).not.toBeNull()
+
+  // P4 — family A's own books still balance: poison never corrupted A either.
+  const scoped = await harness.withFamily(
+    fixture.familyA.familyId,
+    async (tx) => {
+      const accounts = await tx.account.findMany({ select: { balance: true } })
+      const rows = await tx.transaction.findMany({
+        where: { deletedAt: null },
+        select: { amount: true },
+      })
+      return {
+        balances: accounts.reduce((sum, a) => sum + a.balance, 0n),
+        amounts: rows.reduce((sum, r) => sum + r.amount, 0n),
+      }
+    }
+  )
+  expect(scoped.balances).toBe(scoped.amounts)
+}
+
+describe("tenant isolation (property-based, real Postgres) — PER-208", () => {
+  test("INVARIANT: cross-family poison ops are always rejected, family B never mutates, family A never sees B's rows", async () => {
+    tenantPoisonShots = 0
+    await fc.assert(
+      fc
+        .asyncProperty(tenantSequenceArb, async (ops) => {
+          const fixture = await seedTenantFixture()
+          const bBefore = await snapshotFamilyB(fixture)
+          await applyTenantOps(fixture, ops)
+          await assertTenantIsolation(fixture, bBefore)
+        })
+        .beforeEach(async () => {
+          await harness.reset()
+        }),
+      { numRuns: NUM_TENANT_RUNS }
+    )
+    // Coverage gate (Slice 5): the cross-family poison path must have been
+    // FIRING during this run — a property that never executed its probe is
+    // green for the wrong reason.
+    expect(tenantPoisonShots).toBeGreaterThan(0)
   })
 })
