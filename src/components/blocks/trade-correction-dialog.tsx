@@ -176,6 +176,21 @@ function TradeCorrectionForm({
   const [unitPrice, setUnitPrice] = React.useState<string>(
     toDecimalString(initialUnitPriceMinor, currencyCode)
   )
+  // Fee-on-sell — prefilled from the EXISTING trade's fee leg (never silently
+  // dropped by a correction: omitted fee ⇒ the corrected trade has no fee, and
+  // that must be an explicit user action, not a missing prefill). The payer
+  // preselects the bearer the trade actually used; null = "the destination
+  // account" (the server's default). Sell-only in effect: read/submitted only
+  // when `side === "sell"` — flip to Buy and the fee rides along in state
+  // unseen, ready to come back if the user flips back.
+  const [feeDraft, setFeeDraft] = React.useState<string>(() =>
+    details.feeAmountMinor === null
+      ? ""
+      : toDecimalString(BigInt(details.feeAmountMinor), currencyCode)
+  )
+  const [feePayerDraft, setFeePayerDraft] = React.useState<string | null>(
+    details.feeAccountId
+  )
   const [date, setDate] = React.useState<Date>(
     () => new Date(details.tradeDate)
   )
@@ -233,6 +248,38 @@ function TradeCorrectionForm({
     return { kind: "valid", minor: amountMinor, quantityScaled }
   }, [isQuantityBasis, parsedQuantity, amountMinor, unitPriceMinor])
 
+  // Fee-on-sell — derived exactly like `TradeDialog`: Sell-only, empty ⇒ no
+  // fee, raw-text flagged separately so submit explains instead of dropping.
+  const isSell = side === "sell"
+  const feeMinor = React.useMemo<bigint | null>(() => {
+    if (!isSell || feeDraft.trim() === "") return null
+    const parsed = parseMoneyInput(feeDraft, currencyCode)
+    return parsed !== null && parsed > 0n ? parsed : null
+  }, [isSell, feeDraft, currencyCode])
+  const feeTextInvalid = isSell && feeDraft.trim() !== "" && feeMinor === null
+
+  // The bearer actually charged: the preselected original bearer (or an
+  // explicit pick), else the destination account (net lands there).
+  const feePayerId = feePayerDraft ?? fundingAccountId
+  const feePayerName =
+    selectableFundingAccounts.find((account) => account.id === feePayerId)
+      ?.name ?? null
+  const destinationAccountName =
+    selectableFundingAccounts.find((account) => account.id === fundingAccountId)
+      ?.name ?? null
+
+  const feeTooLarge =
+    feeMinor !== null &&
+    cashPreview.kind === "valid" &&
+    feeMinor >= cashPreview.minor
+
+  // What the destination actually receives: net when it bears the fee,
+  // gross when another cash account does.
+  const proceedsMinor =
+    feeMinor !== null && cashPreview.kind === "valid"
+      ? cashPreview.minor - (feePayerId === fundingAccountId ? feeMinor : 0n)
+      : null
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
     setError(null)
@@ -247,6 +294,14 @@ function TradeCorrectionForm({
       setError("Enter a valid unit price.")
       return
     }
+    if (feeTextInvalid) {
+      setError("Enter a valid fee, or clear the fee field.")
+      return
+    }
+    if (feeTooLarge) {
+      setError("The fee must be smaller than the cash proceeds.")
+      return
+    }
     setSubmitting(true)
     try {
       await correctTradeFn({
@@ -255,6 +310,12 @@ function TradeCorrectionForm({
           fundingAccountId,
           side,
           cashAmount: cashPreview.minor.toString(),
+          // The corrected trade's fee — explicit bearer, byte-for-byte what
+          // the preview showed. Omitted (no fee, or flipped to Buy) ⇒ the old
+          // fee leg is reversed with the old trade and not recreated.
+          ...(isSell && feeMinor !== null
+            ? { feeAmount: feeMinor.toString(), feeAccountId: feePayerId }
+            : {}),
           // Quantity basis sends the canonical reading of what the user
           // typed; amount basis sends the derived units at the column's own
           // fixed 8-dp scale (mirrors `TradeDialog`'s submit) so nothing is
@@ -282,6 +343,8 @@ function TradeCorrectionForm({
     fundingAccountId === "" ||
     unitPriceMinor === null ||
     cashPreview.kind !== "valid" ||
+    feeTextInvalid ||
+    feeTooLarge ||
     details.notLatestReason !== null
 
   return (
@@ -420,6 +483,66 @@ function TradeCorrectionForm({
         disabled={details.notLatestReason !== null}
       />
 
+      {/* Fee-on-sell — same shape and wording as TradeDialog (one combined
+          number + a payer selector once a fee exists). Sell-only: a Buy can
+          never carry a fee, so the field follows the side toggle. */}
+      {isSell ? (
+        <div
+          className={cn(
+            "grid gap-3",
+            feeMinor !== null ? "grid-cols-2" : "grid-cols-1"
+          )}
+        >
+          <div className="flex flex-col gap-2">
+            <Label
+              htmlFor="trade-correction-fee"
+              title="ONE total for every charge the platform takes on this sale (platform fee + withdrawal/transfer fee combined). Recorded as its own expense row, so your balances and the bank statement stay exact."
+            >
+              Fee ({details.currency})
+            </Label>
+            <MoneyInput
+              id="trade-correction-fee"
+              currency={currencyCode}
+              value={feeDraft}
+              onChange={setFeeDraft}
+              disabled={details.notLatestReason !== null}
+              placeholder="0"
+            />
+            {feeTextInvalid ? (
+              <p className="text-xs text-destructive">Enter a valid fee.</p>
+            ) : null}
+            {!feeTextInvalid && feeTooLarge ? (
+              <p className="text-xs text-destructive">
+                The fee must be smaller than the cash proceeds.
+              </p>
+            ) : null}
+          </div>
+          {feeMinor !== null ? (
+            <div className="flex flex-col gap-2">
+              <Label title="Who pays it. Default: the destination account — the fee comes out of the proceeds, so the destination receives the net. Pick another cash account when the platform debits the fee elsewhere (the destination then receives the full sale value).">
+                Fee paid from
+              </Label>
+              <Select
+                value={feePayerId}
+                onValueChange={setFeePayerDraft}
+                disabled={details.notLatestReason !== null}
+              >
+                <SelectTrigger aria-label="Fee paid from">
+                  <SelectValue placeholder="Choose account" />
+                </SelectTrigger>
+                <SelectContent>
+                  {selectableFundingAccounts.map((account) => (
+                    <SelectItem key={account.id} value={account.id}>
+                      {account.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       <div
         className={cn(
           "flex flex-col gap-1.5 rounded-md border p-3 text-sm",
@@ -439,6 +562,37 @@ function TradeCorrectionForm({
               : "—"}
           </span>
         </div>
+        {/* Fee-on-sell — mirrors TradeDialog: the fee as its own line, then
+            what the destination ACTUALLY receives (net/gross by bearer). */}
+        {feeMinor !== null && proceedsMinor !== null ? (
+          <>
+            <div className="flex items-center justify-between">
+              <span
+                className="text-muted-foreground"
+                title="One combined fee, recorded as a separate expense row (category Investment Fee) linked to this sale."
+              >
+                Fee{feePayerName !== null ? ` → ${feePayerName}` : ""}
+              </span>
+              <span
+                className="font-semibold tabular-nums"
+                data-testid="trade-correction-fee-total"
+              >
+                −{formatCurrency(feeMinor.toString(), details.currency)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">
+                Lands in {destinationAccountName ?? "destination"}
+              </span>
+              <span
+                className="font-semibold tabular-nums"
+                data-testid="trade-correction-net-proceeds"
+              >
+                {formatCurrency(proceedsMinor.toString(), details.currency)}
+              </span>
+            </div>
+          </>
+        ) : null}
         {/* The derived side of whichever basis is active — shown always so
             both modes preview the same shape (mirrors TradeDialog). */}
         <div className="flex items-center justify-between">

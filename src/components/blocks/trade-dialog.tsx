@@ -137,6 +137,19 @@ export function TradeDialog({
   const [unitPriceDraft, setUnitPriceDraft] = React.useState<string | null>(
     null
   )
+  // SELL fee — ONE total number for every charge the platform takes on the
+  // sale (platform fee + withdrawal/transfer fee combined — the single field
+  // creators asked for). `feePayerDraft === null` = "same as the destination
+  // account" (fee comes out of the proceeds → destination receives NET — the
+  // common full-sell/withdraw-all case); an explicit pick = "charge this
+  // cash account instead" (the platform debited elsewhere → destination
+  // receives the GROSS sale value). Sticky-draft pattern (like
+  // `unitPriceDraft`): derived during render, no effect, user's pick wins.
+  // State persists across a Buy↔Sell side flip, but is only ever READ (and
+  // submitted) while on Sell — a Buy cannot carry a fee (the server would
+  // reject it too, fail loud).
+  const [feeDraft, setFeeDraft] = React.useState<string>("")
+  const [feePayerDraft, setFeePayerDraft] = React.useState<string | null>(null)
   const [date, setDate] = React.useState<Date>(() => new Date())
   const [error, setError] = React.useState<string | null>(null)
   const [submitting, setSubmitting] = React.useState(false)
@@ -320,6 +333,43 @@ export function TradeDialog({
     )
   }, [isBuy, preview, selectedHolding])
 
+  // FEE — derived (Sell-only; the field itself only ever renders on Sell, and
+  // the value is only ever read/submitted there — a Buy cannot carry a fee).
+  // Empty ⇒ no fee. A non-empty unparseable value is flagged separately so
+  // submit explains it instead of silently dropping it.
+  const feeMinor = React.useMemo<bigint | null>(() => {
+    if (isBuy || feeDraft.trim() === "") return null
+    const parsed = parseMoneyInput(feeDraft, currencyCode)
+    return parsed !== null && parsed > 0n ? parsed : null
+  }, [isBuy, feeDraft, currencyCode])
+  const feeTextInvalid = !isBuy && feeDraft.trim() !== "" && feeMinor === null
+
+  // The bearer actually charged: an explicit pick, else the destination
+  // account (fee deducted from the proceeds — net lands there, PER-247's
+  // "origin bears the fee").
+  const feePayerId = feePayerDraft ?? fundingAccountId
+  const feePayerName =
+    sortedFundingAccounts.find((account) => account.id === feePayerId)?.name ??
+    null
+  const destinationAccountName =
+    sortedFundingAccounts.find((account) => account.id === fundingAccountId)
+      ?.name ?? null
+
+  // A fee must be strictly smaller than the sale it belongs to (the server
+  // enforces the same bound) — caught here so the dialog explains WHY instead
+  // of round-tripping a rejection.
+  const feeTooLarge =
+    feeMinor !== null &&
+    preview.kind === "valid" &&
+    feeMinor >= preview.cashMinor
+
+  // What the destination account actually RECEIVES: net when the destination
+  // itself bears the fee, gross when another cash account does.
+  const proceedsMinor =
+    feeMinor !== null && preview.kind === "valid"
+      ? preview.cashMinor - (feePayerId === fundingAccountId ? feeMinor : 0n)
+      : null
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
     setError(null)
@@ -333,6 +383,14 @@ export function TradeDialog({
           ? preview.reason
           : `Enter a valid ${isQuantityBasis ? "quantity" : "amount"} and unit price.`
       )
+      return
+    }
+    if (feeTextInvalid) {
+      setError("Enter a valid fee, or clear the fee field.")
+      return
+    }
+    if (feeTooLarge) {
+      setError("The fee must be smaller than the cash proceeds.")
       return
     }
     setSubmitting(true)
@@ -358,9 +416,18 @@ export function TradeDialog({
         idempotencyKey: createUuidV7(),
       }
       if (!isBuy) {
-        // SELL — must reference an existing position.
+        // SELL — must reference an existing position. The optional fee posts
+        // as a separate linked expense leg; the bearer is sent explicitly
+        // (feePayerId already falls back to the destination account), so what
+        // the dialog previewed is byte-for-byte what the server books.
         await recordTradeFn({
-          data: { ...shared, instrumentId: selectedInstrumentId },
+          data: {
+            ...shared,
+            instrumentId: selectedInstrumentId,
+            ...(feeMinor !== null
+              ? { feeAmount: feeMinor.toString(), feeAccountId: feePayerId }
+              : {}),
+          },
         })
       } else if (creatingInstrument) {
         await recordTradeFn({
@@ -387,6 +454,8 @@ export function TradeDialog({
     fundingAccountId === "" ||
     unitPriceMinor === null ||
     preview.kind !== "valid" ||
+    feeTextInvalid ||
+    feeTooLarge ||
     (creatingInstrument && newName.trim() === "") ||
     (!isBuy && sellablePositions.length === 0)
 
@@ -662,6 +731,64 @@ export function TradeDialog({
             required
           />
 
+          {/* SELL ONLY — the fee section (fee-on-sell). One combined number,
+              the single field creators asked for; the payer selector only
+              appears once there is something to pay with, so the form stays
+              as clean as a buy. */}
+          {!isBuy ? (
+            <div
+              className={cn(
+                "grid gap-3",
+                feeMinor !== null ? "grid-cols-2" : "grid-cols-1"
+              )}
+            >
+              <div className="flex flex-col gap-2">
+                <Label
+                  htmlFor="trade-fee"
+                  title="ONE total for every charge the platform takes on this sale (platform fee + withdrawal/transfer fee combined). Recorded as its own expense row, so your balances and the bank statement stay exact."
+                >
+                  Fee ({currency})
+                </Label>
+                <MoneyInput
+                  id="trade-fee"
+                  currency={currencyCode}
+                  value={feeDraft}
+                  onChange={setFeeDraft}
+                  placeholder="0"
+                />
+                {feeTextInvalid ? (
+                  <p className="text-xs text-destructive">Enter a valid fee.</p>
+                ) : null}
+                {!feeTextInvalid && feeTooLarge ? (
+                  <p className="text-xs text-destructive">
+                    The fee must be smaller than the cash proceeds.
+                  </p>
+                ) : null}
+              </div>
+              {feeMinor !== null ? (
+                <div className="flex flex-col gap-2">
+                  <Label title="Who pays it. Default: the destination account — the fee comes out of the proceeds, so the destination receives the net. Pick another cash account when the platform debits the fee elsewhere (the destination then receives the full sale value).">
+                    Fee paid from
+                  </Label>
+                  <Select value={feePayerId} onValueChange={setFeePayerDraft}>
+                    <SelectTrigger aria-label="Fee paid from">
+                      <SelectValue placeholder="Choose account" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {sortedFundingAccounts
+                        .filter((account) => account.id !== investmentAccountId)
+                        .map((account) => (
+                          <SelectItem key={account.id} value={account.id}>
+                            {account.name}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
           <div
             className={cn(
               "flex flex-col gap-1.5 rounded-md border p-3 text-sm",
@@ -685,6 +812,40 @@ export function TradeDialog({
                   : "—"}
               </span>
             </div>
+            {/* Fee-on-sell — only when a fee is present (never on Buy): the
+                fee as its own linked expense line, then what the destination
+                account ACTUALLY receives (net when the destination bears the
+                fee, gross when another account does). The sale figure above
+                is never trimmed — the fee lives beside it, not inside it. */}
+            {feeMinor !== null && proceedsMinor !== null ? (
+              <>
+                <div className="flex items-center justify-between">
+                  <span
+                    className="text-muted-foreground"
+                    title="One combined fee, recorded as a separate expense row (category Investment Fee) linked to this sale."
+                  >
+                    Fee{feePayerName !== null ? ` → ${feePayerName}` : ""}
+                  </span>
+                  <span
+                    className="font-semibold tabular-nums"
+                    data-testid="trade-fee-total"
+                  >
+                    −{formatCurrency(feeMinor.toString(), currency)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">
+                    Lands in {destinationAccountName ?? "destination"}
+                  </span>
+                  <span
+                    className="font-semibold tabular-nums"
+                    data-testid="trade-net-proceeds"
+                  >
+                    {formatCurrency(proceedsMinor.toString(), currency)}
+                  </span>
+                </div>
+              </>
+            ) : null}
             {/* The derived side of whichever basis is active. Shown always (not
                 only in amount basis) so the two modes preview the same shape. */}
             <div className="flex items-center justify-between">

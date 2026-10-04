@@ -1138,6 +1138,20 @@ export const recordTradeInputSchema = z.object({
   // Execution price per unit (advisory/provenance): cashAmount is authoritative
   // for money; unitPrice is recorded in the audit payload. Never drives balances.
   unitPrice: positiveMinorDigitsSchema.optional(),
+  // A SELL's broker/platform + withdrawal charge, as ONE total number (minor
+  // units, digit-string) — the single field real creators asked for ("platform
+  // fee 7,000 + transfer 2,500 → just 9,500 here"). Posted as a SEPARATE
+  // expense leg linked to the trade's Transfer (kind `transfer_fee`, category
+  // "Investment Fee"), so `cashAmount` stays the GROSS sale value and the
+  // realized gain stays gross: the fee has exactly one home — expense reports —
+  // instead of silently trimming either figure. The bearer defaults to the
+  // funding/destination account (fee deducted from the proceeds → the
+  // destination receives NET — PER-247's "origin bears the fee"); pass
+  // `feeAccountId` to charge another cash account instead (the platform
+  // debits a separate wallet → the destination receives the GROSS amount).
+  // Sell-only: `recordTradeWithinTx` rejects a fee on a Buy (fail loud).
+  feeAmount: positiveMinorDigitsSchema.optional(),
+  feeAccountId: z.string().min(1).optional(),
   tradeDate: z.coerce.date().optional(),
   idempotencyKey: uuidV7Schema,
 })
@@ -1263,6 +1277,40 @@ async function recordTradeWithinTx(
     throw new HoldingError("quantity must be greater than zero")
   }
 
+  // FEE (Sell-only) — validated HERE, before anything mutates, in plain words:
+  // a fee on a Buy is a contract violation (fee-on-sell only), and a fee that
+  // is not strictly between zero and the sale it belongs to would produce a
+  // zero/negative destination credit. The bearer must be a real CASH account —
+  // a valuation/holdings account can never be debited (ADR-0048); the guarded
+  // delta deeper down would reject that anyway, this pre-check just says why.
+  const feeAmount = data.feeAmount ? BigInt(data.feeAmount) : null
+  if (feeAmount !== null) {
+    if (isBuy) {
+      throw new HoldingError(
+        "A fee can only be recorded on a Sell — remove the fee to record this Buy"
+      )
+    }
+    if (feeAmount <= 0n || feeAmount >= cashAmount) {
+      throw new HoldingError(
+        "The fee must be greater than zero and smaller than the sale amount"
+      )
+    }
+    if (data.feeAccountId) {
+      const feeAccount = await tx.account.findFirst({
+        where: { id: data.feeAccountId, familyId },
+        select: { balanceSource: true },
+      })
+      if (!feeAccount) {
+        throw new HoldingError("Fee account not found for this family")
+      }
+      if (feeAccount.balanceSource !== "transaction_flow") {
+        throw new HoldingError(
+          "The fee must be charged to a cash-like account (bank, e-wallet, or platform balance) — an investment account can never pay a fee"
+        )
+      }
+    }
+  }
+
   // Resolve the instrument. A BUY may create one inline; a SELL must name an
   // existing instrument (you cannot sell a position you do not hold).
   if (!isBuy && (data.instrument || !data.instrumentId)) {
@@ -1343,6 +1391,22 @@ async function recordTradeWithinTx(
     user,
     auditCtx,
     baseCurrency,
+    // FEE — one linked expense leg on the SAME Transfer (PER-247's slot): the
+    // cash leg above stays the GROSS sale value, and the bearer defaults to
+    // the funding/destination account inside `postValuationLinkedTransferLegs`
+    // (net lands there) unless the request named `feeAccountId` (the platform
+    // debited elsewhere → gross lands there). Category = the family's
+    // find-or-create "Investment Fee" so fees have exactly one home in
+    // reports — the same category the standalone fee path uses, never a
+    // duplicate. Only evaluated when a fee is present.
+    fee:
+      feeAmount !== null
+        ? {
+            amount: feeAmount,
+            accountId: data.feeAccountId,
+            categoryId: await resolveFeeExpenseCategory(tx, familyId, auditCtx),
+          }
+        : undefined,
     resolveValuation: async (t) => {
       if (isBuy) {
         if (existing) {
@@ -1524,6 +1588,10 @@ export async function recordTradeForFamily({
 
   const requestHash = await hashCanonicalPayload({
     cashAmount: data.cashAmount,
+    // Fee fields are part of the identity of the request: same key with a
+    // DIFFERENT fee must conflict, not silently replay the old response.
+    feeAccountId: data.feeAmount ? (data.feeAccountId ?? null) : null,
+    feeAmount: data.feeAmount ?? null,
     fundingAccountId: data.fundingAccountId,
     instrument: data.instrument ?? null,
     instrumentId: data.instrumentId ?? null,
@@ -2276,6 +2344,11 @@ export const correctTradeInputSchema = z.object({
   cashAmount: positiveMinorDigitsSchema,
   quantity: decimalStringSchema,
   unitPrice: positiveMinorDigitsSchema.optional(),
+  // The corrected trade's fee (same contract as `recordTradeInputSchema`):
+  // omitted = the corrected trade has NO fee (the old fee leg is reversed with
+  // the old trade and NOT recreated). Sell-only, enforced in the reapply core.
+  feeAmount: positiveMinorDigitsSchema.optional(),
+  feeAccountId: z.string().min(1).optional(),
   tradeDate: z.coerce.date().optional(),
   idempotencyKey: uuidV7Schema,
 })
@@ -2301,6 +2374,9 @@ export async function correctTradeForFamily({
   const data: CorrectTradeInput = correctTradeInputSchema.parse(rawData)
   const requestHash = await hashCanonicalPayload({
     cashAmount: data.cashAmount,
+    // Same identity rule as record: same key with a different fee conflicts.
+    feeAccountId: data.feeAmount ? (data.feeAccountId ?? null) : null,
+    feeAmount: data.feeAmount ?? null,
     fundingAccountId: data.fundingAccountId,
     quantity: data.quantity,
     side: data.side,
@@ -2345,6 +2421,19 @@ export async function correctTradeForFamily({
       const instrumentId = (resolved.leg.before ?? resolved.leg.after)!
         .instrumentId
 
+      // The OLD trade's fee leg (if any), captured BEFORE the reversal so the
+      // correction's audit `before` snapshot shows what the fee actually was —
+      // the reversal below tombstones it along with the rest of the old trade.
+      const oldFeeTransactionId =
+        resolved.cashTx.transferOut?.feeTransactionId ??
+        resolved.cashTx.transferIn?.feeTransactionId ??
+        null
+      const oldFeeTx = oldFeeTransactionId
+        ? await tx.transaction.findFirst({
+            where: { id: oldFeeTransactionId, familyId },
+          })
+        : null
+
       // 1. Reverse the OLD trade (cash + valuation + Holding), in this SAME tx.
       await softDeleteValuationLinkedTransferWithinTx(tx, {
         auditCtx,
@@ -2377,6 +2466,10 @@ export async function correctTradeForFamily({
       )
       const newTradeData: RecordTradeInput = recordTradeInputSchema.parse({
         cashAmount: data.cashAmount,
+        // Carry the corrected fee (omitted ⇒ no fee on the corrected trade;
+        // the old fee leg was reversed above along with the old trade).
+        feeAccountId: data.feeAccountId,
+        feeAmount: data.feeAmount,
         fundingAccountId: data.fundingAccountId,
         idempotencyKey: reapplyKey,
         instrumentId,
@@ -2404,6 +2497,15 @@ export async function correctTradeForFamily({
           fundingAccountId: resolved.cashTx.accountId,
           amountMinor: resolved.cashTx.amount,
           date: resolved.cashTx.date,
+          // The old trade's fee leg as it was (null = it had none), so a fee
+          // change (or removal) in this correction is visible in the audit.
+          feeAmountMinor: oldFeeTx
+            ? (oldFeeTx.amount < 0n
+                ? -oldFeeTx.amount
+                : oldFeeTx.amount
+              ).toString()
+            : null,
+          feeAccountId: oldFeeTx?.accountId ?? null,
           holdingBefore: resolved.leg.before,
           holdingAfter: resolved.leg.after,
         },
@@ -2415,6 +2517,12 @@ export async function correctTradeForFamily({
           tradeDate: (data.tradeDate ?? new Date()).toISOString(),
           transactionId: trade.transaction.id,
           unitPrice: data.unitPrice ?? null,
+          feeAmountMinor: data.feeAmount ?? null,
+          // The bearer actually charged: the named account, or the funding
+          // account when omitted (the default — "origin bears the fee").
+          feeAccountId: data.feeAmount
+            ? (data.feeAccountId ?? data.fundingAccountId)
+            : null,
         },
       })
 
@@ -2489,6 +2597,12 @@ export interface TradeForCorrectionView {
   /** This trade's own quantity delta, decimal string (always positive). */
   quantity: string
   tradeDate: string
+  /** This trade's fee leg, in minor units (digit-string) — null when the
+   * trade recorded no fee. Prefills the correction dialog's Fee field so a
+   * correction never silently drops an existing fee. */
+  feeAmountMinor: string | null
+  /** The cash account the fee is charged to (null when no fee). */
+  feeAccountId: string | null
   /** Non-null when this trade is NOT the latest event on its position — the
    * SAME message `deleteTradeFn`/`correctTradeFn` would reject with. Shown
    * inline immediately rather than only on submit; the mutation endpoints
@@ -2540,6 +2654,17 @@ export async function getTradeForCorrectionForFamily({
       where: { id: instrumentId },
     })
 
+    // The trade's fee leg (if any), read from the SAME Transfer row the
+    // mutation endpoints resolve — one source of truth, never re-derived.
+    const tradeTransfer =
+      resolved.cashTx.transferOut ?? resolved.cashTx.transferIn
+    const feeTransactionId = tradeTransfer?.feeTransactionId ?? null
+    const feeTx = feeTransactionId
+      ? await tx.transaction.findFirst({
+          where: { id: feeTransactionId, familyId },
+        })
+      : null
+
     return {
       transactionId: resolved.cashTx.id,
       side: isBuy ? "buy" : "sell",
@@ -2554,6 +2679,10 @@ export async function getTradeForCorrectionForFamily({
       ).toString(),
       quantity: scaledToQuantityString(deltaScaled),
       tradeDate: resolved.cashTx.date.toISOString(),
+      feeAmountMinor: feeTx
+        ? (feeTx.amount < 0n ? -feeTx.amount : feeTx.amount).toString()
+        : null,
+      feeAccountId: feeTx?.accountId ?? null,
       notLatestReason,
     }
   })
@@ -3102,9 +3231,12 @@ export const recordDistributionFn = createServerFn({ method: "POST" })
 // amount). The source holding is NOT mutated (no anchor recompute).
 //
 // OUT OF SCOPE — already captured elsewhere, never double-counted here:
-//   • Fees EMBEDDED in a Buy/Sell (purchase / redemption load) — `cashAmount`
-//     is authoritative, the load is part of the cash actually paid/received
-//     (recordTradeForFamily). Nothing extra to record.
+//   • Fees EMBEDDED in a Buy/Sell (purchase / redemption load) — an
+//     ITEMIZED sell fee lives in the trade itself (`feeAmount` on
+//     `recordTradeInputSchema`, a linked transfer_fee leg — fee-on-sell);
+//     an un-itemized load stays inside `cashAmount`, which is
+//     authoritative for the cash actually paid/received
+//     (recordTradeForFamily). Never both for one charge.
 //   • NAV-embedded management fees (reksadana / ETF expense ratios) — already
 //     inside the NAV/price, so the Σ-holdings value already reflects them. NOT
 //     recorded as a separate row.

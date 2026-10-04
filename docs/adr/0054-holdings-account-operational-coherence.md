@@ -79,7 +79,12 @@ guards that must ALL exist for the model to be coherent (not just Buy/Sell):
      Pensiun" account; units flat. So the destination is user-selectable and the
      date is user-set — do not assume same-account or today.
 4. **Fees** — purchase / redemption / management fees reduce cash or NAV value;
-   a fee that isn't modeled gets mis-booked as a mystery value drop.
+   a fee that isn't modeled gets mis-booked as a mystery value drop. Two
+   sanctioned shapes: the **standalone fee** (Slice 3 — charged after the fact
+   from a cash account) and **fee-on-sell** (contract amendment below — ONE
+   combined number entered in the Sell dialog, posted as a linked `transfer_fee`
+   expense leg on the trade's Transfer). A fee never lands on the holdings
+   account itself — its value stays Σ(units × price).
 5. **Switch** (fund A → fund B) — an atomic sell-A + buy-B in one account, the
    single most common reksadana action after buy/sell; without it users do two
    trades that can half-fail.
@@ -160,11 +165,16 @@ FIFO-vs-average election beyond the current average-cost model — later.
   Slice 2's `postIncomeTransactionWithinTx`; `createTransactionForFamily`
   untouched). Same-currency this slice.
   - **Out of scope — already captured, never double-counted:** a fee **embedded
-    in a Buy/Sell** (purchase / redemption load) is already in the trade —
-    `cashAmount` is authoritative, the load is part of the cash actually
-    paid/received. And **NAV-embedded management fees** (reksadana / ETF expense
-    ratios) are already inside the NAV/price, so the Σ-holdings value already
-    reflects them — NOT recorded separately. Slice 3 adds only the standalone fee.
+    in a Buy/Sell that the user does NOT itemize** (a purchase / redemption load
+    silently inside the price) is already in the trade — `cashAmount` is
+    authoritative, the load is part of the cash actually paid/received. And
+    **NAV-embedded management fees** (reksadana / ETF expense ratios) are already
+    inside the NAV/price, so the Σ-holdings value already reflects them — NOT
+    recorded separately. Slice 3 adds only the standalone fee.
+    **Amended by fee-on-sell (below):** a Sell fee the user DOES itemize is no
+    longer folded into `cashAmount` — it becomes a linked expense leg beside the
+    gross sale. The two must never both record the same charge: entering the NET
+    `cashAmount` AND itemizing the same fee again would double-count it.
 - **Slice 4 — Switch** (atomic sell-A + buy-B).
 - **Slice 5 — Edit/correct a trade** — DONE (PER-259 Slice 5). A mis-entered
   Buy/Sell can now be **corrected or deleted**, not just created. Scope
@@ -303,5 +313,32 @@ FIFO-vs-average election beyond the current average-cost model — later.
   partial move by quantity, partial move by amount, over-quantity rejection, blend into an existing position,
   same-account / cross-currency / non-holdings-account / cross-tenant rejections, idempotent replay, both accounts'
   holdings views post-move).
+- **Fee-on-sell (contract amendment)** — DONE (fee feature; Linear ticket pending
+  the workspace's free-issue quota). Real sales carry broker/platform +
+  withdrawal charges cut from the proceeds; without a home for them the recorded
+  bank credit never matches the real statement (drift). The Sell dialog now takes
+  **ONE combined fee number** (the single field creators asked for — "platform
+  7,000 + transfer 2,500 → just 9,500 here") plus a **bearer selector** ("Fee
+  paid from"): default = the destination account, so the fee comes out of the
+  proceeds and the destination receives the NET — matching a statement that shows
+  the net credit (PER-247's "origin bears the fee"); picking another cash account
+  books the fee there so the destination receives the GROSS sale value — matching
+  a platform that debits the fee elsewhere (the full-sell vs partial-sell reality
+  creators described). The trade's cash leg stays the GROSS sale value and the
+  realized gain stays GROSS: the fee has exactly one home — a linked expense leg
+  on the SAME Transfer (`Transfer.feeTransactionId`, kind `transfer_fee`,
+  trigger-guarded by migration `20260809120000`, category = the family's
+  find-or-create "Investment Fee"). Invariants: bearer must be a
+  `transaction_flow` cash account (a holdings/valuation account can never be
+  debited — the pre-check says so in plain words), `0 < fee < cashAmount`,
+  Sell-only (a fee on a Buy fails loud). Correction carries the fee
+  (reversal-and-replace re-applies it; an omitted fee is an explicit removal) and
+  the prefill endpoint exposes the existing fee so an edit never silently drops
+  it. **Delete/correction reversal now also reverses the fee leg** —
+  `softDeleteValuationLinkedTransferWithinTx` previously only reversed cash +
+  valuation + transfer, which would have left a fee'd valuation-linked transfer's
+  expense active AND its bearer's balance still debited (the classic-transfer
+  delete already did this since PER-247; the valuation-linked path caught up
+  here). No new migration: every column and trigger already existed (PER-247).
 - Cross-cutting: multi-currency trade + FX rides ADR-0052 Slice C/D; everything
   broker/country-agnostic (Broker-agnostic principle above).
