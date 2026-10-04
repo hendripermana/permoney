@@ -1,6 +1,9 @@
 import fc from "fast-check"
 import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test"
-import { createAccountForFamily } from "@/server/accounts"
+import {
+  createAccountForFamily,
+  enableHoldingsTrackingForFamily,
+} from "@/server/accounts"
 import {
   bulkCreateTransactionsForFamily,
   createTransactionForFamily,
@@ -33,9 +36,9 @@ import { createTestFactories, type TestFactories } from "./support/factories"
 // found bug becomes a one-line repro, not a mystery.
 //
 // This first slice proves ONE invariant end-to-end (the "tracer bullet" per
-// CLAUDE.md §C): CONSERVATION. Slice 2 (this file) adds IDEMPOTENCY REPLAY and
-// Slice 3 DELETE REPLAY to the same rig; later slices extend it further to
-// no-false-drift, tenant isolation, and concurrency.
+// CLAUDE.md §C): CONSERVATION. Slice 2 (this file) adds IDEMPOTENCY REPLAY,
+// Slice 3 DELETE REPLAY, and Slice 4 NO FALSE DRIFT (valuation accounts) to the
+// same rig; later slices extend it further to tenant isolation and concurrency.
 //
 // ── CONSERVATION ────────────────────────────────────────────────────────────
 // For a single family, single currency, on transaction-flow accounts:
@@ -122,6 +125,48 @@ import { createTestFactories, type TestFactories } from "./support/factories"
 // Coverage is a gate, not a lottery (Slice 1's "verified to have teeth"):
 // `withDeleteReplayProbe` guarantees every generated sequence actually FIRES
 // the probe, and `deleteAgainShots > 0` is asserted after `fc.assert`.
+//
+// ── NO FALSE DRIFT — VALUATION ACCOUNTS (Slice 4) ───────────────────────────
+//
+// The PER-196 class this slice hunts: a transfer touching a valuation-tracked
+// account (balanceSource="valuation") must SET that account's balance from its
+// valuation series — latest valuation wins (ADR-0043 §5) — never INCREMENT it
+// like a cash account. Increment instead of SET and the stored balance silently
+// detaches from the series: money that exists nowhere, a PER-196-class hidden
+// leg. The PER-270 anchor harness next door already proves drift-freedom for
+// transaction_flow accounts under back-dated activity; but it never CREATES a
+// valuation account, and its canonical assertion deliberately skips
+// balanceSource !== "transaction_flow" (see `assertCanonicalEqualsMaterialized`).
+// This slice closes exactly that hole:
+//
+//   • fixture: ONE flow account via the REAL createAccountForFamily — its
+//     opening valuation is written unconditionally at creation (ADR-0034 §3),
+//     so the as-of date is pushed to day −40 to sit before every row this rig
+//     ever posts (otherwise the afterAnchor rule would ABSORB back-dated rows
+//     and conservation would be false-by-design) — plus ONE INVESTMENT account
+//     flipped to valuation through the real `enableHoldingsTrackingForFamily`
+//     (which seeds the balance-preserving anchor, PER-266);
+//   • ops: `contribution` (flow → valuation) and `withdrawal` (valuation →
+//     flow) valuation-linked transfers carrying an explicit `newValuationValue`
+//     override (ADR-0048 §1's editable prefill) drifted ±1..5_000 from
+//     `latest ∓ cash` so a blind increment can NEVER coincide with the correct
+//     SET; back-dated expense/income on the flow account; and `delete`, the
+//     symmetric reversal path (ADR-0048 §4);
+//   • three invariants after EVERY sequence:
+//       1. CONSERVATION scoped to transaction_flow accounts — a valuation-
+//          linked transfer has ONE Transaction leg (the cash side), so
+//          Σ flow balances == Σ live rows stays exact;
+//       2. the valuation account's balance == its latest live Valuation.value
+//          (valuationDate desc, createdAt desc, id desc — re-derived from the
+//          raw series here as an INDEPENDENT witness, not via production's
+//          resolver) — the direct statement of "never incremented";
+//       3. `detectBalanceDriftForFamily` reports ZERO MATERIALIZATION drift —
+//          the ticket's literal sentence.
+//
+// Coverage is again a gate, not a lottery: `withValuationProbe` guarantees
+// every sequence contains at least one `contribution` (unskippable — no
+// negative override is ever constructed, the cash side is funded), and
+// `valuationTransferShots > 0` is asserted after `fc.assert`.
 
 const NUM_RUNS = 20
 const MAX_OPS = 8
@@ -2365,5 +2410,395 @@ describe("anchor provenance (property-based, real Postgres) — PER-270", () => 
         }),
       { numRuns: NUM_ANCHOR_RUNS }
     )
+  })
+})
+
+// ── SLICE 4 — no false drift (valuation accounts) ────────────────────────────
+//
+// Self-contained: its own ops, fixture, applier, and three-invariant assertion.
+// It deliberately reuses only module-level machinery (arbs, helpers,
+// `isExpectedDomainRejection`) and never touches the CONSERVATION property —
+// that property's fixture is anchor-free by design, and this slice's fixture is
+// anchor-rich by necessity (see the header section for why).
+
+type ValuationOp =
+  | { kind: "contribution"; amount: bigint; drift: bigint }
+  | { kind: "withdrawal"; amount: bigint; drift: bigint }
+  | { kind: "expense"; amount: bigint; dateDaysAgo: number }
+  | { kind: "income"; amount: bigint; dateDaysAgo: number }
+  | { kind: "delete"; pick: number }
+
+const NUM_VALUATION_RUNS = 8
+const MAX_VALUATION_OPS = 4
+// The flow account's opening anchor sits at day −40 (value 0), the float row
+// at day −35, every fuzzed row inside the last 30 days — ALL strictly after
+// the anchor, so the anchored formula (anchor + Σ rows-after) reduces to the
+// plain Σ that the scoped conservation invariant asserts.
+const VALUATION_ANCHOR_DAYS_AGO = 40
+const VALUATION_FLOAT_DAYS_AGO = 35
+// ADR-0048 §1's prefill is `latest ∓ cashAmount` — exactly what a blind
+// increment would land on. The explicit override is drifted away from it, so
+// increment-instead-of-SET can never masquerade as the correct SET.
+const valuationDriftArb = fc
+  .integer({ min: 1, max: 5_000 })
+  .map((n) => BigInt(n))
+const valuationDateArb = fc.integer({ min: 0, max: 30 })
+
+const valuationOpArb: fc.Arbitrary<ValuationOp> = fc.oneof(
+  {
+    weight: 3,
+    arbitrary: fc.record({
+      kind: fc.constant("contribution" as const),
+      amount: anchorAmountArb,
+      drift: valuationDriftArb,
+    }),
+  },
+  {
+    weight: 3,
+    arbitrary: fc.record({
+      kind: fc.constant("withdrawal" as const),
+      amount: anchorAmountArb,
+      drift: valuationDriftArb,
+    }),
+  },
+  {
+    weight: 2,
+    arbitrary: fc.record({
+      kind: fc.constant("expense" as const),
+      amount: anchorAmountArb,
+      dateDaysAgo: valuationDateArb,
+    }),
+  },
+  {
+    weight: 2,
+    arbitrary: fc.record({
+      kind: fc.constant("income" as const),
+      amount: anchorAmountArb,
+      dateDaysAgo: valuationDateArb,
+    }),
+  },
+  {
+    weight: 2,
+    arbitrary: fc.record({
+      kind: fc.constant("delete" as const),
+      pick: pickArb,
+    }),
+  }
+)
+
+// Shots fired by successful valuation-linked transfers across the whole run —
+// asserted > 0 after `fc.assert` so "the cross-class path was exercised" can
+// never be green by luck (same gate discipline as `deleteAgainShots`).
+let valuationTransferShots = 0
+
+/** Post-processing that makes cross-class coverage a GATE, not a lottery.
+ *
+ * A `contribution` is chosen as the probe because it can never be skipped: its
+ * override is positive by construction and the cash side holds a 100M float.
+ * (A `withdrawal` CAN be legitimately skipped — the rig never constructs a
+ * negative override — so it cannot carry the gate.) Every sequence therefore
+ * contains ≥ one guaranteed shot. */
+function withValuationProbe(ops: ValuationOp[]): ValuationOp[] {
+  const next = [...ops]
+  if (next.some((op) => op.kind === "contribution")) return next
+  next.push({ kind: "contribution", amount: 1_000n, drift: 777n })
+  return next
+}
+
+const valuationSequenceArb: fc.Arbitrary<ValuationOp[]> = fc
+  .array(valuationOpArb, { maxLength: MAX_VALUATION_OPS })
+  .map(withValuationProbe)
+
+interface ValuationFixture {
+  familyId: string
+  user: { id: string; familyId?: string | null }
+  flowAccountId: string
+  valuationAccountId: string
+  expenseCategoryId: string
+  incomeCategoryId: string
+}
+
+async function seedValuationFixture(): Promise<ValuationFixture> {
+  const owner = await factories.createAuthenticatedOnboardedUser()
+  const familyId = owner.family.id
+  const user = owner.user
+
+  const expenseCategory = await factories.createCategory({
+    familyId,
+    name: "Val Fuzz Expense",
+    type: "expense",
+  })
+  const incomeCategory = await factories.createCategory({
+    familyId,
+    name: "Val Fuzz Income",
+    type: "income",
+  })
+
+  // Flow account via the REAL ledger path. createAccountForFamily writes an
+  // opening valuation unconditionally (ADR-0034 §3, value 0 here), so the
+  // as-of date pushes that anchor BEFORE every row the rig will ever post —
+  // otherwise the afterAnchor rule would absorb back-dated rows and scoped
+  // conservation would be false-by-design.
+  const flow = await createAccountForFamily({
+    data: {
+      name: "ValFuzz Flow",
+      accountType: "DEPOSITORY",
+      openingBalanceAsOfDate: daysAgo(VALUATION_ANCHOR_DAYS_AGO),
+      idempotencyKey: factories.createIdempotencyKey(),
+    },
+    familyId,
+    user,
+  })
+
+  // Float as a genuine income row (the seedFixture discipline): the flow
+  // side's Σ must stay backed 1:1 by ROWS — an opening value would be an
+  // anchor, not a row, and conservation would then compare different things.
+  await createTransactionForFamily({
+    data: {
+      id: factories.createIdempotencyKey(),
+      idempotencyKey: factories.createIdempotencyKey(),
+      accountId: flow.id,
+      amount: OPENING_FLOAT,
+      categoryId: incomeCategory.id,
+      currency: "IDR",
+      date: daysAgo(VALUATION_FLOAT_DAYS_AGO),
+      description: "Valuation rig float",
+      type: "income",
+      isSplit: false,
+      status: "CLEARED",
+    },
+    familyId,
+    user,
+  })
+
+  // INVESTMENT defaults to balanceSource="transaction_flow"; the real flip
+  // path (enableHoldingsTracking) converts it to "valuation" and seeds the
+  // balance-preserving anchor (PER-266) in the same transaction.
+  const investment = await createAccountForFamily({
+    data: {
+      name: "ValFuzz Investment",
+      accountType: "INVESTMENT",
+      openingBalance: "500000",
+      idempotencyKey: factories.createIdempotencyKey(),
+    },
+    familyId,
+    user,
+  })
+  await enableHoldingsTrackingForFamily({
+    data: {
+      accountId: investment.id,
+      idempotencyKey: factories.createIdempotencyKey(),
+    },
+    familyId,
+    user,
+  })
+
+  return {
+    familyId,
+    user,
+    flowAccountId: flow.id,
+    valuationAccountId: investment.id,
+    expenseCategoryId: expenseCategory.id,
+    incomeCategoryId: incomeCategory.id,
+  }
+}
+
+/** The ADR-0043 §5 ordering, re-derived HERE from the raw series as an
+ * independent witness — the invariant must not ask production's own resolver
+ * whether production is right. */
+async function readLatestValuationValue(
+  familyId: string,
+  accountId: string
+): Promise<bigint | null> {
+  return await harness.withFamily(familyId, async (tx) => {
+    const latest = await tx.valuation.findFirst({
+      where: { accountId, familyId, deletedAt: null },
+      orderBy: [
+        { valuationDate: "desc" },
+        { createdAt: "desc" },
+        { id: "desc" },
+      ],
+      select: { value: true },
+    })
+    return latest ? latest.value : null
+  })
+}
+
+async function applyValuationOps(
+  fixture: ValuationFixture,
+  ops: ValuationOp[]
+): Promise<void> {
+  const { familyId, user, flowAccountId, valuationAccountId } = fixture
+  const liveTxIds: string[] = []
+
+  for (const op of ops) {
+    try {
+      if (op.kind === "delete") {
+        if (liveTxIds.length === 0) continue
+        const idx = op.pick % liveTxIds.length
+        await deleteTransactionForFamily({
+          id: liveTxIds[idx],
+          idempotencyKey: factories.createIdempotencyKey(),
+          familyId,
+          user,
+        })
+        liveTxIds.splice(idx, 1)
+        continue
+      }
+
+      const id = factories.createIdempotencyKey()
+      const idempotencyKey = factories.createIdempotencyKey()
+
+      if (op.kind === "contribution" || op.kind === "withdrawal") {
+        const latest = await readLatestValuationValue(
+          familyId,
+          valuationAccountId
+        )
+        if (latest === null) continue
+        // Never CONSTRUCT a negative override: a magnitude violation is a Zod
+        // rejection, not a domain rejection, and would rethrow as a false red.
+        // Skip instead — the guaranteed-contribution probe keeps the gate safe.
+        if (op.kind === "withdrawal" && latest < op.amount + op.drift) continue
+        const contribution = op.kind === "contribution"
+        const override = contribution
+          ? latest + op.amount + op.drift
+          : latest - op.amount - op.drift
+        // Valuation-linked transfer (ADR-0048 §1): ONE Transaction leg on the
+        // cash side; the tracked side is a fresh Valuation whose value is the
+        // explicit override (a broker's number, drifted from the prefill).
+        await createTransactionForFamily({
+          data: {
+            id,
+            idempotencyKey,
+            accountId: contribution ? flowAccountId : valuationAccountId,
+            toAccountId: contribution ? valuationAccountId : flowAccountId,
+            amount: op.amount,
+            newValuationValue: override.toString(),
+            currency: "IDR",
+            date: new Date(),
+            description: contribution ? "Fuzz contribution" : "Fuzz withdrawal",
+            type: "transfer",
+            isSplit: false,
+            status: "CLEARED",
+          },
+          familyId,
+          user,
+        })
+        valuationTransferShots++
+        liveTxIds.push(id)
+        continue
+      }
+
+      // Back-dated expense / income on the flow account only — the ticket's
+      // "random back-dated transactions" half.
+      await createTransactionForFamily({
+        data: {
+          id,
+          idempotencyKey,
+          accountId: flowAccountId,
+          amount: op.amount,
+          categoryId:
+            op.kind === "expense"
+              ? fixture.expenseCategoryId
+              : fixture.incomeCategoryId,
+          currency: "IDR",
+          date: daysAgo(op.dateDaysAgo),
+          description: `Fuzz ${op.kind}`,
+          type: op.kind,
+          isSplit: false,
+          status: "CLEARED",
+        },
+        familyId,
+        user,
+      })
+      liveTxIds.push(id)
+    } catch (error) {
+      if (isExpectedDomainRejection(error)) continue
+      throw error
+    }
+  }
+}
+
+/** The Slice 4 contract, read straight from Postgres after every sequence:
+ * no mutations, so it runs outside any rejection guard — a failure here IS the
+ * property failing, full stop. */
+async function assertNoFalseDrift(fixture: ValuationFixture): Promise<void> {
+  const { familyId } = fixture
+
+  // 1) CONSERVATION scoped to transaction_flow: the valuation account is SET
+  //    from its series (never incremented) and its transfers write NO second
+  //    Transaction leg, so it cannot — and must not — join the Σ.
+  const scoped = await harness.withFamily(familyId, async (tx) => {
+    const accounts = await tx.account.findMany({
+      where: { familyId, balanceSource: "transaction_flow" },
+      select: { balance: true },
+    })
+    const rows = await tx.transaction.findMany({
+      where: { familyId, deletedAt: null },
+      select: { amount: true },
+    })
+    return {
+      balances: accounts.reduce((sum, a) => sum + a.balance, 0n),
+      amounts: rows.reduce((sum, r) => sum + r.amount, 0n),
+    }
+  })
+  expect(scoped.balances).toBe(scoped.amounts)
+
+  // 2) The valuation account's balance IS its latest live valuation — the
+  //    direct statement of "SET, never incremented".
+  const series = await harness.withFamily(familyId, async (tx) => {
+    const account = await tx.account.findUniqueOrThrow({
+      where: { id: fixture.valuationAccountId },
+      select: { balance: true, balanceSource: true },
+    })
+    const latest = await tx.valuation.findFirst({
+      where: {
+        accountId: fixture.valuationAccountId,
+        familyId,
+        deletedAt: null,
+      },
+      orderBy: [
+        { valuationDate: "desc" },
+        { createdAt: "desc" },
+        { id: "desc" },
+      ],
+      select: { value: true },
+    })
+    return {
+      balance: account.balance,
+      balanceSource: account.balanceSource,
+      latest: latest?.value ?? null,
+    }
+  })
+  expect(series.balanceSource).toBe("valuation")
+  expect(series.latest).not.toBeNull()
+  expect(series.balance).toBe(series.latest)
+
+  // 3) The ticket's literal sentence: zero MATERIALIZATION drift family-wide.
+  const drifts = await harness.withFamily(familyId, async () =>
+    detectBalanceDriftForFamily({ familyId, userId: fixture.user.id })
+  )
+  expect(drifts.filter((d) => d.kind === "MATERIALIZATION")).toEqual([])
+}
+
+describe("valuation no-false-drift (property-based, real Postgres) — PER-208", () => {
+  test("INVARIANT: back-dated transactions + valuation-linked transfers raise no false MATERIALIZATION drift (PER-196 class)", async () => {
+    valuationTransferShots = 0
+    await fc.assert(
+      fc
+        .asyncProperty(valuationSequenceArb, async (ops) => {
+          const fixture = await seedValuationFixture()
+          await applyValuationOps(fixture, ops)
+          await assertNoFalseDrift(fixture)
+        })
+        .beforeEach(async () => {
+          await harness.reset()
+        }),
+      { numRuns: NUM_VALUATION_RUNS }
+    )
+    // Coverage gate (Slice 4): the cross-class transfer path must have been
+    // FIRING during this run — a property that never executed its probe is
+    // green for the wrong reason.
+    expect(valuationTransferShots).toBeGreaterThan(0)
   })
 })
