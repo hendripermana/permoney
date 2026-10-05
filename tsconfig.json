@@ -12,6 +12,7 @@
     "workers",
     ".agents",
     ".claude",
+    ".devin",
     ".windsurf",
     ".junie",
     ".factory",
