@@ -24,6 +24,12 @@
       "skillPath": "plugins/autoresearch/skills/autoresearch/SKILL.md",
       "computedHash": "0e37474300950d0d068734ab8f878cf43d98eaae5e171b4e6bafc32952e142cb"
     },
+    "babysit": {
+      "source": "tester-army/e2e",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/babysit/SKILL.md",
+      "computedHash": "8795e0d12f5272d4b6d3b36a682852f6945d45d316e0a4ccb86b29a61a83ba5b"
+    },
     "ban-type-assertions": {
       "source": "factory-ai/factory-plugins",
       "sourceType": "github",
@@ -140,6 +146,12 @@
       "sourceType": "github",
       "skillPath": "plugins/droid-control/skills/droid-control/SKILL.md",
       "computedHash": "43c459516602f630ceaa566616337776a5ffa4b84a04fa02b7007708e47fb6ad"
+    },
+    "e2e": {
+      "source": "tester-army/e2e",
+      "sourceType": "github",
+      "skillPath": "skills/e2e/SKILL.md",
+      "computedHash": "9080147d820c505835e71911be12bd089ee73eaf7f1e58c034c6db35a0bee99f"
     },
     "edit-article": {
       "source": "mattpocock/skills",
@@ -499,6 +511,12 @@
       "sourceType": "github",
       "computedHash": "dadbca54d35a33fe73e40018611af2179689305bf6da812ab2643987fefd9da3"
     },
+    "ship-pr": {
+      "source": "tester-army/e2e",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/ship-pr/SKILL.md",
+      "computedHash": "982000e4c223f24398d572d5387e6f6068e4648ec5958fa36ffb3cc9bef0e963"
+    },
     "showcase": {
       "source": "factory-ai/factory-plugins",
       "sourceType": "github",
@@ -629,10 +647,10 @@
       "computedHash": "9b446f0c7fe1cfb560b1d34439523b1a76d5f177290007b2c053a1c749a4a8ba"
     },
     "verify": {
-      "source": "factory-ai/factory-plugins",
+      "source": "tester-army/e2e",
       "sourceType": "github",
-      "skillPath": "plugins/droid-control/skills/verify/SKILL.md",
-      "computedHash": "bdbb1a76914934c89f5dc44b078d9c8770a31ec3e92cfb01cb9b71b2b8975ffa"
+      "skillPath": ".claude/skills/verify/SKILL.md",
+      "computedHash": "d1f4e853fedf91443a3cb190667dee1db24c0b9f1cb2c6d4acb77d11681e3510"
     },
     "visual-design": {
       "source": "factory-ai/factory-plugins",
@@ -692,6 +710,12 @@
       "source": "obra/superpowers",
       "sourceType": "github",
       "computedHash": "70fe626d5970349239e939f311893389563a6338cda40eb0500606dd48aa3afa"
+    },
+    "writing-pr": {
+      "source": "tester-army/e2e",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/writing-pr/SKILL.md",
+      "computedHash": "0df20f3dbb5eb56f07a8a712efb88054844984bda9741a2544211ffe6e2179ed"
     },
     "writing-shape": {
       "source": "mattpocock/skills",
