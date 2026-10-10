@@ -66,7 +66,7 @@ The exact entity schema was derived from **two sources and reconciled**:
   classification, not a sign hack (§4.C).
 - **Transfer pairing exists in v2 but not in the bundle.** Sure pairs the two legs
   of a transfer **deterministically** via a `Transfer { inflow_transaction_id,
-outflow_transaction_id, status }` entity (verified in `sure_import/preflight.rb`
+  outflow_transaction_id, status }` entity (verified in `sure_import/preflight.rb`
   required keys and `data_exporter.rb`). The user's bundle has **zero `Transfer`
   rows**, so its 928 transfer-kind transactions (902 `funds_movement` + 12
   `cc_payment` + 14 `loan_payment`) are **unpaired**. Phase 1 defers transfers
@@ -287,7 +287,7 @@ requires no matching logic at all.
 > (`decideOpeningBalance`/`assetOpening`/`willPostThisRun`/
 > `earliestPromotedDateBySureAccount`, all deleted) — no longer runs. ADR-0043
 > made Permoney's balance calculator anchor-aware: `balance = latest
-reconciliation-anchor valuation (≤ now) + Σ(transactions strictly after it)`.
+> reconciliation-anchor valuation (≤ now) + Σ(transactions strictly after it)`.
 > Migration no longer decides or computes an opening value at all. It writes
 > **every** parsed Sure valuation as its own `type="reconciliation"` Valuation
 > row (via the canonical `createValuationForFamily`, source=`"migration:sure"`)

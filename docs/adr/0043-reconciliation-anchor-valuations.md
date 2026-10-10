@@ -58,7 +58,7 @@ PER-177 design grill:
    project's "database is the law, no plugs" standard. Anchor support is the
    only faithful option, and it is a **strictly more general** formula: with
    exactly one anchor (the common case today), `latestAnchor(≤now).value = 
-opening.value` and the post-anchor flow sum degenerates to ADR-0034 §4's
+   opening.value` and the post-anchor flow sum degenerates to ADR-0034 §4's
    original formula exactly. No existing account's materialized balance
    changes as a result of this ADR alone.
 3. **"Permanently un-auditable" is no longer true, because the drift detector

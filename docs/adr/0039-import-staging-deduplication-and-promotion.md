@@ -67,7 +67,7 @@ Two tickets name `RawImportedTransaction`:
 - **PER-82 (this slice)** — generic staging for CSV _and_ future providers.
 - **PER-118 (M8, design-only)** — reserves
   `RawImportedTransaction { id, providerConnectionId, externalId, rawPayload,
-normalizedAt?, confirmedTransactionId?, familyId }` keyed to a future
+  normalizedAt?, confirmedTransactionId?, familyId }` keyed to a future
   `ProviderConnection`, under the reserved ADR-0015.
 
 ADR-0031 already records the intent that "`RawImportedTransaction` is the future
@@ -300,7 +300,7 @@ Two retry surfaces, two keys:
 
 - **Type normalization** is a **pure function**
   `normalizeProviderAccountType(providerKind, providerType, hints) →
-{ accountClass, accountType, accountSubtype, balanceSource, capabilities }` in
+  { accountClass, accountType, accountSubtype, balanceSource, capabilities }` in
   `src/lib/import-staging.ts`, with a conservative fallback
   (`DEPOSITORY`/`checking`). It is **reserved/stubbed** in PER-82 (no real
   providers yet); PER-118/M8 fills provider-specific behavior.
@@ -337,7 +337,7 @@ Two retry surfaces, two keys:
 
 - The matcher is a **pure function**
   `applySmartRules(rules, normalizedRow) → { suggestedCategoryId,
-suggestedMerchantId, matchedSmartRuleId }` in `src/lib/import-staging.ts`.
+  suggestedMerchantId, matchedSmartRuleId }` in `src/lib/import-staging.ts`.
   Match = normalized description **contains** a rule's lowercased `keyword`;
   **first match wins** by deterministic `createdAt` order.
 - It writes **suggestion columns only** on the staging row during the normalize
@@ -417,9 +417,9 @@ Mint/YNAB/QIF rows in PER-151 are flat single-account rows).
   blocked); reads require active membership (`*:read`).
 - **Input seam (keeps PER-151 out of PER-82):** `createImportBatchFn` accepts
   **already-field-extracted** rows — `StagedRowInput { accountId, externalId?,
-rawPayload, date, amount, type, description, suggestedCategoryId?,
-suggestedMerchantId? }[]` plus batch fields `{ sourceKind, accountId?,
-contentHash, idempotencyKey }`. **`accountId` is per row** (the batch-level
+  rawPayload, date, amount, type, description, suggestedCategoryId?,
+  suggestedMerchantId? }[]` plus batch fields `{ sourceKind, accountId?,
+  contentHash, idempotencyKey }`. **`accountId` is per row** (the batch-level
   `accountId?` is only an optional default/hint, §1); each row may target a
   different account so one file spans many accounts. PER-82 **canonicalizes**
   (signs amount by type, buckets date in family-tz, derives currency from the

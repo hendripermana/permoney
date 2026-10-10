@@ -281,7 +281,7 @@ but it has no allocation.
 - **Splits → base via the parent's stored rate.** A `SplitEntry` has no base
   projection of its own (it is parent-currency, positive). Its base contribution
   is `convertMinor(splitEntry.amount, parent.currency, parent.baseCurrency,
-parent.fxRateScaled)` — the parent's **own materialized rate** applied to the
+  parent.fxRateScaled)` — the parent's **own materialized rate** applied to the
   child's native amount. This is exact and consistent with how the parent's
   `baseAmount` was derived (no proportional-drift fudge). If the parent is
   FX-pending, its children are FX-pending too.
