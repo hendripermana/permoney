@@ -161,7 +161,7 @@ reconcile invariants are asserted in the real-Postgres tests:
 - **internal:** `legsStaged === legsPromotedTotal + Σ heldLegsByReason`,
 - **spanning:** every bundle transaction is counted in exactly one place —
   `total === standard{promoted+held} + transfers{legsPromotedTotal + Σheld} +
-zero + invalidDate + unmapped`. Transfer legs live **only** in the `transfers`
+  zero + invalidDate + unmapped`. Transfer legs live **only** in the `transfers`
   block (excluded from `transactions.held`).
 
 ## Consequences

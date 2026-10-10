@@ -759,18 +759,14 @@ function AccountDetailPage() {
         }
 
     const merged: Array<MergedEntry> = [
-      ...statement.map(
-        (trx): MergedEntry => ({
-          date: new Date(trx.date).getTime(),
-          row: { kind: "transaction", trx },
-        })
-      ),
-      ...visibleHoldingEvents.map(
-        (event): MergedEntry => ({
-          date: new Date(event.date).getTime(),
-          row: { kind: "holding_event", event },
-        })
-      ),
+      ...statement.map((trx): MergedEntry => ({
+        date: new Date(trx.date).getTime(),
+        row: { kind: "transaction", trx },
+      })),
+      ...visibleHoldingEvents.map((event): MergedEntry => ({
+        date: new Date(event.date).getTime(),
+        row: { kind: "holding_event", event },
+      })),
     ]
     // Newest first, matching /transactions — a stable sort keeps same-day
     // transactions and events in their original (already-ordered) relative

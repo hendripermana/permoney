@@ -207,7 +207,7 @@ upgraded so the **database independently enforces membership** (defense in depth
   > have no `familyId` column of their own — they are scoped indirectly
   > through their parent `Transaction`. The original migration expressed that
   > indirection as `"transactionId"`/`"outflowTransactionId"` `IN (SELECT id
-FROM "Transaction" WHERE "familyId" = ...)`. That shape is a
+  > FROM "Transaction" WHERE "familyId" = ...)`. That shape is a
   > **non-correlated** subquery: Postgres cannot push the outer row's id into
   > it, so it plans a hashed SubPlan that materializes every `Transaction` row
   > owned by the family on **every** `SplitEntry`/`Transfer` access — cost

@@ -79,7 +79,7 @@ flagged.**
 
 4. **Presentation split, not a data split.** Person-debt accounts are hidden
    from the main Accounts list (`getAccountsForFamily({ includeCounterparty:
-false })` filters them; the default stays `true` so every existing caller
+   false })` filters them; the default stays `true` so every existing caller
    and the net-worth math keep seeing them). They live in the new
    Utang-Piutang view, which lists each person with a signed **net position**
    (Σ balances of their linked accounts, per currency) and a **settled**
