@@ -131,7 +131,7 @@ describe("FX auto-ingestion — discovery -> provider quote -> FxRateSnapshot (P
 
   // Pin the family base currency deterministically before any rows exist.
   const forceBase = (owner: AuthenticatedOnboardedUser, currency: string) =>
-    harness.withFamily(owner.family.id, async (tx) =>
+    harness.withFamily(owner.family.id, (tx) =>
       tx.family.update({ where: { id: owner.family.id }, data: { currency } })
     )
 
@@ -178,7 +178,7 @@ describe("FX auto-ingestion — discovery -> provider quote -> FxRateSnapshot (P
     })
 
   const readTx = (owner: AuthenticatedOnboardedUser, id: string) =>
-    harness.withFamily(owner.family.id, async (tx) =>
+    harness.withFamily(owner.family.id, (tx) =>
       tx.transaction.findUniqueOrThrow({ where: { id } })
     )
 
@@ -213,7 +213,7 @@ describe("FX auto-ingestion — discovery -> provider quote -> FxRateSnapshot (P
   // FxRateSnapshot / AuditLog are FORCE-RLS tenant tables: read them through
   // the harness's GUC-scoped transaction, never the bare client.
   const snapshots = (familyId: string) =>
-    harness.withFamily(familyId, async (tx) =>
+    harness.withFamily(familyId, (tx) =>
       tx.fxRateSnapshot.findMany({
         where: { familyId },
         orderBy: { asOfDate: "asc" },
@@ -221,7 +221,7 @@ describe("FX auto-ingestion — discovery -> provider quote -> FxRateSnapshot (P
     )
 
   const snapshotAuditCount = (familyId: string) =>
-    harness.withFamily(familyId, async (tx) =>
+    harness.withFamily(familyId, (tx) =>
       tx.auditLog.count({
         where: { familyId, entityType: "FxRateSnapshot" },
       })

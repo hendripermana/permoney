@@ -102,7 +102,7 @@ function requireFrankfurterApiUrl(): string {
     )
   }
   const url = raw.trim().replace(/\/+$/, "")
-  if (!/^https?:\/\//.test(url)) {
+  if (!url.startsWith("http://") && !url.startsWith("https://")) {
     throw new Error(
       `FRANKFURTER_API_URL must be an http(s) base URL (got "${url}").`
     )

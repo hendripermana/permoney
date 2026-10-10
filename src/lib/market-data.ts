@@ -1103,12 +1103,23 @@ function fxRateNumberToDecimal(rate: unknown): string | null {
   if (typeof rate !== "number" || !Number.isFinite(rate) || rate <= 0)
     return null
   const shortest = String(rate)
-  if (/^\d+(\.\d+)?$/.test(shortest)) return shortest
+  if (isPlainDecimalString(shortest)) return shortest
   const fixed = rate
     .toFixed(FX_PRICE_DECIMALS)
     .replace(/0+$/, "")
     .replace(/\.$/, "")
-  return /^\d+(\.\d+)?$/.test(fixed) ? fixed : null
+  return isPlainDecimalString(fixed) ? fixed : null
+}
+
+/**
+ * `^\d+(\.\d+)?$` without the nested-quantifier regex (a backtracking
+ * hot-spot worth avoiding in a money path): at most one `.`, every part
+ * non-empty and all digits.
+ */
+function isPlainDecimalString(value: string): boolean {
+  const parts = value.split(".")
+  if (parts.length > 2) return false
+  return parts.every((part) => part.length > 0 && /^\d+$/.test(part))
 }
 
 /** A bare `YYYY-MM-DD` → UTC midnight Date, or null. */
@@ -1230,5 +1241,5 @@ export function parseFxExtraCurrencies(
     if (!shape.test(code)) continue
     seen.add(code)
   }
-  return [...seen].sort()
+  return [...seen].sort((a, b) => a.localeCompare(b))
 }
