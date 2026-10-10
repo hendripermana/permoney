@@ -36,9 +36,24 @@ updates:
         patterns:
           - "@radix-ui/*"
           - radix-ui
+      # react and react-dom must move together: React refuses to run when the
+      # two versions differ ("Incompatible React versions"), which failed every
+      # component test when the bot bumped only `react` (PR #362). The types
+      # pair is named explicitly here and excluded from `types` below, because
+      # an overlapping pattern is resolved by whichever group matches first —
+      # one atomic PR is the only reliable shape.
+      react:
+        patterns:
+          - react
+          - react-dom
+          - "@types/react"
+          - "@types/react-dom"
       types:
         patterns:
           - "@types/*"
+        exclude-patterns:
+          - "@types/react"
+          - "@types/react-dom"
       dev-tooling:
         patterns:
           - vitest
