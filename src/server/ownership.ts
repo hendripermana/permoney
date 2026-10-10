@@ -270,15 +270,13 @@ export async function listOwnerCandidatesForFamily({
           },
         ]
       }),
-      ...people.map(
-        (p): OwnerCandidate => ({
-          ref: { personId: p.id },
-          displayName: p.displayName,
-          kind: "person",
-          isMember:
-            p.linkedUserId !== null && activeMemberIds.has(p.linkedUserId),
-        })
-      ),
+      ...people.map((p): OwnerCandidate => ({
+        ref: { personId: p.id },
+        displayName: p.displayName,
+        kind: "person",
+        isMember:
+          p.linkedUserId !== null && activeMemberIds.has(p.linkedUserId),
+      })),
     ]
     return {
       activeMemberCount: members.length,

@@ -17,7 +17,7 @@ brokers do not work that way. Verified against the creator's actual holdings:
 - **Bibit (reksadana)** — a "portfolio" account holds several funds; each fund
   shows _units_ (`1,353.5149`), _average buy price_ (`Rp 1,477.63`), _cost_
   (`Rp 2,000,000`), _current value_ (`Rp 2,008,370`), _gain_ (`+Rp 8,370
-/ +0.42%`).
+  / +0.42%`).
 - **BSI Gold** — `2.0180 gram` × avg buy `Rp 2,760,809/gram` = cost
   `Rp 5,571,313`; today's sell price `Rp 2,455,000/gram` → value `Rp 4,954,190`;
   `−Rp 617,123 / −11.08%`.
@@ -232,13 +232,13 @@ Semantically: cash **into** a valuation-tracked investment account is a BUY; cas
   touches `lastPrice`.
 
 - **Average cost.** BUY blends: `newAvgUnitCost = round_half_up((oldUnits ×
-oldAvg + cashAmount) × SCALE / newUnits)` (`averageUnitCostMinor`,
+  oldAvg + cashAmount) × SCALE / newUnits)` (`averageUnitCostMinor`,
   `src/lib/holdings.ts`), so `cost += cashAmount`. SELL removes cost pro-rata at
   the current average (`costRemoved = quantity × avgUnitCost`) and leaves the
   average of the remaining units unchanged — the average-cost method, not FIFO.
 
 - **Derived realized gain.** SELL returns `realizedGain = cashAmount −
-costRemoved` (signed, minor units). It is DERIVED and returned for display
+  costRemoved` (signed, minor units). It is DERIVED and returned for display
   only — this slice does NOT post an income/expense row for it.
 
 - **One-way holding close at zero.** Selling the last unit

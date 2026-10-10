@@ -215,7 +215,7 @@ digit string (BigInt is not JSON-serializable); dates are `YYYY-MM-DD`.
     first sample seeds from its **opening anchor plus all flow/valuations strictly
     before `from`** — activity predating `from` shifts the first point and must
     not be dropped. The fold therefore consumes rows back to inception (`date ≤
-to`), not `[from..to]`. (Asserted: a transaction dated before `from` moves the
+    to`), not `[from..to]`. (Asserted: a transaction dated before `from` moves the
     first point.)
   - **One query per entity + one in-memory pass:** the server loads accounts,
     transactions (`date ≤ to`), valuations (`valuationDate ≤ to`), and fx
@@ -226,7 +226,7 @@ to`), not `[from..to]`. (Asserted: a transaction dated before `from` moves the
   - This boundary is what makes the mandated **unit tests** (cash-like, tracked,
     multi-currency mark-to-market, mid-range inception, pre-`from` activity,
     FX-pending, future-dated-rate clamp, carry-forward, `netWorth == assets −
-liabilities`) possible without a database.
+    liabilities`) possible without a database.
 - **Server fn in a new `src/server/reporting.ts`** deep module (R2's income
   statement will land here too — not in `valuations.ts`, whose domain is the
   valuation primitive/balance/drift and which is already large):
@@ -235,7 +235,9 @@ liabilities`) possible without a database.
   getNetWorthSeriesFn = createServerFn({ method: "GET" })
     .middleware([familyMiddleware])
     .inputValidator(getNetWorthSeriesInputSchema.parse)
-    .handler(/* one scopedTenantTransaction → load [inception..to] → buildNetWorthSeries */)
+    .handler(
+      /* one scopedTenantTransaction → load [inception..to] → buildNetWorthSeries */
+    )
   ```
 
 - **Read-only**: no idempotency key, no `AuditLog` (it mutates nothing). One

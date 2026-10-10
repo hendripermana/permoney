@@ -106,7 +106,7 @@ on `categoryId`.**
    today). The pure engine (`src/lib/budget-progress.ts`) takes a `type`
    field per row and nets an income row's magnitude AGAINST the bucket
    instead of adding it — `actualAmount` is `Σ expense magnitude − Σ
-reimbursement magnitude` for the period, the same arithmetic
+   reimbursement magnitude` for the period, the same arithmetic
    `cash-flow.ts` already does as `expense − income`. The pure/impure split
    is untouched: the engine still takes already-fetched rows and does no I/O.
 

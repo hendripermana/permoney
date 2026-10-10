@@ -1073,40 +1073,38 @@ async function loadCalculationAccountsForFamily(
     }
   }
 
-  return inScope.map(
-    (a): ZakatCalculationAccount => ({
-      id: a.id,
-      name: a.name,
-      accountClass: a.accountClass,
-      accountType: a.accountType,
-      balance: a.balance,
-      zakatPayerId: a.zakatPayerId,
-      zakatJointPayerId: a.zakatJointPayerId,
-      zakatJointSharePercent: a.zakatJointSharePercent,
-      transactions: (txnsByAccount.get(a.id) ?? []).map((t) => ({
-        date: t.date,
-        createdAt: t.createdAt,
-        // `Transaction.amount` is SIGNED in the database (CLAUDE.md §5A:
-        // negative for expense/transfer-out, positive for income/transfer-
-        // in). `signedDeltaForAccount` (reused by the bigint daily-series
-        // walk in zakat-calculation.ts) expects the AnalyticsTxn
-        // convention instead — an ABSOLUTE magnitude, with `type` alone
-        // carrying the sign — exactly like every other server-side
-        // `serializeTransaction` call site (`absMoney(...)`) already does
-        // before handing rows to client/analytics code. Skipping this
-        // once produced a real bug here: an expense's stored-negative
-        // amount was double-negated by `signedDeltaForAccount`'s `-amount`
-        // branch, making it ADD to the balance instead of subtracting.
-        amount: absMoney(t.amount),
-        type: t.type,
-        kind: t.kind,
-        accountId: t.accountId,
-        toAccountId: t.toAccountId,
-        transferIncoming: null,
-        description: t.description,
-      })),
-    })
-  )
+  return inScope.map((a): ZakatCalculationAccount => ({
+    id: a.id,
+    name: a.name,
+    accountClass: a.accountClass,
+    accountType: a.accountType,
+    balance: a.balance,
+    zakatPayerId: a.zakatPayerId,
+    zakatJointPayerId: a.zakatJointPayerId,
+    zakatJointSharePercent: a.zakatJointSharePercent,
+    transactions: (txnsByAccount.get(a.id) ?? []).map((t) => ({
+      date: t.date,
+      createdAt: t.createdAt,
+      // `Transaction.amount` is SIGNED in the database (CLAUDE.md §5A:
+      // negative for expense/transfer-out, positive for income/transfer-
+      // in). `signedDeltaForAccount` (reused by the bigint daily-series
+      // walk in zakat-calculation.ts) expects the AnalyticsTxn
+      // convention instead — an ABSOLUTE magnitude, with `type` alone
+      // carrying the sign — exactly like every other server-side
+      // `serializeTransaction` call site (`absMoney(...)`) already does
+      // before handing rows to client/analytics code. Skipping this
+      // once produced a real bug here: an expense's stored-negative
+      // amount was double-negated by `signedDeltaForAccount`'s `-amount`
+      // branch, making it ADD to the balance instead of subtracting.
+      amount: absMoney(t.amount),
+      type: t.type,
+      kind: t.kind,
+      accountId: t.accountId,
+      toAccountId: t.toAccountId,
+      transferIncoming: null,
+      description: t.description,
+    })),
+  }))
 }
 
 export async function computeZakatForFamily({
