@@ -66,8 +66,10 @@ function ProfilePage() {
               </div>
             </div>
 
+            {/* No `key` here on purpose: seeding local state from the server
+                values must never remount the card, because a remount discards
+                an unsaved edit (see ProfileCard). */}
             <ProfileCard
-              key={`${overview?.profile.name}:${overview?.profile.theme}`}
               name={overview?.profile.name}
               email={overview?.profile.email ?? "—"}
               persistedTheme={overview?.profile.theme}
@@ -105,13 +107,26 @@ function ProfileCard({
   onSaved: () => void
 }) {
   const { setTheme } = useTheme()
-  // Seeded once from the server (the `key` on this component resets it whenever
-  // the persisted values change). next-themes owns the live DOM class; this
-  // local state is the not-yet-saved selection persisted to User.theme.
-  const [displayName, setDisplayName] = React.useState(name ?? "")
-  const [theme, setLocalTheme] = React.useState<Theme>(
-    persistedTheme ?? "system"
-  )
+  // Draft-until-edited: `null` means "the user has not touched this field", so
+  // the value is DERIVED from the server value instead of being copied into
+  // state once. Two invariants depend on this:
+  //   * An overview that resolves after the card mounted (cold cache, or any
+  //     background refetch) must seed these fields — never remount the card.
+  //     The old `key={name:theme}` seeding did exactly that: the key moved
+  //     "undefined:undefined" → "Name:theme" the moment the query resolved,
+  //     which reset an already-made selection to the persisted value while
+  //     next-themes kept the previewed `<html>` class — so the UI showed the
+  //     new theme but "Save changes" stayed disabled forever.
+  //   * A clean field keeps following the server (external changes still show
+  //     up); once edited, the draft wins until it is saved.
+  // next-themes owns the live DOM class; the theme draft is the not-yet-saved
+  // selection persisted to User.theme.
+  const [nameDraft, setNameDraft] = React.useState<string | null>(null)
+  const [themeDraft, setThemeDraft] = React.useState<Theme | null>(null)
+
+  const displayName = nameDraft ?? name ?? ""
+  const resolvedTheme = persistedTheme ?? "system"
+  const theme = themeDraft ?? resolvedTheme
 
   const mutation = useMutation({
     mutationFn: async () =>
@@ -125,12 +140,12 @@ function ProfileCard({
 
   const dirty =
     displayName.trim() !== "" &&
-    (displayName.trim() !== (name ?? "") || theme !== persistedTheme)
+    (displayName.trim() !== (name ?? "") || theme !== resolvedTheme)
 
   // Apply the theme to the DOM immediately for instant preview; the durable
   // write to User.theme happens on Save.
   const chooseTheme = (next: Theme) => {
-    setLocalTheme(next)
+    setThemeDraft(next)
     setTheme(next)
   }
 
@@ -150,7 +165,7 @@ function ProfileCard({
             value={displayName}
             maxLength={120}
             disabled={isLoading || mutation.isPending}
-            onChange={(event) => setDisplayName(event.target.value)}
+            onChange={(event) => setNameDraft(event.target.value)}
           />
         </div>
         <div className="grid max-w-sm gap-1.5">
