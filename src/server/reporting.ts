@@ -290,7 +290,7 @@ export async function getNetWorthSeriesForFamily({
   })
 }
 
-async function getFamilyTimezone(
+export async function getFamilyTimezone(
   tx: TenantTransactionClient,
   familyId: string
 ): Promise<string> {
@@ -435,7 +435,9 @@ function serializeCashFlowReport(
 // Generous inclusive bounds: ±2 days UTC covers any family timezone offset
 // (±14h). The fold localizes each instant precisely and filters to [from, to]
 // in the family timezone, so over-fetching at most a day's rows is harmless.
-function queryRange(from: string, to: string): { gte: Date; lt: Date } {
+// Shared with the insights engine (PER-227) so both seams over-fetch by the
+// same margin.
+export function queryRange(from: string, to: string): { gte: Date; lt: Date } {
   const startOfFrom = Date.parse(`${from}T00:00:00.000Z`)
   const startOfTo = Date.parse(`${to}T00:00:00.000Z`)
   const day = 24 * 60 * 60 * 1000

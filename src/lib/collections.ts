@@ -125,6 +125,15 @@ async function resyncLedgerAndBalances(): Promise<void> {
     getQueryClient().invalidateQueries({
       queryKey: ["latestGroundTruthAnchor"],
     }),
+    // PER-227: the dashboard's insights card is a read-time fold over this
+    // same ledger. Without invalidation a page that stays mounted (the form
+    // opens as a dialog OVER the dashboard) would keep the pre-mutation
+    // answer until its next focus/remount — the classic "works in tests,
+    // stale in the app" defect. This is the one hub every collection-driven
+    // ledger mutation goes through, so it is the only place that needs it.
+    getQueryClient().invalidateQueries({
+      queryKey: ["dashboard", "insights"],
+    }),
   ])
 }
 
