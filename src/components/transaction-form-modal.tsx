@@ -17,6 +17,8 @@ import {
   IconTrash,
   IconX,
 } from "@tabler/icons-react"
+import { Loader2 } from "lucide-react"
+import { toast } from "sonner"
 import * as z from "zod"
 import { format } from "date-fns"
 import { getCurrencySymbol } from "@/lib/currency"
@@ -2335,13 +2337,29 @@ function TransactionActionBar({
               <Button type="button" variant="ghost" onClick={onCancel}>
                 Cancel
               </Button>
-              <Button
-                type="submit"
-                disabled={isSaveDisabled}
-                className="bg-yellow-500 font-bold text-black hover:bg-yellow-600 disabled:opacity-50"
-              >
-                {isEditMode ? "Update Changes" : "Save Transaction"}
-              </Button>
+              {/* In-flight state comes from TanStack Form itself — no
+                  imperative flags. The button flips to disabled + spinner for
+                  as long as the submit handler is awaiting persistence, so a
+                  second click during a slow round trip cannot start a second
+                  mutation. */}
+              <form.Subscribe selector={(state) => state.isSubmitting}>
+                {(isSubmitting) => (
+                  <Button
+                    type="submit"
+                    disabled={isSaveDisabled || isSubmitting}
+                    className="bg-yellow-500 font-bold text-black hover:bg-yellow-600 disabled:opacity-50"
+                  >
+                    {isSubmitting && (
+                      <Loader2 className="mr-2 size-4 animate-spin" />
+                    )}
+                    {isSubmitting
+                      ? "Saving…"
+                      : isEditMode
+                        ? "Update Changes"
+                        : "Save Transaction"}
+                  </Button>
+                )}
+              </form.Subscribe>
             </div>
           </div>
         )
@@ -2363,6 +2381,30 @@ function useTransactionFormModalController({
   // THE TOP-LEVEL FIX:
   // Jika dia lahir membawa editData, dia otomatis terbuka dari sananya! Zero re-render.
   const [isOpen, setIsOpen] = React.useState(isEditMode)
+
+  // A create-mode dialog session owns ONE (row id, idempotency key) pair.
+  // Retrying inside the same session (server rejection, slow network) replays
+  // the exact same request — the server deduplicates on (familyId,
+  // idempotencyKey), so no second row is ever inserted. Keeping the
+  // client-generated row id stable too means a replayed write lands on the
+  // very row the optimistic insert already showed. The pair is rolled forward
+  // only when the session ends (dialog closed or submit succeeded) — see
+  // rollCreateSessionIdentity call sites.
+  const createSessionIdentityRef = React.useRef({
+    id: createUuidV7(),
+    idempotencyKey: createUuidV7(),
+  })
+  const rollCreateSessionIdentity = React.useCallback(() => {
+    createSessionIdentityRef.current = {
+      id: createUuidV7(),
+      idempotencyKey: createUuidV7(),
+    }
+  }, [])
+  // Belt-and-braces double-submit guard: `form.state.isSubmitting` disables
+  // the button, but a second submit can still land in the synchronous window
+  // before that re-render. A ref flips immediately (never React state) and is
+  // cleared in the submit handler's finally so a retry stays possible.
+  const submitInFlightRef = React.useRef(false)
 
   const [activeTab, setActiveTab] = React.useState<
     "expense" | "income" | "transfer"
@@ -2813,6 +2855,16 @@ function useTransactionFormModalController({
         return
       }
 
+      // Double-submit guard (belt-and-braces on top of the disabled submit
+      // button): a submit that is still in flight never starts a second
+      // mutation. The ref flips synchronously, before React re-renders the
+      // button as disabled. Cleared in the finally below so a rejected attempt
+      // can be retried with the SAME session identity (server replay). Verified
+      // load-bearing: TanStack Form's own re-entry gate does NOT stop a second
+      // same-tick submit once `submissionAttempts` has been incremented.
+      if (submitInFlightRef.current) return
+      submitInFlightRef.current = true
+
       try {
         // Transfer fee (PER-247): ANY transfer can carry a fee (top-up /
         // e-wallet / bank charge, or FX spread cross-currency). Denominated
@@ -3063,27 +3115,39 @@ function useTransactionFormModalController({
           // exactly that reason (a client-generated id the server hasn't
           // created yet). Full-replace is naturally idempotent, so this is
           // safe to call even when the tag selection didn't change.
-          try {
-            await setTransactionTagsFn({
-              data: {
-                transactionId: editData.id,
-                tagIds: selectedTagIds,
-                idempotencyKey: createUuidV7(),
-              },
-            })
-            await transactionCollection.utils.refetch()
-          } catch (tagError: unknown) {
-            console.error("Failed to save tags", tagError)
-            setFormError(
-              tagError instanceof Error
-                ? `Transaction saved, but tags failed to save: ${tagError.message}`
-                : "Transaction saved, but tags failed to save."
-            )
-          }
+          //
+          // Kicked off, NOT awaited: the ledger write above is the durable
+          // part, and the dialog closes as soon as it lands — waiting on this
+          // second round trip only made the form feel hung (the bug this
+          // change exists for). The tag relation syncs behind the closed
+          // dialog; a failure surfaces as a toast because the form is gone.
+          void (async () => {
+            try {
+              await setTransactionTagsFn({
+                data: {
+                  transactionId: editData.id,
+                  tagIds: selectedTagIds,
+                  idempotencyKey: createUuidV7(),
+                },
+              })
+              await transactionCollection.utils.refetch()
+            } catch (tagError: unknown) {
+              console.error("Failed to save tags", tagError)
+              toast.error(
+                tagError instanceof Error
+                  ? `Transaction saved, but tags failed to save: ${tagError.message}`
+                  : "Transaction saved, but tags failed to save."
+              )
+            }
+          })()
         } else {
-          // 1. Generate Client-Side ID untuk Sinkronisasi Optimistic ke Database
-          const optimisticId = createUuidV7()
-          const idempotencyKey = createUuidV7()
+          // 1. Stable session identity — the optimistic row id and the
+          // idempotency key are minted once per dialog session and only rolled
+          // forward after the session ends (see rollCreateSessionIdentity call
+          // sites), so a retry of this attempt replays the exact same request
+          // server-side instead of inserting a second row.
+          const { id: optimisticId, idempotencyKey } =
+            createSessionIdentityRef.current
 
           // 2. CUKUP Insert ke UI Lokal saja!
           // Arsitektur kita di collections.ts (onInsert) akan melanjutkannya ke server secara gaib.
@@ -3130,10 +3194,12 @@ function useTransactionFormModalController({
             // this for real.
             tags: [],
           })
-          // Keep the dialog open until the server accepts the write. TanStack DB
-          // rolls back a rejected optimistic mutation; awaiting the same
-          // transaction makes that rejection visible in the form instead of
-          // closing the dialog and silently losing the user's input.
+          // Keep the dialog open just long enough for the server to accept the
+          // write. TanStack DB rolls back a rejected optimistic mutation;
+          // awaiting the same transaction makes that rejection visible in the
+          // form instead of closing the dialog and silently losing the user's
+          // input. On success control falls straight through to the close
+          // below — there is no extra await between durability and closing.
           await persistence.isPersisted.promise
         }
 
@@ -3172,6 +3238,12 @@ function useTransactionFormModalController({
           // suggestion lookup live outside the form too, and must not carry
           // over into the next fresh transaction.
           resetSmartRuleSuggestionState()
+          // Session over: roll the identity so the next open starts a clean
+          // attempt, and confirm the write now that it is durable.
+          rollCreateSessionIdentity()
+          toast.success("Transaction saved.")
+        } else {
+          toast.success("Transaction updated.")
         }
       } catch (error: unknown) {
         console.error("Failed to save transaction:", error)
@@ -3180,6 +3252,8 @@ function useTransactionFormModalController({
             ? `Could not save transaction: ${error.message}`
             : "Could not save transaction. Please try again."
         )
+      } finally {
+        submitInFlightRef.current = false
       }
     },
   })
@@ -3251,6 +3325,14 @@ function useTransactionFormModalController({
     if (!open && onClose) {
       onClose()
     }
+    if (!open) {
+      // A close ends the create session: the NEXT open must not reuse an
+      // idempotency key that an abandoned in-flight submit may already have
+      // consumed (same key + different payload would be a server conflict).
+      // A retry while the dialog stays open keeps its key — see the submit
+      // handler.
+      rollCreateSessionIdentity()
+    }
     if (open && editData) {
       setActiveTab(editData.type)
       setIsReimbursement(editData.kind === "reimbursement")
@@ -3271,6 +3353,10 @@ function useTransactionFormModalController({
   const handleCancel = () => {
     setIsOpen(false)
     if (onClose) onClose()
+    // Same close-session rule as handleOpenChange: the Cancel path sets state
+    // directly (it never routes through Radix's onOpenChange), so the roll
+    // must be explicit here too.
+    rollCreateSessionIdentity()
   }
 
   // PER-259 / ADR-0054 — the Transfer tab hands a holdings-account leg over to
