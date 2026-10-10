@@ -68,6 +68,10 @@ const captured = vi.hoisted(() => {
     updates: [] as Array<Record<string, unknown>>,
     persistence: {
       error: null as Error | null,
+      // Optional hold on `isPersisted.promise` so a test can keep a submit
+      // "in flight" while it fires a second one (see the double-submit
+      // describe block at the bottom).
+      gate: null as null | { promise: Promise<void>; open: () => void },
     },
     formData: {
       accounts: [
@@ -114,9 +118,10 @@ vi.mock("@/lib/collections", () => ({
   transactionCollection: {
     insert: (row: Record<string, unknown>) => {
       captured.inserts.push(row)
+      const gate = captured.persistence.gate
       return {
         isPersisted: {
-          promise: Promise.resolve().then(() => {
+          promise: (gate ? gate.promise : Promise.resolve()).then(() => {
             if (captured.persistence.error) throw captured.persistence.error
           }),
         },
@@ -164,7 +169,17 @@ vi.mock("@/server/holdings", () => ({ getAccountHoldingsFn: async () => [] }))
 vi.mock("@/server/valuations", () => ({
   getLatestGroundTruthAnchorFn: async () => null,
 }))
+// The modal imports `toast` from sonner for the success/partial-failure
+// confirmations; asserting on it proves the "close + confirm" half of the
+// submit contract without rendering the real Toaster.
+vi.mock("sonner", () => ({
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+  },
+}))
 
+import { toast } from "sonner"
 import { TransactionFormModal } from "./transaction-form-modal"
 
 // Radix Switch/Tabs measure themselves with a ResizeObserver, which jsdom
@@ -196,6 +211,9 @@ beforeEach(() => {
   captured.inserts.length = 0
   captured.updates.length = 0
   captured.persistence.error = null
+  captured.persistence.gate = null
+  vi.mocked(toast.success).mockClear()
+  vi.mocked(toast.error).mockClear()
 })
 
 afterEach(cleanup)
@@ -500,5 +518,143 @@ describe("edit-mode prefill — exact round-trip", () => {
     expect((amountField as HTMLInputElement).value).toBe("368912.71")
     // The live preview proves it re-parsed to the same minor units.
     expect(screen.getByText(/= Rp 368,912.71/)).toBeTruthy()
+  })
+})
+
+/**
+ * Slow-round-trip double-submit — the "form feels hung, user clicks again,
+ * transaction saved twice" bug.
+ *
+ * The old flow minted a FRESH idempotency key on every submit and left the
+ * submit button live for the whole round trip. A user who believed the save
+ * had failed clicked again — a second, *different* mutation that legitimately
+ * created a second row (prod corroboration: 13 duplicate-suspect groups).
+ *
+ * The fixed contract, asserted here at the collection boundary:
+ *   1. A create-mode session owns ONE (row id, idempotency key) pair; a retry
+ *      replays the exact same request instead of inserting a second row.
+ *   2. While a submit is in flight the button is disabled with a "Saving…"
+ *      label (TanStack Form's own isSubmitting), and a second submit that
+ *      manages to start anyway is swallowed by the in-flight ref guard.
+ *   3. Success closes the dialog immediately and confirms with a toast; a
+ *      rejected attempt keeps the dialog open and shows the server message in
+ *      the existing error banner.
+ */
+describe("double-submit and retry identity", () => {
+  function createGate() {
+    let open: () => void = () => {}
+    const promise = new Promise<void>((resolve) => {
+      open = resolve
+    })
+    return { promise, open }
+  }
+
+  async function fillExpense(description: string) {
+    typeInto(/^Amount \*$/, "25000")
+    fireEvent.change(screen.getByLabelText("Description *"), {
+      target: { value: description },
+    })
+    selectCategory()
+  }
+
+  it("two submits in the same tick insert exactly once", async () => {
+    await openDialog()
+    await fillExpense("Double submit guard")
+
+    const gate = createGate()
+    captured.persistence.gate = gate
+
+    const saveButton = screen.getByRole("button", { name: /Save Transaction/ })
+    const form = saveButton.closest("form")
+    if (!form) throw new Error("transaction form not found")
+    fireEvent.click(saveButton)
+
+    // Second submit in the SAME tick — this lands before React can re-render
+    // the button as disabled, which is the exact fast-double-click window the
+    // ref guard exists for. It must be swallowed: exactly one insert, and one
+    // idempotency key reaches the collection.
+    fireEvent.submit(form)
+
+    // The in-flight affordance lands once the submit starts running; by then
+    // an un-guarded second mutation would already have inserted (verified: the
+    // test fails with two inserts when the guard is removed).
+    await screen.findByRole("button", { name: /Saving/ })
+    expect(captured.inserts).toHaveLength(1)
+
+    gate.open()
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+  })
+
+  it("shows the in-flight state for the whole round trip, then closes with a toast", async () => {
+    await openDialog()
+    await fillExpense("Slow round trip")
+
+    const gate = createGate()
+    captured.persistence.gate = gate
+
+    fireEvent.click(screen.getByRole("button", { name: /Save Transaction/ }))
+
+    // While the round trip is pending the button is disabled and labelled —
+    // the user gets "it is working" feedback instead of a form that looks
+    // frozen (the belief that produced the second click in prod).
+    const savingButton = await screen.findByRole("button", { name: /Saving/ })
+    expect((savingButton as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole("dialog")).toBeTruthy()
+
+    gate.open()
+    // Success closes the dialog immediately (nothing past durability gates the
+    // close) and confirms with a toast.
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    expect(vi.mocked(toast.success)).toHaveBeenCalledWith("Transaction saved.")
+  })
+
+  it("retries a rejected submit with the SAME id and idempotency key (server replay, not a second row)", async () => {
+    captured.persistence.error = new Error("Rejected once")
+    await openDialog()
+    await fillExpense("Retry replay")
+
+    await submit()
+    expect(
+      await screen.findByText(/Could not save transaction: Rejected once/)
+    ).toBeTruthy()
+    // The error path keeps the dialog open so the user can retry.
+    expect(screen.getByRole("dialog")).toBeTruthy()
+    expect(captured.inserts).toHaveLength(1)
+
+    captured.persistence.error = null
+    await submit()
+
+    await waitFor(() => expect(captured.inserts).toHaveLength(2))
+    expect(captured.inserts[1]?.idempotencyKey).toBe(
+      captured.inserts[0]?.idempotencyKey
+    )
+    expect(captured.inserts[1]?.id).toBe(captured.inserts[0]?.id)
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+  })
+
+  it("mints a FRESH id and key for the next session after a successful close", async () => {
+    await openDialog()
+    await fillExpense("First session")
+
+    await submit()
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    expect(captured.inserts).toHaveLength(1)
+
+    // Reopen the singleton modal and record a second, unrelated transaction.
+    fireEvent.click(screen.getByRole("button", { name: /New Transaction/ }))
+    await waitFor(() => {
+      const trigger = screen.getByLabelText("Category *")
+      if ((trigger as HTMLButtonElement).disabled) {
+        throw new Error("form data still loading")
+      }
+    })
+    await fillExpense("Second session")
+
+    await submit()
+    await waitFor(() => expect(captured.inserts).toHaveLength(2))
+    expect(captured.inserts[1]?.idempotencyKey).not.toBe(
+      captured.inserts[0]?.idempotencyKey
+    )
+    expect(captured.inserts[1]?.id).not.toBe(captured.inserts[0]?.id)
   })
 })
