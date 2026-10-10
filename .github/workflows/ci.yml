@@ -43,8 +43,24 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        # `--frozen-lockfile` enforces lock parity; postinstall hook runs `prisma generate`.
+        # `--frozen-lockfile` enforces lock parity AND is the guard against a
+        # semantically broken pnpm-lock.yaml (duplicate mapping keys). This is
+        # not cosmetic: pnpm only hard-fails `ERR_PNPM_BROKEN_LOCKFILE` when the
+        # flag is set — a plain `pnpm install` silently REWRITES a duplicated
+        # lockfile back to a valid one and exits 0, which would hide exactly the
+        # damage the next step asserts on. See the merge protocol in
+        # .github/dependabot.yml before touching this line.
         run: pnpm install --frozen-lockfile
+
+      - name: Lockfile integrity (install must not rewrite pnpm-lock.yaml)
+        # Fail-closed companion to the step above. GitHub's merge check is
+        # textual only: squash-merging a stale-base Dependabot PR (#422) merged
+        # CLEAN and textually duplicated the undici@7.30.0 blocks in
+        # pnpm-lock.yaml, so main went red at install (#433 fixed it). If a
+        # future change ever drops `--frozen-lockfile`, pnpm would quietly repair
+        # the file instead of failing — this assertion makes that mutation
+        # visible: the committed lockfile must come out of install byte-identical.
+        run: git diff --exit-code -- pnpm-lock.yaml
 
       - name: Run vp check (format + lint + types)
         run: pnpm run check
