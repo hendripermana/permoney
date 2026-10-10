@@ -14,8 +14,9 @@
     "test:unit:coverage": "vp test run --coverage",
     "test:integration": "vp test run --config vitest.integration.config.ts",
     "test:e2e": "vp exec playwright test",
+    "test:e2e:army": "vp exec e2e run",
     "test:ci": "vp run test:unit:coverage && vp run test:integration",
-    "test:all": "vp run check && vp run test:unit:coverage && vp run test:integration && vp run test:e2e && vp run build",
+    "test:all": "vp run check && vp run test:unit:coverage && vp run test:integration && vp run test:e2e && vp run test:e2e:army && vp run build",
     "test:watch": "vp test watch",
     "test:related": "vp test related",
     "lint": "vp lint",
@@ -88,6 +89,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@e2e-dev/web": "^0.12.0",
     "@playwright/test": "^1.63.0",
     "@rsbuild/core": "^2.2.4",
     "@tanstack/devtools-vite": "^0.8.5",
@@ -102,7 +104,9 @@
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
     "@vitest/coverage-v8": "4.1.9",
+    "ai": "^7.0.0",
     "dotenv": "^17.4.2",
+    "e2e": "^0.17.0",
     "fast-check": "^4.10.1",
     "jsdom": "^30.1.1",
     "prisma": "^7.10.0",
