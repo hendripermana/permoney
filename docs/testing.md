@@ -11,17 +11,21 @@ vp run test:unit             # explicit unit suite
 vp run test:unit:coverage    # unit suite plus M2 finance-domain coverage gate
 vp run test:integration      # real Postgres integration suite
 vp run test:e2e              # Playwright browser E2E suite
+vp run test:e2e:army         # tester-army deterministic browser suite (tests/army)
 vp run test:ci               # CI-safe unit + integration gate
 vp run test:all              # the full CI gate, run locally in one command
 ```
 
-`test:all` chains the same five jobs CI runs — `check`, `test:unit:coverage`,
-`test:integration`, `test:e2e`, and `build` — so a developer can reproduce the
-merge gate before pushing. It is the broadest local command, not the fastest:
-it needs the local Postgres (`vp run db:up`), a Playwright Chromium install
-(`vp exec playwright install chromium`), and the same
+`test:all` chains the same six jobs CI runs — `check`, `test:unit:coverage`,
+`test:integration`, `test:e2e`, `test:e2e:army`, and `build` — so a developer
+can reproduce the merge gate before pushing. It is the broadest local command,
+not the fastest: it needs the local Postgres (`vp run db:up`), a Chromium for
+each browser lane (`vp exec playwright install chromium` and
+`vp exec e2e-web install chromium`), and the same
 `PERMONEY_TEST_ADMIN_PASSWORD` the integration/E2E suites use. `test:ci` keeps
-its narrower unit+integration scope for tooling that depends on it.
+its narrower unit+integration scope for tooling that depends on it. The two
+browser lanes must run sequentially, never side by side, on one machine (see
+the tester-army lane section below).
 
 Unit tests must keep importing Vitest utilities from `vite-plus/test`.
 Integration tests use their own config at `vitest.integration.config.ts` and
@@ -39,6 +43,9 @@ Each layer has a different source-of-truth boundary:
   audit, and database-constraint invariants.
 - Playwright covers deterministic browser E2E flows: routing, auth,
   onboarding, hydration, TanStack DB preload, and browser-bundle safety.
+- The tester-army `e2e` runner is a second deterministic browser lane for UI
+  contract suites (`tests/army/**`, see below). It runs no `agent.*` steps and
+  needs no model keys, so it is a merge gate exactly like Playwright.
 - TestSprite, or an equivalent AI test generator, is supplemental exploratory
   automation. It may discover regression candidates, but it is not a coverage
   gate and is not proof that Permoney is correct.
@@ -155,6 +162,41 @@ Permoney has actually hit, not as a general proof that the client bundle is
 clean; bundle/import-boundary correctness is enforced at build time by the
 TanStack Start server-only import fence and the `*.server.ts` convention.
 
+## Tester-Army Browser Lane
+
+A second deterministic browser lane runs through the tester-army `e2e` runner
+configured in `e2e.config.ts`. It reuses the Playwright lane's harness but
+stays strictly separate:
+
+- **Glob**: `tests/army/**/*.e2e.ts` only. The runner must never select
+  `tests/e2e/**` — those are Playwright specs with a different test API, and a
+  second engine's loader would fail them as syntax it does not own.
+- **Port**: `3011` via `PERMONEY_E2E_PORT`, started by the same
+  `tests/e2e/support/start-e2e-server.ts` (fresh `permoney_test_*` database
+  per run, dropped on teardown).
+- **Deterministic only**: no `agents` block, no model or API keys, no
+  `agent.*` steps anywhere in this lane.
+- **Env forwarding**: the runner child process inherits only
+  `PATH`/`HOME`/temp variables plus `command.env`, so `e2e.config.ts`
+  explicitly forwards `PERMONEY_TEST_ADMIN_DATABASE_URL` and
+  `PERMONEY_TEST_ADMIN_PASSWORD` (and `PERMONEY_E2E_PORT`). The harness
+  derives `BETTER_AUTH_SECRET` itself when it is unset.
+
+Local workflow:
+
+```bash
+vp run db:up
+vp exec e2e-web install chromium   # first time only
+PERMONEY_TEST_ADMIN_PASSWORD=<local docker password> vp run test:e2e:army
+```
+
+Do not run both browser lanes at the same time on one machine: both harness
+servers write `.playwright/permoney-e2e-state.json` (the shared harness state
+file) and would race. CI jobs run on separate VMs, so the parallel lanes are
+safe there. Payload-level UI assertions in this lane intercept the raw
+`/_serverFn/` POST body through `browser.route` (see
+`tests/army/support/server-fn.ts`); they never import Playwright helpers.
+
 ## Postgres Integration Harness
 
 Ledger, RLS, idempotency, balance, and audit tests must use the real Postgres
@@ -250,19 +292,25 @@ CI exposes separate pass/fail status checks for each gate:
 - `test:integration`: real Postgres integration tests.
 - `test:e2e`: Playwright browser route/auth/bundle regression tests with a
   real Postgres database.
+- `test:e2e-army`: tester-army browser contract tests (`tests/army/**` in the
+  second lane, `e2e.config.ts`) with their own Postgres service, running in
+  parallel with `test:e2e`.
 - `build`: production build smoke test.
 
-The integration and E2E jobs each start a Postgres service, create isolated
-`permoney_test_*` databases through the harness, and run:
+The integration and browser E2E jobs each start a Postgres service, create
+isolated `permoney_test_*` databases through the harness, and run:
 
 ```bash
 vp run test:integration
 vp run test:e2e
+vp run test:e2e:army
 ```
 
-Browser E2E tests should stay in `tests/e2e/**/*.e2e.ts`. Keep this suite small
-enough for PR confidence, deterministic enough for CI, and strict enough to
-catch auth-route, hydration, TanStack DB preload, and browser-bundle regressions.
+Browser E2E tests should stay in `tests/e2e/**/*.e2e.ts` (Playwright lane) or
+`tests/army/**/*.e2e.ts` (tester-army lane) — each runner must only ever see
+its own specs. Keep these suites small enough for PR confidence,
+deterministic enough for CI, and strict enough to catch auth-route,
+hydration, TanStack DB preload, and browser-bundle regressions.
 
 ## Supplemental TestSprite Workflow
 
