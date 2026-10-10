@@ -3381,6 +3381,12 @@ function useTransactionFormModalController({
       accountCollection.utils.refetch(),
       queryClient.invalidateQueries({ queryKey: ["transactionFormData"] }),
       queryClient.invalidateQueries({ queryKey: ["account_holdings"] }),
+      // PER-227: a Buy/Sell is a transfer into/out of an investment account,
+      // so the dashboard's insights fold must not keep a pre-trade answer
+      // while the page stays mounted. This path bypasses the shared
+      // collection resync hub (it calls the trade endpoints directly), hence
+      // the explicit invalidation here too.
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "insights"] }),
     ])
     if (onClose) onClose()
   }, [onClose, queryClient])

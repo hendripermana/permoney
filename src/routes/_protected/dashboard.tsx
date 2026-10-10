@@ -23,7 +23,9 @@ import {
   NetWorthCard,
   TopCategoriesCard,
 } from "@/components/blocks/dashboard-cards"
+import { InsightCard } from "@/components/blocks/insight-card"
 import { getCashFlowReportFn, getNetWorthSeriesFn } from "@/server/reporting"
+import { getInsightsFn } from "@/server/insights"
 import { getBudgetForPeriodFn, listExpenseCategoriesFn } from "@/server/budgets"
 import { accountCollection } from "@/lib/account-collections"
 import { transactionCollection } from "@/lib/collections"
@@ -159,6 +161,16 @@ function DashboardPage() {
     queryKey: ["dashboard", "budget", month ?? "default"],
     queryFn: async () => await getBudgetForPeriodFn({ data: { month } }),
   })
+  // PER-227 — household insights ("Permoney knows me"). No month param: the
+  // engine resolves "this month" in the FAMILY timezone server-side
+  // (ADR-0037 / PER-263), so the card's window can never disagree with the
+  // calendar the ledger itself uses. Invalidated after ledger mutations by
+  // the shared resync hub (src/lib/collections.ts) — see the PER-227 note
+  // there for why a live page must not keep the pre-mutation answer.
+  const insights = useQuery({
+    queryKey: ["dashboard", "insights"],
+    queryFn: async () => await getInsightsFn({ data: {} }),
+  })
   const categories = useQuery({
     queryKey: ["dashboard", "expense-categories"],
     queryFn: async () => await listExpenseCategoriesFn(),
@@ -270,6 +282,14 @@ function DashboardPage() {
             ) : (
               <>
                 <DashboardAttentionStrip summary={attentionSummary} />
+
+                <Section
+                  query={insights}
+                  skeletonHeight="h-[180px]"
+                  label="insights"
+                >
+                  {(data) => <InsightCard report={data} />}
+                </Section>
 
                 <Section
                   query={netWorth}
