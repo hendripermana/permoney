@@ -166,6 +166,11 @@ export interface ReviewImportRowsResult {
   batchId: string
   confirmedCount: number
   rejectedCount: number
+  // Decisions this call skipped because a lockstep `promote` sweep in the same
+  // resumed run had already promoted those rows. `promoted` is terminal, so they
+  // are never re-verdicted; reported so a caller can distinguish "resume had
+  // nothing left to verdict" from "a verdict was silently dropped".
+  skippedPromotedCount: number
   batchStatus: string
 }
 
@@ -673,6 +678,7 @@ export async function reviewImportRowsForFamily({
 
       let confirmedCount = 0
       let rejectedCount = 0
+      let skippedPromotedCount = 0
       const auditEntries: AuditLogEntry[] = []
 
       for (const decision of data.decisions) {
@@ -684,9 +690,20 @@ export async function reviewImportRowsForFamily({
           },
         })
         if (!row) throw new Error("Import row not found or access denied")
-        // `promoted` is terminal — review can never touch it (ADR-0039 §3).
+        // `promoted` is terminal — review never mutates such a row (ADR-0039
+        // §3). Skipping it is deliberate, and mirrors `promote`'s own semantics
+        // ("already-`promoted` rows are excluded by the filter, so re-running
+        // promotes nothing — natural no-op"): a lockstep resume can legitimately
+        // hand this function a row that an EARLIER promote in the same run swept
+        // up, because `promote` has no row-subset filter — it promotes every
+        // currently-`confirmed` row of the batch, while the caller decided what
+        // to review from a read that happened before that sweep. Throwing turned
+        // that legitimate interleaving into a hard error whose reachability
+        // depended on nothing but row order. The caller still learns the verdict
+        // was moot: `skippedPromotedCount` reports it.
         if (row.rowStatus === "promoted") {
-          throw new Error("Cannot review an already-promoted row")
+          skippedPromotedCount += 1
+          continue
         }
 
         // Validate any category/merchant override against the tenant.
@@ -744,6 +761,7 @@ export async function reviewImportRowsForFamily({
         batchId: data.batchId,
         confirmedCount,
         rejectedCount,
+        skippedPromotedCount,
         batchStatus,
       }
       await persistIdempotentEndpointResponse(tx, {

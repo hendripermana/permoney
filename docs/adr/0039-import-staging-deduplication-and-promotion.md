@@ -538,3 +538,40 @@ override, description normalization, `applySmartRules` first-match ordering,
 - ADR-0036 (Family membership and role authorization — RLS guard, `ledger:write`)
 - `docs/account-taxonomy.md` (provider/account binding, `isImportable`)
 - `AGENTS.md` §5.A (Raw Bank Data Is Not Canonical Ledger Data)
+
+## Amendment — review skips rows a promote sweep already booked (2026-10-10)
+
+Appended; everything above stands. This resolves an interleaving that §9's
+"partial/incremental promotion across multiple calls is therefore safe and never
+double-books" promised but did not fully deliver.
+
+`promoteImportBatchForFamily` has no row-subset filter: one call promotes every
+currently-`confirmed` row of the batch. A lockstep resume — the wizard re-reads
+the batch after a failure, keeps the rows the server has not promoted, and runs
+the loop again — can therefore hand `reviewImportRowsForFamily` a decision for a
+row that an EARLIER promote in the same resumed run swept up; the caller's read
+necessarily happened before that sweep. The previous behaviour threw
+`Cannot review an already-promoted row`, which made a resumed import
+un-resumable depending on nothing but row order. The read order is an accident
+of heap layout (ties on `createdAt`), so the integration suite flaked green for
+months: only some orders tripped it.
+
+Decision: a decision targeting a `promoted` row is **skipped, not an error**, and
+is reported in the response as `skippedPromotedCount`. `promoted` remains
+terminal and irreversible — a skipped row is never mutated — and the skip
+mirrors `promote`'s own semantics one section up ("already-`promoted` rows are
+excluded by the filter, so re-running promotes nothing — natural no-op"). No
+ledger property changes: the verdict for an already-booked row is moot by
+definition.
+
+Rejected alternative: making the resume review only rows with no verdict yet
+(the Sure migration selects `rowStatus='normalized'` after its own leading
+sweep). That restores the invariant for one caller but leaves every other caller
+— and the endpoint itself — able to hit the same hard error, and it silently
+drops a re-verdict for a confirmed-but-unpromoted row. The endpoint must be
+resumable by construction, not by caller discipline.
+
+Testing: the interrupted-run integration test interleaves the already-confirmed
+rows with the still-pending ones (adversarial order) and asserts the resumed run
+ends with every staging row `promoted`; a focused test asserts the skip is
+reported in the response and leaves the row untouched.

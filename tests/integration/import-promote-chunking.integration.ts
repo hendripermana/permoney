@@ -270,7 +270,37 @@ describe("chunked import promotion (F1 audit B1)", () => {
 
     // Resume exactly as the wizard does after its error toast: re-read the
     // batch, keep only the rows the server has NOT promoted, run the loop again.
-    const remaining = await pendingDecisions(tenant, batch.id)
+    //
+    // The ordering is deliberately ADVERSARIAL, and it is what makes this test
+    // bite: `promoteImportBatchForFamily` has no row-subset filter, so the
+    // resumed run's FIRST promote sweeps EVERY currently-`confirmed` row —
+    // including the leftover chunk from the crashed attempt, wherever it sits in
+    // the decision order. Interleaving the already-confirmed rows with the
+    // still-pending ones guarantees a later review slice contains a row that
+    // first sweep just booked. That is the exact shape that used to throw
+    // "Cannot review an already-promoted row"; it flaked in CI because the real
+    // read order is an accident of heap layout, so only some orders tripped it.
+    const stagingRows = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      (tx) =>
+        tx.rawImportedTransaction.findMany({
+          where: { importBatchId: batch.id },
+          select: { id: true, rowStatus: true },
+          orderBy: { createdAt: "asc" },
+        })
+    )
+    const notPromoted = stagingRows.filter((r) => r.rowStatus !== "promoted")
+    const confirmedRows = notPromoted.filter((r) => r.rowStatus === "confirmed")
+    const pendingRows = notPromoted.filter((r) => r.rowStatus !== "confirmed")
+    expect(confirmedRows).toHaveLength(100)
+    expect(pendingRows).toHaveLength(100)
+    const interleaved: Array<{ rowId: string; verdict: "confirm" }> = []
+    for (let index = 0; index < confirmedRows.length; index += 1) {
+      interleaved.push({ rowId: confirmedRows[index]!.id, verdict: "confirm" })
+      interleaved.push({ rowId: pendingRows[index]!.id, verdict: "confirm" })
+    }
+    const remaining = interleaved
     expect(remaining).toHaveLength(200)
 
     const resumed = await runLockstepPromotion({
@@ -292,6 +322,82 @@ describe("chunked import promotion (F1 audit B1)", () => {
     // 300 rows, 300 transactions: nothing promoted twice, nothing lost.
     expect(await transactionCount(tenant)).toBe(300)
     expect(await accountBalance(tenant)).toBe(300n * AMOUNT_MINOR)
+
+    // End state of the staging rows themselves — no leftover confirmed/pending.
+    const stagingState = await harness.withMember(
+      tenant.familyId,
+      tenant.userId,
+      async (tx) => ({
+        promoted: await tx.rawImportedTransaction.count({
+          where: { importBatchId: batch.id, rowStatus: "promoted" },
+        }),
+        leftover: await tx.rawImportedTransaction.count({
+          where: {
+            importBatchId: batch.id,
+            rowStatus: { in: ["confirmed", "pending"] },
+          },
+        }),
+      })
+    )
+    expect(stagingState).toEqual({ promoted: 300, leftover: 0 })
+  }, 600_000)
+
+  test("reviewing a row a promote sweep already booked is a reported no-op", async () => {
+    const tenant = await setupTenant()
+    const batch = await stageBatch(tenant, 150, "sweep-1")
+    const decisions = await pendingDecisions(tenant, batch.id)
+    expect(decisions).toHaveLength(150)
+
+    // Confirm + promote the first chunk, exactly as the lockstep loop does, so
+    // the first 100 rows are `promoted` and the rest are untouched.
+    await reviewImportRowsForFamily({
+      data: {
+        batchId: batch.id,
+        idempotencyKey: factories.createIdempotencyKey(),
+        decisions: decisions.slice(0, PROMOTE_CHUNK_SIZE),
+      },
+      familyId: tenant.familyId,
+      user: { id: tenant.userId, familyId: tenant.familyId },
+      runInTenantTransaction: runner(),
+    })
+    await promoteImportBatchForFamily({
+      data: {
+        batchId: batch.id,
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: tenant.familyId,
+      user: { id: tenant.userId, familyId: tenant.familyId },
+      runInTenantTransaction: runner(),
+    })
+
+    // A resumed caller's read can predate that sweep: hand the review endpoint a
+    // decision for a row that is promoted NOW. `promoted` is terminal, so the
+    // verdict is moot — skipped and reported, never an error, never a mutation.
+    const booked = decisions[0]!
+    const result = await reviewImportRowsForFamily({
+      data: {
+        batchId: batch.id,
+        idempotencyKey: factories.createIdempotencyKey(),
+        decisions: [booked],
+      },
+      familyId: tenant.familyId,
+      user: { id: tenant.userId, familyId: tenant.familyId },
+      runInTenantTransaction: runner(),
+    })
+    expect(result.skippedPromotedCount).toBe(1)
+    expect(result.confirmedCount).toBe(0)
+    expect(result.rejectedCount).toBe(0)
+
+    // Terminal means untouched: still promoted, still booked exactly once.
+    const row = await harness.withMember(tenant.familyId, tenant.userId, (tx) =>
+      tx.rawImportedTransaction.findUniqueOrThrow({
+        where: { id: booked.rowId },
+        select: { rowStatus: true, promotedTransactionId: true },
+      })
+    )
+    expect(row.rowStatus).toBe("promoted")
+    expect(row.promotedTransactionId).not.toBeNull()
+    expect(await transactionCount(tenant)).toBe(PROMOTE_CHUNK_SIZE)
   }, 600_000)
 
   test("replaying a chunk's idempotency key is a no-op, and a foreign batch is denied", async () => {
