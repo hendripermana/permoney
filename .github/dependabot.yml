@@ -25,6 +25,13 @@ updates:
     # Group all non-major updates into one PR per week to reduce noise;
     # majors and security patches still come as individual PRs.
     groups:
+      # NOTE — `@tanstack/start-server-core` is exactly pinned in package.json
+      # (both as a dependency and in `pnpm.overrides`) so the server-fn error
+      # transport is a deliberate decision, never a silent side effect of a
+      # group. Since 1.169.39 a thrown server-fn error is serialized into a 200
+      # JSON envelope (`x-tss-serialized`) instead of a 5xx — the client still
+      # throws after deserialization, but any raw-HTTP assertion or monitor
+      # must read the payload, not the status (see tests/e2e/ownership-transfer).
       tanstack:
         patterns:
           - "@tanstack/*"
