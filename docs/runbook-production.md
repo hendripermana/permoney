@@ -7,8 +7,10 @@ for why Postgres is self-hosted here instead of managed.
 
 ## Topology
 
-- **Host**: Oracle Cloud VM (aarch64/arm64), also running Sure at
-  `finance.permana.icu`. Sure must stay undisturbed by anything below.
+- **Host**: Oracle Cloud VM (aarch64/arm64). The legacy Sure stack that used to
+  share this box (`finance.permana.icu`) was **sunset on 2026-10-10**: its
+  containers and Docker network were removed and its midnight backup cron
+  deleted. A final export lives in R2 at `maybe-backup-data/sure-final-export/`.
 - **Ingress**: Caddy (host-level systemd service, `/etc/caddy/Caddyfile`)
   terminates nothing itself for `permana.icu` — Cloudflare terminates public
   HTTPS at the edge; Caddy's `permana.icu`/`www.permana.icu` block
@@ -110,6 +112,19 @@ is nothing pending, making it safe on every deploy. The retained `build`
 stanzas are break-glass fallbacks only; do not run `docker compose build` in a
 normal deployment.
 
+Images are built **natively on GitHub's arm64 runner for every push to `main`**
+by the `Release container image` workflow: app + migrator, each tagged with the
+full commit SHA and with `main`, and `main` is only repointed after the SHA
+images pass their boot test. To confirm which release is actually running —
+the ground truth for "what is in prod", instead of trusting whatever the `main`
+tag happens to point at — read the OCI revision label the workflow stamps on
+the image, off the live container:
+
+```bash
+docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' permoney_prod_app
+# expect the full commit SHA this deploy was pulled for
+```
+
 If the new release adds a migration that creates a new audit/immutable-ledger
 table, re-run `deploy/provision-postgres-roles.sql` afterward (pass 2 style)
 to apply that table's REVOKE — see the SQL file's own caveat comment.
@@ -147,14 +162,20 @@ Uploads to Cloudflare R2 via `rclone` using a **dedicated R2 API token**
 (never reuse the leaked/legacy tokens found during PER-192 discovery — those
 belonged to a different, unrelated legacy backup path and are documented as
 compromised/deprecated in the PER-192 history). Reuses the same `r2backup`
-rclone remote (`/home/ubuntu/.config/rclone/rclone.conf`) the legacy Sure
-backup already uses against the `maybe-backup-data` bucket — just a separate
-`permoney/` prefix (`R2_PATH`) within it, not a second remote.
+rclone remote (`/home/ubuntu/.config/rclone/rclone.conf`) — the one the legacy
+Sure stack's backup used until that stack was sunset on 2026-10-10 — against the
+`maybe-backup-data` bucket, just a separate `permoney/` prefix (`R2_PATH`) within
+it, not a second remote. Retention is **14 days** (pruned by
+`deploy/backup-postgres.sh`).
+
+The full cron → dump → R2 upload path was verified end-to-end on **2026-10-10**,
+with the backup landing in `maybe-backup-data/permoney/` under 14-day retention.
 
 Known quirk: a single `NotImplemented: 501` error from R2 on the first
 upload attempt is normal (an R2/S3-compatibility gap on some operations);
 `rclone`'s built-in retry succeeds on attempt 2 without intervention. Only
-worth investigating if all 3 retry attempts fail.
+worth investigating if all 3 retry attempts fail. (Observed exactly this way in
+the 2026-10-10 verification run: attempt 1 → 501, attempt 2 → success.)
 
 ## Market data refresh (PER-237 / ADR-0050 §4)
 
@@ -315,12 +336,13 @@ DATABASE` resets ownership/grants).
 
 ## Network hardening (Cloudflare-only ingress)
 
-`permana.icu` and `finance.permana.icu` both sit behind Cloudflare. The host
-firewall (iptables, both IPv4 rules) restricts inbound 80/443 to Cloudflare's
-published IP ranges only — closes a direct-IP bypass that previously let
-anyone reach Sure directly over plain HTTP, skipping Cloudflare's WAF
-entirely. Refresh the allowlist if Cloudflare's ranges change (they do so
-rarely):
+`permana.icu` sits behind Cloudflare (`finance.permana.icu`, which served the
+legacy Sure stack, resolved through the same zone until that stack was sunset
+on 2026-10-10 — see Topology). The host firewall (iptables, both IPv4 rules)
+restricts inbound 80/443 to Cloudflare's published IP ranges only — it closes a
+direct-IP bypass that previously let anyone reach the host over plain HTTP,
+skipping Cloudflare's WAF entirely. Refresh the allowlist if Cloudflare's
+ranges change (they do so rarely):
 
 ```bash
 curl -s https://www.cloudflare.com/ips-v4   # compare against: sudo ipset list cf4
@@ -353,6 +375,37 @@ netdata (`:19999`) is bound to `127.0.0.1` only — reachable exclusively via
 (`SELECT 1`). Returns `{"status":"ok"}` / 200, or `{"status":"error"}` / 503.
 Wired into the Dockerfile's `HEALTHCHECK` and safe to point external
 uptime-monitoring at directly (it does not require auth).
+
+## Server-function error transport (monitoring caveat)
+
+Since `@tanstack/start-server-core` **1.169.39**, a thrown server-function
+error is serialized into a **200** response carrying an `x-tss-serialized`
+envelope instead of a 5xx. The client still throws after deserializing, so
+application behaviour is unchanged — but any **raw-HTTP assertion or uptime
+monitor** aimed at a server-function endpoint must read the payload, not the
+status code: a 200 can still mean "the call failed".
+
+That package is deliberately pinned (a `package.json` dependency plus a
+`pnpm.overrides` entry) so the transport stays a reviewed decision rather than
+a silent group bump — see the note in `.github/dependabot.yml`.
+
+## vite-plus upgrades (policy-gated)
+
+`vite-plus` owns the toolchain this repo may not upgrade directly (vitest,
+oxlint, oxfmt, tsdown), and a bump has broken production in a way x86_64 CI
+cannot see: the 2026-08-30 upgrade shipped an ARM64-only SSR crash, and a
+grouped PR silently re-bundling it recurred on 2026-09-10. The policy — also
+encoded in `.github/dependabot.yml`, which excludes `vite-plus` from every
+Dependabot group:
+
+1. It lands as its own **isolated, individually reviewed PR** — never inside a
+   routine dependency group.
+2. Before merging, a **native ARM64 build + boot test runs on the prod VM**;
+   GitHub's x86_64 runners cannot catch native-module regressions.
+3. The reference procedure is the **2026-10-10 `1.1.0` (vitest 5) landing
+   (#431)**: a fresh ref cut from current `main`, reviewed and merged on its
+   own, with the native ARM64 build + boot test on the prod VM done before it
+   landed.
 
 ## Dependency audit
 
