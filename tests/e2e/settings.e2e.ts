@@ -1,4 +1,5 @@
 import { expect, test } from "./support/fixtures"
+import type { Page } from "@playwright/test"
 import { onboard, waitForHydration } from "./support/onboarding"
 
 // PER-113 — Settings hub + navigation cohesion. Drives the real browser path:
@@ -8,6 +9,29 @@ import { onboard, waitForHydration } from "./support/onboarding"
 //   * the previously-orphaned Members and Smart Rules panes are reachable from
 //     the hub;
 //   * theme + family-timezone preferences round-trip through the server fns.
+
+// Holds `getSettingsOverviewFn` until the returned `release()` is called, so
+// the profile card's server data is guaranteed to land AFTER the user's edit.
+// The card must seed itself from that late data without remounting (a remount
+// silently discards an unsaved selection), and the response must be held — not
+// merely raced — or a fast server would let the old bug pass on a warm CI
+// runner. TanStack Start encodes the function id as base64 in
+// `/_serverFn/<id>`, so decode it instead of pattern-matching the blob.
+async function holdSettingsOverview(page: Page): Promise<() => void> {
+  let release = (): void => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  await page.route("**/_serverFn/**", async (route) => {
+    const encoded = new URL(route.request().url()).pathname.split("/")[2] ?? ""
+    const descriptor = Buffer.from(encoded, "base64").toString("utf8")
+    if (descriptor.includes('"export":"getSettingsOverviewFn')) {
+      await held
+    }
+    await route.continue()
+  })
+  return release
+}
 
 test.describe("settings hub & nav cohesion", () => {
   test("reaches /settings from the sidebar without a full reload", async ({
@@ -62,11 +86,20 @@ test.describe("settings hub & nav cohesion", () => {
 
   test("changes the theme to dark and persists it", async ({ page }) => {
     await onboard(page)
+    const releaseOverview = await holdSettingsOverview(page)
+
     await page.goto("/settings/profile")
     await waitForHydration(page)
 
     await page.getByRole("button", { name: "Dark" }).click()
+    // The edit exists now, so let the profile data arrive — it must seed the
+    // card without wiping the selection.
+    releaseOverview()
+
     await expect(page.locator("html")).toHaveClass(/dark/)
+    await expect(
+      page.getByRole("button", { name: "Save changes" })
+    ).toBeEnabled()
 
     await page.getByRole("button", { name: "Save changes" }).click()
     await expect(page.getByText("Profile updated.")).toBeVisible()
