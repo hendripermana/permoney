@@ -96,13 +96,13 @@ currency columns.
 
 - A rate is stored as a **scaled `BigInt`** at fixed scale
   **`RATE_SCALE = 1e12`** (12 fractional digits): `rateScaled = round(rate ×
-1e12)`; `actualRate = rateScaled / 1e12`.
+  1e12)`; `actualRate = rateScaled / 1e12`.
   - 1e12 (vs money.ts's internal 1e9) keeps ~8 significant figures even for
     small-unit bases (e.g. `IDR→USD ≈ 0.0000615`). `BigInt` cannot overflow on
     the large side. 12 digits exceeds real-world FX quote precision, so the
     stored integer reproduces the applied rate exactly.
 - The rate is a **major-unit → major-unit** quote (`1 fromMajor = rate
-toMajor`), the human-intuitive form.
+  toMajor`), the human-intuitive form.
 - Conversion lives in a new `src/lib/fx.ts` helper
   `convertMinor(fromMinor, fromCurrency, toCurrency, rateScaled)` that computes
   the scale-aware result in **one integer expression with a single
@@ -148,7 +148,7 @@ its own account and updates that balance in its own currency; the `Transfer`
 row pairs them. PER-147 makes the rate first-class:
 
 - The **implied cross-rate is recorded on the `Transfer` row**: `fxRateScaled
-BigInt?`, plus `fromCurrency`/`toCurrency` for audit clarity.
+  BigInt?`, plus `fromCurrency`/`toCurrency` for audit clarity.
 - It is **derived from the two native leg amounts** (never independently
   entered, so it cannot disagree with the money that actually moved):
   `rateScaled = round((destMajor / srcMajor) × 1e12)`, direction

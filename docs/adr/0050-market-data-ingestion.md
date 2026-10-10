@@ -108,7 +108,7 @@ failure), never corrupting canonical data.
   balance is untouched. Accounts with no linked instrument keep working exactly
   as today (manual "Update value"). This is the bridge to the Investment & Gold
   milestone: with per-unit holdings (PER-232) the value becomes `units × latest
-price/unit` straight from the quote store.
+  price/unit` straight from the quote store.
 - **Staleness is explicit:** a quote older than its kind's freshness budget is
   shown as stale (like ADR-0035's "FX-pending"), never presented as current.
 
@@ -202,7 +202,7 @@ implementation that refine — but do not change — the decision above:
 - **Instrument identity / idempotency.** `MarketInstrument` identity is
   `(kind, symbol, COALESCE(mic,''), quoteCurrency)` (a `COALESCE` unique index so
   NULL MICs still dedupe); `MarketQuote` idempotency is `UNIQUE (marketInstrumentId,
-asOf, source)` with re-ingest upserting in place. `mic` is constrained to
+  asOf, source)` with re-ingest upserting in place. `mic` is constrained to
   securities only.
 
 - **Audit trail for global tables.** The tenant-scoped `AuditLog` does not apply
@@ -354,7 +354,7 @@ PRIORITY FALLBACK CHAIN and use the FIRST that returns `success: true`, so gold
 ALWAYS gets a number as close to the user's BSI Gold as is currently available.
 
 - **The chain (a small, reorderable constant).** `GOLD_SOURCE_CHAIN =
-["bankbsi", "anekalogam", "pegadaian"]` (`src/server/market-data.server.ts`).
+  ["bankbsi", "anekalogam", "pegadaian"]` (`src/server/market-data.server.ts`).
   Each label is BOTH the worker endpoint path (`/api/prices/{source}`) AND the
   quote `source`/provenance tag. `bankbsi` = exact BSI price; `anekalogam` =
   Antam LM (BSI SELLS Antam gold, so ≈1% below BSI's mark — the closest reliable
@@ -362,7 +362,7 @@ ALWAYS gets a number as close to the user's BSI Gold as is currently available.
 
 - **Per-source normalization to a per-gram IDR buyback (shapes differ).** The
   three feeds share the `{ success, data: [ { weight, weightUnit, buybackPrice }
-] }` envelope but not the shape: `bankbsi` is one `1 gr` row, `anekalogam` is
+  ] }` envelope but not the shape: `bankbsi` is one `1 gr` row, `anekalogam` is
   many bars (pick the `1 gr` plain-LM row), `pegadaian` is one `0.01 gram` row.
   The generalized pure parser (`parseLogamMuliaGoldResponse` +
   `chooseGoldEntry`/`perGramBuybackDecimal`, `src/lib/market-data.ts`) prefers a

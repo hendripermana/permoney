@@ -221,9 +221,9 @@ when the household has never created a second one):
 `zakatable_assets(payer)` = the sum, over every account, of:
 
 - 100% of the account's zakatable value, when `account.zakatPayerId ==
-payer.id` and `zakatJointPayerId` is null, **plus**
+  payer.id` and `zakatJointPayerId` is null, **plus**
 - `(100 − zakatJointSharePercent)%` when `account.zakatPayerId ==
-payer.id` and it IS jointly held, **plus**
+  payer.id` and it IS jointly held, **plus**
 - `zakatJointSharePercent%` when `account.zakatJointPayerId == payer.id`
   (i.e. this payer is the joint co-owner, not the primary).
 
