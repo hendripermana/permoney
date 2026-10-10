@@ -5,6 +5,7 @@ import {
   describe,
   expect,
   test,
+  vi,
 } from "vite-plus/test"
 import { createAccountForFamily } from "@/server/accounts"
 import {
@@ -408,34 +409,63 @@ describe("ground-truth anchor observedAt (ADR-0043 amendment 2026-09-20)", () =>
   })
 
   test("a legacy anchor (observedAt NULL, same day) is unchanged by the deploy", async () => {
-    const owner = await factories.createAuthenticatedOnboardedUser()
-    const account = await makeCash(owner, "150000")
+    // Deterministic clock, advanced across the three moments this scenario is
+    // made of — account opens, expense logged for earlier that same UTC day,
+    // reconcile later that same UTC day. Two reasons it must be pinned rather
+    // than left to the ambient clock:
+    //
+    // 1. The scenario's whole point is that the expense and the reconcile fall
+    //    on the SAME UTC day: the legacy (observedAt NULL) rule segments by
+    //    DATE, so a same-day expense is re-counted and the rebuilt balance is
+    //    50000. Run between 00:00 and 01:00 UTC, `now - 1h` lands on the
+    //    previous day, the double-count silently disappears, and the assertion
+    //    reads 100000 — exactly the CI failure at 00:15 UTC.
+    // 2. A single frozen instant is not enough: `opening` is a DERIVED anchor
+    //    whose segment disjunct is `t.createdAt > anchor.createdAt` (strict),
+    //    and Prisma stamps `createdAt` client-side. Two writes sharing one
+    //    instant are not "after" each other, so the modern chain check drifts.
+    //    Advancing the clock preserves the ordering real time used to provide.
+    //
+    // `toFake: ["Date"]` leaves real timers — and the real Postgres round trips
+    // inside — untouched. The `finally` is load-bearing: a thrown assertion must
+    // never leak a frozen Date into the rest of the file.
+    vi.useFakeTimers({ toFake: ["Date"] })
+    try {
+      vi.setSystemTime(new Date("2026-01-15T09:00:00.000Z"))
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      const account = await makeCash(owner, "150000")
 
-    await post(
-      owner,
-      account.id,
-      "expense",
-      50_000n,
-      new Date(Date.now() - HOUR_MS)
-    )
-    await reconcile(owner, account.id, "100000")
-    await expectCoherent(owner, account.id, 100_000n)
+      vi.setSystemTime(new Date("2026-01-15T11:00:00.000Z"))
+      await post(
+        owner,
+        account.id,
+        "expense",
+        50_000n,
+        new Date(Date.now() - HOUR_MS)
+      )
 
-    // Simulate a row that predates the column: NULL it out. Its segmentation
-    // must be the exact legacy rule (same-day txn > midnight => counted twice),
-    // which is what production balances were computed under.
-    await harness.withFamily(owner.family.id, (tx) =>
-      tx.valuation.updateMany({
-        where: { accountId: account.id, provenance: "ground_truth" },
-        data: { observedAt: null },
+      vi.setSystemTime(new Date("2026-01-15T12:00:00.000Z"))
+      await reconcile(owner, account.id, "100000")
+      await expectCoherent(owner, account.id, 100_000n)
+
+      // Simulate a row that predates the column: NULL it out. Its segmentation
+      // must be the exact legacy rule (same-day txn > midnight => counted
+      // twice), which is what production balances were computed under.
+      await harness.withFamily(owner.family.id, (tx) =>
+        tx.valuation.updateMany({
+          where: { accountId: account.id, provenance: "ground_truth" },
+          data: { observedAt: null },
+        })
+      )
+      const rebuild = await rebuildAccountBalanceForFamily({
+        accountId: account.id,
+        familyId: owner.family.id,
+        user: owner.user,
       })
-    )
-    const rebuild = await rebuildAccountBalanceForFamily({
-      accountId: account.id,
-      familyId: owner.family.id,
-      user: owner.user,
-    })
-    expect(rebuild.rebuiltBalance).toBe("50000")
+      expect(rebuild.rebuiltBalance).toBe("50000")
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   test("a same-day derived anchor keeps PER-276 semantics (observedAt not consulted)", async () => {
