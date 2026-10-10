@@ -1,3 +1,29 @@
+# =============================================================================
+# MERGE PROTOCOL — lockfile-touching Dependabot PRs (read before merging)
+#
+# Incident 2026-10-10: squash-merging the stale-base PR #422 textually
+# duplicated the undici@7.30.0 blocks in pnpm-lock.yaml (packages: ×2,
+# snapshots: ×2). GitHub reported the PR CLEAN — its merge check is textual
+# only — and main went red at `pnpm install --frozen-lockfile`
+# (ERR_PNPM_BROKEN_LOCKFILE: duplicated mapping key) until #433 removed the
+# extra lines. CI caught it, but only after main was already broken, and a
+# plain `pnpm install` would have silently "repaired" the file instead of
+# failing (ci.yml therefore asserts the install leaves the lockfile untouched).
+#
+# 1. REBASE FIRST — never merge a lockfile-touching PR without
+#    `@dependabot rebase` (and the refreshed lockfile) first. A stale base is
+#    exactly what lets the textual merge duplicate YAML blocks.
+# 2. SERIAL MERGES — merge one such PR at a time, and only after the previous
+#    one is fully merged and its main run is green.
+# 3. "NO CHECKS REPORTED" MEANS SYNC, NOT WAIT — a branch GitHub cannot build a
+#    merge commit for (CONFLICTING/DIRTY) gets NO `pull_request` workflow run at
+#    all, so there is no run to wait for. Rebase/sync the branch, then wait for
+#    the run that appears.
+# 4. LET EVERY MAIN RUN FINISH — ci.yml's `ci-…` concurrency group cancels
+#    superseded runs, so a rapid follow-up merge can cancel (and thereby mask)
+#    a red run on main. Do not stack merges on top of a run that is still
+#    going.
+# =============================================================================
 version: 2
 updates:
   - package-ecosystem: npm

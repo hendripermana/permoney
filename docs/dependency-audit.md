@@ -48,6 +48,15 @@ when it lands on a **direct** dependency or on anything that runs in
 Findings that are transitive inside dev tooling are recorded here and revisited
 when the upstream that owns them ships a fix.
 
+## Merge protocol for lockfile-touching PRs
+
+Dependabot PRs that touch `pnpm-lock.yaml` follow the four-rule protocol
+recorded in `.github/dependabot.yml` (rebase first, merge serially, "no checks
+reported" = sync the branch rather than wait, and let every `main` CI run
+finish before merging the next). It exists because of the 2026-10-10 incident:
+a stale-base squash merge produced a `pnpm-lock.yaml` with duplicated mapping
+keys while GitHub still reported the PR CLEAN (#422 → #433).
+
 ## Re-check points
 
 - before any dependency-review,
