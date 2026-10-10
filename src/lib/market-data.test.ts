@@ -6,13 +6,19 @@ import {
   decodeSpotPrice,
   encodePriceForKind,
   encodeSpotPrice,
+  FRANKFURTER_PROVIDER_ID,
+  FRANKFURTER_SUPPORTED_CURRENCIES,
   FX_PRICE_DECIMALS,
+  fxPairSymbol,
   goldPerGramMajorToPerOunceDecimal,
+  isFrankfurterSupportedCurrency,
   isMarketInstrumentKind,
   isProviderId,
   MARKET_INSTRUMENT_KINDS,
   marketQuoteToHoldingPriceMinor,
   normalizeObservations,
+  parseFrankfurterRatesResponse,
+  parseFxExtraCurrencies,
   parseLogamMuliaGoldResponse,
   parseReksadanaNavResponse,
   priceScaleForKind,
@@ -523,13 +529,14 @@ describe("parseLogamMuliaGoldResponse", () => {
 // =============================================================================
 
 describe("provider id domain guard", () => {
-  test("PROVIDER_IDS holds the five known adapter ids", () => {
+  test("PROVIDER_IDS holds the six known adapter ids", () => {
     expect([...PROVIDER_IDS]).toEqual([
       "logam_mulia",
       "reksadana_id",
       "yahoo",
       "alpaca",
       "twelvedata",
+      "frankfurter",
     ])
   })
 
@@ -776,5 +783,255 @@ describe("parseReksadanaNavResponse (PER-250 Slice B / ADR-0053)", () => {
     expect(
       parseReksadanaNavResponse(WORKER_PAYLOAD, { fundCode: "  " }).status
     ).toBe("error")
+  })
+})
+
+describe("parseFrankfurterRatesResponse (PER-234 / ADR-0050 slice 2)", () => {
+  // The documented Frankfurter `GET /latest?from=USD&to=IDR,EUR` contract.
+  const PAYLOAD = {
+    amount: 1,
+    base: "USD",
+    date: "2026-10-09",
+    rates: { IDR: 15_250.1234, EUR: 0.9123 },
+  }
+
+  test("maps each requested rate to an fx observation (1e12 rate encoding)", () => {
+    const result = parseFrankfurterRatesResponse(PAYLOAD, {
+      baseCurrency: "USD",
+      quoteCurrencies: ["IDR", "EUR"],
+    })
+    expect(result.status).toBe("ok")
+    expect(result.observations).toHaveLength(2)
+    const [idr, eur] = result.observations
+    expect(idr).toMatchObject({
+      kind: "fx",
+      symbol: "USD/IDR",
+      baseCurrency: "USD",
+      quoteCurrency: "IDR",
+      priceDecimal: "15250.1234",
+      providerRef: "frankfurter",
+    })
+    // Effective date = the payload's own ECB publication date (honest dating:
+    // a run before today's publication carries the previous rate's date).
+    expect(idr?.asOf.toISOString()).toBe("2026-10-09T00:00:00.000Z")
+    expect(eur?.symbol).toBe("USD/EUR")
+    expect(eur?.priceDecimal).toBe("0.9123")
+    // FX quotes encode at RATE_SCALE (1e12), major -> major.
+    expect(encodeRate(idr!.priceDecimal)).toBe(15_250_123_400_000_000n)
+  })
+
+  test("ignores rates the caller did not request (no surprise pairs)", () => {
+    const result = parseFrankfurterRatesResponse(PAYLOAD, {
+      baseCurrency: "USD",
+      quoteCurrencies: ["IDR"],
+    })
+    expect(result.observations.map((o) => o.quoteCurrency)).toEqual(["IDR"])
+  })
+
+  test("drops a missing / non-positive rate for one pair, keeps the rest", () => {
+    const result = parseFrankfurterRatesResponse(
+      { ...PAYLOAD, rates: { IDR: 15_250.1234, EUR: 0, GBP: -1, SGD: null } },
+      {
+        baseCurrency: "USD",
+        quoteCurrencies: ["IDR", "EUR", "GBP", "SGD", "JPY"],
+      }
+    )
+    expect(result.status).toBe("ok")
+    expect(result.observations.map((o) => o.quoteCurrency)).toEqual(["IDR"])
+  })
+
+  test("a very small rate survives without exponent notation", () => {
+    // Direct IDR-base quote (~6.5e-5) — String() would be exponential.
+    const result = parseFrankfurterRatesResponse(
+      { amount: 1, base: "IDR", date: "2026-10-09", rates: { USD: 6.5e-5 } },
+      { baseCurrency: "IDR", quoteCurrencies: ["USD"] }
+    )
+    expect(result.status).toBe("ok")
+    expect(result.observations[0]?.priceDecimal).toBe("0.000065")
+  })
+
+  test("the encoded rate round-trips through the 1e12 fx scale", () => {
+    const result = parseFrankfurterRatesResponse(PAYLOAD, {
+      baseCurrency: "USD",
+      quoteCurrencies: ["IDR"],
+    })
+    const encoded = encodeRate(result.observations[0]!.priceDecimal)
+    expect(encoded).toBe(15_250_123_400_000_000n)
+    // A normalized fx observation lands in the canonical store at scale 12.
+    const normalized = normalizeObservations(result.observations)
+    expect(normalized.quotes[0]?.priceScale).toBe(FX_PRICE_DECIMALS)
+    expect(normalized.quotes[0]?.price).toBe(encoded)
+    expect(normalized.quotes[0]?.identity).toEqual({
+      kind: "fx",
+      symbol: "USD/IDR",
+      baseCurrency: "USD",
+      quoteCurrency: "IDR",
+      mic: null,
+    })
+  })
+
+  test("structurally unusable payloads error gracefully (no throw)", () => {
+    // Not an object.
+    expect(
+      parseFrankfurterRatesResponse(null, {
+        baseCurrency: "USD",
+        quoteCurrencies: ["IDR"],
+      }).status
+    ).toBe("error")
+    // Missing base echo (the parser cannot trust an unattributed rate).
+    expect(
+      parseFrankfurterRatesResponse(
+        { date: "2026-10-09", rates: { IDR: 1 } },
+        { baseCurrency: "USD", quoteCurrencies: ["IDR"] }
+      ).status
+    ).toBe("error")
+    // Echoed base mismatch (a mangled request/response pairing).
+    expect(
+      parseFrankfurterRatesResponse(
+        { ...PAYLOAD, base: "EUR" },
+        { baseCurrency: "USD", quoteCurrencies: ["IDR"] }
+      ).status
+    ).toBe("error")
+    // Missing / malformed publication date (the effective date is mandatory).
+    expect(
+      parseFrankfurterRatesResponse(
+        { ...PAYLOAD, date: undefined },
+        { baseCurrency: "USD", quoteCurrencies: ["IDR"] }
+      ).status
+    ).toBe("error")
+    expect(
+      parseFrankfurterRatesResponse(
+        { ...PAYLOAD, date: "yesterday" },
+        { baseCurrency: "USD", quoteCurrencies: ["IDR"] }
+      ).status
+    ).toBe("error")
+    // Missing rates object.
+    expect(
+      parseFrankfurterRatesResponse(
+        { amount: 1, base: "USD", date: "2026-10-09" },
+        { baseCurrency: "USD", quoteCurrencies: ["IDR"] }
+      ).status
+    ).toBe("error")
+    // Zero usable rows.
+    expect(
+      parseFrankfurterRatesResponse(
+        { ...PAYLOAD, rates: { EUR: 0.9 } },
+        { baseCurrency: "USD", quoteCurrencies: ["IDR"] }
+      ).status
+    ).toBe("error")
+    // No usable quote currencies requested.
+    expect(
+      parseFrankfurterRatesResponse(PAYLOAD, {
+        baseCurrency: "USD",
+        quoteCurrencies: ["USD"],
+      }).status
+    ).toBe("error")
+  })
+
+  test("a payload `amount` scales every rate (never marks money at N× the quote)", () => {
+    // `?amount=10` publishes each rate for 10 units of base — the per-unit
+    // rate is rate / amount, so 1525.01234 must land as 152.501234, not as-is.
+    const scaled = parseFrankfurterRatesResponse(
+      { ...PAYLOAD, amount: 10 },
+      { baseCurrency: "USD", quoteCurrencies: ["IDR"] }
+    )
+    expect(scaled.status).toBe("ok")
+    expect(scaled.observations[0]?.priceDecimal).toBe("1525.01234")
+
+    // The ordinary amount: 1 path divides by exactly 1 (no float drift).
+    const unit = parseFrankfurterRatesResponse(PAYLOAD, {
+      baseCurrency: "USD",
+      quoteCurrencies: ["IDR"],
+    })
+    expect(unit.observations[0]?.priceDecimal).toBe("15250.1234")
+
+    // A corrupt amount is structurally unusable — reject, never approximate.
+    for (const amount of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, "10"]) {
+      expect(
+        parseFrankfurterRatesResponse(
+          { ...PAYLOAD, amount },
+          { baseCurrency: "USD", quoteCurrencies: ["IDR"] }
+        ).status
+      ).toBe("error")
+    }
+    // An absent `amount` means the documented default of 1.
+    const absent = parseFrankfurterRatesResponse(
+      {
+        amount: undefined,
+        base: "USD",
+        date: "2026-10-09",
+        rates: { IDR: 15_250.1234 },
+      },
+      { baseCurrency: "USD", quoteCurrencies: ["IDR"] }
+    )
+    expect(absent.status).toBe("ok")
+    expect(absent.observations[0]?.priceDecimal).toBe("15250.1234")
+  })
+
+  test("a non-numeric rate is dropped, never coerced through division", () => {
+    const result = parseFrankfurterRatesResponse(
+      {
+        amount: 1,
+        base: "USD",
+        date: "2026-10-09",
+        rates: { IDR: "15250.1234" },
+      },
+      { baseCurrency: "USD", quoteCurrencies: ["IDR"] }
+    )
+    expect(result.status).toBe("error")
+  })
+})
+
+describe("parseFxExtraCurrencies — the FX_RATE_CURRENCIES env list (PER-234)", () => {
+  test("normalizes, de-duplicates, and sorts the configured codes", () => {
+    expect(parseFxExtraCurrencies("USD, EUR ,usd,IDR")).toEqual([
+      "EUR",
+      "IDR",
+      "USD",
+    ])
+  })
+
+  test("a blank / unset / malformed entry is dropped, never thrown", () => {
+    expect(parseFxExtraCurrencies(undefined)).toEqual([])
+    expect(parseFxExtraCurrencies(null)).toEqual([])
+    expect(parseFxExtraCurrencies("   ")).toEqual([])
+    // Bad shapes (short, long, non-alpha, empty slots) cannot crash a cron tick.
+    expect(parseFxExtraCurrencies("US,X,TOOLONG,CU,R,123,USD,,")).toEqual([
+      "USD",
+    ])
+  })
+})
+
+describe("frankfurter provider id + supported-currency whitelist (PER-234)", () => {
+  test("frankfurter is a first-class routed adapter id", () => {
+    expect(isProviderId("frankfurter")).toBe(true)
+    expect(PROVIDER_IDS).toContain("frankfurter")
+    // Explicit provider wins over the fx -> yahoo kind derivation (ADR-0052 §2).
+    expect(
+      resolveProviderId({
+        kind: "fx",
+        symbol: "USD/IDR",
+        mic: null,
+        provider: "frankfurter",
+      })
+    ).toEqual({ status: "routed", providerId: "frankfurter" })
+    // The adapter id doubles as the canonical quote source tag.
+    expect(FRANKFURTER_PROVIDER_ID).toBe("frankfurter")
+  })
+
+  test("the whitelist admits ECB currencies and rejects pseudo-currencies", () => {
+    for (const code of ["USD", "IDR", "EUR", "SGD", "JPY", "MYR"]) {
+      expect(isFrankfurterSupportedCurrency(code)).toBe(true)
+    }
+    // Metals/crypto registry pseudo-currencies are NOT ECB pairs — they must
+    // be a structured skip at discovery, never a 4xx-poisoned fetch.
+    for (const code of ["XAU", "XAG", "BTC", "XXX"]) {
+      expect(isFrankfurterSupportedCurrency(code)).toBe(false)
+    }
+    expect(FRANKFURTER_SUPPORTED_CURRENCIES).toContain("IDR")
+  })
+
+  test("fxPairSymbol is the canonical provider-independent identity", () => {
+    expect(fxPairSymbol("USD", "IDR")).toBe("USD/IDR")
   })
 })

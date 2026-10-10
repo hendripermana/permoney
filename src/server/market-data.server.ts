@@ -9,7 +9,11 @@
  *   - `MarketDataProvider` — the ONLY seam a vendor lives behind. The normalizer
  *     and every consumer speak `MarketInstrument`/`MarketQuote`, never a vendor.
  *   - `MarketFixtureProvider` — a deterministic, no-network, no-secrets adapter
- *     that proves the pipeline end to end (real adapters are PER-234+).
+ *     that proves the pipeline end to end. Real adapters live behind the same
+ *     seam: gold (PER-235), reksadana NAV (PER-250), and FX via the ECB's
+ *     Frankfurter feed (PER-234, whose tenant discovery + snapshot propagation
+ *     live in `fx-auto-ingest.server.ts` so the FX-specific walk never has to
+ *     reach back into this module).
  *   - `ingestMarketDataOnce` — one raw → staged → canonical cycle:
  *       1. call the provider (never letting it throw the pipeline dead),
  *       2. persist the raw payload to `RawMarketDataFetch` FIRST (provenance),
@@ -34,6 +38,7 @@ import { timingSafeEqual } from "node:crypto"
 import {
   BSI_GOLD_QUOTE_CURRENCY,
   BSI_GOLD_SYMBOL,
+  FRANKFURTER_PROVIDER_ID,
   isMarketInstrumentKind,
   normalizeObservations,
   parseLogamMuliaGoldResponse,
@@ -48,6 +53,16 @@ import {
   type ProviderId,
 } from "@/lib/market-data"
 import { prisma } from "./db.server"
+import {
+  FrankfurterFxProvider,
+  isFrankfurterConfigured,
+  prepareFxAutoIngest,
+  propagateFxRateSnapshotsForFamilies,
+  summarizeFxAutoIngest,
+  type FxAutoIngestOptions,
+  type FxRefreshSummary,
+  type PreparedFxAutoIngest,
+} from "./fx-auto-ingest.server"
 import { logEvent } from "./log.server"
 
 // -----------------------------------------------------------------------------
@@ -1105,19 +1120,38 @@ export interface DefaultRegistryReksadanaOptions {
   from?: string
 }
 
+/**
+ * FX-adapter construction knobs (tests inject a fixture fetch / base URL).
+ * `extraCurrencies` is discovery-only and ignored here.
+ */
+export interface DefaultRegistryFxOptions {
+  /** Base URL; defaults to reading `FRANKFURTER_API_URL` at call time. */
+  baseUrl?: string
+  /** Injectable fetch (tests pass a fixture; prod uses the global `fetch`). */
+  fetchImpl?: FetchLike
+}
+
 export interface DefaultRegistryOptions {
   /** Passthrough for the `logam_mulia` gold adapter (see LogamMuliaGoldProvider). */
   gold?: DefaultRegistryGoldOptions
   /** Passthrough for the `reksadana_id` NAV adapter (see ReksadanaNavProvider). */
   reksadana?: DefaultRegistryReksadanaOptions
+  /** Passthrough for the `frankfurter` FX adapter (see FrankfurterFxProvider). */
+  fx?: DefaultRegistryFxOptions
 }
 
 /**
  * The production registry. Slice A registers ONLY `logam_mulia` (gold now flows
  * THROUGH the router, proving the mechanism before fragile sources plug in).
- * `reksadana_id` (PER-257 Slice B) and `yahoo` / `alpaca` / `twelvedata`
- * (later slices) drop in here with no consumer change. The factory is lazy: the
- * gold provider reads `LOGAM_MULIA_API_URL` only when actually constructed.
+ * `reksadana_id` (PER-250 Slice B) and the later `yahoo` / `alpaca` /
+ * `twelvedata` slices drop in here with no consumer change. Factories are lazy:
+ * gold reads `LOGAM_MULIA_API_URL` only when actually constructed.
+ *
+ * PER-234: `frankfurter` is registered ONLY when FX auto-ingestion is
+ * configured (`FRANKFURTER_API_URL`, or an explicit `fx.baseUrl`). An
+ * install that never opted in must not turn every existing `fx` instrument
+ * into a permanently degraded group — an unregistered routed id is a quiet,
+ * structured `skipped` entry instead (the router's own contract).
  */
 export function createDefaultProviderRegistry(
   options?: DefaultRegistryOptions
@@ -1146,6 +1180,17 @@ export function createDefaultProviderRegistry(
         from: options?.reksadana?.from,
       })
   )
+  // PER-234: the ECB FX adapter, opt-in (see `isFrankfurterConfigured`).
+  if (isFrankfurterConfigured(options?.fx?.baseUrl)) {
+    registry.set(
+      FRANKFURTER_PROVIDER_ID,
+      () =>
+        new FrankfurterFxProvider({
+          baseUrl: options?.fx?.baseUrl,
+          fetchImpl: options?.fx?.fetchImpl,
+        })
+    )
+  }
   return registry
 }
 
@@ -1196,12 +1241,18 @@ export interface IngestAllSummary {
 
 export interface IngestAllOptions {
   db?: MarketDataDb
-  /** Adapter registry; defaults to the production registry (gold + reksadana). */
+  /** Adapter registry; defaults to the production registry (gold + reksadana + fx). */
   registry?: ProviderRegistry
   /** Gold passthrough used only when building the DEFAULT registry. */
   gold?: DefaultRegistryGoldOptions
   /** Reksadana passthrough used only when building the DEFAULT registry. */
   reksadana?: DefaultRegistryReksadanaOptions
+  /**
+   * FX passthrough (base URL / fixture fetch / `FX_RATE_CURRENCIES` override).
+   * Used both when building the DEFAULT registry and by the FX discovery
+   * phases the scheduled refresh runs around this router (PER-234).
+   */
+  fx?: FxAutoIngestOptions
 }
 
 /**
@@ -1233,6 +1284,7 @@ export async function ingestAllInstrumentsOnce(
     createDefaultProviderRegistry({
       gold: options?.gold,
       reksadana: options?.reksadana,
+      fx: options?.fx,
     })
 
   const instruments = await loadRoutableInstruments(db)
@@ -1480,18 +1532,28 @@ export interface ScheduledMarketDataRefreshResult {
   totalIngested: number
   perProvider: ProviderIngestSummary[]
   skipped: SkippedInstrument[]
+  /** PER-234 — the FX auto-ingest phases run around the router (see below). */
+  fx: FxRefreshSummary
   /** True when ANY provider group degraded — the signal worth a human look. */
   degraded: boolean
 }
 
 /**
- * Run one scheduled market-data refresh cycle: ensure the always-relevant
- * BSI-gold instrument exists (idempotent, so a fresh install is priceable on
- * the very first scheduled tick, mirroring `syncMarketPricesOnce`), then
- * ingest the WHOLE `MarketInstrument` catalog through the router
- * (`ingestAllInstrumentsOnce` — unchanged; per-provider failure isolation +
- * keep-last-good already proven). Never throws on a provider failure — that
- * degradation is the router's job. A structured summary is ALWAYS logged
+ * Run one scheduled market-data refresh cycle:
+ *
+ *   1. ensure the always-relevant BSI-gold instrument exists (idempotent, so a
+ *      fresh install is priceable on the very first scheduled tick),
+ *   2. PER-234 FX PRE — discover the (foreign -> base) pairs the families
+ *      really use and ensure a `frankfurter`-routed instrument per pair,
+ *   3. ingest the WHOLE `MarketInstrument` catalog through the router
+ *      (`ingestAllInstrumentsOnce` — unchanged; per-provider failure isolation +
+ *      keep-last-good already proven),
+ *   4. PER-234 FX POST — promote the freshly staged provider quotes into dated,
+ *      `source: "provider"` `FxRateSnapshot`s per family, which backfills each
+ *      family's FX-pending projections (ADR-0035 §4/§7).
+ *
+ * Never throws on a provider failure — that degradation is the router's (and,
+ * for FX, `prepareFxAutoIngest`'s) job. A structured summary is ALWAYS logged
  * (`console.error` when degraded, `console.log` otherwise) because no
  * email/push alerting infrastructure exists in this codebase (see ADR-0043's
  * "Notify" finding) — `docker compose logs` / journald grepped for
@@ -1499,7 +1561,7 @@ export interface ScheduledMarketDataRefreshResult {
  * chosen for the project.
  *
  * Accepts the same options as `ingestAllInstrumentsOnce` (a custom `registry`
- * / `gold` / `reksadana` passthrough, plus `db`) so tests can inject a
+ * / `gold` / `reksadana` / `fx` passthrough, plus `db`) so tests can inject a
  * fixture registry or fetch — the production HTTP entrypoint
  * (`handleInternalMarketDataRefreshRequest`) calls this with NO overrides,
  * always the real default registry reading real env config.
@@ -1510,11 +1572,28 @@ export async function runScheduledMarketDataRefresh(
   const db = options?.db
   const startedAt = new Date()
   await ensureBsiGoldInstrument(db)
+
+  // FX PRE: discovery + instrument ensure (idempotent, never throws — a broken
+  // FX pass must not take the gold/reksadana refresh down with it).
+  const fxPrepared: PreparedFxAutoIngest = await prepareFxAutoIngest({
+    db,
+    fx: options?.fx,
+  })
+
   const summary = await ingestAllInstrumentsOnce(options)
+
+  // FX POST: only meaningful once discovery succeeded; a same-day re-run
+  // writes nothing (natural-key idempotency, see fx-auto-ingest.server.ts).
+  const fxPropagation =
+    fxPrepared.status === "ready"
+      ? await propagateFxRateSnapshotsForFamilies(fxPrepared.discovery, db)
+      : undefined
+  const fx = summarizeFxAutoIngest(fxPrepared, fxPropagation)
+
   const finishedAt = new Date()
-  const degraded = summary.perProvider.some(
-    (group) => group.error !== undefined
-  )
+  const degraded =
+    summary.perProvider.some((group) => group.error !== undefined) ||
+    fx.error !== undefined
 
   const result: ScheduledMarketDataRefreshResult = {
     startedAt: startedAt.toISOString(),
@@ -1523,10 +1602,11 @@ export async function runScheduledMarketDataRefresh(
     totalIngested: summary.totalIngested,
     perProvider: summary.perProvider,
     skipped: summary.skipped,
+    fx,
     degraded,
   }
 
-  const logLine = `[market-data-refresh] degraded=${degraded} ingested=${result.totalIngested}`
+  const logLine = `[market-data-refresh] degraded=${degraded} ingested=${result.totalIngested} fxSnapshots=${fx.snapshotsUpserted}`
   if (degraded) {
     console.error(logLine, JSON.stringify(result))
   } else {

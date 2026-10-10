@@ -1376,7 +1376,8 @@ model MarketInstrument {
   mic String?
 
   // PER-257 / ADR-0052 — the explicit SOURCE ADAPTER that prices this instrument
-  // ('logam_mulia' | 'reksadana_id' | 'yahoo' | 'alpaca' | 'twelvedata'). The
+  // ('logam_mulia' | 'reksadana_id' | 'yahoo' | 'alpaca' | 'twelvedata' |
+  // 'frankfurter'). The
   // Financial Ingestion Service router reads this FIRST; when NULL it falls back
   // to kind/mic derivation (`resolveProviderId`), so existing rows (gold) keep
   // routing correctly with zero backfill. A CHECK constrains it to the adapter-id

@@ -98,6 +98,9 @@ export const PROVIDER_IDS = [
   "yahoo",
   "alpaca",
   "twelvedata",
+  // PER-234 — ECB reference rates via the public Frankfurter API (keyless).
+  // FX pairs only; spot kinds are other adapters' concern.
+  "frankfurter",
 ] as const
 
 /** A source-adapter id — the key a `ProviderRegistry` maps to a factory. */
@@ -998,4 +1001,245 @@ export function parseReksadanaNavResponse(
     return err("payload has no usable (positive-priced, dated) NAV quotes")
   }
   return { status: "ok", observations }
+}
+
+// -----------------------------------------------------------------------------
+// Frankfurter (ECB reference rates) FX adapter — PER-234 / ADR-0050 slice 2
+// -----------------------------------------------------------------------------
+//
+// Pure parsing + identity helpers for the FIRST real FX feed. Frankfurter
+// serves the ECB's daily reference rates as keyless JSON (ADR-0052 §5's "ECB"
+// slot). The adapter class lives behind the `.server.ts` fence in
+// `src/server/market-data.server.ts`; everything here is DB-free, network-free,
+// and secret-free so it unit-tests without any runtime.
+
+/** The stable adapter id (provenance tag + provider-routing discriminator). */
+export const FRANKFURTER_PROVIDER_ID = "frankfurter" as const
+
+/**
+ * The ECB reference-rate currency universe Frankfurter publishes (~31 + EUR).
+ *
+ * Discovery uses this as an HONESTY WHITELIST: a pair outside it is a
+ * structured skip, never a fetch. An unknown `to`/`from` symbol makes the whole
+ * Frankfurter request 4xx, so one unsupported currency (a crypto code, a metal
+ * pseudo-currency, or a non-ECB ISO code) in a family's usage would otherwise
+ * poison every pair of that base group. A future FX adapter that covers more
+ * currencies carries its own list — this is a property of the ADAPTER, not of
+ * the store.
+ */
+export const FRANKFURTER_SUPPORTED_CURRENCIES = [
+  "AUD",
+  "BGN",
+  "BRL",
+  "CAD",
+  "CHF",
+  "CNY",
+  "CZK",
+  "DKK",
+  "EUR",
+  "GBP",
+  "HKD",
+  "HUF",
+  "IDR",
+  "ILS",
+  "INR",
+  "ISK",
+  "JPY",
+  "KRW",
+  "MXN",
+  "MYR",
+  "NOK",
+  "NZD",
+  "PHP",
+  "PLN",
+  "RON",
+  "SEK",
+  "SGD",
+  "THB",
+  "TRY",
+  "USD",
+  "ZAR",
+] as const
+
+export function isFrankfurterSupportedCurrency(code: string): boolean {
+  return (FRANKFURTER_SUPPORTED_CURRENCIES as readonly string[]).includes(code)
+}
+
+/** The canonical provider-independent identity symbol for an FX pair. */
+export function fxPairSymbol(
+  baseCurrency: string,
+  quoteCurrency: string
+): string {
+  return `${baseCurrency}/${quoteCurrency}`
+}
+
+/** One `GET /latest?from=X&to=Y...` response from Frankfurter (ECB data). */
+export interface FrankfurterRatesPayload {
+  amount: number
+  base: string
+  /** ECB publication date, `YYYY-MM-DD` — the honest effective date. */
+  date: string
+  rates: Record<string, number>
+}
+
+/** The outcome of parsing one Frankfurter response into fx observations. */
+export interface FxParseResult {
+  status: "ok" | "error"
+  /** Human-readable reason when `status` is "error" (graceful skip, no throw). */
+  error?: string
+  observations: MarketObservation[]
+}
+
+/**
+ * A finite, positive FX rate → a plain decimal string the 1e12 `encodeRate`
+ * accepts. `String(n)`'s shortest round-trip form is used when it is plain
+ * decimal (exact for ECB's published precision); exponent-notation values
+ * (rates below 1e-6, e.g. a direct VND quote) fall back to `toFixed(12)` — the
+ * FX scale — trimmed, so they never round-trip through a lossy exponent.
+ * Non-finite / non-positive rates are a corrupt quote: reject the row, never
+ * mis-mark money.
+ */
+function fxRateNumberToDecimal(rate: unknown): string | null {
+  if (typeof rate !== "number" || !Number.isFinite(rate) || rate <= 0)
+    return null
+  const shortest = String(rate)
+  if (isPlainDecimalString(shortest)) return shortest
+  const fixed = rate
+    .toFixed(FX_PRICE_DECIMALS)
+    .replace(/0+$/, "")
+    .replace(/\.$/, "")
+  return isPlainDecimalString(fixed) ? fixed : null
+}
+
+/**
+ * `^\d+(\.\d+)?$` without the nested-quantifier regex (a backtracking
+ * hot-spot worth avoiding in a money path): at most one `.`, every part
+ * non-empty and all digits.
+ */
+function isPlainDecimalString(value: string): boolean {
+  const parts = value.split(".")
+  if (parts.length > 2) return false
+  return parts.every((part) => part.length > 0 && /^\d+$/.test(part))
+}
+
+/** A bare `YYYY-MM-DD` → UTC midnight Date, or null. */
+function parseFxDateOnly(value: unknown): Date | null {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) {
+    return null
+  }
+  const date = new Date(`${value.trim()}T00:00:00.000Z`)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+/**
+ * Parse ONE Frankfurter `GET /latest` payload into canonical `fx` observations,
+ * one per REQUESTED quote currency that is actually present and usable.
+ *
+ * Effective date = the payload's own ECB `date` (date-only → UTC midnight), so
+ * a run before the ECB's daily publication honestly carries the previous
+ * business day's effective date — never "today" (misdated rates would silently
+ * shift the ADR-0035 step function). A payload missing/invalidating its `date`,
+ * echoing a different `base`, lacking a `rates` object, or yielding zero usable
+ * rows is structurally unusable → one graceful error. An individually missing /
+ * non-positive / unencodable rate DROPS that pair only (the rest still ingest).
+ * Pure: no DB, no network, no secrets.
+ */
+export function parseFrankfurterRatesResponse(
+  payload: unknown,
+  opts: {
+    baseCurrency: string
+    quoteCurrencies: readonly string[]
+    sourceLabel?: string
+  }
+): FxParseResult {
+  const err = (reason: string): FxParseResult => ({
+    status: "error",
+    error: reason,
+    observations: [],
+  })
+
+  const baseCurrency = opts.baseCurrency.trim().toUpperCase()
+  if (baseCurrency.length === 0) return err("missing baseCurrency")
+  const quoteCurrencies = opts.quoteCurrencies
+    .map((code) => code.trim().toUpperCase())
+    .filter((code) => code.length > 0 && code !== baseCurrency)
+  if (quoteCurrencies.length === 0) return err("no usable quote currencies")
+
+  if (!isRecord(payload)) return err("payload is not an object")
+
+  const echoedBase =
+    typeof payload.base === "string" ? payload.base.trim().toUpperCase() : ""
+  if (echoedBase.length === 0) return err("payload is missing a base currency")
+  if (echoedBase !== baseCurrency) {
+    return err(
+      `payload base "${echoedBase}" does not match requested "${baseCurrency}"`
+    )
+  }
+
+  // The ECB publication date is REQUIRED — it is the snapshot's effective date
+  // (ADR-0035 §2 step function); a dated feed that cannot name its date cannot
+  // be ingested honestly.
+  const asOf = parseFxDateOnly(payload.date)
+  if (asOf === null) return err("payload is missing a valid YYYY-MM-DD date")
+
+  if (!isRecord(payload.rates)) return err("payload is missing rates")
+
+  // Frankfurter's `amount` scales the whole `rates` object (`?amount=10`
+  // publishes each rate for 10 units of base). We never request one, so the
+  // honest default is 1; an amount that is present but not a finite positive
+  // number is structurally corrupt — reject the payload rather than mark money
+  // at an arbitrary multiple of the published rate. `rate / 1` is exact, so
+  // the ordinary path never does float division it does not need.
+  const amount = payload.amount ?? 1
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
+    return err("payload has an invalid amount")
+  }
+
+  const providerRef = opts.sourceLabel ?? FRANKFURTER_PROVIDER_ID
+  const observations: MarketObservation[] = []
+  for (const quoteCurrency of quoteCurrencies) {
+    // Type-checked BEFORE dividing: `undefined / amount` is NaN and a numeric
+    // string would otherwise be silently coerced — both must drop the pair,
+    // never widen what counts as a rate.
+    const raw = payload.rates[quoteCurrency]
+    const priceDecimal =
+      typeof raw === "number" ? fxRateNumberToDecimal(raw / amount) : null
+    if (priceDecimal === null) continue
+    observations.push({
+      kind: "fx",
+      symbol: fxPairSymbol(baseCurrency, quoteCurrency),
+      baseCurrency,
+      quoteCurrency,
+      asOf,
+      priceDecimal,
+      providerRef,
+    })
+  }
+
+  if (observations.length === 0) {
+    return err("payload has no usable (positive, requested) rates")
+  }
+  return { status: "ok", observations }
+}
+
+/**
+ * Parse the `FX_RATE_CURRENCIES` env value (comma-separated ISO-like codes,
+ * e.g. `"USD, EUR ,SGD"`) into normalized, de-duplicated, sorted codes.
+ * Blank / malformed entries (bad shape) are DROPPED, never thrown — a typo in
+ * a config file must not crash the scheduled refresh. The base currency is
+ * removed by the caller (it is not a foreign pair side). Pure: no DB, no env
+ * read (the raw string is passed in).
+ */
+export function parseFxExtraCurrencies(
+  raw: string | undefined | null
+): string[] {
+  if (typeof raw !== "string" || raw.trim().length === 0) return []
+  const shape = /^[A-Z]{3,5}$/
+  const seen = new Set<string>()
+  for (const part of raw.split(",")) {
+    const code = part.trim().toUpperCase()
+    if (!shape.test(code)) continue
+    seen.add(code)
+  }
+  return [...seen].sort((a, b) => a.localeCompare(b))
 }

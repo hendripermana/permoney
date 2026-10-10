@@ -76,6 +76,14 @@ services:
       # ReksadanaNavProvider adapter reads it at call time and fails gracefully
       # when unset, so the app still boots without it. See ADR-0053.
       REKSADANA_API_URL: ${REKSADANA_API_URL:-}
+      # PER-234 market-data: base URL of the Frankfurter API (ECB reference
+      # rates, keyless). Optional — unset means FX auto-ingestion is disabled
+      # and the scheduled refresh skips the FX phases entirely (existing
+      # FxRateSnapshot rows are kept). See docs/adr/0050-market-data-ingestion.md.
+      FRANKFURTER_API_URL: ${FRANKFURTER_API_URL:-}
+      # PER-234 market-data: optional extra FX currencies to pre-discover pairs
+      # for beyond each family's real usage. Non-ECB codes are structured skips.
+      FX_RATE_CURRENCIES: ${FX_RATE_CURRENCIES:-}
       # PER-237 market-data: shared secret the host cron job
       # (deploy/refresh-market-data.sh) presents to trigger the scheduled
       # market-data refresh over loopback. Optional — unset means the
