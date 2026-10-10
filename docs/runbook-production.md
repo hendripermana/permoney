@@ -203,6 +203,39 @@ file works for both, since the app's own `.env` already has it (see
 `/api/internal/market-data-refresh` route rejects every request (fails
 closed) rather than running unauthenticated.
 
+**FX rates (PER-234).** The same tick also refreshes FX rates via the
+Frankfurter API (ECB reference rates) when `FRANKFURTER_API_URL` is set in
+the app's `.env`. Unset = FX auto-ingestion is simply off (the run is not
+degraded — the FX phases are skipped and existing `FxRateSnapshot` rows are
+kept). Optional `FX_RATE_CURRENCIES` pre-discovers pairs beyond each family's
+current usage; codes the ECB does not publish are logged as structured skips,
+never fetched. The ECB publishes on business days (~14:15 UTC), so a run
+before that still records the previous business day's rate — the snapshot's
+`asOfDate` is the ECB's own `date`, never "today".
+
+**Freshness verification.** After enabling FX (or any time you want to check),
+read the last run's summary from the cron log and confirm the FX block:
+
+```bash
+grep market-data-refresh /var/log/permoney_prod_market_data_refresh.log | tail -1
+```
+
+A healthy FX-enabled line looks like
+`"fx":{"enabled":true,"pairsDiscovered":N,"instrumentsEnsured":N,...,"snapshotsUpserted":N,...}`.
+Then verify the stored snapshots are dated to the last ECB business day:
+
+```sql
+SELECT "fromCurrency", "toCurrency", "asOfDate", source, "createdAt"
+FROM "FxRateSnapshot"
+WHERE source = 'provider'
+ORDER BY "createdAt" DESC
+LIMIT 10;
+```
+
+An `asOfDate` older than ~3 ECB business days means the feed stopped updating
+(the router keeps the last good rate — it never invents one) — check the
+`frankfurter` entry in `perProvider` for an `error`.
+
 **Health / alerting.** No email/push infrastructure exists in this codebase
 (the same gap ADR-0043's "Notify" section documents). A run that DEGRADES —
 one provider group failed but others still ingested — still exits `0` (the

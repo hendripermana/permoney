@@ -474,6 +474,92 @@ refresh" (the cron trigger); `docker-compose.prod.yml` +
 `.env.example` (`MARKET_DATA_REFRESH_SECRET`); real-Postgres
 (`tests/integration/market-data-scheduled-refresh.integration.ts`) tests.
 
+## Implementation notes (PER-234, Slice 2 — FX auto-ingestion)
+
+Slice 2 delivers the ADR's "first real adapter" on the FX seam: the ECB's
+reference rates via the keyless Frankfurter API, promoted into dated
+`FxRateSnapshot` rows so families stop hand-seeding rates. Points where the
+shipped implementation refines the plan:
+
+- **Frankfurter (ECB), keyless, one request per BASE currency.** `GET
+  {base}/latest?from=X&to=A,B,C` returns the whole cross-table for base `X`,
+  so a run costs one HTTP request per distinct family base currency (not per
+  pair). The provider groups planned pairs by base and fetches each group once;
+  a group that fails records a failure but never blocks the other groups.
+
+- **The effective date is the payload's own `date` — never "today".** The ECB
+  publishes once per business day (~14:15 UTC). A run at 11:05 UTC therefore
+  lands YESTERDAY's rate, which is honest data; stamping it with the run date
+  would silently lie about provenance. The parser also honors the payload's
+  `amount` scaling field (`rate ÷ amount`); a non-finite or non-positive
+  `amount`, or a non-numeric rate, drops that pair with a structured error —
+  a rate is NEVER coerced into existence.
+
+- **Pair discovery = per-family real usage + configured extras, filtered by
+  an ECB whitelist.** For each family the planner unions the distinct
+  currencies of its accounts, transactions, `destinationCurrency`, and
+  valuations, maps each foreign currency to a (foreign → family base) pair,
+  and adds any `FX_RATE_CURRENCIES` extras. Every code is then checked against
+  `FRANKFURTER_SUPPORTED_CURRENCIES` — metal pseudo-currencies (XAU/XAG) and
+  other non-ECB codes become structured SKIP records (visible in the summary),
+  never a doomed fetch.
+
+- **FX instruments get an explicit `provider = "frankfurter"`.** An fx
+  `MarketInstrument` with a NULL provider would derive to `yahoo` under the
+  ADR-0052 router's kind-based default, which is not a registered provider.
+  The new id widened the `market_instrument_provider` CHECK (additive
+  migration). `ensureFxInstrument` also CLAIMS an existing NULL-provider fx
+  row rather than creating a duplicate — and never overwrites an explicit
+  provider another path has set.
+
+- **Promotion is idempotent at the snapshot row, not just the quote.** Only
+  quotes with `source: "frankfurter"` and `priceScale === 12` are promoted
+  (a spot-scale quote could be a corrupt row; mis-scaling money is worse than
+  a missing rate). The promoted snapshot is written with
+  `source: "provider"` through the SAME `upsertFxRateSnapshotForFamily` a
+  hand-entered rate uses — same audit rows, same natural-key idempotency, same
+  scoped projection rebuild (ADR-0035 §4/§7). A same-provider row with the
+  identical rate is a TRUE no-op: no UPDATE, no audit row. A `source:
+  "manual"` row for the same date is PRESERVED (the operator outranks the
+  feed); a `seed` row is replaced.
+
+- **Auto-ingest is opt-in via configuration.** The frankfurter provider is
+  registered in the default registry ONLY when configured
+  (`FRANKFURTER_API_URL` set or an explicit `baseUrl` passed). An
+  unconfigured install gets a quiet router skip — never a degraded tick, never
+  a scary error in the daily log — while existing snapshots are kept.
+
+- **FX rides the scheduled tick as PRE/POST phases, not a second provider
+  group.** `runScheduledMarketDataRefresh` runs discovery+quote fetch (PRE,
+  global-only, no RLS) before the router's catalog ingest, then promotes
+  snapshots into families (POST). Per-family work opens a
+  `scopedTenantTransaction` AS A REAL ACTIVE MEMBER (cross-family helpers
+  `listAllFamilies`/`resolveActingMember` extracted to
+  `src/server/family-actors.server.ts` — the same helpers PER-268's
+  balance-correction path uses); the snapshot upsert reuses that already-open
+  transaction via a `runInTenantTransaction` shim, since nesting an
+  interactive `prisma.$transaction` would throw. A failed discovery or a
+  failed family marks the run `degraded`; a total provider outage surfaces as
+  the `frankfurter` group's `error` in `perProvider` instead (keep-last-good:
+  no new quote, existing snapshots untouched).
+
+The module boundary keeps the runtime edge one-directional:
+`fx-auto-ingest.server.ts` imports the `MarketDataProvider` seam only via an
+erased `import type`, and `market-data.server.ts` orchestrates the FX phases
+around the unchanged router.
+
+Files: `src/server/fx-auto-ingest.server.ts` (adapter, discovery, promotion,
+summary), `src/lib/market-data.ts` (Frankfurter parser + whitelist, pure),
+`src/server/market-data.server.ts` (registry entry + PRE/POST wiring),
+`src/server/family-actors.server.ts` (shared cross-family helpers);
+migration `20261010180000_market_instrument_provider_frankfurter` (CHECK
+widening); `.env.example` + `docker-compose.prod.yml` (`FRANKFURTER_API_URL`,
+`FX_RATE_CURRENCIES`); `docs/runbook-production.md` "Market data refresh"
+(freshness verification); real-Postgres
+(`tests/integration/fx-auto-ingest.integration.ts`) tests proving same-day
+no-op, post-ingestion projection, graceful missing-rate handling, extras
+discovery, manual-rate preservation, and the unconfigured-disabled path.
+
 ## Amendment — implementation shipped (2026-09-20)
 
 **Status corrected from Proposed to Accepted.** The decision above was
