@@ -22,8 +22,7 @@ import {
   RiNotification3Line,
   RiLogoutBoxLine,
 } from "@remixicon/react"
-import { useRouter } from "@tanstack/react-router"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation } from "@tanstack/react-query"
 import { useServerFn } from "@tanstack/react-start"
 import { toast } from "sonner"
 import { logoutFn } from "@/server/auth-fns"
@@ -77,34 +76,32 @@ export interface NavUserIdentity {
 
 export function NavUser({ user }: { user: NavUserIdentity | undefined }) {
   const { isMobile } = useSidebar()
-  const router = useRouter()
-  const queryClient = useQueryClient()
   const logout = useServerFn(logoutFn)
 
   // PER-166 — wire the previously-dead Log out item. Go through the logoutFn
   // server function (same relative, port-agnostic path as loginFn) rather than
   // the client auth-client whose baseURL is pinned to :3006 and silently fails
-  // off that port. On success clear the server session, drop cached tenant
-  // data, then land on the public landing at "/". On failure surface a toast
-  // instead of leaving the user in silent limbo (the failure mode this ticket
-  // exists to kill).
+  // off that port. On success land on the public landing at "/". On failure
+  // surface a toast instead of leaving the user in silent limbo (the failure
+  // mode this ticket exists to kill).
   //
-  // PER-187 follow-up: this used to call `queryClient.invalidateQueries()`,
-  // which means "refetch this, it's still relevant" — but the session was
-  // just killed, so every actively-mounted query on this page (dashboard's
-  // net-worth/cash-flow/budget/etc.) immediately refetched against a dead
-  // session. `query-client.ts`'s global auth-error handler now hard-redirects
-  // to /login the instant one of those refetches fails, which raced (and
-  // beat) the `router.navigate({ to: "/" })` below. `clear()` matches what
-  // this code actually intends ("drop cached tenant data") — it empties the
-  // cache with no network calls, so there is nothing left to fail and
-  // nothing for that handler to react to.
+  // PER-187 follow-up, now a full document navigation rather than a soft one:
+  // `logoutFn` has already killed the server session by the time this runs, so
+  // anything the client does next against the network is defined to fail.
+  // `queryClient.clear()` used to be enough (it empties the cache without
+  // refetching), but with @tanstack/query-db-collection 1.4.0 a removed query
+  // whose collection still has subscribers — the dashboard is still mounted —
+  // is eagerly re-subscribed and refetched, so the clear itself fires the very
+  // refetches this handler exists to avoid: they fail UNAUTHENTICATED and
+  // query-client.ts's global auth-error handler hard-redirects to /login,
+  // beating the intended landing navigation. A document navigation tears the
+  // whole in-memory client down in one step — no refetch can race it, no
+  // tenant data survives — which is also the right posture for a logout
+  // boundary.
   const logoutMutation = useMutation({
     mutationFn: () => logout(),
-    onSuccess: async () => {
-      queryClient.clear()
-      await router.invalidate()
-      await router.navigate({ to: "/" })
+    onSuccess: () => {
+      window.location.assign("/")
     },
     onError: () => {
       toast.error("Couldn't sign you out. Please try again.")

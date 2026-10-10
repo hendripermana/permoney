@@ -173,14 +173,30 @@ test.describe("ownership transfer (PER-271)", () => {
           body: body as string | null,
           credentials: "same-origin",
         })
-        return { status: response.status, ok: response.ok }
+        return {
+          status: response.status,
+          ok: response.ok,
+          body: await response.text(),
+        }
       },
       [request.url, request.method, safeHeaders, request.postData] as const
     )
 
     // The server rejects it independently of the UI hiding the button.
-    expect(replay.ok).toBe(false)
-    expect(replay.status).toBeGreaterThanOrEqual(400)
+    //
+    // The rejection is asserted transport-agnostically, because its shape is a
+    // framework decision that has already moved once: since
+    // @tanstack/start-server-core 1.169.39 a thrown server-fn error travels as a
+    // serialized-error envelope inside a 200 JSON response (`x-tss-serialized`)
+    // instead of a 5xx, while older versions used the 5xx. Either way a REJECTION
+    // is present, and a server that quietly ALLOWED the call would produce
+    // neither a >=400 status nor `$TSR/Error`/FORBIDDEN in the body — it would
+    // return the new owner roster. So: one of the two rejection signatures must
+    // hold; `ok` is true on the enveloped path and proves nothing on its own.
+    const rejectedByStatus = replay.status >= 400
+    const rejectedByPayload =
+      replay.body.includes("$TSR/Error") && replay.body.includes("FORBIDDEN")
+    expect(rejectedByStatus || rejectedByPayload).toBe(true)
 
     // And nothing actually moved: reloading the roster shows the owner is
     // still the owner and the attacker is still merely an admin.
