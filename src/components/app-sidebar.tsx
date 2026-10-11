@@ -5,6 +5,7 @@ import { Link } from "@tanstack/react-router"
 import { useQuery } from "@tanstack/react-query"
 import {
   IconChartBar,
+  IconChartPie,
   IconDashboard,
   IconDatabase,
   IconSettings,
@@ -46,6 +47,12 @@ const BASE_NAV_MAIN: NavItem[] = [
     title: "Accounts & Wallets",
     url: "/accounts",
     icon: IconDatabase,
+  },
+  // PER-230 — the portfolio report over INVESTMENT + TRACKED_ASSET accounts.
+  {
+    title: "Investments",
+    url: "/investments",
+    icon: IconChartPie,
   },
   {
     title: "Pit Stop",
