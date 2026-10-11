@@ -7,6 +7,7 @@ import {
   resolvePaydayAnchor,
   SAVINGS_FLOW_INSIGHT_ID,
   SINCE_PAYDAY_INSIGHT_ID,
+  type InsightAnchorGapRow,
   type InsightContextInput,
   type InsightFlowRow,
   type InsightReport,
@@ -160,6 +161,7 @@ interface ReportOptions {
   transferRows?: ReadonlyArray<InsightTransferRow>
   incomeRows?: ReadonlyArray<InsightFlowRow>
   expenseRows?: ReadonlyArray<InsightFlowRow>
+  anchorGaps?: ReadonlyArray<InsightAnchorGapRow>
   month?: string
   timezone?: string
   now?: Date
@@ -175,6 +177,7 @@ function buildReport(options: ReportOptions = {}) {
     transferRows: options.transferRows ?? [],
     incomeRows: options.incomeRows ?? [],
     expenseRows: options.expenseRows ?? [],
+    anchorGaps: options.anchorGaps ?? [],
   })
 }
 
@@ -445,6 +448,7 @@ describe("computeInsights — savings_flow", () => {
         transferRows: classicTransfer({ transferId: "tr-1", savedBase: 1n }),
         incomeRows: [],
         expenseRows: [],
+        anchorGaps: [],
       },
       [
         {
@@ -467,6 +471,7 @@ describe("computeInsights — savings_flow", () => {
         transferRows: classicTransfer({ transferId: "tr-1", savedBase: 10n }),
         incomeRows: [],
         expenseRows: [],
+        anchorGaps: [],
       } satisfies InsightContextInput,
       [
         {
@@ -486,6 +491,8 @@ describe("computeInsights — savings_flow", () => {
               metrics: [],
               partial: false,
               fxPendingCount: 0,
+              periodPartial: false,
+              periodGaps: [],
               window: context.window,
               engineVersion: INSIGHTS_ENGINE_VERSION,
             },
@@ -843,5 +850,125 @@ describe("computeInsights — since_payday", () => {
       SINCE_PAYDAY_INSIGHT_ID,
     ])
     expect(result.engineVersion).toBe(INSIGHTS_ENGINE_VERSION)
+  })
+})
+
+describe("computeInsights — period completeness (PER-443)", () => {
+  const NOW = new Date("2026-07-10T03:00:00.000Z") // 2026-07-10 10:00 WIB
+  const SALARY = salarySeries({ months: ["2026-04", "2026-05", "2026-06"] })
+
+  function gap(
+    overrides: Partial<InsightAnchorGapRow> = {}
+  ): InsightAnchorGapRow {
+    return {
+      accountId: "acc-1",
+      accountName: "Bank Jago",
+      currency: "IDR",
+      fromDate: "2026-06-03",
+      toDate: "2026-06-28",
+      amount: 6_762_000n,
+      fromSource: "manual",
+      toSource: "pit_stop",
+      ...overrides,
+    }
+  }
+
+  function byId(result: InsightReport, id: string) {
+    return result.insights.find((insight) => insight.id === id)
+  }
+
+  test("marks savings_flow partially recorded when a live gap intersects its month", () => {
+    const result = buildReport({
+      transferRows: classicTransfer({
+        transferId: "tr-1",
+        savedBase: 500_000n,
+      }),
+      anchorGaps: [gap()],
+    })
+
+    const insight = byId(result, SAVINGS_FLOW_INSIGHT_ID)
+    expect(insight?.periodPartial).toBe(true)
+    expect(insight?.periodGaps).toEqual([
+      {
+        accountId: "acc-1",
+        accountName: "Bank Jago",
+        currency: "IDR",
+        fromDate: "2026-06-03",
+        toDate: "2026-06-28",
+        amount: "6762000",
+      },
+    ])
+  })
+
+  test("leaves the qualifier off when no gap intersects the window", () => {
+    const result = buildReport({
+      transferRows: classicTransfer({
+        transferId: "tr-1",
+        savedBase: 500_000n,
+      }),
+      anchorGaps: [gap({ fromDate: "2026-01-01", toDate: "2026-01-31" })],
+    })
+
+    const insight = byId(result, SAVINGS_FLOW_INSIGHT_ID)
+    expect(insight?.periodPartial).toBe(false)
+    expect(insight?.periodGaps).toEqual([])
+  })
+
+  test("ignores migration-softened gaps (known by design, not a live hole)", () => {
+    const result = buildReport({
+      transferRows: classicTransfer({
+        transferId: "tr-1",
+        savedBase: 500_000n,
+      }),
+      anchorGaps: [
+        gap({ fromSource: "migration:sure", toSource: "migration:sure" }),
+      ],
+    })
+
+    const insight = byId(result, SAVINGS_FLOW_INSIGHT_ID)
+    expect(insight?.periodPartial).toBe(false)
+    expect(insight?.periodGaps).toEqual([])
+  })
+
+  test("stays alarming when only ONE end is migration-sourced", () => {
+    const result = buildReport({
+      transferRows: classicTransfer({
+        transferId: "tr-1",
+        savedBase: 500_000n,
+      }),
+      anchorGaps: [gap({ fromSource: "migration:sure", toSource: "pit_stop" })],
+    })
+
+    expect(byId(result, SAVINGS_FLOW_INSIGHT_ID)?.periodPartial).toBe(true)
+  })
+
+  test("each derivation intersects its OWN window, not the report's", () => {
+    const transferRows = classicTransfer({
+      transferId: "tr-1",
+      savedBase: 500_000n,
+      date: new Date("2026-07-02T03:00:00.000Z"),
+    })
+
+    // Inside since_payday (2026-06-25 → 2026-07-10) but before the July month.
+    const paydayOnly = buildReport({
+      now: NOW,
+      month: "2026-07",
+      transferRows,
+      incomeRows: SALARY,
+      anchorGaps: [gap({ fromDate: "2026-06-26", toDate: "2026-06-30" })],
+    })
+    expect(byId(paydayOnly, SINCE_PAYDAY_INSIGHT_ID)?.periodPartial).toBe(true)
+    expect(byId(paydayOnly, SAVINGS_FLOW_INSIGHT_ID)?.periodPartial).toBe(false)
+
+    // Inside the July month but after since_payday's end (today, 2026-07-10).
+    const monthOnly = buildReport({
+      now: NOW,
+      month: "2026-07",
+      transferRows,
+      incomeRows: SALARY,
+      anchorGaps: [gap({ fromDate: "2026-07-12", toDate: "2026-07-20" })],
+    })
+    expect(byId(monthOnly, SAVINGS_FLOW_INSIGHT_ID)?.periodPartial).toBe(true)
+    expect(byId(monthOnly, SINCE_PAYDAY_INSIGHT_ID)?.periodPartial).toBe(false)
   })
 })

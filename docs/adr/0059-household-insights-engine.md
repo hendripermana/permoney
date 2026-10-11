@@ -1,14 +1,15 @@
 # ADR-0059 — Household insights engine (computed-on-read, registry)
 
-|                   |                |
-| ----------------- | -------------- |
-| **Status**        | Accepted       |
-| **Date**          | 2026-10-11     |
-| **Accepted**      | 2026-10-11     |
-| **Deciders**      | Hendri Permana |
-| **Supersedes**    | —              |
-| **Superseded by** | —              |
-| **Amends**        | —              |
+|                   |                                                                                                                                    |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| **Status**        | Accepted                                                                                                                           |
+| **Date**          | 2026-10-11                                                                                                                         |
+| **Accepted**      | 2026-10-11                                                                                                                         |
+| **Deciders**      | Hendri Permana                                                                                                                     |
+| **Supersedes**    | —                                                                                                                                  |
+| **Superseded by** | —                                                                                                                                  |
+| **Amends**        | —                                                                                                                                  |
+| **Amended by**    | PER-443 amendment below (period incompleteness — anchor-chain gaps as a first-class honesty qualifier, distinct from FX `partial`) |
 
 ## Context
 
@@ -80,7 +81,8 @@ consumer, e.g. email delivery of a digest):
   changes OR when the registry's composition changes (an artifact produced by
   an earlier engine is incomplete for a later one), so a stored artifact is
   never read under a newer engine than produced it. Version 2 added
-  `since_payday` (slice #2, below).
+  `since_payday` (slice #2, below); version 3 added the period-incompleteness
+  qualifier (PER-443 amendment below).
 - `window` is typed (`calendar_month` today; `previous_month`, `since_payday`,
   `rolling_90d` reserved) and always carries the family timezone it was cut in.
 
@@ -178,3 +180,54 @@ resolved server-side in the family timezone, never the caller's clock.
 - `src/lib/insights.ts`, `src/server/insights.ts`,
   `src/components/blocks/insight-card.tsx`,
   `tests/integration/insights.integration.ts`
+
+## Amendment — period incompleteness: anchor-chain gaps as a first-class honesty qualifier (PER-443, 2026-10-11)
+
+### Problem
+
+A real production account with a ~3-month recording gap showed "Needs reconcile
+(−Δ)" next to a balance that was CORRECT (stored == canonical: the next
+`ground_truth` anchor already absorbed the restatement, per ADR-0043 §6). The
+signal existed but was unexplained, mis-worded — "reconcile" implies the
+balance is broken — and un-actionable, while reports over the gap silently
+understated ("no silent zeros" applied to FX, not to unrecorded history).
+
+### Decision
+
+1. **Vocabulary.** An `ANCHOR_CHAIN` mismatch is a HOLE IN HISTORY, never a
+   broken balance: the balance derives from the LATEST anchor plus the flow
+   after it, so a gap between older assertions cannot move today's number.
+   Only `MATERIALIZATION` (stored cache ≠ recomputed canonical) is a
+   correctness error. UI copy is "History gap (size)" / "Balance drift"; the
+   drift explainer states why per kind and offers exactly one honest action
+   per kind — `Set real balance` (the existing `ground_truth` reconcile;
+   `/pit-stop` stays the batch entry) and `Recalculate balance` for
+   materialization. A gap whose later anchor is `ground_truth` is
+   ACKNOWLEDGED history (`requiresAction: false`).
+2. **One shared definition of a hole.** `src/lib/anchor-gaps.ts`
+   (`gapsInWindow`) and the server's `collectAnchorChainGaps` — the same
+   collector the drift report, the completeness endpoint and this engine read,
+   so "partially recorded" can never mean different things on different
+   screens. Migration-softened pairs (both ends importer-written — the rule
+   the accounts badge already applied) are excluded everywhere.
+3. **Insights vocabulary.** `Insight` gains `periodPartial` and `periodGaps`
+   (account-currency amounts, no FX conversion), computed by intersecting
+   each derivation's OWN window against the shared gaps. This is DELIBERATELY
+   separate from FX `partial`: a period problem is not an exchange-rate
+   problem, and each badge must say exactly one thing. The derivations never
+   read the clock — the intersection is pure, `now` stays injected.
+4. **Reports.** `getPeriodCompletenessFn` (read-only, familyMiddleware, same
+   default-range resolution as reporting) returns the live gaps intersecting
+   a report window; the dashboard renders "Partially recorded period" with
+   account, window and amount instead of a silent smaller number.
+5. **`INSIGHTS_ENGINE_VERSION` → 3.** The numbers themselves are unchanged,
+   but a v2 artifact carries no way to say "partially recorded", so it must
+   not be read as complete under v3 (this is §2's rule applied literally).
+6. **"Uncategorized share" is deliberately NOT part of the marker.**
+   Transfers never carry a category by design (~29% of rows) and
+   income/expense categorization runs ~99.7% — uncategorized does not
+   understate money totals, so folding it into the incompleteness signal
+   would be noise (the corrected framing from the 2026-10-11 audit; see
+   issues #442/#448).
+7. **Computed-on-read** (§1) applies unchanged: no new tables, no
+   write-on-read, family-tz window intersection (ADR-0037).

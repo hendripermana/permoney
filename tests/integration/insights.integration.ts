@@ -14,6 +14,7 @@ import {
   createTransactionForFamily,
   deleteTransactionForFamily,
 } from "@/server/transactions"
+import { createValuationForFamily } from "@/server/valuations"
 import {
   createIntegrationHarness,
   type IntegrationHarness,
@@ -729,5 +730,160 @@ describe("household insights (PER-227)", () => {
     // a broken detector.
     const reportB = await insightsAt(ownerB, PAYDAY_NOW)
     expect(insightMetric(reportB, "since_payday", "left")).toBe("20000000")
+  })
+
+  // ---- period completeness (PER-443) -----------------------------------------
+
+  // 2026-06-15 10:00 WIB — pinned so the seam's month is June. The anchors
+  // below are BACK-DATED (valuationDate != the write day), so their
+  // `observedAt` stays NULL and the chain segments by date only — exactly the
+  // production shape for historical reconciles.
+  const COMPLETENESS_NOW = new Date("2026-06-15T03:00:00.000Z")
+
+  const addAnchor = (
+    owner: AuthenticatedOnboardedUser,
+    accountId: string,
+    value: string,
+    valuationDate: Date,
+    source?: string
+  ) =>
+    createValuationForFamily({
+      data: {
+        accountId,
+        value,
+        type: "reconciliation",
+        ...(source ? { source } : {}),
+        valuationDate,
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      provenance: source ? "derived" : "ground_truth",
+      user: owner.user,
+    })
+
+  test("marks savings_flow partially recorded when a live gap intersects its month", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    const wallet = await account(owner, "Wallet", {
+      accountSubtype: "checking",
+    })
+    const savings = await account(owner, "Tabungan", {
+      accountSubtype: "savings",
+    })
+    await transfer(owner, {
+      from: wallet.id,
+      to: savings.id,
+      amount: 500_000n,
+      date: new Date("2026-06-10T03:00:00.000Z"),
+    })
+    // A separate account carries the hole so no recorded activity explains it:
+    // asserting 120,000 at June 28 while the June 1 assertion was 100,000.
+    const gapAccount = await account(owner, "Gap account", {
+      accountSubtype: "checking",
+    })
+    await addAnchor(
+      owner,
+      gapAccount.id,
+      "100000",
+      new Date("2026-06-01T03:00:00.000Z")
+    )
+    await addAnchor(
+      owner,
+      gapAccount.id,
+      "120000",
+      new Date("2026-06-28T03:00:00.000Z")
+    )
+
+    const report = await insightsAt(owner, COMPLETENESS_NOW)
+    const insight = report.insights.find((entry) => entry.id === "savings_flow")
+    expect(insight?.partial).toBe(false)
+    expect(insight?.periodPartial).toBe(true)
+    expect(insight?.periodGaps).toEqual([
+      {
+        accountId: gapAccount.id,
+        accountName: "Gap account",
+        currency: "IDR",
+        fromDate: "2026-06-01",
+        toDate: "2026-06-28",
+        amount: "20000",
+      },
+    ])
+  })
+
+  test("leaves the qualifier off when the insight's window has no gap", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    const wallet = await account(owner, "Wallet", {
+      accountSubtype: "checking",
+    })
+    const savings = await account(owner, "Tabungan", {
+      accountSubtype: "savings",
+    })
+    await transfer(owner, {
+      from: wallet.id,
+      to: savings.id,
+      amount: 500_000n,
+      date: new Date("2026-06-10T03:00:00.000Z"),
+    })
+    // A real hole — but in JANUARY, far outside the June window.
+    const gapAccount = await account(owner, "Gap account", {
+      accountSubtype: "checking",
+    })
+    await addAnchor(
+      owner,
+      gapAccount.id,
+      "100000",
+      new Date("2026-01-05T03:00:00.000Z")
+    )
+    await addAnchor(
+      owner,
+      gapAccount.id,
+      "120000",
+      new Date("2026-01-20T03:00:00.000Z")
+    )
+
+    const report = await insightsAt(owner, COMPLETENESS_NOW)
+    const insight = report.insights.find((entry) => entry.id === "savings_flow")
+    expect(insight?.periodPartial).toBe(false)
+    expect(insight?.periodGaps).toEqual([])
+  })
+
+  test("ignores migration-softened gaps (imported history is known by design)", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    const wallet = await account(owner, "Wallet", {
+      accountSubtype: "checking",
+    })
+    const savings = await account(owner, "Tabungan", {
+      accountSubtype: "savings",
+    })
+    await transfer(owner, {
+      from: wallet.id,
+      to: savings.id,
+      amount: 500_000n,
+      date: new Date("2026-06-10T03:00:00.000Z"),
+    })
+    const imported = await account(owner, "Imported", {
+      accountSubtype: "checking",
+    })
+    await addAnchor(
+      owner,
+      imported.id,
+      "100000",
+      new Date("2026-06-01T03:00:00.000Z"),
+      "migration:sure"
+    )
+    await addAnchor(
+      owner,
+      imported.id,
+      "120000",
+      new Date("2026-06-28T03:00:00.000Z"),
+      "migration:sure"
+    )
+
+    const report = await insightsAt(owner, COMPLETENESS_NOW)
+    const insight = report.insights.find((entry) => entry.id === "savings_flow")
+    expect(insight?.periodPartial).toBe(false)
+    expect(insight?.periodGaps).toEqual([])
   })
 })

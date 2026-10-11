@@ -3,9 +3,20 @@ import { afterEach, describe, expect, it } from "vite-plus/test"
 import { cleanup, render, screen } from "@testing-library/react"
 
 import { InsightCard } from "./insight-card"
+import { TooltipProvider } from "@/components/ui/tooltip"
 import { INSIGHTS_ENGINE_VERSION, type InsightReport } from "@/lib/insights"
 
 afterEach(() => cleanup())
+
+/** The card is always mounted under a page-level provider in production; the
+ * helper keeps that contract (the period badge is a tooltip trigger). */
+function renderCard(report: InsightReport) {
+  return render(
+    <TooltipProvider>
+      <InsightCard report={report} />
+    </TooltipProvider>
+  )
+}
 
 const window = {
   kind: "calendar_month",
@@ -39,6 +50,8 @@ const savingsReport: InsightReport = {
       ],
       partial: true,
       fxPendingCount: 1,
+      periodPartial: false,
+      periodGaps: [],
       window,
       engineVersion: INSIGHTS_ENGINE_VERSION,
     },
@@ -64,6 +77,8 @@ const sincePaydayReport: InsightReport = {
       ],
       partial: false,
       fxPendingCount: 0,
+      periodPartial: false,
+      periodGaps: [],
       window: {
         kind: "since_payday",
         start: "2026-06-25",
@@ -77,14 +92,48 @@ const sincePaydayReport: InsightReport = {
   skipped: [],
 }
 
+const gapReport: InsightReport = {
+  engineVersion: INSIGHTS_ENGINE_VERSION,
+  window,
+  insights: [
+    {
+      id: "savings_flow",
+      tone: "positive",
+      title: "Saved this month",
+      summary: "Transfers into savings and investment accounts this month.",
+      metrics: [
+        { key: "saved", value: "500000", currency: "IDR" },
+        { key: "fx_pending_count", value: "1" },
+      ],
+      partial: true,
+      fxPendingCount: 1,
+      periodPartial: true,
+      periodGaps: [
+        {
+          accountId: "acc-1",
+          accountName: "Bank Jago",
+          currency: "IDR",
+          fromDate: "2026-06-03",
+          toDate: "2026-06-28",
+          amount: "6762000",
+        },
+      ],
+      window,
+      engineVersion: INSIGHTS_ENGINE_VERSION,
+    },
+  ],
+  failedCount: 0,
+  skipped: [],
+}
+
 describe("InsightCard", () => {
   it("renders nothing when the report has no insights", () => {
-    const { container } = render(<InsightCard report={emptyReport} />)
+    const { container } = renderCard(emptyReport)
     expect(container.firstChild).toBeNull()
   })
 
   it("renders the derivation's copy, the headline figure, and the partial badge", () => {
-    render(<InsightCard report={savingsReport} />)
+    renderCard(savingsReport)
 
     expect(screen.getByText("Saved this month")).toBeTruthy()
     expect(screen.getByText(/Across 2 transfers/)).toBeTruthy()
@@ -96,7 +145,7 @@ describe("InsightCard", () => {
   })
 
   it("renders a negative headline and labelled supporting money metrics", () => {
-    render(<InsightCard report={sincePaydayReport} />)
+    renderCard(sincePaydayReport)
 
     // IDR 3,000,000 minor units = Rp 30,000, negative — tolerate locale
     // grouping and sign placement.
@@ -107,5 +156,22 @@ describe("InsightCard", () => {
     expect(spent.textContent).toContain("Spent")
     // IDR 12,000,000 minor units = Rp 120,000.
     expect(spent.textContent).toMatch(/120[.,]000/)
+  })
+
+  it("marks a window with an anchor-chain gap as partially recorded, beside the FX badge", () => {
+    renderCard(gapReport)
+
+    expect(
+      screen.getByTestId("insight-savings_flow-period-partial").textContent
+    ).toContain("Partially recorded period")
+    // The period qualifier never replaces the FX one: both are true and both show.
+    expect(screen.getByText(/1 pending exchange rate/i)).toBeTruthy()
+  })
+
+  it("shows no period badge when no gap intersects the window", () => {
+    renderCard(savingsReport)
+    expect(
+      screen.queryByTestId("insight-savings_flow-period-partial")
+    ).toBeNull()
   })
 })

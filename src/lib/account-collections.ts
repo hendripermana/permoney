@@ -43,7 +43,13 @@ export const balanceDriftCollection = createCollection(
     queryKey: ["balance_drift_live"],
     queryClient: getQueryClient(),
     queryFn: async () => await detectBalanceDriftFn(),
-    getKey: (item: DriftRecord) => `${item.accountId}:${item.kind}`,
+    // PER-443: one account can have MULTIPLE anchor-chain gaps (every
+    // consecutive pair is checked), and the explainer must be able to list
+    // them individually — keying by `${accountId}:${kind}` silently collapsed
+    // all but one. The segment's start date (falling back to the report date
+    // for MATERIALIZATION rows, which have no anchor) makes each row unique.
+    getKey: (item: DriftRecord) =>
+      `${item.accountId}:${item.kind}:${item.fromAnchorDate ?? item.asOf}`,
     syncMode: "eager",
   })
 )
