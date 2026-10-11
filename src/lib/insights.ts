@@ -1,11 +1,18 @@
 import {
+  detectRecurringSeries,
+  type RecurringSeries,
+  type RecurringTxn,
+} from "./account-recurring"
+import {
   calendarDateInZone,
   transactionInPeriod,
   type BudgetPeriodInput,
 } from "./budget-progress"
+import { convertMinor } from "./fx"
+import type { CurrencyCode } from "@/lib/data/currencies"
 
 // =============================================================================
-// PER-227 — household-level insights engine ("Permoney knows me"), slice 1.
+// PER-227 — household-level insights engine ("Permoney knows me"), slices 1-2.
 //
 // Computed-on-read over the canonical ledger: no new tables, no write-on-read,
 // no periodic job (the design pass on Linear PER-227, 2026-10-11, locked the
@@ -40,19 +47,30 @@ import {
 // without them by choice, so zero budget rows is a valid state, never treated
 // as a defect or an empty-insight reason.
 //
-// Later slices add derivations (payday anchor + `since_payday` window,
-// emergency fund, recurring bills, month-over-month trend) and an in-app
-// digest page. A materialized delivered-digest artifact keyed
-// `(familyId, month, engineVersion)` is only considered once a real
-// out-of-request consumer (email delivery) exists — never the open period,
-// never write-on-read.
+// Slice #2 adds `since_payday`: the anchor is the family-wide salary series
+// (the LARGEST recurring monthly INCOME series, via `detectRecurringSeries`),
+// the window runs from that occurrence's family-tz calendar date through
+// "today", and the figures are household cash flow inside that window — all
+// income minus all spending (locked decision 2026-10-11). A family with no
+// detectable monthly income series gets NO since-payday card: an invented
+// payday would be the opposite of "Permoney knows me".
+//
+// Later slices add derivations (emergency fund, recurring bills,
+// month-over-month trend) and an in-app digest page. A materialized
+// delivered-digest artifact keyed `(familyId, month, engineVersion)` is only
+// considered once a real out-of-request consumer (email delivery) exists —
+// never the open period, never write-on-read.
 // =============================================================================
 
-/** Bumped whenever a derivation's meaning changes, so stored artifacts (a
- * future digest) are never read under a newer engine than produced them. */
-export const INSIGHTS_ENGINE_VERSION = 1
+/** Bumped whenever a derivation's meaning changes OR the registry's
+ * composition changes — an artifact produced by an earlier engine is
+ * incomplete for a later one, so it must never be read as if it were current.
+ * Version 2 adds `since_payday`. */
+export const INSIGHTS_ENGINE_VERSION = 2
 
 export const SAVINGS_FLOW_INSIGHT_ID = "savings_flow"
+
+export const SINCE_PAYDAY_INSIGHT_ID = "since_payday"
 
 export type InsightTone = "positive" | "neutral" | "attention"
 
@@ -77,6 +95,10 @@ export interface InsightMetric {
   value: string
   /** Present for money metrics; absent for counts. */
   currency?: string
+  /** Human label owned by the derivation. The headline money figure is
+   * identified by POSITION (first money metric); every labelled metric after
+   * it is rendered as a supporting line by the generic surfaces. */
+  label?: string
 }
 
 /**
@@ -122,11 +144,20 @@ export interface InsightReport {
 }
 
 /** The minimum a derivation gets: the resolved window, the household's base
- * currency, and the canonical rows the server seam already loaded. */
+ * currency, the request instant, and the canonical rows the server seam
+ * already loaded. */
 export interface InsightContext {
   window: InsightWindow
   baseCurrency: string
+  /** The request instant, resolved by the caller — a derivation never reads
+   * the clock itself, so window math stays deterministic in tests. */
+  now: Date
   transferRows: ReadonlyArray<InsightTransferRow>
+  /** Income rows over the payday-anchor lookback (see `src/server/insights.ts`
+   * for how far back, and why). */
+  incomeRows: ReadonlyArray<InsightFlowRow>
+  /** Expense rows whose family-tz dates can fall inside a payday window. */
+  expenseRows: ReadonlyArray<InsightFlowRow>
 }
 
 /**
@@ -151,13 +182,59 @@ export interface InsightTransferRow {
   transferInflowTransactionId: string | null
 }
 
+/**
+ * One income/expense row as loaded by `src/server/insights.ts` — the same
+ * flat, DB-agnostic projection discipline as `InsightTransferRow`. Only the
+ * `since_payday` derivation consumes these:
+ *   - `accountId`, `date`, `amount`, `merchantName`, `description` feed
+ *     `detectRecurringSeries` (native magnitudes — never displayed);
+ *   - `date`, `baseAmount`, `isSplit`, `splitEntries`, `currency`,
+ *     `baseCurrency`, `fxRateScaled` feed the cash-flow fold, byte-for-byte
+ *     the same rules the budget/cash-flow engines apply to the same rows.
+ */
+export interface InsightFlowRow {
+  /** The row owner's account — required by `RecurringTxn`; detection does not
+   * group per account (the family-wide salary series). */
+  accountId: string
+  date: Date
+  /** Native-currency amount magnitude — series detection only. */
+  amount: bigint
+  /** Frozen base-currency projection (ADR-0035 §4). `null` = FX-pending. */
+  baseAmount: bigint | null
+  currency: string
+  baseCurrency: string | null
+  fxRateScaled: bigint | null
+  isSplit: boolean
+  /** Split child allocations (native, parent currency) — folded through the
+   * parent's stored rate, exactly as `computeCashFlowReport` does. */
+  splitEntries: ReadonlyArray<{ amount: bigint }>
+  /** Detection label: the merchant name, else the description. */
+  merchantName: string | null
+  description: string | null
+}
+
+/** The resolved payday anchor of the open cycle: the most recent occurrence of
+ * the family's largest monthly income series, as family-tz calendar dates. */
+export interface PaydayAnchor {
+  /** Family-tz date (YYYY-MM-DD) of the anchor occurrence — window start. */
+  paydayDate: string
+  /** Family-tz date the series is next expected on (a projection — the copy
+   * must say "expected", never state it as fact). */
+  nextExpectedDate: string
+}
+
 export interface InsightContextInput {
-  /** Family IANA timezone — the zone the month is cut in. */
+  /** Family IANA timezone — the zone every window is cut in. */
   timezone: string
   /** `YYYY-MM`, already resolved in the family timezone by the caller. */
   month: string
   baseCurrency: string
+  /** The request instant (injected — the server passes `new Date()`; tests
+   * pass a fixed instant so window math is deterministic). */
+  now: Date
   transferRows: ReadonlyArray<InsightTransferRow>
+  incomeRows: ReadonlyArray<InsightFlowRow>
+  expenseRows: ReadonlyArray<InsightFlowRow>
 }
 
 export interface DerivationOutcome {
@@ -236,7 +313,10 @@ export function buildInsightContext(
       timezone: input.timezone,
     },
     baseCurrency: input.baseCurrency,
+    now: input.now,
     transferRows: input.transferRows,
+    incomeRows: input.incomeRows,
+    expenseRows: input.expenseRows,
   }
 }
 
@@ -350,8 +430,202 @@ function deriveSavingsFlow(context: InsightContext): DerivationOutcome {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Slice #2 — `since_payday`
+// ---------------------------------------------------------------------------
+
+/** `InsightFlowRow` → the recurring detector's input shape. These rows are
+ * income rows by contract (the server loads only `type="income"` for the
+ * anchor lookback), so the type is fixed rather than carried per row. */
+function toRecurringTxn(row: InsightFlowRow): RecurringTxn {
+  return {
+    accountId: row.accountId,
+    date: row.date,
+    amount: row.amount,
+    type: "income",
+    merchant: row.merchantName === null ? null : { name: row.merchantName },
+    description: row.description,
+  }
+}
+
+/** Anchor preference: the LARGER typical amount wins; ties fall to the more
+ * recent occurrence, then to the grouping key — fully deterministic. */
+function beatsForAnchor(
+  candidate: RecurringSeries,
+  current: RecurringSeries
+): boolean {
+  if (candidate.typicalAmountMinor !== current.typicalAmountMinor) {
+    return candidate.typicalAmountMinor > current.typicalAmountMinor
+  }
+  const lastGap =
+    candidate.lastOccurrence.getTime() - current.lastOccurrence.getTime()
+  if (lastGap !== 0) return lastGap > 0
+  return candidate.key < current.key
+}
+
+/**
+ * Resolve the payday anchor: the most recent occurrence of the family's
+ * largest MONTHLY recurring income series (the salary, by the locked rule).
+ * `null` when no such series exists — the caller must skip the card, never
+ * invent a payday. Pure; `now` is injected because the detector's staleness
+ * guard needs it (a series whose last occurrence is more than two cadence
+ * bands old is not a live salary and is dropped there).
+ */
+export function resolvePaydayAnchor(
+  incomeRows: ReadonlyArray<InsightFlowRow>,
+  now: Date,
+  timezone: string
+): PaydayAnchor | null {
+  const series = detectRecurringSeries(incomeRows.map(toRecurringTxn), { now })
+  let top: RecurringSeries | null = null
+  for (const candidate of series) {
+    if (candidate.cadence !== "monthly") continue
+    if (top === null || beatsForAnchor(candidate, top)) top = candidate
+  }
+  if (top === null) return null
+  return {
+    paydayDate: calendarDateInZone(top.lastOccurrence, timezone),
+    nextExpectedDate: calendarDateInZone(top.nextExpected, timezone),
+  }
+}
+
+interface FlowTotals {
+  income: bigint
+  spent: bigint
+  fxPendingCount: number
+}
+
+/** Positive base magnitude of one split child via the parent's stored rate —
+ * byte-for-byte the fold `computeBudgetProgress`/`computeCashFlowReport`
+ * apply to the same rows. */
+function splitChildBase(
+  row: InsightFlowRow,
+  entry: { amount: bigint }
+): bigint {
+  // Caller guarantees the parent is non-pending (rate + base currency set).
+  const base = convertMinor(
+    entry.amount,
+    row.currency as CurrencyCode,
+    row.baseCurrency as CurrencyCode,
+    row.fxRateScaled as bigint
+  ) as bigint
+  return base < 0n ? -base : base
+}
+
+/** Fold one window-member row into the totals. A split parent contributes via
+ * its children; an FX-pending row (or pending split parent) is counted once
+ * and contributes nothing — excluded AND counted, never a silent zero. */
+function addFlowRow(
+  totals: FlowTotals,
+  row: InsightFlowRow,
+  isIncome: boolean
+): void {
+  if (row.isSplit) {
+    const parentPending =
+      row.baseAmount === null ||
+      row.fxRateScaled === null ||
+      row.baseCurrency === null
+    if (parentPending) {
+      totals.fxPendingCount += 1
+      return
+    }
+    for (const entry of row.splitEntries) {
+      const magnitude = splitChildBase(row, entry)
+      if (isIncome) totals.income += magnitude
+      else totals.spent += magnitude
+    }
+    return
+  }
+
+  if (row.baseAmount === null) {
+    totals.fxPendingCount += 1
+    return
+  }
+  const magnitude = row.baseAmount < 0n ? -row.baseAmount : row.baseAmount
+  if (isIncome) totals.income += magnitude
+  else totals.spent += magnitude
+}
+
+/**
+ * Slice #2 derivation — `since_payday`.
+ *
+ * Runs ONLY for the family's current month: the window is "now"-relative by
+ * nature, so a historical digest must not grow a card folded from a stale
+ * clock. The window starts on the anchor occurrence's family-tz calendar date
+ * and ends today (inclusive); `left` is household cash flow inside it — all
+ * income minus all spending (locked decision, 2026-10-11). Transfers never
+ * enter either side: a movement into savings is neither spending nor income,
+ * so `savings_flow` and `since_payday` cannot double-count one movement.
+ */
+function deriveSincePayday(context: InsightContext): DerivationOutcome {
+  const { window: monthWindow, baseCurrency, now } = context
+  const timezone = monthWindow.timezone
+  const today = calendarDateInZone(now, timezone)
+  if (monthWindow.start.slice(0, 7) !== today.slice(0, 7)) {
+    return {
+      insight: null,
+      skippedReason: "since payday only applies to the family's current month",
+    }
+  }
+
+  const anchor = resolvePaydayAnchor(context.incomeRows, now, timezone)
+  if (anchor === null) {
+    return {
+      insight: null,
+      skippedReason: "no monthly recurring income series detected",
+    }
+  }
+
+  const window: InsightWindow = {
+    kind: "since_payday",
+    start: anchor.paydayDate,
+    end: today,
+    timezone,
+  }
+
+  const totals: FlowTotals = { income: 0n, spent: 0n, fxPendingCount: 0 }
+  for (const row of context.incomeRows) {
+    if (transactionInPeriod(row.date, window)) addFlowRow(totals, row, true)
+  }
+  for (const row of context.expenseRows) {
+    if (transactionInPeriod(row.date, window)) addFlowRow(totals, row, false)
+  }
+
+  const left = totals.income - totals.spent
+
+  return {
+    insight: {
+      id: SINCE_PAYDAY_INSIGHT_ID,
+      tone: left < 0n ? "attention" : "positive",
+      title: "Left since payday",
+      summary: `Income minus spending since your last payday (${anchor.paydayDate}).`,
+      detail: `Next payday expected ${anchor.nextExpectedDate}.`,
+      metrics: [
+        {
+          key: "left",
+          label: "Left",
+          value: left.toString(),
+          currency: baseCurrency,
+        },
+        {
+          key: "spent",
+          label: "Spent",
+          value: totals.spent.toString(),
+          currency: baseCurrency,
+        },
+        { key: "fx_pending_count", value: String(totals.fxPendingCount) },
+      ],
+      partial: totals.fxPendingCount > 0,
+      fxPendingCount: totals.fxPendingCount,
+      window,
+      engineVersion: INSIGHTS_ENGINE_VERSION,
+    },
+  }
+}
+
 const REGISTERED_DERIVATIONS: ReadonlyArray<RegisteredDerivation> = [
   { id: SAVINGS_FLOW_INSIGHT_ID, run: deriveSavingsFlow },
+  { id: SINCE_PAYDAY_INSIGHT_ID, run: deriveSincePayday },
 ]
 
 /**

@@ -76,9 +76,11 @@ consumer, e.g. email delivery of a digest):
   bounds. `computeInsights` isolates failures per derivation (`failedCount`) and
   records deliberate non-output (`skipped` with a reason) — "nothing to say"
   and "failed" are different states and never look the same.
-- Every payload carries `engineVersion` (bumped when a derivation's meaning
-  changes) so a stored artifact is never read under a newer engine than
-  produced it.
+- Every payload carries `engineVersion` — bumped when a derivation's meaning
+  changes OR when the registry's composition changes (an artifact produced by
+  an earlier engine is incomplete for a later one), so a stored artifact is
+  never read under a newer engine than produced it. Version 2 added
+  `since_payday` (slice #2, below).
 - `window` is typed (`calendar_month` today; `previous_month`, `since_payday`,
   `rolling_90d` reserved) and always carries the family timezone it was cut in.
 
@@ -109,7 +111,28 @@ consumer, e.g. email delivery of a digest):
   inclusive; the server seam over-fetches ±2 days and the pure fold localizes
   each instant (the shared `queryRange` convention from `src/server/reporting.ts`).
 
-### 5. Seam and access
+### 5. Slice #2 — `since_payday`
+
+- The anchor is the most recent occurrence of the family's largest MONTHLY
+  recurring income series (reusing `detectRecurringSeries`,
+  `src/lib/account-recurring.ts`). No detected series means NO card — a
+  skipped reason, never an invented payday.
+- The window runs from the anchor occurrence's family-tz calendar date through
+  today, inclusive; the request instant is injected (`now`) so window math is
+  deterministic in tests. The derivation only runs for the family's CURRENT
+  month — a historical digest must not grow a now-relative card.
+- `left` is household cash flow inside the window: all income minus all
+  spending (locked decision, 2026-10-11) — self-consistent (spent + left =
+  income) and inclusive of a second earner. Transfers are neither income nor
+  spending, so `savings_flow` and `since_payday` cannot double-count one
+  movement.
+- Spending folds the same rules as the budget/cash-flow engines (split children
+  through the parent's stored rate; FX-pending rows excluded AND counted). A
+  new optional `label` on `InsightMetric` lets the one generic renderer show a
+  supporting figure ("Spent: …") beside the headline without knowing which
+  insight it draws.
+
+### 6. Seam and access
 
 Read-only `getInsightsFn` (`GET`, `familyMiddleware`, zod `inputValidator`,
 optional `month: "YYYY-MM"` for the digest): one `scopedTenantTransaction`

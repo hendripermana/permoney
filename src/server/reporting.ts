@@ -77,8 +77,14 @@ function defaultReportingTo(timezone: string): string {
  * calendar arithmetic on the Y-M-D components — `Date.UTC` is used only as a
  * calendar calculator here, never to represent a real wall-clock instant, so
  * it carries no timezone risk (same technique as `stepDate` in cash-flow.ts).
+ *
+ * Exported for the insights engine's payday-anchor lookback (PER-227 slice 2),
+ * so "N months before the family-tz today" means the same thing in both seams.
  */
-function subtractCalendarMonths(dateOnly: string, months: number): string {
+export function subtractCalendarMonths(
+  dateOnly: string,
+  months: number
+): string {
   const [year, month, day] = dateOnly.split("-").map(Number)
   const totalMonths = year * 12 + (month - 1) - months
   const targetYear = Math.floor(totalMonths / 12)
