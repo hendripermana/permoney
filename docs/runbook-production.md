@@ -184,14 +184,15 @@ on this self-hosted VM per ADR-0047) — calling the app's own internal
 endpoint over loopback:
 
 ```cron
-5 11 * * * cd /home/ubuntu/permoney-prod && set -a && . ./.env && set +a && ./deploy/refresh-market-data.sh >> /var/log/permoney_prod_market_data_refresh.log 2>&1
+5 18 * * * cd /home/ubuntu/permoney-prod && set -a && . ./.env && set +a && ./deploy/refresh-market-data.sh >> /var/log/permoney_prod_market_data_refresh.log 2>&1
 ```
 
-Runs at **11:05 UTC (~18:05 WIB)** — after Indonesian Stock Exchange close and
+Runs at **18:05 WIB (= 11:05 UTC)** — after Indonesian Stock Exchange close and
 after gold-desk / reksadana NAV prices for the day are typically published.
-**This assumes the VM's crontab runs in UTC** — verify with `date -u` vs
-`date` on the box before relying on it, and adjust the hour if the crontab's
-local time differs. One daily run covers every feed: the router
+**The VM's crontab runs in WIB (Asia/Jakarta), not UTC** — the hour above is
+the local (WIB) hour; an entry meaning 11:05 UTC is therefore `5 18`, not
+`5 11`. Verify with `date` vs `date -u` on the box before changing any hour
+here. One daily run covers every feed: the router
 (`ingestAllInstrumentsOnce`, ADR-0052) discovers and prices the WHOLE
 `MarketInstrument` catalog (gold today; reksadana funds once linked; any
 future provider) in a single call, so no per-feed cron entries are needed.
@@ -331,8 +332,10 @@ cd /home/ubuntu/permoney-prod && set -a && . ./.env.backup && set +a
 
 The monthly run is automated via cron — same mechanism as the backup and
 market-data jobs (no serverless cron on this self-hosted VM, per ADR-0047).
-It runs on the **1st at 04:00 UTC**, i.e. after that morning's 02:00 backup,
-and verifies the newest local dump:
+It runs on the **1st at 04:00 WIB** (= 21:00 UTC on the last day of the
+previous month; the VM crontab runs in WIB — see the market-data section),
+i.e. after that morning's 02:00 local backup, and verifies the newest local
+dump:
 
 ```cron
 0 4 1 * * cd /home/ubuntu/permoney-prod && set -a && . ./.env.backup && set +a && ./deploy/restore-postgres.sh verify "$(ls -1t /home/ubuntu/permoney-prod/backups/permoney_prod_*.dump | head -1)" >> /var/log/permoney_prod_restore_verify.log 2>&1

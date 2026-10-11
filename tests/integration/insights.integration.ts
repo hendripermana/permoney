@@ -7,6 +7,7 @@ import {
   test,
 } from "vite-plus/test"
 import type { AccountType } from "@/lib/accounts"
+import { INSIGHTS_ENGINE_VERSION } from "@/lib/insights"
 import { getInsightsForFamily } from "@/server/insights"
 import { getCashFlowReportForFamily } from "@/server/reporting"
 import {
@@ -45,7 +46,7 @@ const ON_JUNE = new Date("2026-06-15T03:00:00.000Z")
 // zone boundary the window must respect.
 const ON_JULY_IN_JAKARTA = new Date("2026-06-30T20:00:00.000Z")
 
-describe("household insights — savings_flow (PER-227)", () => {
+describe("household insights (PER-227)", () => {
   let harness: IntegrationHarness
   let factories: TestFactories
 
@@ -151,6 +152,64 @@ describe("household insights — savings_flow (PER-227)", () => {
       userId,
     })
 
+  /** Pinned-clock variant (payday windows are now-relative; production
+   * defaults `now` to the server instant). */
+  const insightsAt = (
+    owner: AuthenticatedOnboardedUser,
+    now: Date,
+    month?: string
+  ) =>
+    getInsightsForFamily({
+      data: { month },
+      familyId: owner.family.id,
+      userId: owner.user.id,
+      now,
+    })
+
+  /** A real-ledger income row — the payday anchor must be derivable from rows
+   * written by the production path, never from a hand-built projection. */
+  const income = (
+    owner: AuthenticatedOnboardedUser,
+    data: {
+      accountId: string
+      amount: bigint
+      date: Date
+      description: string
+    }
+  ) =>
+    create(owner, {
+      type: "income",
+      amount: data.amount,
+      accountId: data.accountId,
+      description: data.description,
+      date: data.date,
+    })
+
+  /** Three monthly salary rows on the 25th at 10:00 WIB (03:00Z). */
+  const seedSalarySeries = async (
+    owner: AuthenticatedOnboardedUser,
+    accountId: string,
+    amount = 20_000_000n
+  ) => {
+    for (const month of ["04", "05", "06"]) {
+      await income(owner, {
+        accountId,
+        amount,
+        date: new Date(`2026-${month}-25T03:00:00.000Z`),
+        description: "Monthly salary",
+      })
+    }
+  }
+
+  const insightMetric = (
+    report: Awaited<ReturnType<typeof getInsightsForFamily>>,
+    insightId: string,
+    key: string
+  ) =>
+    report.insights
+      .find((insight) => insight.id === insightId)
+      ?.metrics.find((metric) => metric.key === key)?.value
+
   const metric = (
     report: Awaited<ReturnType<typeof getInsightsForFamily>>,
     key: string
@@ -189,7 +248,7 @@ describe("household insights — savings_flow (PER-227)", () => {
     })
 
     const report = await insights(owner, JUNE)
-    expect(report.engineVersion).toBe(1)
+    expect(report.engineVersion).toBe(INSIGHTS_ENGINE_VERSION)
     expect(report.failedCount).toBe(0)
     expect(report.window).toEqual({
       kind: "calendar_month",
@@ -261,12 +320,15 @@ describe("household insights — savings_flow (PER-227)", () => {
 
     const report = await insights(owner, JUNE)
     expect(report.insights).toHaveLength(0)
-    expect(report.skipped).toEqual([
+    // Assert savings_flow's own reason without pinning the whole array: this
+    // call runs on the real server clock, so `since_payday`'s skip reason
+    // legitimately differs between "off current month" and "no series".
+    expect(report.skipped.find((entry) => entry.id === "savings_flow")).toEqual(
       {
         id: "savings_flow",
         reason: "no savings or investment transfers in the window",
-      },
-    ])
+      }
+    )
   })
 
   // ---- family-tz month boundary (ADR-0037 / PER-263) -------------------------
@@ -435,5 +497,237 @@ describe("household insights — savings_flow (PER-227)", () => {
     const reportB = await insights(ownerB, JUNE)
     expect(metric(reportB, "saved")).toBe("42000")
     expect(metric(reportB, "transfer_count")).toBe("1")
+  })
+
+  // ---- since_payday (slice #2) ------------------------------------------------
+
+  // 2026-07-10 10:00 in Asia/Jakarta — the pinned "today" for payday tests.
+  const PAYDAY_NOW = new Date("2026-07-10T03:00:00.000Z")
+
+  test("anchors on the salary series and folds the family-tz payday window", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    const wallet = await account(owner, "Wallet", {
+      accountSubtype: "checking",
+    })
+    await seedSalarySeries(owner, wallet.id)
+
+    // Inside the payday window [2026-06-25, 2026-07-10].
+    await income(owner, {
+      accountId: wallet.id,
+      amount: 3_000_000n,
+      date: new Date("2026-07-05T03:00:00.000Z"),
+      description: "Freelance project",
+    })
+    await create(owner, {
+      type: "expense",
+      amount: 12_000_000n,
+      accountId: wallet.id,
+      description: "rent",
+      date: new Date("2026-07-02T03:00:00.000Z"),
+    })
+    // Before the anchor — outside the window even though it is June-July.
+    await create(owner, {
+      type: "expense",
+      amount: 1_000_000n,
+      accountId: wallet.id,
+      description: "groceries",
+      date: new Date("2026-06-20T03:00:00.000Z"),
+    })
+
+    const report = await insightsAt(owner, PAYDAY_NOW)
+    expect(report.engineVersion).toBe(INSIGHTS_ENGINE_VERSION)
+    expect(report.failedCount).toBe(0)
+    expect(report.window).toEqual({
+      kind: "calendar_month",
+      start: "2026-07-01",
+      end: "2026-07-31",
+      timezone: "Asia/Jakarta",
+    })
+
+    const insight = report.insights.find((entry) => entry.id === "since_payday")
+    expect(insight?.window).toEqual({
+      kind: "since_payday",
+      start: "2026-06-25",
+      end: "2026-07-10",
+      timezone: "Asia/Jakarta",
+    })
+    expect(insight?.tone).toBe("positive")
+    expect(insight?.partial).toBe(false)
+    // 20,000,000 (salary) + 3,000,000 (freelance) − 12,000,000 (spending).
+    expect(insightMetric(report, "since_payday", "left")).toBe("11000000")
+    expect(insightMetric(report, "since_payday", "spent")).toBe("12000000")
+    expect(insightMetric(report, "since_payday", "fx_pending_count")).toBe("0")
+
+    // Cross-engine: the cash-flow report over the SAME window folds the same
+    // rows to the same net (income − expense == left).
+    const cashFlow = await getCashFlowReportForFamily({
+      data: { from: "2026-06-25", to: "2026-07-10", interval: "month" },
+      familyId: owner.family.id,
+      userId: owner.user.id,
+    })
+    expect(cashFlow.totals.income).toBe("23000000")
+    expect(cashFlow.totals.expense).toBe("12000000")
+    expect(cashFlow.totals.net).toBe(
+      insightMetric(report, "since_payday", "left")
+    )
+  })
+
+  test("skips the card when the household has no monthly income series", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    const wallet = await account(owner, "Wallet", {
+      accountSubtype: "checking",
+    })
+    // Irregular income (gaps 2 and 28 days) never matches a cadence band.
+    for (const date of ["2026-06-01", "2026-06-03", "2026-07-01"]) {
+      await income(owner, {
+        accountId: wallet.id,
+        amount: 4_000_000n,
+        date: new Date(`${date}T03:00:00.000Z`),
+        description: "Ad-hoc payout",
+      })
+    }
+
+    const report = await insightsAt(owner, PAYDAY_NOW)
+    expect(report.insights.map((entry) => entry.id)).not.toContain(
+      "since_payday"
+    )
+    expect(report.skipped.find((entry) => entry.id === "since_payday")).toEqual(
+      {
+        id: "since_payday",
+        reason: "no monthly recurring income series detected",
+      }
+    )
+  })
+
+  test("skips the card for a month that is not the family's current month", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    const wallet = await account(owner, "Wallet", {
+      accountSubtype: "checking",
+    })
+    await seedSalarySeries(owner, wallet.id)
+
+    const report = await insightsAt(owner, PAYDAY_NOW, "2026-06")
+    expect(report.insights.map((entry) => entry.id)).not.toContain(
+      "since_payday"
+    )
+    expect(report.skipped.find((entry) => entry.id === "since_payday")).toEqual(
+      {
+        id: "since_payday",
+        reason: "since payday only applies to the family's current month",
+      }
+    )
+  })
+
+  test("excludes an FX-pending expense from spent but counts it as partial", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    const wallet = await account(owner, "Wallet", {
+      accountSubtype: "checking",
+    })
+    // USD account with NO USD→IDR rate seeded: the frozen base projection of
+    // its rows stays null (FX-pending).
+    const usdWallet = await account(owner, "USD Wallet", {
+      accountSubtype: "checking",
+      currency: "USD",
+    })
+    await seedSalarySeries(owner, wallet.id)
+
+    await create(owner, {
+      type: "expense",
+      amount: 100_000n,
+      accountId: wallet.id,
+      description: "groceries",
+      date: new Date("2026-07-03T03:00:00.000Z"),
+    })
+    await create(owner, {
+      type: "expense",
+      amount: 1_000n,
+      accountId: usdWallet.id,
+      description: "USD purchase",
+      date: new Date("2026-07-02T03:00:00.000Z"),
+    })
+
+    const report = await insightsAt(owner, PAYDAY_NOW)
+    const insight = report.insights.find((entry) => entry.id === "since_payday")
+    expect(insightMetric(report, "since_payday", "spent")).toBe("100000")
+    expect(insightMetric(report, "since_payday", "left")).toBe("19900000")
+    expect(insightMetric(report, "since_payday", "fx_pending_count")).toBe("1")
+    expect(insight?.partial).toBe(true)
+  })
+
+  test("a deleted expense stops counting toward spent", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    const wallet = await account(owner, "Wallet", {
+      accountSubtype: "checking",
+    })
+    await seedSalarySeries(owner, wallet.id)
+
+    const expense = await create(owner, {
+      type: "expense",
+      amount: 7_000_000n,
+      accountId: wallet.id,
+      description: "flight",
+      date: new Date("2026-07-02T03:00:00.000Z"),
+    })
+    expect(
+      insightMetric(
+        await insightsAt(owner, PAYDAY_NOW),
+        "since_payday",
+        "spent"
+      )
+    ).toBe("7000000")
+
+    await deleteTransactionForFamily({
+      id: expense.id,
+      idempotencyKey: factories.createIdempotencyKey(),
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+    const after = await insightsAt(owner, PAYDAY_NOW)
+    expect(insightMetric(after, "since_payday", "spent")).toBe("0")
+    expect(insightMetric(after, "since_payday", "left")).toBe("20000000")
+  })
+
+  test("another family's salary never anchors this family", async () => {
+    const ownerA = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(ownerA, "IDR", "Asia/Jakarta")
+    const aWallet = await account(ownerA, "A wallet", {
+      accountSubtype: "checking",
+    })
+    await create(ownerA, {
+      type: "expense",
+      amount: 500_000n,
+      accountId: aWallet.id,
+      description: "A spending",
+      date: new Date("2026-07-03T03:00:00.000Z"),
+    })
+
+    const ownerB = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(ownerB, "IDR", "Asia/Jakarta")
+    const bWallet = await account(ownerB, "B wallet", {
+      accountSubtype: "checking",
+    })
+    await seedSalarySeries(ownerB, bWallet.id)
+
+    const reportA = await insightsAt(ownerA, PAYDAY_NOW)
+    expect(reportA.insights.map((entry) => entry.id)).not.toContain(
+      "since_payday"
+    )
+    expect(
+      reportA.skipped.find((entry) => entry.id === "since_payday")
+    ).toEqual({
+      id: "since_payday",
+      reason: "no monthly recurring income series detected",
+    })
+
+    // B's own report still sees its salary — the skip above is isolation, not
+    // a broken detector.
+    const reportB = await insightsAt(ownerB, PAYDAY_NOW)
+    expect(insightMetric(reportB, "since_payday", "left")).toBe("20000000")
   })
 })

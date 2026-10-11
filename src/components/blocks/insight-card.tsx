@@ -10,7 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { isCurrencyCode } from "@/lib/data/currencies"
-import type { Insight, InsightReport } from "@/lib/insights"
+import type { Insight, InsightMetric, InsightReport } from "@/lib/insights"
 import { decodeMoney, formatMoney } from "@/lib/money"
 
 // =============================================================================
@@ -18,9 +18,9 @@ import { decodeMoney, formatMoney } from "@/lib/money"
 //
 // Pure presentation over the already-computed envelope: money is decoded from
 // the wire string and formatted with the insight's own currency; every word
-// (title / summary / detail) comes from the derivation, so this component
-// never needs to know which insight it is showing. A new derivation needs no
-// renderer change. Renders NOTHING when the report has no insights — a
+// (title / summary / detail / metric labels) comes from the derivation, so this
+// component never needs to know which insight it is showing. A new derivation
+// needs no renderer change. Renders NOTHING when the report has no insights — a
 // permanent empty card a user scrolls past every day is worse than no card
 // (same rule as the PER-226 attention strip).
 // =============================================================================
@@ -28,6 +28,18 @@ import { decodeMoney, formatMoney } from "@/lib/money"
 /** The first money metric is the headline figure; counts are supporting copy. */
 function headlineMetric(insight: Insight) {
   return insight.metrics.find((metric) => metric.currency !== undefined) ?? null
+}
+
+/** Labelled metrics AFTER the headline render as supporting lines ("Spent:
+ * Rp …"). Unlabelled metrics stay wire-only (the partial badge reads
+ * `fx_pending_count` itself), and the headline is never repeated by label. */
+function supportingMetrics(
+  insight: Insight,
+  headline: InsightMetric | null
+): InsightMetric[] {
+  return insight.metrics.filter(
+    (metric) => metric !== headline && metric.label !== undefined
+  )
 }
 
 function formatWire(wire: string, currency: string): string {
@@ -50,6 +62,7 @@ export function InsightCard({ report }: { report: InsightReport }) {
 
 function InsightCardItem({ insight }: { insight: Insight }) {
   const headline = headlineMetric(insight)
+  const supporting = supportingMetrics(insight, headline)
   const pendingCount = insight.metrics.find(
     (metric) => metric.key === "fx_pending_count"
   )?.value
@@ -83,6 +96,23 @@ function InsightCardItem({ insight }: { insight: Insight }) {
             data-testid={`insight-${insight.id}-value`}
           >
             {formatWire(headline.value, headline.currency ?? "")}
+          </span>
+        ) : null}
+        {supporting.length > 0 ? (
+          <span className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
+            {supporting.map((metric) => (
+              <span
+                key={metric.key}
+                data-testid={`insight-${insight.id}-metric-${metric.key}`}
+              >
+                {metric.label}:{" "}
+                <span className="font-medium text-foreground tabular-nums">
+                  {metric.currency
+                    ? formatWire(metric.value, metric.currency)
+                    : metric.value}
+                </span>
+              </span>
+            ))}
           </span>
         ) : null}
         {insight.detail ? (

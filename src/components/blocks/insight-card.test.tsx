@@ -47,6 +47,36 @@ const savingsReport: InsightReport = {
   skipped: [],
 }
 
+const sincePaydayReport: InsightReport = {
+  engineVersion: INSIGHTS_ENGINE_VERSION,
+  window,
+  insights: [
+    {
+      id: "since_payday",
+      tone: "attention",
+      title: "Left since payday",
+      summary: "Income minus spending since your last payday (2026-06-25).",
+      detail: "Next payday expected 2026-07-26.",
+      metrics: [
+        { key: "left", label: "Left", value: "-3000000", currency: "IDR" },
+        { key: "spent", label: "Spent", value: "12000000", currency: "IDR" },
+        { key: "fx_pending_count", value: "0" },
+      ],
+      partial: false,
+      fxPendingCount: 0,
+      window: {
+        kind: "since_payday",
+        start: "2026-06-25",
+        end: "2026-07-10",
+        timezone: "Asia/Jakarta",
+      },
+      engineVersion: INSIGHTS_ENGINE_VERSION,
+    },
+  ],
+  failedCount: 0,
+  skipped: [],
+}
+
 describe("InsightCard", () => {
   it("renders nothing when the report has no insights", () => {
     const { container } = render(<InsightCard report={emptyReport} />)
@@ -63,5 +93,19 @@ describe("InsightCard", () => {
       screen.getByTestId("insight-savings_flow-value").textContent
     ).toMatch(/5[.,]000/)
     expect(screen.getByText(/1 pending exchange rate/i)).toBeTruthy()
+  })
+
+  it("renders a negative headline and labelled supporting money metrics", () => {
+    render(<InsightCard report={sincePaydayReport} />)
+
+    // IDR 3,000,000 minor units = Rp 30,000, negative — tolerate locale
+    // grouping and sign placement.
+    expect(
+      screen.getByTestId("insight-since_payday-value").textContent
+    ).toMatch(/-?.*30[.,]000/)
+    const spent = screen.getByTestId("insight-since_payday-metric-spent")
+    expect(spent.textContent).toContain("Spent")
+    // IDR 12,000,000 minor units = Rp 120,000.
+    expect(spent.textContent).toMatch(/120[.,]000/)
   })
 })
