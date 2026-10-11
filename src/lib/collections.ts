@@ -134,6 +134,14 @@ async function resyncLedgerAndBalances(): Promise<void> {
     getQueryClient().invalidateQueries({
       queryKey: ["dashboard", "insights"],
     }),
+    // PER-443: the same write path can flip which anchor is an account's
+    // latest `ground_truth` one (the "ubah saldo juga" override), which changes
+    // whether a report window is fully recorded — the dashboard's
+    // completeness banner must not keep the pre-mutation answer while the form
+    // sits open over it.
+    getQueryClient().invalidateQueries({
+      queryKey: ["dashboard", "completeness"],
+    }),
   ])
 }
 

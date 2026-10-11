@@ -5,10 +5,12 @@ import {
   calendarMonthBounds,
   computeInsights,
   currentMonthInZone,
+  type InsightAnchorGapRow,
   type InsightFlowRow,
   type InsightReport,
   type InsightTransferRow,
 } from "@/lib/insights"
+import { absMoney, decodeMoney } from "@/lib/money"
 import { getFamilyBaseCurrency } from "./fx"
 import {
   getFamilyTimezone,
@@ -20,6 +22,7 @@ import {
   scopedTenantTransaction,
 } from "./middleware/with-family"
 import type { RunInTenantTransaction } from "./mutation-kit"
+import { collectAnchorChainGaps } from "./valuations"
 
 // =============================================================================
 // PER-227 — insights engine server seam.
@@ -209,6 +212,25 @@ export async function getInsightsForFamily({
       }
     })
 
+    // PER-443 — every anchor-chain hole in the family, so each derivation can
+    // mark its OWN window as partially recorded (the fold intersects + applies
+    // the shared migration-softening rule; nothing is filtered here, so the
+    // accounts badge, the dashboard banner and these cards can never disagree
+    // about which gaps exist). Account-currency magnitudes: no FX conversion,
+    // so a pending exchange rate can never suppress or distort a gap signal.
+    const anchorGaps: InsightAnchorGapRow[] = (
+      await collectAnchorChainGaps(tx, familyId)
+    ).map((gap) => ({
+      accountId: gap.accountId,
+      accountName: gap.accountName,
+      currency: gap.currency,
+      fromDate: gap.fromDate,
+      toDate: gap.toDate,
+      amount: absMoney(decodeMoney(gap.drift)),
+      fromSource: gap.fromSource,
+      toSource: gap.toSource,
+    }))
+
     return computeInsights({
       timezone,
       month,
@@ -217,6 +239,7 @@ export async function getInsightsForFamily({
       transferRows,
       incomeRows: incomeTransactions.map(toFlowRow),
       expenseRows: expenseTransactions.map(toFlowRow),
+      anchorGaps,
     })
   })
 }

@@ -733,9 +733,9 @@ function AnchorSummary({
       </div>
       <p className="text-xs text-muted-foreground">
         Balances are anchored to your Sure account values, plus every
-        transaction recorded after them. If an account shows a "needs reconcile"
-        hint right after import, that's expected — Sure's own history already
-        absorbed some drift before it was exported.
+        transaction recorded after them. If an account shows a &ldquo;history
+        gap&rdquo; hint right after import, that&apos;s expected — Sure&apos;s
+        own history already absorbed some drift before it was exported.
       </p>
     </div>
   )

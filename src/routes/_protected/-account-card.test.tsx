@@ -1,51 +1,30 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vite-plus/test"
-import { cleanup, render, screen } from "@testing-library/react"
+import { afterEach, describe, expect, it, vi } from "vite-plus/test"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 
 import { AccountCard } from "./-account-card"
 import { TooltipProvider } from "@/components/ui/tooltip"
+import { TEST_ACCOUNT } from "@/test-support/blocks"
 import type { AccountRecord, DriftRecord } from "@/lib/account-collections"
 import type { AccountRunway } from "@/lib/account-runway"
 
-// PER-178 — the accounts-page badge must soften a migration-origin
+// PER-178 / PER-443 — the accounts-page badge must soften a migration-origin
 // ANCHOR_CHAIN warning to a neutral "Imported" affordance while a live-user
-// ANCHOR_CHAIN warning keeps the alarming "Needs reconcile" badge. The
-// classification itself is unit-tested in account-drift-presentation.test.ts;
-// this covers the actual wiring/render.
+// ANCHOR_CHAIN warning reads as a HISTORY GAP (never "Needs reconcile": the
+// balance is correct, a past period was never recorded). The classification
+// itself is unit-tested in account-drift-presentation.test.ts; this covers the
+// actual wiring/render + the explainer trigger.
 
 afterEach(cleanup)
 
 function noop() {}
 
-const account: AccountRecord = {
-  id: "acc-1",
-  name: "Bank Jago",
-  accountClass: "ASSET",
-  accountType: "DEPOSITORY",
-  accountSubtype: "checking",
-  balanceSource: "transaction_flow",
-  balance: "100000",
-  currency: "IDR",
-  color: null,
-  status: "active",
-  archivedAt: null,
-  institutionName: null,
-  externalProvider: null,
-  externalAccountId: null,
-  mask: null,
-  isImportable: true,
-  creditLimit: null,
-  statementDay: null,
-  dueDay: null,
-  interestRateBps: null,
-  counterpartyMerchantId: null,
-  reserveBalance: null,
-  zakatPayerId: null,
-  zakatJointPayerId: null,
-  zakatJointSharePercent: null,
-}
+const account: AccountRecord = TEST_ACCOUNT
 
-function renderCard(drift: ReadonlyArray<DriftRecord>) {
+function renderCard(
+  drift: ReadonlyArray<DriftRecord>,
+  onDriftDetails?: () => void
+) {
   render(
     <TooltipProvider>
       <AccountCard
@@ -57,6 +36,7 @@ function renderCard(drift: ReadonlyArray<DriftRecord>) {
         onArchive={noop}
         onReactivate={noop}
         onDelete={noop}
+        onDriftDetails={onDriftDetails}
       />
     </TooltipProvider>
   )
@@ -84,7 +64,7 @@ const liveAnchorChain: DriftRecord = {
 describe("AccountCard drift badge", () => {
   it("renders no badge when there is no drift", () => {
     renderCard([])
-    expect(screen.queryByText(/needs reconcile/i)).toBeNull()
+    expect(screen.queryByText(/history gap/i)).toBeNull()
     expect(screen.queryByText(/imported/i)).toBeNull()
   })
 
@@ -93,13 +73,21 @@ describe("AccountCard drift badge", () => {
     expect(
       screen.getByText("Imported — anchored to your Sure balances")
     ).toBeTruthy()
-    expect(screen.queryByText(/needs reconcile/i)).toBeNull()
+    expect(screen.queryByText(/history gap/i)).toBeNull()
   })
 
-  it("keeps a live-user ANCHOR_CHAIN fully alarming", () => {
+  it("names a live-user ANCHOR_CHAIN a 'History gap', not a reconcile instruction", () => {
     renderCard([liveAnchorChain])
-    expect(screen.getByText(/needs reconcile/i)).toBeTruthy()
+    expect(screen.getByText(/history gap/i)).toBeTruthy()
+    expect(screen.queryByText(/needs reconcile/i)).toBeNull()
     expect(screen.queryByText(/imported/i)).toBeNull()
+  })
+
+  it("opens the drift explainer when the warning badge is clicked", () => {
+    const onDriftDetails = vi.fn()
+    renderCard([liveAnchorChain], onDriftDetails)
+    fireEvent.click(screen.getByRole("button", { name: /history gap/i }))
+    expect(onDriftDetails).toHaveBeenCalledTimes(1)
   })
 
   it("keeps MATERIALIZATION drift alarming even when a migration ANCHOR_CHAIN is also present", () => {
@@ -117,6 +105,26 @@ describe("AccountCard drift badge", () => {
     ])
     expect(screen.getByText(/balance drift/i)).toBeTruthy()
     expect(screen.queryByText(/imported/i)).toBeNull()
+  })
+
+  it("opens the explainer for a MATERIALIZATION error too", () => {
+    const onDriftDetails = vi.fn()
+    renderCard(
+      [
+        {
+          accountId: account.id,
+          kind: "MATERIALIZATION",
+          severity: "error",
+          expected: "100000",
+          actual: "90000",
+          drift: "-10000",
+          asOf: "2026-07-01",
+        },
+      ],
+      onDriftDetails
+    )
+    fireEvent.click(screen.getByRole("button", { name: /balance drift/i }))
+    expect(onDriftDetails).toHaveBeenCalledTimes(1)
   })
 })
 

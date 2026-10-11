@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start"
 import type { Valuation } from "@prisma/client"
 import { z } from "zod"
 import { allowsNegativeAssetBalance, type AccountType } from "@/lib/accounts"
+import { gapIntersectsWindow, isSoftenedMigrationGap } from "@/lib/anchor-gaps"
 import {
   ANCHOR_VALUATION_TYPES,
   groundTruthBoundary,
@@ -13,6 +14,7 @@ import {
 import {
   absMoney,
   addMoney,
+  decodeMoney,
   negateMoney,
   subMoney,
   toMoney,
@@ -41,6 +43,7 @@ import {
   uuidV7Schema,
   type RunInTenantTransaction,
 } from "./mutation-kit"
+import { defaultReportingRange, getFamilyTimezone } from "./reporting"
 import { validateTenantReferences } from "./validation/tenant-references"
 
 // =============================================================================
@@ -274,6 +277,17 @@ export interface BalanceDriftReport {
   // §6's deferred UI-presentation decision (see src/lib/account-drift-presentation.ts).
   fromAnchorSource?: string
   toAnchorSource?: string
+  // PER-443 — the segment's own numbers, so the explainer can state WHAT is
+  // unrecorded without re-deriving anything: the two anchors' asserted values,
+  // the flow recorded between them, and each anchor's provenance (PER-264,
+  // already narrowed to the closed domain). `ground_truth` on the later anchor
+  // means the balance was independently observed there, so the gap is
+  // acknowledged history rather than an unresolved hole.
+  fromAnchorValue?: string
+  toAnchorValue?: string
+  segmentFlow?: string
+  fromAnchorProvenance?: AnchorProvenance
+  toAnchorProvenance?: AnchorProvenance
 }
 
 export interface ServerActor {
@@ -1261,69 +1275,120 @@ export const rebuildAccountBalanceFn = createServerFn({ method: "POST" })
 // only the latest one. Uses the same segmentation predicate as the balance
 // formula (`sumTransactionFlowAfterAnchor`'s afterAnchor rule, PER-201) so the
 // two can never silently disagree about which flows belong to which anchor.
-async function detectAnchorChainDrift(
-  tx: TenantTransactionClient,
-  familyId: string,
+//
+// PER-443: ONE collector feeds every honesty surface — the wire drift report,
+// the dashboard period-completeness banner, and the insights period marker —
+// so "this period is only partially recorded" can never mean different things
+// on different screens. READ-ONLY, computed-on-read.
+export interface AnchorChainGapEntry {
   accountId: string
-): Promise<BalanceDriftReport[]> {
-  const anchors = await tx.valuation.findMany({
-    where: {
-      accountId,
-      familyId,
-      deletedAt: null,
-      type: { in: [...ANCHOR_VALUATION_TYPES] },
-    },
-    orderBy: [{ valuationDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
-    select: {
-      value: true,
-      valuationDate: true,
-      createdAt: true,
-      source: true,
-      // PER-264: the chain check segments with the SAME branched predicate as
-      // the balance formula (ADR-0043 §6's one-segmentation-function rule), so
-      // it needs each anchor's provenance (and observedAt) on both segment
-      // boundaries.
-      provenance: true,
-      observedAt: true,
-    },
+  accountName: string
+  currency: string
+  /** Segment window, family-tz calendar dates (YYYY-MM-DD). */
+  fromDate: string
+  toDate: string
+  /** `fromValue + segmentFlow` — what the recorded ledger says the to-anchor
+   * should hold. */
+  expected: string
+  /** `toValue` — what the to-anchor asserts. */
+  actual: string
+  /** `actual − expected`; non-zero by construction. */
+  drift: string
+  fromValue: string
+  toValue: string
+  /** Σ signed flow recorded inside the segment (both bounds via the shared
+   * afterAnchor predicate). */
+  segmentFlow: string
+  fromSource: string
+  toSource: string
+  fromProvenance: AnchorProvenance
+  toProvenance: AnchorProvenance
+}
+
+export async function collectAnchorChainGaps(
+  tx: TenantTransactionClient,
+  familyId: string
+): Promise<AnchorChainGapEntry[]> {
+  const accounts = await tx.account.findMany({
+    where: { familyId, balanceSource: "transaction_flow" },
+    select: { id: true, name: true, currency: true },
   })
 
-  const reports: BalanceDriftReport[] = []
-  for (let index = 0; index < anchors.length - 1; index += 1) {
-    const from = anchors[index]
-    const to = anchors[index + 1]
-    if (!from || !to) continue
+  const entries: AnchorChainGapEntry[] = []
+  for (
+    let accountIndex = 0;
+    accountIndex < accounts.length;
+    accountIndex += 1
+  ) {
+    const account = accounts[accountIndex]
+    if (!account) continue
 
-    // PER-201: segment flow = afterAnchor(from) ∧ ¬afterAnchor(to), the exact
-    // complement pairing that keeps this drift check and the balance formula on
-    // ONE segmentation predicate (ADR-0043 §6). A late back-dated user
-    // transaction lands only in the "after latest anchor" bucket, so it never
-    // perturbs a historical migrated-anchor segment here.
-    const segmentFlow = await sumTransactionFlowAfterAnchor(
-      tx,
-      familyId,
-      accountId,
-      { ...from, provenance: toAnchorProvenance(from.provenance) },
-      { ...to, provenance: toAnchorProvenance(to.provenance) }
-    )
-    const expected = addMoney(toMoney(from.value), segmentFlow)
-    const actual = toMoney(to.value)
-    if (expected !== actual) {
-      reports.push({
-        accountId,
-        kind: "ANCHOR_CHAIN",
-        severity: "warning",
+    const anchors = await tx.valuation.findMany({
+      where: {
+        accountId: account.id,
+        familyId,
+        deletedAt: null,
+        type: { in: [...ANCHOR_VALUATION_TYPES] },
+      },
+      orderBy: [{ valuationDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      select: {
+        value: true,
+        valuationDate: true,
+        createdAt: true,
+        source: true,
+        // PER-264: the chain check segments with the SAME branched predicate as
+        // the balance formula (ADR-0043 §6's one-segmentation-function rule), so
+        // it needs each anchor's provenance (and observedAt) on both segment
+        // boundaries.
+        provenance: true,
+        observedAt: true,
+      },
+    })
+
+    for (let index = 0; index < anchors.length - 1; index += 1) {
+      const from = anchors[index]
+      const to = anchors[index + 1]
+      if (!from || !to) continue
+
+      const fromProvenance = toAnchorProvenance(from.provenance)
+      const toProvenance = toAnchorProvenance(to.provenance)
+
+      // PER-201: segment flow = afterAnchor(from) ∧ ¬afterAnchor(to), the exact
+      // complement pairing that keeps this drift check and the balance formula
+      // on ONE segmentation predicate (ADR-0043 §6). A late back-dated user
+      // transaction lands only in the "after latest anchor" bucket, so it never
+      // perturbs a historical migrated-anchor segment here.
+      const segmentFlow = await sumTransactionFlowAfterAnchor(
+        tx,
+        familyId,
+        account.id,
+        { ...from, provenance: fromProvenance },
+        { ...to, provenance: toProvenance }
+      )
+      const expected = addMoney(toMoney(from.value), segmentFlow)
+      const actual = toMoney(to.value)
+      if (expected === actual) continue
+
+      entries.push({
+        accountId: account.id,
+        accountName: account.name,
+        currency: account.currency,
+        fromDate: from.valuationDate.toISOString().slice(0, 10),
+        toDate: to.valuationDate.toISOString().slice(0, 10),
         expected: expected.toString(),
         actual: actual.toString(),
         drift: subMoney(actual, expected).toString(),
-        asOf: to.valuationDate.toISOString().slice(0, 10),
-        fromAnchorDate: from.valuationDate.toISOString().slice(0, 10),
-        fromAnchorSource: from.source,
-        toAnchorSource: to.source,
+        fromValue: from.value.toString(),
+        toValue: to.value.toString(),
+        segmentFlow: segmentFlow.toString(),
+        fromSource: from.source,
+        toSource: to.source,
+        fromProvenance,
+        toProvenance,
       })
     }
   }
-  return reports
+  return entries
 }
 
 export async function detectBalanceDriftForFamily({
@@ -1348,6 +1413,16 @@ export async function detectBalanceDriftForFamily({
     const reports: BalanceDriftReport[] = []
     const today = new Date().toISOString().slice(0, 10)
 
+    // PER-443: chain gaps come from the shared collector (the same one the
+    // completeness marker and insights use), grouped back per account so the
+    // report's ordering stays per-account.
+    const chainEntriesByAccount = new Map<string, AnchorChainGapEntry[]>()
+    for (const entry of await collectAnchorChainGaps(tx, familyId)) {
+      const bucket = chainEntriesByAccount.get(entry.accountId)
+      if (bucket) bucket.push(entry)
+      else chainEntriesByAccount.set(entry.accountId, [entry])
+    }
+
     for (let index = 0; index < accounts.length; index += 1) {
       const account = accounts[index]
       if (!account) continue
@@ -1370,10 +1445,24 @@ export async function detectBalanceDriftForFamily({
       // (2) Anchor-chain drift (cash only, ADR-0043 §6): does the flow between
       // every consecutive pair of balance-assertion anchors explain the
       // restatement between them?
-      if (account.balanceSource === "transaction_flow") {
-        reports.push(
-          ...(await detectAnchorChainDrift(tx, familyId, account.id))
-        )
+      for (const entry of chainEntriesByAccount.get(account.id) ?? []) {
+        reports.push({
+          accountId: account.id,
+          kind: "ANCHOR_CHAIN",
+          severity: "warning",
+          expected: entry.expected,
+          actual: entry.actual,
+          drift: entry.drift,
+          asOf: entry.toDate,
+          fromAnchorDate: entry.fromDate,
+          fromAnchorSource: entry.fromSource,
+          toAnchorSource: entry.toSource,
+          fromAnchorValue: entry.fromValue,
+          toAnchorValue: entry.toValue,
+          segmentFlow: entry.segmentFlow,
+          fromAnchorProvenance: entry.fromProvenance,
+          toAnchorProvenance: entry.toProvenance,
+        })
       }
     }
     return reports
@@ -1384,6 +1473,129 @@ export const detectBalanceDriftFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
   .handler(async ({ context }) => {
     return await detectBalanceDriftForFamily({
+      familyId: context.familyId,
+      userId: context.user.id,
+    })
+  })
+
+// =============================================================================
+// PERIOD COMPLETENESS (PER-443) — "this window is only partially recorded"
+// =============================================================================
+
+/** One account's history hole intersecting the requested report window. */
+export interface PeriodCompletenessGap {
+  accountId: string
+  accountName: string
+  currency: string
+  fromDate: string
+  toDate: string
+  /** |unrecorded movement| in the segment, account-currency minor units. */
+  amount: string
+}
+
+export interface PeriodCompleteness {
+  window: { from: string; to: string }
+  gaps: PeriodCompletenessGap[]
+}
+
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+
+export const getPeriodCompletenessInputSchema = z
+  .object({
+    from: z
+      .string()
+      .regex(DATE_ONLY_PATTERN, "from must be YYYY-MM-DD")
+      .optional(),
+    to: z.string().regex(DATE_ONLY_PATTERN, "to must be YYYY-MM-DD").optional(),
+  })
+  .superRefine((data, ctx) => {
+    // Same rule as the reporting schemas: never mix a caller bound with a
+    // server-resolved one.
+    if ((data.from === undefined) !== (data.to === undefined)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "from and to must be provided together",
+      })
+      return
+    }
+    if (
+      data.from !== undefined &&
+      data.to !== undefined &&
+      data.from > data.to
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "from must not be after to",
+      })
+    }
+  })
+
+export type GetPeriodCompletenessInput = z.infer<
+  typeof getPeriodCompletenessInputSchema
+>
+
+/**
+ * The honesty answer for "does this report window cover everything?": every
+ * live anchor-chain hole that touches `[from, to]`, with the unrecorded
+ * movement per account. Migration-softened pairs (both ends importer-written)
+ * are excluded — their history was incomplete before Permoney existed and the
+ * import already absorbed it (the same rule the accounts badge applies).
+ * Computed-on-read; nothing here is stored (ADR-0043 §6 / ADR-0059).
+ */
+export async function getPeriodCompletenessForFamily({
+  data: rawData,
+  familyId,
+  userId,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  data: GetPeriodCompletenessInput
+  familyId: string
+  userId: string
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<PeriodCompleteness> {
+  const data = getPeriodCompletenessInputSchema.parse(rawData)
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
+    const timezone = await getFamilyTimezone(tx, familyId)
+    const window =
+      data.from !== undefined && data.to !== undefined
+        ? { from: data.from, to: data.to }
+        : defaultReportingRange(timezone)
+
+    const gaps = (await collectAnchorChainGaps(tx, familyId))
+      .filter((gap) => !isSoftenedMigrationGap(gap))
+      .filter((gap) =>
+        gapIntersectsWindow(gap.fromDate, gap.toDate, {
+          start: window.from,
+          end: window.to,
+        })
+      )
+      .map((gap) => ({
+        accountId: gap.accountId,
+        accountName: gap.accountName,
+        currency: gap.currency,
+        fromDate: gap.fromDate,
+        toDate: gap.toDate,
+        amount: absMoney(decodeMoney(gap.drift)).toString(),
+      }))
+      .sort((left, right) => {
+        const a = decodeMoney(left.amount)
+        const b = decodeMoney(right.amount)
+        if (a === b) return 0
+        return a > b ? -1 : 1
+      })
+
+    return { window, gaps }
+  })
+}
+
+export const getPeriodCompletenessFn = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .inputValidator((data: GetPeriodCompletenessInput) =>
+    getPeriodCompletenessInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await getPeriodCompletenessForFamily({
+      data,
       familyId: context.familyId,
       userId: context.user.id,
     })

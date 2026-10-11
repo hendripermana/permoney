@@ -24,6 +24,7 @@ import {
   TopCategoriesCard,
 } from "@/components/blocks/dashboard-cards"
 import { InsightCard } from "@/components/blocks/insight-card"
+import { PeriodCompletenessBanner } from "@/components/blocks/period-completeness-banner"
 import { getCashFlowReportFn, getNetWorthSeriesFn } from "@/server/reporting"
 import { getInsightsFn } from "@/server/insights"
 import { getBudgetForPeriodFn, listExpenseCategoriesFn } from "@/server/budgets"
@@ -282,6 +283,10 @@ function DashboardPage() {
             ) : (
               <>
                 <DashboardAttentionStrip summary={attentionSummary} />
+
+                {/* PER-443 — says out loud when the selected window contains a
+                    never-recorded period, instead of silently understating. */}
+                <PeriodCompletenessBanner from={from} to={to} />
 
                 <Section
                   query={insights}

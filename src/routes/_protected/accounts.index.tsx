@@ -25,6 +25,7 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { Badge } from "@/components/ui/badge"
 import { AccountCard, ACCOUNT_TYPE_LABEL, PinButton } from "./-account-card"
 import { AccountFormDialog } from "@/components/blocks/account-form-dialog"
+import { DriftExplainerDialog } from "@/components/blocks/drift-explainer-dialog"
 import { WealthByPersonCard } from "@/components/blocks/wealth-by-person-card"
 import { ValuationActionDialog } from "@/components/blocks/valuation-action-dialog"
 import { Button } from "@/components/ui/button"
@@ -95,6 +96,7 @@ import {
   getAccountDeletionImpactFn,
   reactivateAccountFn,
 } from "@/server/accounts"
+import { rebuildAccountBalanceFn } from "@/server/valuations"
 
 export const Route = createFileRoute("/_protected/accounts/")({
   // TanStack DB collections are browser-only; SSR would hang on the pending sync.
@@ -163,6 +165,10 @@ function AccountsPage() {
   )
   const [dialog, setDialog] = React.useState<DialogState>(null)
   const [busyId, setBusyId] = React.useState<string | null>(null)
+  // PER-443 — which account's drift explainer is open (null = closed).
+  const [driftDetails, setDriftDetails] = React.useState<AccountRecord | null>(
+    null
+  )
   // PER-219 list tools. Search/type/archived are ephemeral view state; pins and
   // view mode are client-only preferences hydrated once from localStorage (the
   // route is ssr:false, so these initializers run on the client). Persistence
@@ -306,6 +312,22 @@ function AccountsPage() {
     }
   }
 
+  // PER-443 — the MATERIALIZATION fix: rebuild the stored balance from the
+  // ledger (audited, capability-gated server-side). Closes the explainer so
+  // the refreshed badge (now clean) is what the user sees.
+  async function handleRebuild(account: AccountRecord) {
+    setBusyId(account.id)
+    try {
+      await rebuildAccountBalanceFn({
+        data: { accountId: account.id, idempotencyKey: createUuidV7() },
+      })
+      await refreshAfterMutation()
+      setDriftDetails(null)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   return (
     <TooltipProvider>
       <SidebarProvider
@@ -396,6 +418,7 @@ function AccountsPage() {
                                 onValuation={() =>
                                   setDialog({ mode: "valuation", account })
                                 }
+                                onDriftDetails={() => setDriftDetails(account)}
                                 onArchive={() => handleArchive(account)}
                                 onReactivate={() => handleReactivate(account)}
                                 onDelete={() =>
@@ -471,6 +494,23 @@ function AccountsPage() {
             await refreshAfterMutation()
             setDialog(null)
           }}
+        />
+      ) : null}
+
+      {driftDetails ? (
+        <DriftExplainerDialog
+          account={driftDetails}
+          entries={driftByAccount.get(driftDetails.id) ?? []}
+          busy={busyId === driftDetails.id}
+          onClose={() => setDriftDetails(null)}
+          // One tap to catch-up: the shared valuation dialog (set the real
+          // balance). The gap itself stays visible — that is the honest part.
+          onReconcile={() => {
+            const account = driftDetails
+            setDriftDetails(null)
+            setDialog({ mode: "valuation", account })
+          }}
+          onRebuild={() => handleRebuild(driftDetails)}
         />
       ) : null}
     </TooltipProvider>

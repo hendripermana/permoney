@@ -129,9 +129,11 @@ function integrityFactor(tone: DriftTone): HealthFactor | null {
     return { key: "integrity", label: "Balance drift detected", tone: "bad" }
   }
   if (tone === "warning") {
+    // PER-443 vocabulary: a chain mismatch is a hole in history, never a
+    // broken balance — the factor must not read as "act now".
     return {
       key: "integrity",
-      label: "Balance needs reconcile",
+      label: "History has an unrecorded gap",
       tone: "caution",
     }
   }

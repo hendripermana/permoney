@@ -3,6 +3,7 @@ import {
   type RecurringSeries,
   type RecurringTxn,
 } from "./account-recurring"
+import { gapsInWindow } from "./anchor-gaps"
 import {
   calendarDateInZone,
   transactionInPeriod,
@@ -65,8 +66,11 @@ import type { CurrencyCode } from "@/lib/data/currencies"
 /** Bumped whenever a derivation's meaning changes OR the registry's
  * composition changes — an artifact produced by an earlier engine is
  * incomplete for a later one, so it must never be read as if it were current.
- * Version 2 adds `since_payday`. */
-export const INSIGHTS_ENGINE_VERSION = 2
+ * Version 2 added `since_payday`. Version 3 added the period-incompleteness
+ * qualifier (`periodPartial` / `periodGaps`, PER-443): the numbers themselves
+ * are unchanged, but a v2 artifact carries no way to say "this window is only
+ * partially recorded", so it must not be read as complete under v3. */
+export const INSIGHTS_ENGINE_VERSION = 3
 
 export const SAVINGS_FLOW_INSIGHT_ID = "savings_flow"
 
@@ -102,6 +106,24 @@ export interface InsightMetric {
 }
 
 /**
+ * One anchor-chain hole (PER-443) intersecting an insight's window, in the
+ * shape the card renders: account-currency money as a wire string, display-
+ * ready calendar dates. There is no cross-currency conversion here — the gap
+ * belongs to one account and is reported in that account's own currency,
+ * exactly as the accounts page does.
+ */
+export interface InsightPeriodGap {
+  accountId: string
+  accountName: string
+  currency: string
+  /** Family-tz calendar dates (YYYY-MM-DD) of the unrecorded segment. */
+  fromDate: string
+  toDate: string
+  /** |unrecorded movement| in the segment, account-currency minor units. */
+  amount: string
+}
+
+/**
  * Design A's single envelope. Every derivation produces exactly this shape,
  * so one generic card / digest renderer can surface any insight without
  * knowing which derivation generated it.
@@ -122,6 +144,15 @@ export interface Insight {
   partial: boolean
   /** Rows this insight deliberately excluded because no FX rate resolved yet. */
   fxPendingCount: number
+  /** True when at least one LIVE anchor-chain gap intersects this insight's
+   * window: activity in that period was never recorded, so the money figures
+   * may be understated. Deliberately separate from `partial` (FX-only) — a
+   * period problem is not an exchange-rate problem, and each badge must be
+   * able to say exactly one thing (PER-443, ADR-0059 §7). */
+  periodPartial: boolean
+  /** The live gaps intersecting this window. Empty when the window covers a
+   * fully recorded period. */
+  periodGaps: InsightPeriodGap[]
   window: InsightWindow
   engineVersion: number
 }
@@ -158,6 +189,10 @@ export interface InsightContext {
   incomeRows: ReadonlyArray<InsightFlowRow>
   /** Expense rows whose family-tz dates can fall inside a payday window. */
   expenseRows: ReadonlyArray<InsightFlowRow>
+  /** Every live anchor-chain hole in the family (PER-443); each derivation
+   * intersects its OWN window against them, so a gap that misses
+   * `since_payday` still qualifies a calendar-month card and vice versa. */
+  anchorGaps: ReadonlyArray<InsightAnchorGapRow>
 }
 
 /**
@@ -213,6 +248,26 @@ export interface InsightFlowRow {
   description: string | null
 }
 
+/**
+ * One live anchor-chain hole as loaded by `src/server/insights.ts` — the same
+ * flat, DB-agnostic projection discipline as the other row types. `amount` is
+ * the |unrecorded movement| in the ACCOUNT's currency (bigint; never converted
+ * across currencies, so FX-pending can't touch it). `fromSource`/`toSource`
+ * feed the shared migration-softening rule (src/lib/anchor-gaps.ts), so this
+ * engine can never disagree with the accounts badge about which gaps are
+ * "known by design".
+ */
+export interface InsightAnchorGapRow {
+  accountId: string
+  accountName: string
+  currency: string
+  fromDate: string
+  toDate: string
+  amount: bigint
+  fromSource: string | null
+  toSource: string | null
+}
+
 /** The resolved payday anchor of the open cycle: the most recent occurrence of
  * the family's largest monthly income series, as family-tz calendar dates. */
 export interface PaydayAnchor {
@@ -235,6 +290,9 @@ export interface InsightContextInput {
   transferRows: ReadonlyArray<InsightTransferRow>
   incomeRows: ReadonlyArray<InsightFlowRow>
   expenseRows: ReadonlyArray<InsightFlowRow>
+  /** Every live anchor-chain hole in the family (PER-443) — see
+   * `InsightContext.anchorGaps`. */
+  anchorGaps: ReadonlyArray<InsightAnchorGapRow>
 }
 
 export interface DerivationOutcome {
@@ -317,7 +375,28 @@ export function buildInsightContext(
     transferRows: input.transferRows,
     incomeRows: input.incomeRows,
     expenseRows: input.expenseRows,
+    anchorGaps: input.anchorGaps,
   }
+}
+
+/**
+ * The live gaps an insight over `window` must disclose, in the card's shape.
+ * One shared definition (src/lib/anchor-gaps.ts): migration-softened pairs are
+ * "known by design" and drop out; a gap touching only one boundary day still
+ * counts. Pure — no clock, no DB.
+ */
+function periodGapsForWindow(
+  anchorGaps: ReadonlyArray<InsightAnchorGapRow>,
+  window: InsightWindow
+): InsightPeriodGap[] {
+  return gapsInWindow(anchorGaps, window).map((gap) => ({
+    accountId: gap.accountId,
+    accountName: gap.accountName,
+    currency: gap.currency,
+    fromDate: gap.fromDate,
+    toDate: gap.toDate,
+    amount: gap.amount.toString(),
+  }))
 }
 
 /** Group legs by their `Transfer` pairing; an unpaired row is its own group. */
@@ -407,6 +486,8 @@ function deriveSavingsFlow(context: InsightContext): DerivationOutcome {
     }
   }
 
+  const periodGaps = periodGapsForWindow(context.anchorGaps, window)
+
   return {
     insight: {
       id: SAVINGS_FLOW_INSIGHT_ID,
@@ -424,6 +505,8 @@ function deriveSavingsFlow(context: InsightContext): DerivationOutcome {
       ],
       partial: fxPendingCount > 0,
       fxPendingCount,
+      periodPartial: periodGaps.length > 0,
+      periodGaps,
       window,
       engineVersion: INSIGHTS_ENGINE_VERSION,
     },
@@ -592,6 +675,7 @@ function deriveSincePayday(context: InsightContext): DerivationOutcome {
   }
 
   const left = totals.income - totals.spent
+  const periodGaps = periodGapsForWindow(context.anchorGaps, window)
 
   return {
     insight: {
@@ -617,6 +701,8 @@ function deriveSincePayday(context: InsightContext): DerivationOutcome {
       ],
       partial: totals.fxPendingCount > 0,
       fxPendingCount: totals.fxPendingCount,
+      periodPartial: periodGaps.length > 0,
+      periodGaps,
       window,
       engineVersion: INSIGHTS_ENGINE_VERSION,
     },

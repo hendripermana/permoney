@@ -31,8 +31,12 @@ import { ACCOUNT_TYPE_LABEL, type AccountType } from "@/lib/accounts"
 import { isRunwayAlerting, type AccountRunway } from "@/lib/account-runway"
 import { hasReserve } from "@/lib/account-reserve"
 import type { AccountRecord, DriftRecord } from "@/lib/account-collections"
-import { selectDriftBadge } from "@/lib/account-drift-presentation"
+import {
+  explainDriftEntry,
+  selectDriftBadge,
+} from "@/lib/account-drift-presentation"
 import { formatCurrency } from "@/lib/currency"
+import { absMoney, decodeMoney } from "@/lib/money"
 import { cn } from "@/lib/utils"
 
 // Extracted out of accounts.tsx (the route file, "-"-prefixed = not a route
@@ -90,6 +94,7 @@ export function AccountCard({
   onReactivate,
   onDelete,
   onOpen,
+  onDriftDetails,
   pinned = false,
   onTogglePin,
   runway,
@@ -105,6 +110,9 @@ export function AccountCard({
   // Opens the per-account detail route. Optional so a component test can mount
   // the card without a router (navigation is a parent concern).
   onOpen?: () => void
+  // PER-443 — opens the drift explainer dialog ("why is this flagged?").
+  // Optional so existing mounts/tests work without the dialog.
+  onDriftDetails?: () => void
   // PER-219 pin/favorite. Optional so existing mounts (and the unit test) work
   // without wiring pin state; the pin button only renders when a handler exists.
   pinned?: boolean
@@ -133,6 +141,19 @@ export function AccountCard({
   // src/lib/account-drift-presentation.ts, unit-tested there). Read-only — the
   // badge never mutates anything (ADR-0034 §7).
   const driftBadge = selectDriftBadge(drift)
+  const driftExplanation = driftBadge
+    ? explainDriftEntry(driftBadge.entry)
+    : null
+  // PER-443 vocabulary fix: a chain mismatch is a HOLE IN HISTORY, not a
+  // broken balance — the badge says "History gap (size)" and opens the
+  // explainer instead of implying "Needs reconcile". Only MATERIALIZATION is a
+  // real balance error.
+  const driftBadgeLabel =
+    driftBadge && driftExplanation
+      ? driftBadge.entry.kind === "MATERIALIZATION"
+        ? driftExplanation.label
+        : `${driftExplanation.label} (${formatCurrency(absMoney(decodeMoney(driftBadge.entry.drift)), account.currency)})`
+      : null
   return (
     <Card className={cn("overflow-hidden", archived && "opacity-60")}>
       <button
@@ -198,19 +219,27 @@ export function AccountCard({
                 was exported, so this gap is expected — your balance is correct.
               </TooltipContent>
             </Tooltip>
-          ) : driftBadge ? (
-            <Badge
-              variant={driftBadge.tone === "error" ? "destructive" : "outline"}
-              className={cn(
-                driftBadge.tone === "warning" &&
-                  "border-amber-500/50 text-amber-600 dark:text-amber-400"
-              )}
+          ) : driftBadge && driftBadgeLabel ? (
+            <button
+              type="button"
+              onClick={onDriftDetails}
+              disabled={!onDriftDetails}
+              aria-label={`${driftBadgeLabel} — details`}
+              className="cursor-pointer rounded-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-default"
             >
-              <TriangleAlert className="size-3" />
-              {driftBadge.entry.kind === "MATERIALIZATION"
-                ? "Balance drift"
-                : `Needs reconcile (${formatCurrency(driftBadge.entry.drift, account.currency)})`}
-            </Badge>
+              <Badge
+                variant={
+                  driftBadge.tone === "error" ? "destructive" : "outline"
+                }
+                className={cn(
+                  driftBadge.tone === "warning" &&
+                    "border-amber-500/50 text-amber-600 dark:text-amber-400"
+                )}
+              >
+                <TriangleAlert className="size-3" />
+                {driftBadgeLabel}
+              </Badge>
+            </button>
           ) : null}
         </div>
 

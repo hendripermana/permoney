@@ -9,6 +9,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { isCurrencyCode } from "@/lib/data/currencies"
 import type { Insight, InsightMetric, InsightReport } from "@/lib/insights"
 import { decodeMoney, formatMoney } from "@/lib/money"
@@ -75,17 +80,46 @@ function InsightCardItem({ insight }: { insight: Insight }) {
           {insight.title}
         </CardTitle>
         <CardDescription>{insight.summary}</CardDescription>
-        {insight.partial ? (
+        {insight.partial || insight.periodPartial ? (
           <CardAction>
-            <Badge
-              variant="outline"
-              className="gap-1 text-amber-600 dark:text-amber-400"
-            >
-              <TriangleAlert className="size-3" aria-hidden />
-              {pendingCount && pendingCount !== "0"
-                ? `${pendingCount} pending exchange rate`
-                : "Exchange rate pending"}
-            </Badge>
+            <div className="flex flex-wrap justify-end gap-1">
+              {insight.periodPartial ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge
+                      variant="outline"
+                      className="gap-1 text-amber-600 dark:text-amber-400"
+                      data-testid={`insight-${insight.id}-period-partial`}
+                    >
+                      <TriangleAlert className="size-3" aria-hidden />
+                      Partially recorded period
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <div className="flex flex-col gap-1">
+                      {insight.periodGaps.map((gap) => (
+                        <span key={`${gap.accountId}:${gap.fromDate}`}>
+                          {gap.accountName}:{" "}
+                          {formatWire(gap.amount, gap.currency)} not recorded
+                          between {gap.fromDate} and {gap.toDate}
+                        </span>
+                      ))}
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
+              ) : null}
+              {insight.partial ? (
+                <Badge
+                  variant="outline"
+                  className="gap-1 text-amber-600 dark:text-amber-400"
+                >
+                  <TriangleAlert className="size-3" aria-hidden />
+                  {pendingCount && pendingCount !== "0"
+                    ? `${pendingCount} pending exchange rate`
+                    : "Exchange rate pending"}
+                </Badge>
+              ) : null}
+            </div>
           </CardAction>
         ) : null}
       </CardHeader>

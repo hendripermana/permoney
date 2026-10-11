@@ -1,31 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 import { cleanup, render, screen } from "@testing-library/react"
-import type { ReactNode } from "react"
+
+import { RouterLinkMock } from "@/test-support/blocks"
 
 // A router-less stand-in for <Link>: the notice only needs the destination.
 vi.mock("@tanstack/react-router", () => ({
-  Link: ({
-    to,
-    params,
-    children,
-    className,
-  }: {
-    to: string
-    params?: Record<string, string>
-    children?: ReactNode
-    className?: string
-  }) => (
-    <a
-      href={Object.entries(params ?? {}).reduce(
-        (path, [key, value]) => path.replace(`$${key}`, value),
-        to
-      )}
-      className={className}
-    >
-      {children}
-    </a>
-  ),
+  Link: RouterLinkMock,
 }))
 
 import { UnattributedAccountsNotice } from "./zakat-unattributed-notice"

@@ -16,6 +16,7 @@ import {
   Scale,
   Search,
   TrendingUp,
+  TriangleAlert,
 } from "lucide-react"
 
 import { AppSidebar } from "@/components/app-sidebar"
@@ -45,6 +46,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { AccountVisual } from "@/components/blocks/account-visual"
 import { getQueryClient } from "@/lib/query-client"
+import { DriftExplainerDialog } from "@/components/blocks/drift-explainer-dialog"
 import { GroundTruthAnchorSubtitle } from "@/components/blocks/ground-truth-anchor-subtitle"
 import { OpeningAsOfSubtitle } from "@/components/blocks/opening-as-of-subtitle"
 import { AccountFormDialog } from "@/components/blocks/account-form-dialog"
@@ -79,6 +81,7 @@ import {
   accountCollection,
   balanceDriftCollection,
   type AccountRecord,
+  type DriftRecord,
 } from "@/lib/account-collections"
 import {
   transactionCollection,
@@ -106,7 +109,10 @@ import { detectRecurringSeries } from "@/lib/account-recurring"
 import { computeAccountCashFlowForecast } from "@/lib/account-cash-flow-forecast"
 import { computeAccountPerformance } from "@/lib/account-performance"
 import { sortAccountOptions } from "@/lib/holdings"
-import { getAccountOpeningValueFn } from "@/server/valuations"
+import {
+  getAccountOpeningValueFn,
+  rebuildAccountBalanceFn,
+} from "@/server/valuations"
 import { enableHoldingsTrackingFn } from "@/server/accounts"
 import {
   canEnableHoldingsTracking,
@@ -128,7 +134,10 @@ import {
   type HoldingRecord,
 } from "./-account-holdings"
 import { computeAccountHealth } from "@/lib/account-health"
-import { selectDriftBadge } from "@/lib/account-drift-presentation"
+import {
+  explainDriftEntry,
+  selectDriftBadge,
+} from "@/lib/account-drift-presentation"
 import {
   buildBalanceSeries,
   buildStatementCsv,
@@ -141,7 +150,14 @@ import {
 } from "@/lib/account-analytics"
 import { ACCOUNT_TYPE_LABEL } from "./-account-card"
 import { formatCurrency } from "@/lib/currency"
-import { toMoney, ZERO_MONEY, parseMoneyInput, type Money } from "@/lib/money"
+import {
+  absMoney,
+  decodeMoney,
+  toMoney,
+  ZERO_MONEY,
+  parseMoneyInput,
+  type Money,
+} from "@/lib/money"
 import { MoneyInput } from "@/components/blocks/money-input"
 import type { CurrencyCode } from "@/lib/data/currencies"
 import { setTransactionReconciledFn } from "@/server/transaction-reconciliation"
@@ -215,6 +231,8 @@ function AccountDetailPage() {
   const [detailDialog, setDetailDialog] = React.useState<
     "edit" | "valuation" | null
   >(null)
+  // PER-443 — the explainer's "Recalculate balance" action is in flight.
+  const [rebuildBusy, setRebuildBusy] = React.useState(false)
   // PER-232 — add/edit holding dialog (create vs edit a single position).
   const [holdingDialog, setHoldingDialog] =
     React.useState<HoldingFormState | null>(null)
@@ -962,14 +980,32 @@ function AccountDetailPage() {
     }
   }
 
+  // PER-443 — this account's drift entries for the explainer. One filter,
+  // shared by the health panel and the notice below the hero.
+  const accountDrift = React.useMemo(
+    () => (driftRows ?? []).filter((d) => d.accountId === accountId),
+    [driftRows, accountId]
+  )
+
+  // The explainer's MATERIALIZATION fix: rebuild the stored balance from the
+  // ledger (audited, capability-gated server-side), then resync this page.
+  async function handleRebuildBalance() {
+    setRebuildBusy(true)
+    try {
+      await rebuildAccountBalanceFn({
+        data: { accountId, idempotencyKey: createUuidV7() },
+      })
+      await refreshAccountData()
+    } finally {
+      setRebuildBusy(false)
+    }
+  }
+
   // PER-224 — account health: fold runway + reserve buffer + balance-drift into
   // one transparent score. Cash-like only (the signals don't apply to tracked
   // assets / term liabilities).
   const health = React.useMemo(() => {
     if (!cashLike) return null
-    const accountDrift = (driftRows ?? []).filter(
-      (d) => d.accountId === accountId
-    )
     const driftTone = selectDriftBadge(accountDrift)?.tone ?? "none"
     const reserveMinor = account?.reserveBalance
       ? BigInt(account.reserveBalance)
@@ -979,14 +1015,7 @@ function AccountDetailPage() {
       reserveState: reserveHealth(currentBalance, reserveMinor),
       driftTone,
     })
-  }, [
-    cashLike,
-    driftRows,
-    accountId,
-    account?.reserveBalance,
-    currentBalance,
-    runway,
-  ])
+  }, [cashLike, accountDrift, account?.reserveBalance, currentBalance, runway])
 
   if (accounts && !account) {
     return (
@@ -1103,6 +1132,13 @@ function AccountDetailPage() {
             accountId={accountId}
             currency={currency}
             cashLike={cashLike}
+          />
+          <AccountDriftNotice
+            account={account}
+            drift={accountDrift}
+            busy={rebuildBusy}
+            onReconcile={() => setDetailDialog("valuation")}
+            onRebuild={handleRebuildBalance}
           />
           <div className="flex flex-wrap gap-1.5">
             <Badge variant="secondary">
@@ -1686,6 +1722,59 @@ async function refreshAccountData() {
       queryKey: ["accountOpeningAsOf"],
     }),
   ])
+}
+
+// PER-443 — the detail-page entry into the drift explainer: one line naming
+// the worst live signal, opening the shared dialog for the full "why". Renders
+// nothing for a clean account or a purely importer-absorbed gap (those are
+// expected by design, not actionable).
+function AccountDriftNotice({
+  account,
+  drift,
+  busy,
+  onReconcile,
+  onRebuild,
+}: Readonly<{
+  account: AccountRecord
+  drift: ReadonlyArray<DriftRecord>
+  busy: boolean
+  onReconcile: () => void
+  onRebuild: () => void
+}>) {
+  const [open, setOpen] = React.useState(false)
+  const badge = selectDriftBadge(drift)
+  if (!badge || badge.tone === "informational") return null
+  const explanation = explainDriftEntry(badge.entry)
+  const magnitude = absMoney(decodeMoney(badge.entry.drift))
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        data-testid="account-drift-notice"
+        className={cn(
+          "flex w-fit items-center gap-1 text-xs font-medium hover:underline",
+          badge.tone === "error"
+            ? "text-destructive"
+            : "text-amber-600 dark:text-amber-400"
+        )}
+      >
+        <TriangleAlert className="size-3" aria-hidden />
+        {explanation.label} · {formatCurrency(magnitude, account.currency)} —
+        details
+      </button>
+      {open ? (
+        <DriftExplainerDialog
+          account={account}
+          entries={drift}
+          busy={busy}
+          onClose={() => setOpen(false)}
+          onReconcile={onReconcile}
+          onRebuild={onRebuild}
+        />
+      ) : null}
+    </>
+  )
 }
 
 // PER-239 / ADR-0051 — CTA that promotes an eligible INVESTMENT account to

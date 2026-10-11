@@ -14,6 +14,7 @@ import {
   createTransactionForFamily,
   deleteTransactionForFamily,
 } from "@/server/transactions"
+import { createValuationForFamily } from "@/server/valuations"
 import {
   createIntegrationHarness,
   type IntegrationHarness,
@@ -729,5 +730,123 @@ describe("household insights (PER-227)", () => {
     // a broken detector.
     const reportB = await insightsAt(ownerB, PAYDAY_NOW)
     expect(insightMetric(reportB, "since_payday", "left")).toBe("20000000")
+  })
+
+  // ---- period completeness (PER-443) -----------------------------------------
+
+  // 2026-06-15 10:00 WIB — pinned so the seam's month is June. The anchors
+  // below are BACK-DATED (valuationDate != the write day), so their
+  // `observedAt` stays NULL and the chain segments by date only — exactly the
+  // production shape for historical reconciles.
+  const COMPLETENESS_NOW = new Date("2026-06-15T03:00:00.000Z")
+
+  const addAnchor = (
+    owner: AuthenticatedOnboardedUser,
+    accountId: string,
+    value: string,
+    valuationDate: Date,
+    source?: string
+  ) =>
+    createValuationForFamily({
+      data: {
+        accountId,
+        value,
+        type: "reconciliation",
+        ...(source ? { source } : {}),
+        valuationDate,
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      provenance: source ? "derived" : "ground_truth",
+      user: owner.user,
+    })
+
+  /** Wallet + savings with one June transfer into savings, so the June
+   * savings_flow card exists in every scenario below. */
+  const juneSavingsTransfer = async (owner: AuthenticatedOnboardedUser) => {
+    const wallet = await account(owner, "Wallet", {
+      accountSubtype: "checking",
+    })
+    const savings = await account(owner, "Tabungan", {
+      accountSubtype: "savings",
+    })
+    await transfer(owner, {
+      from: wallet.id,
+      to: savings.id,
+      amount: 500_000n,
+      date: new Date("2026-06-10T03:00:00.000Z"),
+    })
+  }
+
+  /** A separate account whose two anchors disagree by 20,000 with nothing
+   * recorded between them — a real [from, to] hole. `source` selects the
+   * importer path (migration-softened) when given. */
+  const seedHole = async (
+    owner: AuthenticatedOnboardedUser,
+    from: string,
+    to: string,
+    source?: string
+  ) => {
+    const gapAccount = await account(owner, "Gap account", {
+      accountSubtype: "checking",
+    })
+    await addAnchor(
+      owner,
+      gapAccount.id,
+      "100000",
+      new Date(`${from}T03:00:00.000Z`),
+      source
+    )
+    await addAnchor(
+      owner,
+      gapAccount.id,
+      "120000",
+      new Date(`${to}T03:00:00.000Z`),
+      source
+    )
+    return gapAccount
+  }
+
+  const savingsFlow = (
+    report: Awaited<ReturnType<typeof getInsightsForFamily>>
+  ) => report.insights.find((insight) => insight.id === "savings_flow")
+
+  test("marks savings_flow partially recorded when a live gap intersects its month", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    await juneSavingsTransfer(owner)
+    const gapAccount = await seedHole(owner, "2026-06-01", "2026-06-28")
+
+    const insight = savingsFlow(await insightsAt(owner, COMPLETENESS_NOW))
+    expect(insight?.partial).toBe(false)
+    expect(insight?.periodPartial).toBe(true)
+    expect(insight?.periodGaps).toEqual([
+      {
+        accountId: gapAccount.id,
+        accountName: "Gap account",
+        currency: "IDR",
+        fromDate: "2026-06-01",
+        toDate: "2026-06-28",
+        amount: "20000",
+      },
+    ])
+  })
+
+  test("leaves the qualifier off when no live gap intersects (outside the window, or importer-absorbed)", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    await juneSavingsTransfer(owner)
+
+    // A real hole — but in JANUARY, far outside the June window.
+    await seedHole(owner, "2026-01-05", "2026-01-20")
+    let insight = savingsFlow(await insightsAt(owner, COMPLETENESS_NOW))
+    expect(insight?.periodPartial).toBe(false)
+    expect(insight?.periodGaps).toEqual([])
+
+    // A June hole — but importer-written on BOTH ends: known by design.
+    await seedHole(owner, "2026-06-01", "2026-06-28", "migration:sure")
+    insight = savingsFlow(await insightsAt(owner, COMPLETENESS_NOW))
+    expect(insight?.periodPartial).toBe(false)
+    expect(insight?.periodGaps).toEqual([])
   })
 })
