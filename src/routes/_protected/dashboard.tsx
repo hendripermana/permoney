@@ -21,6 +21,7 @@ import {
   CashFlowCard,
   DashboardAttentionStrip,
   NetWorthCard,
+  PortfolioSummaryCard,
   TopCategoriesCard,
 } from "@/components/blocks/dashboard-cards"
 import { InsightCard } from "@/components/blocks/insight-card"
@@ -28,9 +29,21 @@ import { PeriodCompletenessBanner } from "@/components/blocks/period-completenes
 import { getCashFlowReportFn, getNetWorthSeriesFn } from "@/server/reporting"
 import { getInsightsFn } from "@/server/insights"
 import { getBudgetForPeriodFn, listExpenseCategoriesFn } from "@/server/budgets"
+import { getLatestFxOverviewFn } from "@/server/fx"
 import { accountCollection } from "@/lib/account-collections"
 import { transactionCollection } from "@/lib/collections"
 import { computeDashboardAttention } from "@/lib/dashboard-attention"
+import { buildLatestRateResolver } from "@/lib/net-worth"
+import {
+  computePortfolio,
+  isPortfolioAccount,
+  type PortfolioAccountInput,
+  type PortfolioSummary,
+} from "@/lib/portfolio"
+import {
+  loadAccountScalars,
+  type AccountScalars,
+} from "@/lib/portfolio-scalars"
 
 // =============================================================================
 // PER-156 / R3 — Dashboard realization (rendering layer only).
@@ -207,6 +220,71 @@ function DashboardPage() {
     [attentionAccounts, attentionTransactions]
   )
 
+  // PER-231 — compact portfolio summary. ONE query fetches the two scalars the
+  // collections cannot answer (opening value + holdings cost) and the latest
+  // FX overview together, keyed on the portfolio account IDs; a memo then
+  // computes the summary from the SAME live accounts and transactions the
+  // attention strip already loaded, so the card stays reactive to ledger edits
+  // without a second query. Disabled entirely when the family holds no
+  // investment/tracked-asset accounts — the card then renders nothing (an
+  // honest empty state per PER-231), never a zeroed card.
+  //
+  // Reuses Slice 1 + Slice 2 helpers verbatim: `isPortfolioAccount` for the
+  // universe, `loadAccountScalars` for the cost basis, and `computePortfolio`
+  // for the math — so this card and the /investments report can never disagree.
+  const portfolioAccounts = React.useMemo(
+    () => (attentionAccounts ?? []).filter(isPortfolioAccount),
+    [attentionAccounts]
+  )
+  const portfolioAccountIds = React.useMemo(
+    () => portfolioAccounts.map((account) => account.id),
+    [portfolioAccounts]
+  )
+  const portfolioData = useQuery({
+    queryKey: ["dashboard", "portfolio", portfolioAccountIds],
+    enabled: portfolioAccountIds.length > 0,
+    staleTime: 30_000,
+    queryFn: async () => {
+      const [fx, scalars] = await Promise.all([
+        getLatestFxOverviewFn(),
+        Promise.all(
+          portfolioAccountIds.map(
+            async (accountId) => await loadAccountScalars(accountId)
+          )
+        ),
+      ])
+      return { fx, scalars }
+    },
+  })
+
+  const portfolioSummary = React.useMemo<PortfolioSummary | null>(() => {
+    const fx = portfolioData.data?.fx
+    if (!fx) return null
+    const scalarsByAccountId = new Map<string, AccountScalars>()
+    for (const row of portfolioData.data?.scalars ?? []) {
+      scalarsByAccountId.set(row.accountId, row)
+    }
+    const resolveRate = buildLatestRateResolver(fx.rates, fx.baseCurrency)
+    const inputs = portfolioAccounts.map<PortfolioAccountInput>((account) => ({
+      accountId: account.id,
+      name: account.name,
+      accountType: account.accountType,
+      accountSubtype: account.accountSubtype,
+      currency: account.currency,
+      balanceMinor: BigInt(account.balance),
+      openingValueMinor:
+        scalarsByAccountId.get(account.id)?.openingValueMinor ?? null,
+      holdingsCostBasisMinor:
+        scalarsByAccountId.get(account.id)?.holdingsCostBasisMinor ?? null,
+    }))
+    return computePortfolio(
+      inputs,
+      attentionTransactions ?? [],
+      resolveRate,
+      fx.baseCurrency
+    )
+  }, [portfolioData.data, portfolioAccounts, attentionTransactions])
+
   return (
     <TooltipProvider>
       <SidebarProvider
@@ -303,6 +381,20 @@ function DashboardPage() {
                 >
                   {(data) => <NetWorthCard data={data} />}
                 </Section>
+
+                {portfolioAccounts.length > 0 ? (
+                  <Section
+                    query={portfolioData}
+                    skeletonHeight="h-[200px]"
+                    label="portfolio summary"
+                  >
+                    {() =>
+                      portfolioSummary !== null ? (
+                        <PortfolioSummaryCard summary={portfolioSummary} />
+                      ) : null
+                    }
+                  </Section>
+                ) : null}
 
                 <div className="grid gap-6 lg:grid-cols-2">
                   <Section

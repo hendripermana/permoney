@@ -11,20 +11,20 @@ import { SiteHeader } from "@/components/site-header"
 import { LoadErrorCard } from "@/components/blocks/load-error-card"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import {
-  accountCollection,
-  type AccountRecord,
-} from "@/lib/account-collections"
+import { accountCollection } from "@/lib/account-collections"
 import { transactionCollection } from "@/lib/collections"
 import { buildLatestRateResolver } from "@/lib/net-worth"
 import {
   computePortfolio,
+  isPortfolioAccount,
   type PortfolioAccountInput,
   type PortfolioSummary,
 } from "@/lib/portfolio"
-import { getAccountHoldingsFn } from "@/server/holdings"
+import {
+  loadAccountScalars,
+  type AccountScalars,
+} from "@/lib/portfolio-scalars"
 import { getLatestFxOverviewFn } from "@/server/fx"
-import { getAccountOpeningValueFn } from "@/server/valuations"
 import { InvestmentsView } from "./-investments-ui"
 
 // =============================================================================
@@ -60,51 +60,12 @@ export const Route = createFileRoute("/_protected/investments")({
 })
 
 /**
- * The portfolio universe: every ACTIVE INVESTMENT / TRACKED_ASSET account.
- *
- * Archived accounts are deliberately excluded — this is a "what do I hold
- * right now" report, and an archived account is a thing the household put
- * away; its history stays visible on the accounts page.
+ * The portfolio universe (every ACTIVE INVESTMENT / TRACKED_ASSET account)
+ * resolves via `isPortfolioAccount` from src/lib/portfolio.ts — shared with
+ * the PER-231 dashboard card so the report and the card can never disagree
+ * on which accounts are "the portfolio". The cost-basis scalars resolve via
+ * `loadAccountScalars` (src/lib/portfolio-scalars.ts) for the same reason.
  */
-function isPortfolioAccount(account: AccountRecord): boolean {
-  return (
-    account.status === "active" &&
-    (account.accountType === "INVESTMENT" ||
-      account.accountType === "TRACKED_ASSET")
-  )
-}
-
-interface AccountScalars {
-  /** The opening valuation (native minor units), or null when none was recorded. */
-  openingValueMinor: bigint | null
-  /** Σ holdings cost when the account tracks positions, else null. */
-  holdingsCostBasisMinor: bigint | null
-}
-
-interface AccountScalarsRow extends AccountScalars {
-  accountId: string
-}
-
-/**
- * The one scalar pair the client cannot derive from the collections, fetched
- * with the SAME server functions the account detail page uses. Both are
- * cheap single-row reads; they run in parallel for the whole portfolio.
- */
-async function loadAccountScalars(
-  accountId: string
-): Promise<AccountScalarsRow> {
-  const [opening, holdings] = await Promise.all([
-    getAccountOpeningValueFn({ data: { accountId } }),
-    getAccountHoldingsFn({ data: { accountId } }),
-  ])
-  return {
-    accountId,
-    openingValueMinor:
-      opening.openingValue !== null ? BigInt(opening.openingValue) : null,
-    holdingsCostBasisMinor:
-      holdings.holdings.length > 0 ? BigInt(holdings.totalCostMinor) : null,
-  }
-}
 
 function InvestmentsPendingComponent() {
   return (

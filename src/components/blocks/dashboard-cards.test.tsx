@@ -1,11 +1,31 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vite-plus/test"
+import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 import { cleanup, render, screen } from "@testing-library/react"
+import type { ReactNode } from "react"
+
+// A router-less stand-in for <Link>: the portfolio card wraps its whole body
+// in a Link to /investments, so the render contract only needs the target.
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({
+    to,
+    children,
+    className,
+  }: {
+    to: string
+    children?: ReactNode
+    className?: string
+  }) => (
+    <a href={to} className={className}>
+      {children}
+    </a>
+  ),
+}))
 
 import {
   BudgetProgressCard,
   CashFlowCard,
   NetWorthCard,
+  PortfolioSummaryCard,
   TopCategoriesCard,
   selectTopExpenseCategories,
   type TopCategoryRow,
@@ -19,6 +39,7 @@ import type {
   SerializedBudgetProgress,
   SerializedExpenseCategory,
 } from "@/server/budgets"
+import { computePortfolio, type PortfolioAccountInput } from "@/lib/portfolio"
 
 // recharts' ResponsiveContainer relies on ResizeObserver, which jsdom lacks.
 // The cards still render their headline KPIs (outside the chart) regardless.
@@ -260,5 +281,144 @@ describe("BudgetProgressCard", () => {
     expect(screen.getByText("$3,000.00")).toBeTruthy() // budgeted total stat
     expect(screen.getByText("Over budget")).toBeTruthy()
     expect(screen.getByText("Groceries")).toBeTruthy()
+  })
+})
+
+// ─── PER-231 — portfolio summary card ────────────────────────────────────────
+//
+// The render contract of the compact dashboard portfolio card. Fixtures come
+// from the REAL aggregator (computePortfolio), so this pins the wiring between
+// src/lib/portfolio.ts and the card the same way the investments-ui test pins
+// the full report. Figures are in minor units.
+
+const PORTFOLIO_BASE = "IDR"
+const noRates = (): bigint | null => null
+
+function portfolioAccount(
+  overrides: Partial<PortfolioAccountInput> & { accountId: string }
+): PortfolioAccountInput {
+  return {
+    name: `Account ${overrides.accountId}`,
+    accountType: "INVESTMENT",
+    accountSubtype: "brokerage",
+    currency: PORTFOLIO_BASE,
+    balanceMinor: 0n,
+    openingValueMinor: null,
+    holdingsCostBasisMinor: null,
+    ...overrides,
+  }
+}
+
+// Two funded subtypes with a known basis: gold +50%, brokerage flat.
+const fundedSummary = computePortfolio(
+  [
+    portfolioAccount({
+      accountId: "gold",
+      accountSubtype: "gold",
+      balanceMinor: 1_500_000n,
+      openingValueMinor: 1_000_000n,
+    }),
+    portfolioAccount({
+      accountId: "brokerage",
+      accountSubtype: "brokerage",
+      balanceMinor: 500_000n,
+      openingValueMinor: 500_000n,
+    }),
+  ],
+  [],
+  noRates,
+  PORTFOLIO_BASE
+)
+
+// A convertible account with a balance but NO recorded basis → return withheld.
+const noBasisSummary = computePortfolio(
+  [
+    portfolioAccount({
+      accountId: "gold",
+      accountSubtype: "gold",
+      balanceMinor: 2_000_000n,
+      openingValueMinor: null,
+    }),
+  ],
+  [],
+  noRates,
+  PORTFOLIO_BASE
+)
+
+// Every account is FX-pending → the card must show "—" and flag, never a zero.
+const fullyUnconvertedSummary = computePortfolio(
+  [
+    portfolioAccount({
+      accountId: "usd",
+      currency: "USD",
+      balanceMinor: 10_000n,
+      openingValueMinor: 10_000n,
+    }),
+  ],
+  [],
+  noRates,
+  PORTFOLIO_BASE
+)
+
+describe("PortfolioSummaryCard", () => {
+  it("renders nothing for an empty portfolio (honest empty state)", () => {
+    const { container } = render(
+      <PortfolioSummaryCard
+        summary={computePortfolio([], [], noRates, PORTFOLIO_BASE)}
+      />
+    )
+    expect(container.firstChild).toBeNull()
+  })
+
+  it("shows the total market value and a whole-card link to the report", () => {
+    render(<PortfolioSummaryCard summary={fundedSummary} />)
+    // Total = 2,000,000 minor → Rp 20,000.00
+    expect(screen.getByTestId("dashboard-portfolio-value").textContent).toBe(
+      "Rp\u00A020,000.00"
+    )
+    const link = screen.getByRole("link")
+    expect(link.getAttribute("href")).toBe("/investments")
+  })
+
+  it("surfaces the overall gain and return % when a basis exists", () => {
+    render(<PortfolioSummaryCard summary={fundedSummary} />)
+    // Gain = +500,000 minor → +Rp 5,000.00. Overall return is across BOTH
+    // accounts: 500k gain on 1.5M combined cost = +33.33% (gold is +50%,
+    // brokerage is flat), NOT gold's isolated +50%.
+    // getByText normalizes the node's whitespace (NBSP → plain space), so the
+    // expected string uses plain spaces rather than \u00A0.
+    expect(screen.getByText("+ Rp 5,000.00 · +33.33%")).toBeTruthy()
+  })
+
+  it("withholds a fabricated return when no cost basis is recorded", () => {
+    render(<PortfolioSummaryCard summary={noBasisSummary} />)
+    expect(screen.getByText(/Return not available/i)).toBeTruthy()
+    // A return is always two decimals (e.g. "33.33%"); the allocation legend
+    // uses one ("100.0%"). No two-decimal return figure may appear.
+    expect(screen.queryByText(/\d+\.\d{2}%/)).toBeNull()
+    // The market value itself is still real and shown.
+    expect(screen.getByTestId("dashboard-portfolio-value").textContent).toBe(
+      "Rp\u00A020,000.00"
+    )
+  })
+
+  it("shows a dash and flags the rate when every account is unconverted", () => {
+    render(<PortfolioSummaryCard summary={fullyUnconvertedSummary} />)
+    expect(screen.getByTestId("dashboard-portfolio-value").textContent).toBe(
+      "—"
+    )
+    expect(screen.getByText(/1 unconverted/i)).toBeTruthy()
+    // No fabricated allocation bar for a portfolio we could not value.
+    expect(screen.queryByTestId("dashboard-portfolio-allocation")).toBeNull()
+  })
+
+  it("renders the mini allocation bar and legend for funded subtypes", () => {
+    render(<PortfolioSummaryCard summary={fundedSummary} />)
+    expect(screen.getByTestId("dashboard-portfolio-allocation")).toBeTruthy()
+    // Both subtype labels and their true shares appear in the legend.
+    expect(screen.getByText("Gold")).toBeTruthy()
+    expect(screen.getByText("Brokerage")).toBeTruthy()
+    expect(screen.getByText("75.0%")).toBeTruthy()
+    expect(screen.getByText("25.0%")).toBeTruthy()
   })
 })
