@@ -1,23 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 import { cleanup, render, screen, within } from "@testing-library/react"
-import type { ReactNode } from "react"
+
+import { RouterLinkMock } from "@/test-support/blocks"
 
 // A router-less stand-in for <Link>: the empty state only needs its target.
 vi.mock("@tanstack/react-router", () => ({
-  Link: ({
-    to,
-    children,
-    className,
-  }: {
-    to: string
-    children?: ReactNode
-    className?: string
-  }) => (
-    <a href={to} className={className}>
-      {children}
-    </a>
-  ),
+  Link: RouterLinkMock,
 }))
 
 import { formatCurrency } from "@/lib/currency"

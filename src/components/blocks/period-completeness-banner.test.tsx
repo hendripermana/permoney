@@ -2,31 +2,12 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { cleanup, render, screen, waitFor } from "@testing-library/react"
-import type { ReactNode } from "react"
+
+import { RouterLinkMock } from "@/test-support/blocks"
 
 // A router-less stand-in for <Link>: the banner only needs the destination.
 vi.mock("@tanstack/react-router", () => ({
-  Link: ({
-    to,
-    params,
-    children,
-    className,
-  }: {
-    to: string
-    params?: Record<string, string>
-    children?: ReactNode
-    className?: string
-  }) => (
-    <a
-      href={Object.entries(params ?? {}).reduce(
-        (path, [key, value]) => path.replace(`$${key}`, value),
-        to
-      )}
-      className={className}
-    >
-      {children}
-    </a>
-  ),
+  Link: RouterLinkMock,
 }))
 
 // The banner talks to the server only through this fn; mock it so no server

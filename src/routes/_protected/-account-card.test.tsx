@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 
 import { AccountCard } from "./-account-card"
 import { TooltipProvider } from "@/components/ui/tooltip"
+import { TEST_ACCOUNT } from "@/test-support/blocks"
 import type { AccountRecord, DriftRecord } from "@/lib/account-collections"
 import type { AccountRunway } from "@/lib/account-runway"
 
@@ -18,33 +19,7 @@ afterEach(cleanup)
 
 function noop() {}
 
-const account: AccountRecord = {
-  id: "acc-1",
-  name: "Bank Jago",
-  accountClass: "ASSET",
-  accountType: "DEPOSITORY",
-  accountSubtype: "checking",
-  balanceSource: "transaction_flow",
-  balance: "100000",
-  currency: "IDR",
-  color: null,
-  status: "active",
-  archivedAt: null,
-  institutionName: null,
-  externalProvider: null,
-  externalAccountId: null,
-  mask: null,
-  isImportable: true,
-  creditLimit: null,
-  statementDay: null,
-  dueDay: null,
-  interestRateBps: null,
-  counterpartyMerchantId: null,
-  reserveBalance: null,
-  zakatPayerId: null,
-  zakatJointPayerId: null,
-  zakatJointSharePercent: null,
-}
+const account: AccountRecord = TEST_ACCOUNT
 
 function renderCard(
   drift: ReadonlyArray<DriftRecord>,

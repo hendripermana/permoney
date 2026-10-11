@@ -1,23 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 import { cleanup, fireEvent, render, screen } from "@testing-library/react"
-import type { ReactNode } from "react"
+
+import { RouterLinkMock, TEST_ACCOUNT } from "@/test-support/blocks"
 
 // A router-less stand-in for <Link>: the dialog only needs the destination.
 vi.mock("@tanstack/react-router", () => ({
-  Link: ({
-    to,
-    children,
-    className,
-  }: {
-    to: string
-    children?: ReactNode
-    className?: string
-  }) => (
-    <a href={to} className={className}>
-      {children}
-    </a>
-  ),
+  Link: RouterLinkMock,
 }))
 
 import { DriftExplainerDialog } from "./drift-explainer-dialog"
@@ -30,33 +19,7 @@ import type { AccountRecord, DriftRecord } from "@/lib/account-collections"
 
 afterEach(cleanup)
 
-const account: AccountRecord = {
-  id: "acc-1",
-  name: "Bank Jago",
-  accountClass: "ASSET",
-  accountType: "DEPOSITORY",
-  accountSubtype: "checking",
-  balanceSource: "transaction_flow",
-  balance: "0",
-  currency: "IDR",
-  color: null,
-  status: "active",
-  archivedAt: null,
-  institutionName: null,
-  externalProvider: null,
-  externalAccountId: null,
-  mask: null,
-  isImportable: true,
-  creditLimit: null,
-  statementDay: null,
-  dueDay: null,
-  interestRateBps: null,
-  counterpartyMerchantId: null,
-  reserveBalance: null,
-  zakatPayerId: null,
-  zakatJointPayerId: null,
-  zakatJointSharePercent: null,
-}
+const account: AccountRecord = TEST_ACCOUNT
 
 /** The canonical Jago shape: a real reconcile on the later date already
  * absorbed the gap, so the balance is correct and the gap is acknowledged
