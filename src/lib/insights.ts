@@ -10,7 +10,7 @@ import {
   type BudgetPeriodInput,
 } from "./budget-progress"
 import { convertMinor } from "./fx"
-import { buildLatestRateResolver } from "./net-worth"
+import { buildLatestRateResolver, type RateResolver } from "./net-worth"
 import type { CurrencyCode } from "@/lib/data/currencies"
 
 // =============================================================================
@@ -865,15 +865,184 @@ function isDesignatedSavingsAccount(row: InsightAccountRow): boolean {
   )
 }
 
-/** The counted-account names as the card prints them: sorted INSIDE the fold
- * (determinism is a local contract, never a dependency on the seam's read
- * order), at most three names, then `+n` — auditable (which balances make up
- * the figure) without turning the card into an account roster. */
+/** The counted-account names as the card prints them: sorted LOCALLY inside
+ * the fold (determinism is a local contract, never a dependency on the
+ * seam's read order), at most three names, then `+n` — auditable (which
+ * balances make up the figure) without turning the card into an account
+ * roster. The comparator is `localeCompare`, NOT code-unit `<`/`>`: byte
+ * order puts "Zakat" before "dana darurat" (uppercase sorts first), which
+ * is not alphabetical to a human (Sonar S2871). */
 function formatCountedAccountNames(names: ReadonlyArray<string>): string {
-  const sorted = [...names].sort()
+  const sorted = [...names].sort((a, b) => a.localeCompare(b))
   const shown = sorted.slice(0, MAX_COUNTED_ACCOUNT_NAMES)
   const rest = sorted.length - shown.length
   return rest > 0 ? `${shown.join(", ")} +${rest}` : shown.join(", ")
+}
+
+/** Saved-side totals of the designated-savings fold. */
+interface SavedFundTotals {
+  saved: bigint
+  fxPendingCount: number
+  countedNames: ReadonlyArray<string>
+}
+
+/** Saved-side fold (PER-227 slice #3): the CURRENT balances of the
+ * already-qualified accounts (qualification is `isDesignatedSavingsAccount`,
+ * unit-tested directly), converted through the SAME latest-rate resolver the
+ * net-worth cards use, so this card can never disagree with net worth. A
+ * foreign balance with no rate is excluded AND counted; the counted-names
+ * collection drives the auditable "Counted accounts" metric. Pure. */
+function foldSavedFund(
+  accounts: ReadonlyArray<InsightAccountRow>,
+  baseCurrency: string,
+  resolveRate: RateResolver
+): SavedFundTotals {
+  let saved = 0n
+  let fxPendingCount = 0
+  const countedNames: string[] = []
+  for (const account of accounts) {
+    if (account.currency !== baseCurrency) {
+      const rate = resolveRate(account.currency)
+      if (rate === null) {
+        fxPendingCount += 1
+        continue
+      }
+      saved += convertMinor(
+        account.nativeBalance,
+        account.currency as CurrencyCode,
+        baseCurrency as CurrencyCode,
+        rate
+      ) as bigint
+    } else {
+      saved += account.nativeBalance
+    }
+    countedNames.push(account.name)
+  }
+  return { saved, fxPendingCount, countedNames }
+}
+
+/** Rule E (locked, ADR-0059 amendment): the trailing months recorded
+ * end-to-end by the family ledger. A candidate month counts only when
+ * `historyRange` — the family-tz dates of the first and last non-deleted
+ * ledger rows — covers it start-to-end. A month the family joined mid-way is
+ * EXCLUDED, never diluted (its burn would be a fragment presented as a
+ * month); a month with zero rows inside the covered span still counts, with
+ * zero burn. Months after a lapsed period (no rows since the last one) drop
+ * out the same way. Pure. */
+function coveredTrailingMonths(
+  month: string,
+  history: { start: string; end: string } | null
+): string[] {
+  if (history === null) return []
+  const covered: string[] = []
+  for (let i = EMERGENCY_FUND_TARGET_MONTHS; i >= 1; i -= 1) {
+    const candidate = shiftCalendarMonth(month, -i)
+    const bounds = calendarMonthBounds(candidate)
+    if (bounds.start >= history.start && bounds.end <= history.end) {
+      covered.push(candidate)
+    }
+  }
+  return covered
+}
+
+/** Burn totals of the trailing-months fold. */
+interface BurnFundTotals {
+  spent: bigint
+  fxPendingCount: number
+}
+
+/** Burn-side fold (PER-227 slice #3): spending in the USED months only.
+ * Month-key membership (not window membership) is what enforces Rule E — the
+ * requested month and any history-incomplete month fall outside `usedMonths`
+ * by construction. Money rules are the shared `addFlowRow` fold (split
+ * parents contribute via their children at the parent's stored rate;
+ * FX-pending rows excluded AND counted; transfers never appear here — the
+ * burn consumes expense rows only, so a movement into savings can never
+ * inflate spending and deflate the gap in one card). Pure. */
+function foldBurnInUsedMonths(
+  expenseRows: ReadonlyArray<InsightFlowRow>,
+  usedMonths: ReadonlyArray<string>,
+  timezone: string
+): BurnFundTotals {
+  const usedMonthSet = new Set(usedMonths)
+  const totals: FlowTotals = { income: 0n, spent: 0n, fxPendingCount: 0 }
+  for (const row of expenseRows) {
+    const rowMonth = calendarDateInZone(row.date, timezone).slice(0, 7)
+    if (usedMonthSet.has(rowMonth)) addFlowRow(totals, row, false)
+  }
+  return { spent: totals.spent, fxPendingCount: totals.fxPendingCount }
+}
+
+/** The rendered card, assembled from the two folds' results. Metric order is
+ * the generic renderer's contract: the FIRST money metric is the headline
+ * ("Saved"), every labelled metric after it a supporting line — no renderer
+ * branch knows this insight's id. Tone: the family is "behind" only when the
+ * gap is positive. Pure. */
+function buildEmergencyFundInsight(input: {
+  baseCurrency: string
+  burnWindow: InsightWindow
+  burn: BurnFundTotals
+  monthsUsed: number
+  saved: SavedFundTotals
+  anchorGaps: ReadonlyArray<InsightAnchorGapRow>
+}): Insight {
+  const { baseCurrency, burnWindow, burn, monthsUsed, saved } = input
+  // Truncating division — never a rounded-up target the family must beat.
+  const target =
+    (burn.spent * BigInt(EMERGENCY_FUND_TARGET_MONTHS)) / BigInt(monthsUsed)
+  const gap = target - saved.saved
+  const fxPendingCount = saved.fxPendingCount + burn.fxPendingCount
+  const partialWindow = monthsUsed < EMERGENCY_FUND_TARGET_MONTHS
+  const periodGaps = periodGapsForWindow(input.anchorGaps, burnWindow)
+
+  return {
+    id: EMERGENCY_FUND_INSIGHT_ID,
+    tone: gap > 0n ? "attention" : "positive",
+    title: "Emergency fund",
+    summary: "What you've set aside versus 6× your average monthly spending.",
+    detail: `Based on ${monthsUsed} complete months of recorded spending.`,
+    metrics: [
+      {
+        key: "saved",
+        label: "Saved",
+        value: saved.saved.toString(),
+        currency: baseCurrency,
+      },
+      {
+        key: "target",
+        label: "Target",
+        value: target.toString(),
+        currency: baseCurrency,
+      },
+      {
+        key: "gap",
+        label: "Gap",
+        value: gap.toString(),
+        currency: baseCurrency,
+      },
+      ...(partialWindow
+        ? [
+            {
+              key: "partial_window",
+              label: "Months used",
+              value: `${monthsUsed} of ${EMERGENCY_FUND_TARGET_MONTHS}`,
+            },
+          ]
+        : []),
+      {
+        key: "counted_accounts",
+        label: "Counted accounts",
+        value: formatCountedAccountNames(saved.countedNames),
+      },
+      { key: "fx_pending_count", value: String(fxPendingCount) },
+    ],
+    partial: fxPendingCount > 0,
+    fxPendingCount,
+    periodPartial: periodGaps.length > 0,
+    periodGaps,
+    window: burnWindow,
+    engineVersion: INSIGHTS_ENGINE_VERSION,
+  }
 }
 
 /**
@@ -915,29 +1084,12 @@ function deriveEmergencyFund(context: InsightContext): DerivationOutcome {
     }
   }
 
-  const resolveRate = buildLatestRateResolver(context.fxRateRows, baseCurrency)
-  let saved = 0n
-  let savedFxPending = 0
-  const countedNames: string[] = []
-  for (const account of qualifying) {
-    if (account.currency !== baseCurrency) {
-      const rate = resolveRate(account.currency)
-      if (rate === null) {
-        savedFxPending += 1
-        continue
-      }
-      saved += convertMinor(
-        account.nativeBalance,
-        account.currency as CurrencyCode,
-        baseCurrency as CurrencyCode,
-        rate
-      ) as bigint
-    } else {
-      saved += account.nativeBalance
-    }
-    countedNames.push(account.name)
-  }
-  if (countedNames.length === 0) {
+  const saved = foldSavedFund(
+    qualifying,
+    baseCurrency,
+    buildLatestRateResolver(context.fxRateRows, baseCurrency)
+  )
+  if (saved.countedNames.length === 0) {
     return {
       insight: null,
       skippedReason:
@@ -955,24 +1107,8 @@ function deriveEmergencyFund(context: InsightContext): DerivationOutcome {
     timezone,
   }
 
-  // Rule E (locked, ADR-0059 amendment): a candidate month counts only when
-  // recorded history covers it end-to-end — `historyRange` spans the family-tz
-  // dates of the first and last non-deleted ledger rows. A month the family
-  // joined mid-way is EXCLUDED, never diluted (its burn would be a fragment
-  // presented as a month); a month with zero rows inside the covered span
-  // still counts, with zero burn. Months after a lapsed period (no rows since
-  // the last one) drop out the same way.
-  const history = context.historyRange
-  const usedMonths: string[] = []
-  if (history !== null) {
-    for (let i = EMERGENCY_FUND_TARGET_MONTHS; i >= 1; i -= 1) {
-      const candidate = shiftCalendarMonth(month, -i)
-      const bounds = calendarMonthBounds(candidate)
-      if (bounds.start >= history.start && bounds.end <= history.end) {
-        usedMonths.push(candidate)
-      }
-    }
-  }
+  // Rule E (locked, ADR-0059 amendment) lives in `coveredTrailingMonths`.
+  const usedMonths = coveredTrailingMonths(month, context.historyRange)
   const monthsUsed = usedMonths.length
   if (monthsUsed < EMERGENCY_FUND_MIN_MONTHS) {
     return {
@@ -981,15 +1117,9 @@ function deriveEmergencyFund(context: InsightContext): DerivationOutcome {
     }
   }
 
-  // Burn = spending in the USED months only. Month-key membership (not window
-  // membership) is what enforces Rule E: the requested month and any
-  // history-incomplete month fall outside `usedMonths` by construction.
-  const usedMonthSet = new Set(usedMonths)
-  const totals: FlowTotals = { income: 0n, spent: 0n, fxPendingCount: 0 }
-  for (const row of context.expenseRows) {
-    const rowMonth = calendarDateInZone(row.date, timezone).slice(0, 7)
-    if (usedMonthSet.has(rowMonth)) addFlowRow(totals, row, false)
-  }
+  // Burn = spending in the USED months only — see `foldBurnInUsedMonths`
+  // (month-key membership is what enforces Rule E).
+  const burn = foldBurnInUsedMonths(context.expenseRows, usedMonths, timezone)
 
   // Skip-vs-zero, burn side: a zero burn is a FACT about the ledger (real
   // covered months with no spending — see the zero-burn month rule) only when
@@ -997,73 +1127,22 @@ function deriveEmergencyFund(context: InsightContext): DerivationOutcome {
   // FX-pending, the zero is an artifact of missing rates — rendering a
   // fabricated Rp 0 target with a `positive` tone would be exactly the
   // confident zero the honesty rules forbid.
-  if (totals.spent === 0n && totals.fxPendingCount > 0) {
+  if (burn.spent === 0n && burn.fxPendingCount > 0) {
     return {
       insight: null,
       skippedReason: "every burn row in the window is pending an exchange rate",
     }
   }
 
-  // Truncating division — never a rounded-up target the family must beat.
-  const target =
-    (totals.spent * BigInt(EMERGENCY_FUND_TARGET_MONTHS)) / BigInt(monthsUsed)
-  const gap = target - saved
-  const fxPendingCount = savedFxPending + totals.fxPendingCount
-  const partialWindow = monthsUsed < EMERGENCY_FUND_TARGET_MONTHS
-  const periodGaps = periodGapsForWindow(context.anchorGaps, burnWindow)
-
   return {
-    insight: {
-      id: EMERGENCY_FUND_INSIGHT_ID,
-      tone: gap > 0n ? "attention" : "positive",
-      title: "Emergency fund",
-      summary: "What you've set aside versus 6× your average monthly spending.",
-      detail: `Based on ${monthsUsed} complete months of recorded spending.`,
-      // Metric order is the generic renderer's contract: the FIRST money
-      // metric is the headline ("Saved"), every labelled metric after it a
-      // supporting line — no renderer branch knows this insight's id.
-      metrics: [
-        {
-          key: "saved",
-          label: "Saved",
-          value: saved.toString(),
-          currency: baseCurrency,
-        },
-        {
-          key: "target",
-          label: "Target",
-          value: target.toString(),
-          currency: baseCurrency,
-        },
-        {
-          key: "gap",
-          label: "Gap",
-          value: gap.toString(),
-          currency: baseCurrency,
-        },
-        ...(partialWindow
-          ? [
-              {
-                key: "partial_window",
-                label: "Months used",
-                value: `${monthsUsed} of ${EMERGENCY_FUND_TARGET_MONTHS}`,
-              },
-            ]
-          : []),
-        {
-          key: "counted_accounts",
-          label: "Counted accounts",
-          value: formatCountedAccountNames(countedNames),
-        },
-        { key: "fx_pending_count", value: String(fxPendingCount) },
-      ],
-      partial: fxPendingCount > 0,
-      fxPendingCount,
-      periodPartial: periodGaps.length > 0,
-      periodGaps,
-      window: burnWindow,
-      engineVersion: INSIGHTS_ENGINE_VERSION,
-    },
+    insight: buildEmergencyFundInsight({
+      baseCurrency,
+      burnWindow,
+      burn,
+      monthsUsed,
+      saved,
+      anchorGaps: context.anchorGaps,
+    }),
   }
 }
 

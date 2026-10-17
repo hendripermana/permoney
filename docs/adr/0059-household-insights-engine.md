@@ -310,8 +310,9 @@ basis that a future Savings Goal entity would then contradict.
 5. **Auditable surface.** The counted-accounts metric names up to three
    account names then `+n` — the figure is traceable to real balances
    without turning the card into a roster. The fold sorts the names
-   ITSELF, so a deterministic listing is a local contract, never a
-   dependency on the seam's read order. FX conversion reuses the
+   ITSELF, with `localeCompare` (human alphabetical order, not code-unit
+   byte order — Sonar S2871), so a deterministic listing is a local
+   contract, never a dependency on the seam's read order. FX conversion reuses the
    net-worth cards' latest-rate resolver (`buildLatestRateResolver`),
    so this card can never disagree with net worth about a converted
    balance.

@@ -1409,6 +1409,27 @@ describe("computeInsights — emergency_fund (PER-227 slice #3)", () => {
     ).toBe("A, B, C +2")
   })
 
+  test("sorts counted accounts with localeCompare, not byte order — pins the comparator contract (Sonar S2871)", () => {
+    // Byte order (UTF-16 code units) puts uppercase first: "DanaB, Zakat,
+    // dana darurat". Locale order folds case at the primary level and weighs
+    // the space below letters, so the card prints "dana darurat, DanaB,
+    // Zakat". The comparator is part of the counted-accounts contract — if
+    // anyone reverts to `<`/`>`, this test fails.
+    const result = buildReport({
+      month: JULY,
+      historyRange: FULL_HISTORY,
+      accountRows: [
+        savingsAccount({ id: "acc-1", name: "Zakat" }),
+        savingsAccount({ id: "acc-2", name: "dana darurat" }),
+        savingsAccount({ id: "acc-3", name: "DanaB" }),
+      ],
+      expenseRows: [monthExpense("2026-06", 1_000_000n)],
+    })
+    expect(
+      insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "counted_accounts")
+    ).toBe("dana darurat, DanaB, Zakat")
+  })
+
   test("renders a genuine zero balance as zero — not as a skip", () => {
     const result = buildReport({
       month: JULY,
