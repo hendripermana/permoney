@@ -84,8 +84,10 @@ consumer, e.g. email delivery of a digest):
   `since_payday` (slice #2, below); version 3 added the period-incompleteness
   qualifier (PER-443 amendment below); version 4 added `emergency_fund`
   (slice #3 amendment below).
-- `window` is typed (`calendar_month` today; `previous_month`, `since_payday`,
-  `rolling_90d` reserved) and always carries the family timezone it was cut in.
+- `window` is typed — `calendar_month` (slice #1), `since_payday` (slice #2)
+  and `trailing_6_months` (slice #3) are the vocabulary in use;
+  `previous_month` and `rolling_90d` remain reserved for later slices — and
+  always carries the family timezone it was cut in.
 
 ### 3. Money honesty rules
 
@@ -246,13 +248,23 @@ basis that a future Savings Goal entity would then contradict.
 ### Decision
 
 1. **Saved basis A (locked): designated-savings CURRENT balances.** An
-   account counts when it is ACTIVE (soft-deleted excluded), of `ASSET`
-   class, and its product subtype is `savings` — ANY `accountType`,
+   account counts only when it is LIVE — `status = "active"` with BOTH
+   `archivedAt` and `deletedAt` null — of `ASSET` class, and its product
+   subtype is `savings` — ANY `accountType`,
    because Indonesian households park emergency money in money-market
    mutual funds (an INVESTMENT-class ASSET with the `savings` subtype is
    the norm here). The figure is the account's CURRENT balance — the
    canonical `Account.balance`, whatever its balance source (transaction
-   flow, reconciliation anchor, or holdings). Alternatives rejected:
+   flow, reconciliation anchor, or holdings). **An ARCHIVED (soft-closed)
+   account is excluded**, even though archiving deliberately preserves its
+   balance (PER-143 sets `status = "closed"` + `archivedAt` and never
+   touches the number): an archived account's balance is no longer
+   ACTIVELY MANAGED money, so counting it would silently OVERSTATE the
+   fund — with no badge anywhere on the card saying part of the figure is
+   closed. This is a DELIBERATE asymmetry with net worth and the reporting
+   engines, which still include archived balances: those answer
+   "everything you own", while this card answers "live earmarked money".
+   Alternatives rejected:
    - **B — liquid-above-reserve** (balances minus a floor): conflates
      safe-to-spend with saved; the "reserve" is an invented number the
      ledger cannot know, and moving it would silently change "saved".
@@ -268,9 +280,14 @@ basis that a future Savings Goal entity would then contradict.
 2. **Skip-vs-zero honesty.** No qualifying account → the card SKIPS
    ("no account is designated as savings"): absence of a designation is
    not a fact about money. Every designated balance pending an exchange
-   rate → skip. Fewer than two COMPLETE recorded months → skip. A
-   genuine ZERO balance renders Rp 0 — a fact about the ledger, not an
-   absence of one.
+   rate → skip. Every burn row in the months actually used pending an
+   exchange rate → skip ("every burn row in the window is pending an
+   exchange rate"): when the only reason `spent` folds to zero is that
+   the rates are missing, the zero is not a fact about money — a
+   fabricated Rp 0 target with a `positive` tone would be exactly the
+   confident zero §3 forbids. Fewer than two COMPLETE recorded months →
+   skip. A genuine ZERO balance renders Rp 0 — a fact about the ledger,
+   not an absence of one.
 3. **Target = 6 × the average monthly spending burn over the trailing
    six COMPLETE family-tz months**, before the requested month (the
    current partial month is still accumulating and is excluded). The
@@ -292,7 +309,9 @@ basis that a future Savings Goal entity would then contradict.
    way.
 5. **Auditable surface.** The counted-accounts metric names up to three
    account names then `+n` — the figure is traceable to real balances
-   without turning the card into a roster. FX conversion reuses the
+   without turning the card into a roster. The fold sorts the names
+   ITSELF, so a deterministic listing is a local contract, never a
+   dependency on the seam's read order. FX conversion reuses the
    net-worth cards' latest-rate resolver (`buildLatestRateResolver`),
    so this card can never disagree with net worth about a converted
    balance.
@@ -305,8 +324,11 @@ basis that a future Savings Goal entity would then contradict.
    (a third derivation), so a v3 artifact is incomplete for v4 (§2
    applied literally). The server seam widens its expense lookback to
    seven calendar months (six complete + the current partial, anchored
-   to the requested month) and adds three loads — accounts (UNFILTERED;
-   the qualification predicate lives in the pure fold where unit tests
-   can prove it), the latest foreign→base rate per pair, and the
-   first/last ledger rows. Still computed-on-read (§1): no new tables,
-   no write-on-read.
+   to the requested month) and adds three loads — accounts (UNFILTERED,
+   carrying `status`/`archivedAt` so the LIVE-only qualification
+   predicate can live in the pure fold where unit tests can prove it),
+   the latest foreign→base rate per pair (the `_max(asOfDate)`-per-pair
+   groupBy + fetch shape of `getLatestFxOverviewForFamily`, inlined
+   inside this transaction because that function opens its own), and
+   the first/last ledger rows. Still computed-on-read (§1): no new
+   tables, no write-on-read.

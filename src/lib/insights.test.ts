@@ -1034,6 +1034,8 @@ describe("computeInsights — emergency_fund (PER-227 slice #3)", () => {
       accountSubtype: "savings",
       currency: "IDR",
       nativeBalance: 1_000_000n,
+      status: "active",
+      archivedAt: null,
       deletedAt: null,
       ...overrides,
     }
@@ -1310,6 +1312,15 @@ describe("computeInsights — emergency_fund (PER-227 slice #3)", () => {
           deletedAt: new Date("2026-06-01T00:00:00.000Z"),
           nativeBalance: 8_000_000n,
         }),
+        // An ARCHIVED (soft-closed) savings account: balance survives the
+        // close, but the money is no longer actively managed — not the fund.
+        savingsAccount({
+          id: "acc-4",
+          name: "Archived savings",
+          status: "closed",
+          archivedAt: new Date("2026-06-02T00:00:00.000Z"),
+          nativeBalance: 7_000_000n,
+        }),
       ],
       expenseRows: [monthExpense("2026-06", 1_000_000n)],
     })
@@ -1322,7 +1333,7 @@ describe("computeInsights — emergency_fund (PER-227 slice #3)", () => {
     })
   })
 
-  test("counts exactly the designated accounts: any accountType, never deleted, never liability", () => {
+  test("counts exactly the designated accounts: any accountType, never deleted, never archived, never liability", () => {
     const result = buildReport({
       month: JULY,
       historyRange: FULL_HISTORY,
@@ -1351,8 +1362,17 @@ describe("computeInsights — emergency_fund (PER-227 slice #3)", () => {
           deletedAt: new Date("2026-06-01T00:00:00.000Z"),
           nativeBalance: 8_000_000n,
         }),
+        // Archived (soft-closed): the balance row survives but the money is
+        // no longer actively managed — excluded, never silently counted.
         savingsAccount({
           id: "acc-5",
+          name: "Archived savings",
+          status: "closed",
+          archivedAt: new Date("2026-06-02T00:00:00.000Z"),
+          nativeBalance: 7_000_000n,
+        }),
+        savingsAccount({
+          id: "acc-6",
           name: "Card",
           accountClass: "LIABILITY",
           nativeBalance: -5_000_000n,
@@ -1363,10 +1383,11 @@ describe("computeInsights — emergency_fund (PER-227 slice #3)", () => {
     expect(insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "saved")).toBe(
       "5000000"
     )
-    // The fold preserves the seam's deterministic input order (name asc).
+    // The fold sorts the names ITSELF — determinism is a local contract, not
+    // a dependency on the seam's read order.
     expect(
       insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "counted_accounts")
-    ).toBe("Tabungan, Reksadana")
+    ).toBe("Reksadana, Tabungan")
   })
 
   test("caps the counted-accounts listing at three names then +n", () => {
@@ -1446,6 +1467,84 @@ describe("computeInsights — emergency_fund (PER-227 slice #3)", () => {
       id: EMERGENCY_FUND_INSIGHT_ID,
       reason: "every designated savings balance is pending an exchange rate",
     })
+  })
+
+  test("skips when the only designated savings account is ARCHIVED", () => {
+    const result = buildReport({
+      month: JULY,
+      historyRange: FULL_HISTORY,
+      accountRows: [
+        // The balance survives the soft close — but the household stopped
+        // actively managing this money, so it is not the live fund.
+        savingsAccount({
+          id: "acc-1",
+          name: "Archived savings",
+          status: "closed",
+          archivedAt: new Date("2026-06-02T00:00:00.000Z"),
+          nativeBalance: 9_000_000n,
+        }),
+      ],
+      expenseRows: [monthExpense("2026-06", 1_000_000n)],
+    })
+    expect(byId(result, EMERGENCY_FUND_INSIGHT_ID)).toBeUndefined()
+    expect(result.skipped).toContainEqual({
+      id: EMERGENCY_FUND_INSIGHT_ID,
+      reason: "no account is designated as savings",
+    })
+  })
+
+  test("skips when every burn row in the used months is pending an exchange rate — never a fabricated zero target", () => {
+    const result = buildReport({
+      month: JULY,
+      historyRange: FULL_HISTORY,
+      accountRows: [savingsAccount({ id: "acc-1", name: "Tabungan" })],
+      fxRateRows: [],
+      expenseRows: [
+        // Every burn row is USD with no rate: spent folds to exactly zero
+        // ONLY because the rates are missing. A Rp 0 target with a `positive`
+        // tone would be the confident zero the honesty rules forbid.
+        expenseRow({
+          date: "2026-05-10T03:00:00.000Z",
+          amountMinor: 1_000n,
+          baseAmountMinor: null,
+        }),
+        expenseRow({
+          date: "2026-06-12T03:00:00.000Z",
+          amountMinor: 2_000n,
+          baseAmountMinor: null,
+        }),
+      ],
+    })
+    expect(byId(result, EMERGENCY_FUND_INSIGHT_ID)).toBeUndefined()
+    expect(result.skipped).toContainEqual({
+      id: EMERGENCY_FUND_INSIGHT_ID,
+      reason: "every burn row in the window is pending an exchange rate",
+    })
+  })
+
+  test("cuts a burn row at the UTC/WIB boundary into its FAMILY-tz month", () => {
+    // 2026-06-30T20:00:00Z is already 2026-07-01 03:00 in Asia/Jakarta. Cut
+    // in the family zone the row is JULY — still accumulating, excluded from
+    // the burn. A UTC slice would misfile it into June (6M+9M=15M burn) and
+    // produce a different target, so this assertion fails on that refactor.
+    const result = buildReport({
+      month: JULY,
+      historyRange: FULL_HISTORY,
+      accountRows: [savingsAccount({ id: "acc-1", name: "Tabungan" })],
+      expenseRows: [
+        monthExpense("2026-05", 3_000_000n),
+        monthExpense("2026-06", 6_000_000n),
+        expenseRow({
+          date: "2026-06-30T20:00:00.000Z",
+          amountMinor: 9_000_000n,
+        }),
+      ],
+    })
+    // burn = 3M + 6M over 6 months → 54M/6 = 9M. (UTC misfiling → 15M burn
+    // → 15M target.)
+    expect(insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "target")).toBe(
+      "9000000"
+    )
   })
 
   test("excludes AND counts FX-pending balances and burn rows from both sides", () => {
@@ -1601,7 +1700,9 @@ describe("computeInsights — emergency_fund (PER-227 slice #3)", () => {
       accountRows: [savingsAccount({ id: "acc-1", name: "Tabungan" })],
       expenseRows: [monthExpense("2026-06", 1_000_000n)],
     })
-    // Registry order: savings_flow, since_payday, emergency_fund.
+    // The other two derivations skipped here (no qualifying rows), so this
+    // pins that `emergency_fund` IS in the registry and reaches the report —
+    // not the registry's array order.
     expect(result.insights.map((insight) => insight.id)).toEqual([
       EMERGENCY_FUND_INSIGHT_ID,
     ])

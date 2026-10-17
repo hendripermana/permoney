@@ -27,10 +27,11 @@ import type { CurrencyCode } from "@/lib/data/currencies"
 // shape) carrying Design B's honesty vocabulary:
 //   - `engineVersion` — every payload states which engine produced it, so a
 //     future materialized artifact (delivered digest) can be keyed by it;
-//   - typed window kinds (`calendar_month` today; `previous_month`,
-//     `since_payday`, `rolling_90d` reserved for later slices) that carry the
-//     family timezone they were resolved in — a window is meaningless without
-//     the zone it was cut in (ADR-0037 / PER-263);
+//   - typed window kinds (`calendar_month`, `since_payday`,
+//     `trailing_6_months` in use; `previous_month`, `rolling_90d` reserved
+//     for later slices) that carry the family timezone they were resolved in
+//     — a window is meaningless without the zone it was cut in
+//     (ADR-0037 / PER-263);
 //   - per-derivation empty / skipped states and failure isolation
 //     (`failedCount`) — one broken derivation must never blank the page;
 //   - FX-pending rows are EXCLUDED and COUNTED (`fxPendingCount` +
@@ -325,9 +326,18 @@ export interface InsightAccountRow {
   accountSubtype: string
   currency: string
   nativeBalance: bigint
-  /** `null` = active (possibly archived); a timestamp = soft-deleted and
-   * therefore never designated savings. */
+  /** `null` = never soft-deleted; a timestamp = soft-deleted (PER-183 sets
+   * `status="closed"`, `archivedAt` AND `deletedAt` together) and therefore
+   * never designated savings. Note this alone is NOT the active test: an
+   * ARCHIVED account also has `deletedAt === null` — see `status`/`archivedAt`
+   * and `isDesignatedSavingsAccount`. */
   deletedAt: Date | null
+  /** `"active" | "closed"` (DB CHECK domain). `"closed"` = archived (soft
+   * close, PER-143): the balance row survives but is no longer actively
+   * managed, so it is excluded from designated savings. */
+  status: string
+  /** Set when the account was archived; `null` while active. */
+  archivedAt: Date | null
 }
 
 /**
@@ -828,28 +838,41 @@ const MAX_COUNTED_ACCOUNT_NAMES = 3
 
 /**
  * The locked "saved" basis (PER-227 design pass, ADR-0059 amendment): an
- * account is designated savings when it is ACTIVE (soft-deleted excluded),
- * of ASSET class, and its product subtype is `savings` — ANY accountType
+ * account is designated savings when it is LIVE — `status === "active"` with
+ * `archivedAt === null` AND `deletedAt === null` — of ASSET class, and its
+ * product subtype is `savings` — ANY accountType
  * counts, because Indonesian households park emergency money in
  * money-market mutual funds (an INVESTMENT-class ASSET with the `savings`
  * subtype is the norm here, not an edge case). A LIABILITY account never
  * qualifies even if its product string says "savings": a savings-flavoured
  * credit product is debt, not a fund.
+ *
+ * ARCHIVED (`status="closed"`) accounts are excluded even though their
+ * balance rows survive the soft close: archiving means the household stopped
+ * actively managing that money, and counting it would silently OVERSTATE the
+ * fund with no badge saying so. This is a deliberate asymmetry with net
+ * worth and the reporting engines, which still include archived balances —
+ * those answer "everything you own"; this card answers "live earmarked
+ * money".
  */
 function isDesignatedSavingsAccount(row: InsightAccountRow): boolean {
   return (
+    row.status === "active" &&
+    row.archivedAt === null &&
     row.deletedAt === null &&
     row.accountClass === "ASSET" &&
     row.accountSubtype === SAVINGS_SUBTYPE
   )
 }
 
-/** The counted-account names as the card prints them: at most three, then
- * `+n` — auditable (which balances make up the figure) without turning the
- * card into an account roster. */
+/** The counted-account names as the card prints them: sorted INSIDE the fold
+ * (determinism is a local contract, never a dependency on the seam's read
+ * order), at most three names, then `+n` — auditable (which balances make up
+ * the figure) without turning the card into an account roster. */
 function formatCountedAccountNames(names: ReadonlyArray<string>): string {
-  const shown = names.slice(0, MAX_COUNTED_ACCOUNT_NAMES)
-  const rest = names.length - shown.length
+  const sorted = [...names].sort()
+  const shown = sorted.slice(0, MAX_COUNTED_ACCOUNT_NAMES)
+  const rest = sorted.length - shown.length
   return rest > 0 ? `${shown.join(", ")} +${rest}` : shown.join(", ")
 }
 
@@ -872,9 +895,10 @@ function formatCountedAccountNames(names: ReadonlyArray<string>): string {
  * inflate spending and deflate the gap in one card).
  *
  * Skip-vs-zero honesty: no designated account → skip; every designated
- * balance pending an FX rate → skip; too little recorded history → skip. A
- * genuine ZERO balance renders Rp 0 — that is a fact about the ledger, not
- * an absence of one.
+ * balance pending an FX rate → skip; every burn row in the used months
+ * pending an FX rate → skip (a zero burn reached only by excluding rows is
+ * not a fact); too little recorded history → skip. A genuine ZERO balance
+ * renders Rp 0 — that is a fact about the ledger, not an absence of one.
  */
 function deriveEmergencyFund(context: InsightContext): DerivationOutcome {
   const { window: monthWindow, baseCurrency } = context
@@ -965,6 +989,19 @@ function deriveEmergencyFund(context: InsightContext): DerivationOutcome {
   for (const row of context.expenseRows) {
     const rowMonth = calendarDateInZone(row.date, timezone).slice(0, 7)
     if (usedMonthSet.has(rowMonth)) addFlowRow(totals, row, false)
+  }
+
+  // Skip-vs-zero, burn side: a zero burn is a FACT about the ledger (real
+  // covered months with no spending — see the zero-burn month rule) only when
+  // nothing was excluded to reach it. If every burn row in the used months is
+  // FX-pending, the zero is an artifact of missing rates — rendering a
+  // fabricated Rp 0 target with a `positive` tone would be exactly the
+  // confident zero the honesty rules forbid.
+  if (totals.spent === 0n && totals.fxPendingCount > 0) {
+    return {
+      insight: null,
+      skippedReason: "every burn row in the window is pending an exchange rate",
+    }
   }
 
   // Truncating division — never a rounded-up target the family must beat.

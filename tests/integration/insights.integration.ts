@@ -11,6 +11,7 @@ import {
   EMERGENCY_FUND_INSIGHT_ID,
   INSIGHTS_ENGINE_VERSION,
 } from "@/lib/insights"
+import { archiveAccountForFamily } from "@/server/accounts"
 import { getInsightsForFamily } from "@/server/insights"
 import { getCashFlowReportForFamily } from "@/server/reporting"
 import {
@@ -1026,10 +1027,180 @@ describe("household insights (PER-227)", () => {
       insightMetric(reportB, EMERGENCY_FUND_INSIGHT_ID, "counted_accounts")
     ).toBe("B savings")
 
-    // A non-member reading family A gets nothing — RLS never leaks a balance.
+    // A non-member reading family A gets nothing — RLS never leaks a balance
+    // or even the fact that accounts exist: every derivation records a skip.
     const leaked = await insights(ownerA, "2026-07", ownerB.user.id)
-    expect(leaked.insights.map((entry) => entry.id)).not.toContain(
+    expect(leaked.insights).toHaveLength(0)
+    expect(leaked.failedCount).toBe(0)
+    expect(leaked.skipped).toHaveLength(3)
+    expect(leaked.skipped).toContainEqual({
+      id: EMERGENCY_FUND_INSIGHT_ID,
+      reason: "no account is designated as savings",
+    })
+  })
+
+  test("drops an ARCHIVED (soft-closed) savings balance from the figure via the real archive path", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    const wallet = await account(owner, "Wallet", {
+      accountSubtype: "checking",
+    })
+    const savingsA = await account(owner, "Savings A", {
+      accountSubtype: "savings",
+      balance: 5_000_000n,
+    })
+    const savingsB = await account(owner, "Savings B", {
+      accountSubtype: "savings",
+      balance: 3_000_000n,
+    })
+
+    // Two complete months of recorded history (May + June) so the card
+    // renders at all.
+    await create(owner, {
+      type: "expense",
+      amount: 300_000n,
+      accountId: wallet.id,
+      description: "May spending",
+      date: new Date("2026-05-01T03:00:00.000Z"),
+    })
+    await create(owner, {
+      type: "expense",
+      amount: 300_000n,
+      accountId: wallet.id,
+      description: "June spending",
+      date: new Date("2026-06-30T03:00:00.000Z"),
+    })
+
+    const before = await insightsAt(owner, EMERGENCY_NOW, "2026-07")
+    expect(insightMetric(before, EMERGENCY_FUND_INSIGHT_ID, "saved")).toBe(
+      "8000000"
+    )
+    expect(
+      insightMetric(before, EMERGENCY_FUND_INSIGHT_ID, "counted_accounts")
+    ).toBe("Savings A, Savings B")
+
+    // The REAL production archive path — soft close: status → "closed",
+    // archivedAt set, the balance row deliberately preserved. The card must
+    // still stop counting it: an archived balance is no longer actively
+    // managed money.
+    await archiveAccountForFamily({
+      data: {
+        id: savingsB.id,
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+    const after = await insightsAt(owner, EMERGENCY_NOW, "2026-07")
+    expect(insightMetric(after, EMERGENCY_FUND_INSIGHT_ID, "saved")).toBe(
+      "5000000"
+    )
+    expect(
+      insightMetric(after, EMERGENCY_FUND_INSIGHT_ID, "counted_accounts")
+    ).toBe("Savings A")
+
+    // Archive the last designated account too: the card SKIPS — it never
+    // fabricates a Rp 0 fund from accounts the household closed.
+    await archiveAccountForFamily({
+      data: {
+        id: savingsA.id,
+        idempotencyKey: factories.createIdempotencyKey(),
+      },
+      familyId: owner.family.id,
+      user: owner.user,
+    })
+
+    const final = await insightsAt(owner, EMERGENCY_NOW, "2026-07")
+    expect(final.insights.map((entry) => entry.id)).not.toContain(
       EMERGENCY_FUND_INSIGHT_ID
+    )
+    expect(
+      final.skipped.find((entry) => entry.id === EMERGENCY_FUND_INSIGHT_ID)
+    ).toEqual({
+      id: EMERGENCY_FUND_INSIGHT_ID,
+      reason: "no account is designated as savings",
+    })
+  })
+
+  test("cuts burn rows and recorded history at the UTC/WIB boundary, never a UTC slice", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    const wallet = await account(owner, "Wallet", {
+      accountSubtype: "checking",
+    })
+    await account(owner, "Savings 1", {
+      accountSubtype: "savings",
+      balance: 5_000_000n,
+    })
+
+    // FIRST ledger row: 2026-04-30T20:00:00Z = 2026-05-01 03:00 in
+    // Asia/Jakarta. Family-tz history therefore STARTS on May 1 (May is
+    // covered end-to-end), and the burn row itself lands in MAY. A UTC slice
+    // would file it into April — an uncovered month, so excluded from burn.
+    await create(owner, {
+      type: "expense",
+      amount: 4_000_000n,
+      accountId: wallet.id,
+      description: "May 1 WIB spending",
+      date: new Date("2026-04-30T20:00:00.000Z"),
+    })
+    await create(owner, {
+      type: "expense",
+      amount: 1_000_000n,
+      accountId: wallet.id,
+      description: "May spending",
+      date: new Date("2026-05-15T03:00:00.000Z"),
+    })
+    await create(owner, {
+      type: "expense",
+      amount: 1_000_000n,
+      accountId: wallet.id,
+      description: "June spending",
+      date: new Date("2026-06-10T03:00:00.000Z"),
+    })
+    // LAST ledger row: 2026-06-29T20:00:00Z = 2026-06-30 03:00 WIB — history
+    // ENDS on June 30, exactly what makes June a COMPLETE month, and the row
+    // is June burn. A UTC slice would end history at 2026-06-29, drop June
+    // below the coverage test, and the card would skip instead of rendering.
+    await create(owner, {
+      type: "expense",
+      amount: 1_000_000n,
+      accountId: wallet.id,
+      description: "June 30 WIB spending",
+      date: new Date("2026-06-29T20:00:00.000Z"),
+    })
+
+    const report = await insightsAt(owner, EMERGENCY_NOW, "2026-07")
+    const insight = report.insights.find(
+      (entry) => entry.id === EMERGENCY_FUND_INSIGHT_ID
+    )
+    expect(insight?.window).toEqual({
+      kind: "trailing_6_months",
+      start: "2026-01-01",
+      end: "2026-06-30",
+      timezone: "Asia/Jakarta",
+    })
+    // Both boundary rows count, so BOTH coverage (history first/last) and the
+    // burn month-keys were decided in Jakarta. Under a UTC slice June would
+    // fall out of history and this card would not exist; under a UTC burn
+    // slice the first row would drop to April and target would differ.
+    expect(
+      insightMetric(report, EMERGENCY_FUND_INSIGHT_ID, "partial_window")
+    ).toBe("2 of 6")
+    // burn = 4M + 1M (May) + 1M + 1M (June) = 7M over 2 covered months →
+    // target = 7M × 6 ÷ 2 = 21M.
+    expect(insightMetric(report, EMERGENCY_FUND_INSIGHT_ID, "target")).toBe(
+      "21000000"
+    )
+    expect(insightMetric(report, EMERGENCY_FUND_INSIGHT_ID, "saved")).toBe(
+      "5000000"
+    )
+    expect(
+      insightMetric(report, EMERGENCY_FUND_INSIGHT_ID, "fx_pending_count")
+    ).toBe("0")
+    expect(insight?.detail).toBe(
+      "Based on 2 complete months of recorded spending."
     )
   })
 

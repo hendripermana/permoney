@@ -57,16 +57,16 @@ import { collectAnchorChainGaps } from "./valuations"
 //      from them, and `since_payday`'s window (anchor ≈ ≤70 days back through
 //      today) is a subset whenever the requested month is current (the only
 //      case that derivation runs);
-//   4. every family account, flat and UNFILTERED (`emergency_fund`'s
-//      designated-savings predicate lives in the pure fold, so the unit tests
-//      can prove it — the seam never pre-filters, and `orderBy name asc`
-//      keeps the counted-accounts listing deterministic);
+//   4. every family account, flat and UNFILTERED (soft-deleted AND archived
+//      rows included — `emergency_fund`'s designated-savings predicate lives
+//      in the pure fold, so the unit tests can prove it — the seam never
+//      pre-filters);
 //   5. the latest foreign→base rate per pair (`emergency_fund`) — the
-//      debts.ts-style latest-per-pair query feeding the SAME
+//      `_max(asOfDate)`-per-pair groupBy + fetch shape of
+//      `getLatestFxOverviewForFamily` (src/server/fx.ts), inlined inside this
+//      transaction because that function opens its own, feeding the SAME
 //      `buildLatestRateResolver` the net-worth cards use, so this card can
-//      never disagree with net worth about a converted balance. (The
-//      alternative — reusing `getLatestFxOverviewForFamily` — is impossible
-//      inside this transaction: it opens its own.)
+//      never disagree with net worth about a converted balance.
 //   6. the first and last non-deleted ledger rows (`emergency_fund`) — the
 //      recorded-history span (Rule E, ADR-0059 PER-227 amendment) deciding
 //      which trailing burn months count as COMPLETE. `family.createdAt` is
@@ -262,10 +262,13 @@ export async function getInsightsForFamily({
     }))
 
     // PER-227 slice #3 — `emergency_fund`'s three loads. Accounts are loaded
-    // UNFILTERED (soft-deleted rows included, class/subtype untouched): the
-    // designated-savings predicate is a locked domain rule that lives in the
-    // pure fold (src/lib/insights.ts), where the unit tests can prove it.
-    // Name-ordered so the counted-accounts metric lists deterministically.
+    // UNFILTERED (soft-deleted AND archived rows included, class/subtype
+    // untouched): the designated-savings predicate is a locked domain rule
+    // that lives in the pure fold (src/lib/insights.ts), where the unit tests
+    // can prove it. `status`/`archivedAt` ride along so the fold can exclude
+    // archived (soft-closed) balances too. (The seam still orders by name for
+    // a stable read order, but the counted-accounts listing's determinism is
+    // the FOLD's local contract — it sorts internally.)
     const accountRows: InsightAccountRow[] = (
       await tx.account.findMany({
         where: { familyId },
@@ -276,6 +279,8 @@ export async function getInsightsForFamily({
           accountSubtype: true,
           currency: true,
           balance: true,
+          status: true,
+          archivedAt: true,
           deletedAt: true,
         },
         orderBy: { name: "asc" },
@@ -287,17 +292,43 @@ export async function getInsightsForFamily({
       accountSubtype: row.accountSubtype,
       currency: row.currency,
       nativeBalance: row.balance,
+      status: row.status,
+      archivedAt: row.archivedAt,
       deletedAt: row.deletedAt,
     }))
 
-    // Latest foreign→base rate per pair (greatest asOfDate wins — the
-    // debts.ts pattern), first-wins per pair feeding the shared
-    // `buildLatestRateResolver`, identical to the net-worth cards.
-    const fxRateRows: InsightFxRateRow[] = await tx.fxRateSnapshot.findMany({
+    // Latest foreign→base rate per directed pair — the SAME two-query shape
+    // `getLatestFxOverviewForFamily` uses (src/server/fx.ts ~line 427):
+    // `_max(asOfDate)` per pair via groupBy, then fetch only those rows,
+    // instead of pulling the family's ENTIRE rate history and de-duplicating
+    // in memory. Inlined (not reused) because that function opens its own
+    // tenant transaction, which cannot nest inside this one; both queries run
+    // sequentially on this transaction's single connection.
+    // (debts.ts still pulls full history and dedupes in memory — the same
+    // flaw, deliberately untouched here: out of scope for PER-227.)
+    const latestFxDates = await tx.fxRateSnapshot.groupBy({
+      by: ["fromCurrency", "toCurrency"],
       where: { familyId, toCurrency: baseCurrency },
-      orderBy: [{ fromCurrency: "asc" }, { asOfDate: "desc" }],
-      select: { fromCurrency: true, toCurrency: true, rateScaled: true },
+      _max: { asOfDate: true },
     })
+    const latestFxPairs = latestFxDates.flatMap((pair) =>
+      pair._max.asOfDate === null
+        ? []
+        : [
+            {
+              fromCurrency: pair.fromCurrency,
+              toCurrency: pair.toCurrency,
+              asOfDate: pair._max.asOfDate,
+            },
+          ]
+    )
+    const fxRateRows: InsightFxRateRow[] =
+      latestFxPairs.length === 0
+        ? []
+        : await tx.fxRateSnapshot.findMany({
+            where: { familyId, OR: latestFxPairs },
+            select: { fromCurrency: true, toCurrency: true, rateScaled: true },
+          })
 
     // Rule E — the recorded-history span: family-tz dates of the first and
     // last non-deleted ledger rows (any type, excluded rows included — they
