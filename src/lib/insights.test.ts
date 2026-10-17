@@ -1522,6 +1522,44 @@ describe("computeInsights — emergency_fund (PER-227 slice #3)", () => {
     })
   })
 
+  // The OTHER side of that guard — this test pins the guard's BOUNDARY, so it
+  // must survive next to the skip test above. The guard is
+  // `spent === 0n && fxPendingCount > 0`: it skips only when the zero is an
+  // ARTIFACT of missing rates. A family whose covered months genuinely record
+  // no spending at all (coverage established by the history span alone; think
+  // a household funded by income rows with every expense still unrecorded)
+  // still gets the card — saved intact, honest Rp 0 target. If anyone narrows
+  // the guard to a bare `totals.spent === 0n`, THIS test fails: that
+  // narrowing would silently delete the card for exactly the zero-spend
+  // households it must speak for.
+  test("RENDERS with target Rp 0 when the covered months record no spending at all — pins the burn guard's fxPendingCount boundary, not a bare spent===0", () => {
+    const result = buildReport({
+      month: JULY,
+      historyRange: FULL_HISTORY,
+      accountRows: [
+        savingsAccount({
+          id: "acc-1",
+          name: "Tabungan",
+          nativeBalance: 7_000_000n,
+        }),
+      ],
+      // No expense rows exist: nothing was excluded to reach the zero burn,
+      // so Rp 0 is a fact about the ledger, not a missing-rate artifact.
+      expenseRows: [],
+    })
+    const insight = byId(result, EMERGENCY_FUND_INSIGHT_ID)
+    expect(insight).toBeDefined()
+    // Headline saved survives untouched…
+    expect(insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "saved")).toBe(
+      "7000000"
+    )
+    // …and the target answers "how much more" with Rp 0 instead of silence.
+    expect(insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "target")).toBe("0")
+    expect(result.skipped.map((entry) => entry.id)).not.toContain(
+      EMERGENCY_FUND_INSIGHT_ID
+    )
+  })
+
   test("cuts a burn row at the UTC/WIB boundary into its FAMILY-tz month", () => {
     // 2026-06-30T20:00:00Z is already 2026-07-01 03:00 in Asia/Jakarta. Cut
     // in the family zone the row is JULY — still accumulating, excluded from

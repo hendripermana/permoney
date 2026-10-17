@@ -84,10 +84,10 @@ consumer, e.g. email delivery of a digest):
   `since_payday` (slice #2, below); version 3 added the period-incompleteness
   qualifier (PER-443 amendment below); version 4 added `emergency_fund`
   (slice #3 amendment below).
-- `window` is typed — `calendar_month` (slice #1), `since_payday` (slice #2)
-  and `trailing_6_months` (slice #3) are the vocabulary in use;
-  `previous_month` and `rolling_90d` remain reserved for later slices — and
-  always carries the family timezone it was cut in.
+- `window` is typed and always carries the family timezone it was cut in.
+  Its kind draws on a fixed vocabulary: `calendar_month` (slice #1),
+  `since_payday` (slice #2) and `trailing_6_months` (slice #3) are in use;
+  `previous_month` and `rolling_90d` remain reserved for later slices.
 
 ### 3. Money honesty rules
 
