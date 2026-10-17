@@ -10,6 +10,7 @@ import {
   type BudgetPeriodInput,
 } from "./budget-progress"
 import { convertMinor } from "./fx"
+import { buildLatestRateResolver, type RateResolver } from "./net-worth"
 import type { CurrencyCode } from "@/lib/data/currencies"
 
 // =============================================================================
@@ -26,10 +27,11 @@ import type { CurrencyCode } from "@/lib/data/currencies"
 // shape) carrying Design B's honesty vocabulary:
 //   - `engineVersion` — every payload states which engine produced it, so a
 //     future materialized artifact (delivered digest) can be keyed by it;
-//   - typed window kinds (`calendar_month` today; `previous_month`,
-//     `since_payday`, `rolling_90d` reserved for later slices) that carry the
-//     family timezone they were resolved in — a window is meaningless without
-//     the zone it was cut in (ADR-0037 / PER-263);
+//   - typed window kinds (`calendar_month`, `since_payday`,
+//     `trailing_6_months` in use; `previous_month`, `rolling_90d` reserved
+//     for later slices) that carry the family timezone they were resolved in
+//     — a window is meaningless without the zone it was cut in
+//     (ADR-0037 / PER-263);
 //   - per-derivation empty / skipped states and failure isolation
 //     (`failedCount`) — one broken derivation must never blank the page;
 //   - FX-pending rows are EXCLUDED and COUNTED (`fxPendingCount` +
@@ -56,11 +58,23 @@ import type { CurrencyCode } from "@/lib/data/currencies"
 // detectable monthly income series gets NO since-payday card: an invented
 // payday would be the opposite of "Permoney knows me".
 //
-// Later slices add derivations (emergency fund, recurring bills,
-// month-over-month trend) and an in-app digest page. A materialized
-// delivered-digest artifact keyed `(familyId, month, engineVersion)` is only
-// considered once a real out-of-request consumer (email delivery) exists —
-// never the open period, never write-on-read.
+// Slice #3 adds `emergency_fund`: "current saved" is the CURRENT BALANCE of
+// every active ASSET account whose product subtype is `savings` (any
+// accountType — Indonesian households park emergency money in money-market
+// mutual funds), converted with the SAME latest-rate resolver the net-worth
+// cards use, so this card can never disagree with net worth. The target is
+// 6 × the average monthly spending burn over the six COMPLETE family-tz
+// months before the requested month; a burn month counts only when recorded
+// ledger history covers it end-to-end, and the months actually used are
+// disclosed (`partial_window`). No qualifying account → a skip, never a
+// confident zero. The full locked basis and the rejected alternatives are in
+// the ADR-0059 PER-227 amendment.
+//
+// Later slices add derivations (recurring bills, month-over-month trend) and
+// an in-app digest page. A materialized delivered-digest artifact keyed
+// `(familyId, month, engineVersion)` is only considered once a real
+// out-of-request consumer (email delivery) exists — never the open period,
+// never write-on-read.
 // =============================================================================
 
 /** Bumped whenever a derivation's meaning changes OR the registry's
@@ -69,12 +83,16 @@ import type { CurrencyCode } from "@/lib/data/currencies"
  * Version 2 added `since_payday`. Version 3 added the period-incompleteness
  * qualifier (`periodPartial` / `periodGaps`, PER-443): the numbers themselves
  * are unchanged, but a v2 artifact carries no way to say "this window is only
- * partially recorded", so it must not be read as complete under v3. */
-export const INSIGHTS_ENGINE_VERSION = 3
+ * partially recorded", so it must not be read as complete under v3. Version 4
+ * adds `emergency_fund` (PER-227 slice #3): a v3 artifact simply lacks the
+ * card, so it must not be read as a complete report under v4. */
+export const INSIGHTS_ENGINE_VERSION = 4
 
 export const SAVINGS_FLOW_INSIGHT_ID = "savings_flow"
 
 export const SINCE_PAYDAY_INSIGHT_ID = "since_payday"
+
+export const EMERGENCY_FUND_INSIGHT_ID = "emergency_fund"
 
 export type InsightTone = "positive" | "neutral" | "attention"
 
@@ -83,10 +101,15 @@ export type InsightWindowKind =
   | "previous_month"
   | "since_payday"
   | "rolling_90d"
+  | "trailing_6_months"
 
 /** The family-tz-anchored window an insight was computed over. `start`/`end`
  * are inclusive family-tz calendar dates (ADR-0037) — the same convention as
- * `BudgetPeriodInput`, so `transactionInPeriod` is the one membership rule. */
+ * `BudgetPeriodInput`, so `transactionInPeriod` is the one membership rule.
+ * `trailing_6_months` is the emergency-fund burn window: the six COMPLETE
+ * calendar months preceding the requested month (the requested month itself
+ * is still accumulating and is deliberately excluded). `previous_month` stays
+ * reserved for the month-over-month trend slice. */
 export interface InsightWindow extends BudgetPeriodInput {
   kind: InsightWindowKind
 }
@@ -193,6 +216,21 @@ export interface InsightContext {
    * intersects its OWN window against them, so a gap that misses
    * `since_payday` still qualifies a calendar-month card and vice versa. */
   anchorGaps: ReadonlyArray<InsightAnchorGapRow>
+  /** Every family account, flat and UNFILTERED (PER-227 slice #3): the
+   * designated-savings predicate (active + ASSET class + `savings` product
+   * subtype) lives in the pure fold below, so unit tests can prove exactly
+   * which accounts count — the seam never pre-filters. */
+  accountRows: ReadonlyArray<InsightAccountRow>
+  /** The latest foreign→base rate per pair (slice #3). The fold resolves
+   * through `buildLatestRateResolver` — the SAME resolver the net-worth
+   * cards use (ADR-0038 §5) — so this card can never disagree with net
+   * worth about what a balance is worth in base currency. */
+  fxRateRows: ReadonlyArray<InsightFxRateRow>
+  /** Family-tz calendar dates (YYYY-MM-DD) of the FIRST and LAST non-deleted
+   * ledger rows, or `null` when the family has no recorded history at all
+   * (slice #3). The burn window counts only months this span covers
+   * end-to-end — see `deriveEmergencyFund` (Rule E, ADR-0059 amendment). */
+  historyRange: { start: string; end: string } | null
 }
 
 /**
@@ -219,13 +257,17 @@ export interface InsightTransferRow {
 
 /**
  * One income/expense row as loaded by `src/server/insights.ts` — the same
- * flat, DB-agnostic projection discipline as `InsightTransferRow`. Only the
- * `since_payday` derivation consumes these:
- *   - `accountId`, `date`, `amount`, `merchantName`, `description` feed
- *     `detectRecurringSeries` (native magnitudes — never displayed);
- *   - `date`, `baseAmount`, `isSplit`, `splitEntries`, `currency`,
- *     `baseCurrency`, `fxRateScaled` feed the cash-flow fold, byte-for-byte
- *     the same rules the budget/cash-flow engines apply to the same rows.
+ * flat, DB-agnostic projection discipline as `InsightTransferRow`. Consumed
+ * by two derivations:
+ *   - `since_payday`: `accountId`, `date`, `amount`, `merchantName`,
+ *     `description` feed `detectRecurringSeries` (native magnitudes — never
+ *     displayed), and `date`, `baseAmount`, `isSplit`, `splitEntries`,
+ *     `currency`, `baseCurrency`, `fxRateScaled` feed the cash-flow fold,
+ *     byte-for-byte the same rules the budget/cash-flow engines apply to the
+ *     same rows;
+ *   - `emergency_fund` (expense rows only): the trailing-months burn folds
+ *     through the SAME `addFlowRow` rules, so the target can never disagree
+ *     with the cash-flow engine about what spending is.
  */
 export interface InsightFlowRow {
   /** The row owner's account — required by `RecurringTxn`; detection does not
@@ -268,6 +310,49 @@ export interface InsightAnchorGapRow {
   toSource: string | null
 }
 
+/**
+ * One family account as loaded by `src/server/insights.ts` — deliberately the
+ * same flat, DB-agnostic projection discipline as the other row types, and
+ * deliberately UNFILTERED (no class/subtype/deletion filtering in SQL): the
+ * designated-savings predicate is a locked domain rule that belongs in the
+ * pure fold, where unit tests can prove it. `nativeBalance` is the account's
+ * CURRENT ledger balance in its own currency (minor units) — never
+ * pre-converted, never a valuation snapshot.
+ */
+export interface InsightAccountRow {
+  id: string
+  name: string
+  accountClass: string
+  accountSubtype: string
+  currency: string
+  nativeBalance: bigint
+  /** `null` = never soft-deleted; a timestamp = soft-deleted (PER-183 sets
+   * `status="closed"`, `archivedAt` AND `deletedAt` together) and therefore
+   * never designated savings. Note this alone is NOT the active test: an
+   * ARCHIVED account also has `deletedAt === null` — see `status`/`archivedAt`
+   * and `isDesignatedSavingsAccount`. */
+  deletedAt: Date | null
+  /** `"active" | "closed"` (DB CHECK domain). `"closed"` = archived (soft
+   * close, PER-143): the balance row survives but is no longer actively
+   * managed, so it is excluded from designated savings. */
+  status: string
+  /** Set when the account was archived; `null` while active. */
+  archivedAt: Date | null
+}
+
+/**
+ * One latest foreign→base FX rate pair as loaded by `src/server/insights.ts`
+ * (PER-227 slice #3) — the exact shape `buildLatestRateResolver` consumes
+ * (net-worth's shared resolver), so this engine resolves rates identically
+ * to the net-worth cards (ADR-0038 §5, ADR-0058 D3).
+ */
+export interface InsightFxRateRow {
+  fromCurrency: string
+  toCurrency: string
+  /** 1e12-scaled major→major rate. */
+  rateScaled: bigint
+}
+
 /** The resolved payday anchor of the open cycle: the most recent occurrence of
  * the family's largest monthly income series, as family-tz calendar dates. */
 export interface PaydayAnchor {
@@ -293,6 +378,12 @@ export interface InsightContextInput {
   /** Every live anchor-chain hole in the family (PER-443) — see
    * `InsightContext.anchorGaps`. */
   anchorGaps: ReadonlyArray<InsightAnchorGapRow>
+  /** Every family account, unfiltered — see `InsightContext.accountRows`. */
+  accountRows: ReadonlyArray<InsightAccountRow>
+  /** Latest foreign→base rates — see `InsightContext.fxRateRows`. */
+  fxRateRows: ReadonlyArray<InsightFxRateRow>
+  /** First→last non-deleted ledger dates — see `InsightContext.historyRange`. */
+  historyRange: { start: string; end: string } | null
 }
 
 export interface DerivationOutcome {
@@ -344,6 +435,23 @@ export function currentMonthInZone(now: Date, timezone: string): string {
   return calendarDateInZone(now, timezone).slice(0, 7)
 }
 
+/**
+ * A `YYYY-MM` shifted by whole calendar months (negative = earlier). Pure
+ * calendar arithmetic on the Y-M components (the same technique as
+ * `subtractCalendarMonths` in src/server/reporting.ts); `Date.UTC` is not
+ * needed because a month string has no day to clamp.
+ */
+export function shiftCalendarMonth(month: string, delta: number): string {
+  const match = MONTH_PATTERN.exec(month)
+  if (!match) {
+    throw new Error(`shiftCalendarMonth: month must be YYYY-MM, got "${month}"`)
+  }
+  const total = Number(match[1]) * 12 + (Number(match[2]) - 1) + delta
+  const year = Math.floor(total / 12)
+  const monthIndex = ((total % 12) + 12) % 12
+  return `${year}-${String(monthIndex + 1).padStart(2, "0")}`
+}
+
 /** Purposes that mean "this transfer moved money into savings/investments". */
 const SAVINGS_PURPOSES: ReadonlySet<string> = new Set([
   "savings",
@@ -376,6 +484,9 @@ export function buildInsightContext(
     incomeRows: input.incomeRows,
     expenseRows: input.expenseRows,
     anchorGaps: input.anchorGaps,
+    accountRows: input.accountRows,
+    fxRateRows: input.fxRateRows,
+    historyRange: input.historyRange,
   }
 }
 
@@ -709,9 +820,336 @@ function deriveSincePayday(context: InsightContext): DerivationOutcome {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Slice #3 — `emergency_fund`
+// ---------------------------------------------------------------------------
+
+/** How many months of spending the target covers (locked basis: 6× — see the
+ * ADR-0059 PER-227 amendment for the rejected alternatives). */
+const EMERGENCY_FUND_TARGET_MONTHS = 6
+
+/** Below this many COMPLETE recorded months the burn average would be a
+ * guess, not a fact — the card skips rather than averaging a window the
+ * ledger barely covers (honesty rule, not a tuning knob). */
+const EMERGENCY_FUND_MIN_MONTHS = 2
+
+/** Max account names printed in the counted-accounts metric, then `+n`. */
+const MAX_COUNTED_ACCOUNT_NAMES = 3
+
+/**
+ * The locked "saved" basis (PER-227 design pass, ADR-0059 amendment): an
+ * account is designated savings when it is LIVE — `status === "active"` with
+ * `archivedAt === null` AND `deletedAt === null` — of ASSET class, and its
+ * product subtype is `savings` — ANY accountType
+ * counts, because Indonesian households park emergency money in
+ * money-market mutual funds (an INVESTMENT-class ASSET with the `savings`
+ * subtype is the norm here, not an edge case). A LIABILITY account never
+ * qualifies even if its product string says "savings": a savings-flavoured
+ * credit product is debt, not a fund.
+ *
+ * ARCHIVED (`status="closed"`) accounts are excluded even though their
+ * balance rows survive the soft close: archiving means the household stopped
+ * actively managing that money, and counting it would silently OVERSTATE the
+ * fund with no badge saying so. This is a deliberate asymmetry with net
+ * worth and the reporting engines, which still include archived balances —
+ * those answer "everything you own"; this card answers "live earmarked
+ * money".
+ */
+function isDesignatedSavingsAccount(row: InsightAccountRow): boolean {
+  return (
+    row.status === "active" &&
+    row.archivedAt === null &&
+    row.deletedAt === null &&
+    row.accountClass === "ASSET" &&
+    row.accountSubtype === SAVINGS_SUBTYPE
+  )
+}
+
+/** The counted-account names as the card prints them: sorted LOCALLY inside
+ * the fold (determinism is a local contract, never a dependency on the
+ * seam's read order), at most three names, then `+n` — auditable (which
+ * balances make up the figure) without turning the card into an account
+ * roster. The comparator is `localeCompare`, NOT code-unit `<`/`>`: byte
+ * order puts "Zakat" before "dana darurat" (uppercase sorts first), which
+ * is not alphabetical to a human (Sonar S2871). */
+function formatCountedAccountNames(names: ReadonlyArray<string>): string {
+  const sorted = [...names].sort((a, b) => a.localeCompare(b))
+  const shown = sorted.slice(0, MAX_COUNTED_ACCOUNT_NAMES)
+  const rest = sorted.length - shown.length
+  return rest > 0 ? `${shown.join(", ")} +${rest}` : shown.join(", ")
+}
+
+/** Saved-side totals of the designated-savings fold. */
+interface SavedFundTotals {
+  saved: bigint
+  fxPendingCount: number
+  countedNames: ReadonlyArray<string>
+}
+
+/** Saved-side fold (PER-227 slice #3): the CURRENT balances of the
+ * already-qualified accounts (qualification is `isDesignatedSavingsAccount`,
+ * unit-tested directly), converted through the SAME latest-rate resolver the
+ * net-worth cards use, so this card can never disagree with net worth. A
+ * foreign balance with no rate is excluded AND counted; the counted-names
+ * collection drives the auditable "Counted accounts" metric. Pure. */
+function foldSavedFund(
+  accounts: ReadonlyArray<InsightAccountRow>,
+  baseCurrency: string,
+  resolveRate: RateResolver
+): SavedFundTotals {
+  let saved = 0n
+  let fxPendingCount = 0
+  const countedNames: string[] = []
+  for (const account of accounts) {
+    if (account.currency !== baseCurrency) {
+      const rate = resolveRate(account.currency)
+      if (rate === null) {
+        fxPendingCount += 1
+        continue
+      }
+      saved += convertMinor(
+        account.nativeBalance,
+        account.currency as CurrencyCode,
+        baseCurrency as CurrencyCode,
+        rate
+      ) as bigint
+    } else {
+      saved += account.nativeBalance
+    }
+    countedNames.push(account.name)
+  }
+  return { saved, fxPendingCount, countedNames }
+}
+
+/** Rule E (locked, ADR-0059 amendment): the trailing months recorded
+ * end-to-end by the family ledger. A candidate month counts only when
+ * `historyRange` — the family-tz dates of the first and last non-deleted
+ * ledger rows — covers it start-to-end. A month the family joined mid-way is
+ * EXCLUDED, never diluted (its burn would be a fragment presented as a
+ * month); a month with zero rows inside the covered span still counts, with
+ * zero burn. Months after a lapsed period (no rows since the last one) drop
+ * out the same way. Pure. */
+function coveredTrailingMonths(
+  month: string,
+  history: { start: string; end: string } | null
+): string[] {
+  if (history === null) return []
+  const covered: string[] = []
+  for (let i = EMERGENCY_FUND_TARGET_MONTHS; i >= 1; i -= 1) {
+    const candidate = shiftCalendarMonth(month, -i)
+    const bounds = calendarMonthBounds(candidate)
+    if (bounds.start >= history.start && bounds.end <= history.end) {
+      covered.push(candidate)
+    }
+  }
+  return covered
+}
+
+/** Burn totals of the trailing-months fold. */
+interface BurnFundTotals {
+  spent: bigint
+  fxPendingCount: number
+}
+
+/** Burn-side fold (PER-227 slice #3): spending in the USED months only.
+ * Month-key membership (not window membership) is what enforces Rule E — the
+ * requested month and any history-incomplete month fall outside `usedMonths`
+ * by construction. Money rules are the shared `addFlowRow` fold (split
+ * parents contribute via their children at the parent's stored rate;
+ * FX-pending rows excluded AND counted; transfers never appear here — the
+ * burn consumes expense rows only, so a movement into savings can never
+ * inflate spending and deflate the gap in one card). Pure. */
+function foldBurnInUsedMonths(
+  expenseRows: ReadonlyArray<InsightFlowRow>,
+  usedMonths: ReadonlyArray<string>,
+  timezone: string
+): BurnFundTotals {
+  const usedMonthSet = new Set(usedMonths)
+  const totals: FlowTotals = { income: 0n, spent: 0n, fxPendingCount: 0 }
+  for (const row of expenseRows) {
+    const rowMonth = calendarDateInZone(row.date, timezone).slice(0, 7)
+    if (usedMonthSet.has(rowMonth)) addFlowRow(totals, row, false)
+  }
+  return { spent: totals.spent, fxPendingCount: totals.fxPendingCount }
+}
+
+/** The rendered card, assembled from the two folds' results. Metric order is
+ * the generic renderer's contract: the FIRST money metric is the headline
+ * ("Saved"), every labelled metric after it a supporting line — no renderer
+ * branch knows this insight's id. Tone: the family is "behind" only when the
+ * gap is positive. Pure. */
+function buildEmergencyFundInsight(input: {
+  baseCurrency: string
+  burnWindow: InsightWindow
+  burn: BurnFundTotals
+  monthsUsed: number
+  saved: SavedFundTotals
+  anchorGaps: ReadonlyArray<InsightAnchorGapRow>
+}): Insight {
+  const { baseCurrency, burnWindow, burn, monthsUsed, saved } = input
+  // Truncating division — never a rounded-up target the family must beat.
+  const target =
+    (burn.spent * BigInt(EMERGENCY_FUND_TARGET_MONTHS)) / BigInt(monthsUsed)
+  const gap = target - saved.saved
+  const fxPendingCount = saved.fxPendingCount + burn.fxPendingCount
+  const partialWindow = monthsUsed < EMERGENCY_FUND_TARGET_MONTHS
+  const periodGaps = periodGapsForWindow(input.anchorGaps, burnWindow)
+
+  return {
+    id: EMERGENCY_FUND_INSIGHT_ID,
+    tone: gap > 0n ? "attention" : "positive",
+    title: "Emergency fund",
+    summary: "What you've set aside versus 6× your average monthly spending.",
+    detail: `Based on ${monthsUsed} complete months of recorded spending.`,
+    metrics: [
+      {
+        key: "saved",
+        label: "Saved",
+        value: saved.saved.toString(),
+        currency: baseCurrency,
+      },
+      {
+        key: "target",
+        label: "Target",
+        value: target.toString(),
+        currency: baseCurrency,
+      },
+      {
+        key: "gap",
+        label: "Gap",
+        value: gap.toString(),
+        currency: baseCurrency,
+      },
+      ...(partialWindow
+        ? [
+            {
+              key: "partial_window",
+              label: "Months used",
+              value: `${monthsUsed} of ${EMERGENCY_FUND_TARGET_MONTHS}`,
+            },
+          ]
+        : []),
+      {
+        key: "counted_accounts",
+        label: "Counted accounts",
+        value: formatCountedAccountNames(saved.countedNames),
+      },
+      { key: "fx_pending_count", value: String(fxPendingCount) },
+    ],
+    partial: fxPendingCount > 0,
+    fxPendingCount,
+    periodPartial: periodGaps.length > 0,
+    periodGaps,
+    window: burnWindow,
+    engineVersion: INSIGHTS_ENGINE_VERSION,
+  }
+}
+
+/**
+ * Slice #3 derivation — `emergency_fund`.
+ *
+ * Saved is the CURRENT BALANCE of every designated-savings account (the
+ * locked basis A), converted through the SAME latest-rate resolver the
+ * net-worth cards use, so this card can never disagree with net worth. The
+ * target is 6 × the average monthly spending burn over the six COMPLETE
+ * family-tz months before the requested month (the requested month is still
+ * accumulating and is deliberately excluded). A burn month counts only when
+ * recorded history covers it end-to-end (Rule E below), and the months
+ * actually used are disclosed whenever fewer than six qualified.
+ *
+ * Money rules are byte-for-byte the budget/cash-flow engines': split parents
+ * contribute via their children at the parent's stored rate, FX-pending rows
+ * are excluded AND counted, transfers are neither income nor expense (the
+ * burn consumes expense rows only, so a movement into savings can never
+ * inflate spending and deflate the gap in one card).
+ *
+ * Skip-vs-zero honesty: no designated account → skip; every designated
+ * balance pending an FX rate → skip; every burn row in the used months
+ * pending an FX rate → skip (a zero burn reached only by excluding rows is
+ * not a fact); too little recorded history → skip. A genuine ZERO balance
+ * renders Rp 0 — that is a fact about the ledger, not an absence of one.
+ */
+function deriveEmergencyFund(context: InsightContext): DerivationOutcome {
+  const { window: monthWindow, baseCurrency } = context
+  const timezone = monthWindow.timezone
+  // The report window IS the requested calendar month (see buildInsightContext).
+  const month = monthWindow.start.slice(0, 7)
+
+  // ---- Saved: current balances of designated-savings accounts ----
+  const qualifying = context.accountRows.filter(isDesignatedSavingsAccount)
+  if (qualifying.length === 0) {
+    return {
+      insight: null,
+      skippedReason: "no account is designated as savings",
+    }
+  }
+
+  const saved = foldSavedFund(
+    qualifying,
+    baseCurrency,
+    buildLatestRateResolver(context.fxRateRows, baseCurrency)
+  )
+  if (saved.countedNames.length === 0) {
+    return {
+      insight: null,
+      skippedReason:
+        "every designated savings balance is pending an exchange rate",
+    }
+  }
+
+  // ---- Target: 6 × the average monthly burn, trailing COMPLETE months ----
+  const burnWindow: InsightWindow = {
+    kind: "trailing_6_months",
+    start: calendarMonthBounds(
+      shiftCalendarMonth(month, -EMERGENCY_FUND_TARGET_MONTHS)
+    ).start,
+    end: calendarMonthBounds(shiftCalendarMonth(month, -1)).end,
+    timezone,
+  }
+
+  // Rule E (locked, ADR-0059 amendment) lives in `coveredTrailingMonths`.
+  const usedMonths = coveredTrailingMonths(month, context.historyRange)
+  const monthsUsed = usedMonths.length
+  if (monthsUsed < EMERGENCY_FUND_MIN_MONTHS) {
+    return {
+      insight: null,
+      skippedReason: "fewer than two complete months of recorded history",
+    }
+  }
+
+  // Burn = spending in the USED months only — see `foldBurnInUsedMonths`
+  // (month-key membership is what enforces Rule E).
+  const burn = foldBurnInUsedMonths(context.expenseRows, usedMonths, timezone)
+
+  // Skip-vs-zero, burn side: a zero burn is a FACT about the ledger (real
+  // covered months with no spending — see the zero-burn month rule) only when
+  // nothing was excluded to reach it. If every burn row in the used months is
+  // FX-pending, the zero is an artifact of missing rates — rendering a
+  // fabricated Rp 0 target with a `positive` tone would be exactly the
+  // confident zero the honesty rules forbid.
+  if (burn.spent === 0n && burn.fxPendingCount > 0) {
+    return {
+      insight: null,
+      skippedReason: "every burn row in the window is pending an exchange rate",
+    }
+  }
+
+  return {
+    insight: buildEmergencyFundInsight({
+      baseCurrency,
+      burnWindow,
+      burn,
+      monthsUsed,
+      saved,
+      anchorGaps: context.anchorGaps,
+    }),
+  }
+}
+
 const REGISTERED_DERIVATIONS: ReadonlyArray<RegisteredDerivation> = [
   { id: SAVINGS_FLOW_INSIGHT_ID, run: deriveSavingsFlow },
   { id: SINCE_PAYDAY_INSIGHT_ID, run: deriveSincePayday },
+  { id: EMERGENCY_FUND_INSIGHT_ID, run: deriveEmergencyFund },
 ]
 
 /**
