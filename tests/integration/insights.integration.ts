@@ -10,6 +10,7 @@ import type { AccountType } from "@/lib/accounts"
 import {
   EMERGENCY_FUND_INSIGHT_ID,
   INSIGHTS_ENGINE_VERSION,
+  RECURRING_BILLS_INSIGHT_ID,
 } from "@/lib/insights"
 import { archiveAccountForFamily } from "@/server/accounts"
 import { getInsightsForFamily } from "@/server/insights"
@@ -1032,7 +1033,10 @@ describe("household insights (PER-227)", () => {
     const leaked = await insights(ownerA, "2026-07", ownerB.user.id)
     expect(leaked.insights).toHaveLength(0)
     expect(leaked.failedCount).toBe(0)
-    expect(leaked.skipped).toHaveLength(3)
+    // `recurring_bills` records its own skip here: the request month (July)
+    // is not the family's current month relative to the real clock, so the
+    // RLS-empty context never even reaches its history floor.
+    expect(leaked.skipped).toHaveLength(4)
     expect(leaked.skipped).toContainEqual({
       id: EMERGENCY_FUND_INSIGHT_ID,
       reason: "no account is designated as savings",
@@ -1392,6 +1396,233 @@ describe("household insights (PER-227)", () => {
     ).toEqual({
       id: EMERGENCY_FUND_INSIGHT_ID,
       reason: "fewer than two complete months of recorded history",
+    })
+  })
+
+  // ---- recurring bills (PER-227 slice #4) ------------------------------------
+
+  /** A real-ledger bill occurrence — the projection must be derivable from
+   * rows written by the production path, never a hand-built series. */
+  const bill = (
+    owner: AuthenticatedOnboardedUser,
+    accountId: string,
+    isoDate: string,
+    amount: bigint,
+    description: string
+  ) =>
+    create(owner, {
+      type: "expense",
+      amount,
+      accountId,
+      description,
+      date: new Date(isoDate),
+    })
+
+  /** The four-occurrence Netflix cadence (30-day gaps) shared by the
+   * prediction and tenant-isolation tests: mean 222,500, next expected
+   * 2026-06-29 — due inside the [06-15, 07-15] window. The June one-off
+   * extends recorded history past 2026-05-31 so Mar–May count as COMPLETE
+   * months (Rule E) without forming a series of its own. */
+  const seedNetflix = async (
+    owner: AuthenticatedOnboardedUser,
+    accountId: string
+  ) => {
+    const occurrences: ReadonlyArray<readonly [string, bigint]> = [
+      ["2026-03-01T03:00:00.000Z", 220_000n],
+      ["2026-03-31T03:00:00.000Z", 220_000n],
+      ["2026-04-30T03:00:00.000Z", 230_000n],
+      ["2026-05-30T03:00:00.000Z", 220_000n],
+    ]
+    for (const [isoDate, amount] of occurrences) {
+      await bill(owner, accountId, isoDate, amount, "Netflix")
+    }
+    await bill(
+      owner,
+      accountId,
+      "2026-06-10T03:00:00.000Z",
+      45_000n,
+      "Groceries"
+    )
+  }
+
+  test("predicts a due-soon bill from real ledger rows and labels the estimate", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    const wallet = await account(owner, "Wallet", {
+      accountSubtype: "checking",
+    })
+    await seedNetflix(owner, wallet.id)
+
+    const report = await insightsAt(owner, ON_JUNE)
+    expect(report.failedCount).toBe(0)
+    const insight = report.insights.find(
+      (entry) => entry.id === RECURRING_BILLS_INSIGHT_ID
+    )
+    expect(insight?.tone).toBe("neutral")
+    expect(insight?.window).toEqual({
+      kind: "next_30_days",
+      start: "2026-06-15",
+      end: "2026-07-15",
+      timezone: "Asia/Jakarta",
+    })
+    expect(insight?.periodPartial).toBe(false)
+    expect(insight?.periodGaps).toEqual([])
+    // 890,000 ÷ 4 occurrences — a PREDICTION, labelled as one.
+    expect(
+      insightMetric(report, RECURRING_BILLS_INSIGHT_ID, "predicted_total")
+    ).toBe("222500")
+    expect(
+      report.insights
+        .find((entry) => entry.id === RECURRING_BILLS_INSIGHT_ID)
+        ?.metrics.find((m) => m.key === "predicted_total")?.label
+    ).toBe("Predicted from 4 past payments")
+    expect(insight?.summary).toBe(
+      "Predicted recurring outflows over the next 30 days — an estimate from recorded payments, not money already spent."
+    )
+    // History starts 2026-03-01: Mar, Apr, May are the complete months.
+    expect(insight?.detail).toBe(
+      "Based on 4 past payments across 3 months of recorded history."
+    )
+    expect(
+      insightMetric(report, RECURRING_BILLS_INSIGHT_ID, "series_count")
+    ).toBe("1")
+    expect(
+      insightMetric(report, RECURRING_BILLS_INSIGHT_ID, "nearest_bill")
+    ).toBe("222500")
+    expect(
+      report.insights
+        .find((entry) => entry.id === RECURRING_BILLS_INSIGHT_ID)
+        ?.metrics.find((m) => m.key === "nearest_bill")?.label
+    ).toBe("Nearest (Netflix, due in 14 days)")
+    expect(
+      insightMetric(report, RECURRING_BILLS_INSIGHT_ID, "cadence_mix")
+    ).toBe("1 monthly")
+    expect(insightMetric(report, RECURRING_BILLS_INSIGHT_ID, "due_bills")).toBe(
+      "Netflix"
+    )
+    expect(
+      insightMetric(report, RECURRING_BILLS_INSIGHT_ID, "history_months")
+    ).toBe("3")
+  })
+
+  test("counts only the reader's family bill series — an identical series in another tenant never doubles the prediction", async () => {
+    const seedFamily = async () => {
+      const owner = await factories.createAuthenticatedOnboardedUser()
+      await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+      const wallet = await account(owner, "Wallet", {
+        accountSubtype: "checking",
+      })
+      await seedNetflix(owner, wallet.id)
+      return owner
+    }
+    const ownerA = await seedFamily()
+    const ownerB = await seedFamily()
+
+    // A leak of B's four Netflix rows into A's detector would report 8 past
+    // payments (and double the typical amount) — the label and the figure
+    // together pin the tenant boundary at the series level, not just the row.
+    const reportA = await insightsAt(ownerA, ON_JUNE)
+    expect(
+      insightMetric(reportA, RECURRING_BILLS_INSIGHT_ID, "predicted_total")
+    ).toBe("222500")
+    expect(
+      reportA.insights
+        .find((entry) => entry.id === RECURRING_BILLS_INSIGHT_ID)
+        ?.metrics.find((m) => m.key === "predicted_total")?.label
+    ).toBe("Predicted from 4 past payments")
+
+    const reportB = await insightsAt(ownerB, ON_JUNE)
+    expect(
+      insightMetric(reportB, RECURRING_BILLS_INSIGHT_ID, "predicted_total")
+    ).toBe("222500")
+    expect(
+      insightMetric(reportB, RECURRING_BILLS_INSIGHT_ID, "due_bills")
+    ).toBe("Netflix")
+  })
+
+  test("still counts an overdue bill: 30 days past the projection, no lower bound", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    const wallet = await account(owner, "Wallet", {
+      accountSubtype: "checking",
+    })
+    // 31/29-day gaps average to 30, projecting 2026-04-16 + 30 = 2026-05-16
+    // — 30 days overdue at the pinned clock. The last occurrence is 60 days
+    // old: inside the detector's two-monthly-band staleness bound (70
+    // days), so the series is still live. The June one-off extends recorded
+    // history to cover Mar–May end-to-end without forming a series.
+    await bill(
+      owner,
+      wallet.id,
+      "2026-02-15T03:00:00.000Z",
+      100_000n,
+      "Netflix"
+    )
+    await bill(
+      owner,
+      wallet.id,
+      "2026-03-16T03:00:00.000Z",
+      100_000n,
+      "Netflix"
+    )
+    await bill(
+      owner,
+      wallet.id,
+      "2026-04-16T03:00:00.000Z",
+      100_000n,
+      "Netflix"
+    )
+    await bill(
+      owner,
+      wallet.id,
+      "2026-06-10T03:00:00.000Z",
+      45_000n,
+      "Groceries"
+    )
+
+    const report = await insightsAt(owner, ON_JUNE)
+    const insight = report.insights.find(
+      (entry) => entry.id === RECURRING_BILLS_INSIGHT_ID
+    )
+    expect(insight).toBeDefined()
+    expect(
+      insightMetric(report, RECURRING_BILLS_INSIGHT_ID, "series_count")
+    ).toBe("1")
+    expect(
+      insightMetric(report, RECURRING_BILLS_INSIGHT_ID, "predicted_total")
+    ).toBe("100000")
+    expect(
+      report.insights
+        .find((entry) => entry.id === RECURRING_BILLS_INSIGHT_ID)
+        ?.metrics.find((m) => m.key === "nearest_bill")?.label
+    ).toBe("Nearest (Netflix, 30 days overdue)")
+  })
+
+  test("skips a fresh family with the distinct history reason, never a confident prediction", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    const wallet = await account(owner, "Wallet", {
+      accountSubtype: "checking",
+    })
+    // One recent row: recorded history spans a single day, so no month is
+    // complete — "predicted from recorded payments" would be a guess.
+    await bill(
+      owner,
+      wallet.id,
+      "2026-06-10T03:00:00.000Z",
+      45_000n,
+      "Groceries"
+    )
+
+    const report = await insightsAt(owner, ON_JUNE)
+    expect(report.insights.map((entry) => entry.id)).not.toContain(
+      RECURRING_BILLS_INSIGHT_ID
+    )
+    expect(
+      report.skipped.find((entry) => entry.id === RECURRING_BILLS_INSIGHT_ID)
+    ).toEqual({
+      id: RECURRING_BILLS_INSIGHT_ID,
+      reason: "fewer than three complete months of recorded history",
     })
   })
 })

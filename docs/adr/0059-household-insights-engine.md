@@ -1,15 +1,15 @@
 # ADR-0059 — Household insights engine (computed-on-read, registry)
 
-|                   |                                                                                                                                                                                                                                                             |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**        | Accepted                                                                                                                                                                                                                                                    |
-| **Date**          | 2026-10-11                                                                                                                                                                                                                                                  |
-| **Accepted**      | 2026-10-11                                                                                                                                                                                                                                                  |
-| **Deciders**      | Hendri Permana                                                                                                                                                                                                                                              |
-| **Supersedes**    | —                                                                                                                                                                                                                                                           |
-| **Superseded by** | —                                                                                                                                                                                                                                                           |
-| **Amends**        | —                                                                                                                                                                                                                                                           |
-| **Amended by**    | PER-443 amendment below (period incompleteness — anchor-chain gaps as a first-class honesty qualifier, distinct from FX `partial`); PER-227 slice #3 amendment below (`emergency_fund` — designated-savings basis, 6× burn target, recorded-history Rule E) |
+|                   |                                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Status**        | Accepted                                                                                                                                                                                                                                                                                                                                                                          |
+| **Date**          | 2026-10-11                                                                                                                                                                                                                                                                                                                                                                        |
+| **Accepted**      | 2026-10-11                                                                                                                                                                                                                                                                                                                                                                        |
+| **Deciders**      | Hendri Permana                                                                                                                                                                                                                                                                                                                                                                    |
+| **Supersedes**    | —                                                                                                                                                                                                                                                                                                                                                                                 |
+| **Superseded by** | —                                                                                                                                                                                                                                                                                                                                                                                 |
+| **Amends**        | —                                                                                                                                                                                                                                                                                                                                                                                 |
+| **Amended by**    | PER-443 amendment below (period incompleteness — anchor-chain gaps as a first-class honesty qualifier, distinct from FX `partial`); PER-227 slice #3 amendment below (`emergency_fund` — designated-savings basis, 6× burn target, recorded-history Rule E); PER-227 slice #4 amendment below (`recurring_bills` — predicted due-soon obligations, forward `next_30_days` window) |
 
 ## Context
 
@@ -83,10 +83,12 @@ consumer, e.g. email delivery of a digest):
   never read under a newer engine than produced it. Version 2 added
   `since_payday` (slice #2, below); version 3 added the period-incompleteness
   qualifier (PER-443 amendment below); version 4 added `emergency_fund`
-  (slice #3 amendment below).
+  (slice #3 amendment below); version 5 added `recurring_bills` and the
+  forward-looking `next_30_days` window kind (slice #4 amendment below).
 - `window` is typed and always carries the family timezone it was cut in.
   Its kind draws on a fixed vocabulary: `calendar_month` (slice #1),
-  `since_payday` (slice #2) and `trailing_6_months` (slice #3) are in use;
+  `since_payday` (slice #2), `trailing_6_months` (slice #3) and
+  `next_30_days` (slice #4, the only forward-looking kind) are in use;
   `previous_month` and `rolling_90d` remain reserved for later slices.
 
 ### 3. Money honesty rules
@@ -333,3 +335,105 @@ basis that a future Savings Goal entity would then contradict.
    inside this transaction because that function opens its own), and
    the first/last ledger rows. Still computed-on-read (§1): no new
    tables, no write-on-read.
+
+## Amendment — slice #4: `recurring_bills` (PER-227, 2026-10-16)
+
+### Problem
+
+The flagship ask names bills directly ("which bills are coming?"), and
+this is the engine's first FORWARD-LOOKING card: every prior derivation
+folds RECORDED activity, but a bills card answers a question about the
+NEAR FUTURE. That creates three honesty problems the engine's existing
+vocabulary does not answer on its own: a projected amount is not money
+that moved (it must never read as spending or as a reminder), the engine
+has no notion of "due" (no bill entity, no schedule), and a forward
+window has no recorded period to be partial about.
+
+### Decision
+
+1. **The amount is a PREDICTION, and the card says so — label-led.**
+   `detectRecurringSeries` (PER-225, `src/lib/account-recurring.ts`)
+   clusters the family's EXPENSE occurrences into cadence series and
+   projects each `nextExpected` from the last occurrence plus the average
+   gap. The card's headline is the summed `typicalAmountMinor` of the
+   DUE series in base-minor units. Because that figure is a projection,
+   every surface carries derived-nature copy: the metric is labelled
+   "Predicted from N past payments" (N = summed occurrences), the summary
+   reads "an estimate from recorded payments, not money already spent",
+   and the detail discloses the basis ("Based on N past payments across
+   M months of recorded history"). Alternatives rejected:
+   - **B — sum only bills whose next occurrence is already RECORDED as a
+     scheduled row**: Permoney has no schedule/bill entity (PER-225
+     explicitly deferred one); inventing rows would violate "raw intent
+     is not canonical ledger data".
+   - **C — show each series' last charged amount instead of a mean**: one
+     noisy occurrence (a prorated month) would misprice the whole card;
+     the series mean is the detector's own canonical typical figure.
+2. **Direction is a caller-side filter — income NEVER reaches the
+   detector here.** `detectRecurringSeries` has no direction option (the
+   payday anchor maps every row to "income"); the bills derivation
+   consumes `context.expenseRows` only, mapping each row as an expense.
+   A salary projecting inside the window must never appear as a "bill" —
+   a non-vacuity test pins this (seed a monthly income series that WOULD
+   project inside the window; the card must stay empty while
+   `since_payday` renders from the same rows).
+3. **Due-soon = `nextExpected`'s family-tz calendar date ≤ today + 30
+   days, inclusive of both endpoints; NO lower bound.** Membership is the
+   same date-string comparison `transactionInPeriod` uses (§5 precedent),
+   cut in the family timezone — a UTC-slice would flip bills across the
+   17:00Z Jakarta boundary (unit-tested on both sides of the flip). An
+   OVERDUE series (next projection already past) is still a bill that
+   must be paid, so it counts; how far past due a series can linger is
+   bounded by the DETECTOR's staleness guard (two cadence bands ≈ 70 days
+   monthly), not duplicated here. The window is exposed as the new
+   `next_30_days` kind; rows dated AFTER today are dropped from detection
+   input (a future row is a schedule, not an occurrence — feeding it
+   drags `lastOccurrence` forward and can hide a bill that IS due), and
+   the FX-pending count is scoped to the SAME post-drop rows detection
+   uses (a future row is neither an occurrence nor a pending one).
+4. **Skip-vs-render is split by what the ledger can prove.** Fewer than
+   three COMPLETE recorded months (Rule E's covered-months test, six-month
+   lookback) → the card SKIPS with its own reason ("fewer than three
+   complete months of recorded history"): below that floor "predicted from
+   recorded payments" is a guess. Adequate history + nothing due → the
+   card RENDERS the honest empty card, and the empty copy keys off what
+   was DETECTED, not what is due: nothing detected at all says "No
+   recurring outflows detected in the last N complete months of recorded
+   history" (a true claim about detection); a live detected series whose
+   projection lands past the window says "No recurring bills are due in
+   the next 30 days" (a fact about the schedule — never "not detected",
+   which would be a false negative). Either way Rp 0 predicted and
+   "Bills due 0". The derivation also refuses HISTORICAL months (same
+   rule as `since_payday`, skip reason "recurring bills only apply to the
+   family's current month"): the window is "now"-relative by nature, and
+   a historical month would render a LYING empty card because the
+   detector's staleness guard silently drops the old series.
+5. **Tone is `neutral` on every path — deliberately NO advisory rule.**
+   An `attention` tone on an overdue projection would read as a bill
+   REMINDER (act now!), which this engine is not: it is diagnostic
+   ambient surfacing with no snooze/confirm/dismiss affordance (PER-225's
+   read-only posture carries over). No crisp non-advisory escalation rule
+   exists for a prediction, so `neutral` is the only honest tone today; a
+   future reconciliation/dismiss UX can revisit this.
+6. **Money rules extend unchanged.** Amounts are frozen BASE-currency
+   projections (ADR-0035 §4) so series across accounts share one currency
+   and the due-soon sum is a valid base-minor figure; FX-pending rows are
+   excluded AND counted (`fxPendingCount` + `partial`). A split parent
+   contributes its own amount (one receipt, one occurrence), never its
+   children. Determinism stays a local contract: due series are re-sorted
+   by projection instant with a `localeCompare` label tie-break (S2871),
+   the cadence mix prints on a fixed ladder (monthly → biweekly →
+   weekly), and the "Due bills" list reuses the slice-#3 capped
+   locale-sorted name list (`formatSortedNameList`, max three then `+n`).
+   `periodPartial` is always `false` with no gaps: PER-443's axis is
+   past-tense, and a forward window has no recorded activity to be
+   incomplete — fabricating a gap there would lie in the OTHER direction.
+7. **`INSIGHTS_ENGINE_VERSION` → 5.** The registry's composition changed
+   (a fourth derivation) and the typed window vocabulary gained
+   `next_30_days`, so a v4 artifact is incomplete for v5 (§2 applied
+   literally). The server seam needed NO new load: the slice-#3 expense
+   lookback (seven calendar months) already spans the six-complete-month
+   detection lookback plus today, and flow rows already carry
+   merchant/description for the detector's labels. Still
+   computed-on-read (§1): no new tables, no write-on-read, no periodic
+   job.
