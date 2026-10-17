@@ -1,18 +1,24 @@
 import { describe, expect, test } from "vite-plus/test"
+import { RATE_SCALE } from "./fx"
 import {
   calendarMonthBounds,
   computeInsights,
   currentMonthInZone,
+  EMERGENCY_FUND_INSIGHT_ID,
   INSIGHTS_ENGINE_VERSION,
   resolvePaydayAnchor,
   SAVINGS_FLOW_INSIGHT_ID,
+  shiftCalendarMonth,
   SINCE_PAYDAY_INSIGHT_ID,
+  type InsightAccountRow,
   type InsightAnchorGapRow,
   type InsightContextInput,
   type InsightFlowRow,
+  type InsightFxRateRow,
   type InsightReport,
   type InsightTransferRow,
 } from "./insights"
+import { buildLatestRateResolver, normalizeNetWorthAt } from "./net-worth"
 
 const JUNE = "2026-06"
 
@@ -162,6 +168,9 @@ interface ReportOptions {
   incomeRows?: ReadonlyArray<InsightFlowRow>
   expenseRows?: ReadonlyArray<InsightFlowRow>
   anchorGaps?: ReadonlyArray<InsightAnchorGapRow>
+  accountRows?: ReadonlyArray<InsightAccountRow>
+  fxRateRows?: ReadonlyArray<InsightFxRateRow>
+  historyRange?: { start: string; end: string } | null
   month?: string
   timezone?: string
   now?: Date
@@ -178,6 +187,9 @@ function buildReport(options: ReportOptions = {}) {
     incomeRows: options.incomeRows ?? [],
     expenseRows: options.expenseRows ?? [],
     anchorGaps: options.anchorGaps ?? [],
+    accountRows: options.accountRows ?? [],
+    fxRateRows: options.fxRateRows ?? [],
+    historyRange: options.historyRange ?? null,
   })
 }
 
@@ -348,6 +360,10 @@ describe("computeInsights — savings_flow", () => {
         id: SINCE_PAYDAY_INSIGHT_ID,
         reason: "no monthly recurring income series detected",
       },
+      {
+        id: EMERGENCY_FUND_INSIGHT_ID,
+        reason: "no account is designated as savings",
+      },
     ])
   })
 
@@ -405,6 +421,10 @@ describe("computeInsights — savings_flow", () => {
         id: SINCE_PAYDAY_INSIGHT_ID,
         reason: "no monthly recurring income series detected",
       },
+      {
+        id: EMERGENCY_FUND_INSIGHT_ID,
+        reason: "no account is designated as savings",
+      },
     ])
   })
 
@@ -449,6 +469,9 @@ describe("computeInsights — savings_flow", () => {
         incomeRows: [],
         expenseRows: [],
         anchorGaps: [],
+        accountRows: [],
+        fxRateRows: [],
+        historyRange: null,
       },
       [
         {
@@ -472,6 +495,9 @@ describe("computeInsights — savings_flow", () => {
         incomeRows: [],
         expenseRows: [],
         anchorGaps: [],
+        accountRows: [],
+        fxRateRows: [],
+        historyRange: null,
       } satisfies InsightContextInput,
       [
         {
@@ -970,5 +996,615 @@ describe("computeInsights — period completeness (PER-443)", () => {
     })
     expect(byId(monthOnly, SAVINGS_FLOW_INSIGHT_ID)?.periodPartial).toBe(true)
     expect(byId(monthOnly, SINCE_PAYDAY_INSIGHT_ID)?.periodPartial).toBe(false)
+  })
+})
+
+describe("shiftCalendarMonth", () => {
+  test("shifts across the year boundary", () => {
+    expect(shiftCalendarMonth("2026-01", -1)).toBe("2025-12")
+    expect(shiftCalendarMonth("2025-12", 1)).toBe("2026-01")
+  })
+
+  test("shifts the trailing-window anchors of a July request", () => {
+    expect(shiftCalendarMonth("2026-07", -6)).toBe("2026-01")
+    expect(shiftCalendarMonth("2026-07", -1)).toBe("2026-06")
+  })
+
+  test("rejects a malformed month", () => {
+    expect(() => shiftCalendarMonth("2026-7", -1)).toThrow(/YYYY-MM/)
+    expect(() => shiftCalendarMonth("July", 1)).toThrow(/YYYY-MM/)
+  })
+})
+
+describe("computeInsights — emergency_fund (PER-227 slice #3)", () => {
+  const JULY = "2026-07"
+  /** Ledger rows exist from 2026-01-01 through 2026-07-05: all six burn
+   * months (Jan–Jun) are COMPLETE; July is the still-accumulating month. */
+  const FULL_HISTORY: { start: string; end: string } = {
+    start: "2026-01-01",
+    end: "2026-07-05",
+  }
+
+  function savingsAccount(
+    overrides: Partial<InsightAccountRow> & { id: string }
+  ): InsightAccountRow {
+    return {
+      name: `Account ${overrides.id}`,
+      accountClass: "ASSET",
+      accountSubtype: "savings",
+      currency: "IDR",
+      nativeBalance: 1_000_000n,
+      deletedAt: null,
+      ...overrides,
+    }
+  }
+
+  /** An expense on the 10th of `month` at 10:00 WIB (03:00Z). */
+  function monthExpense(month: string, amountMinor: bigint): InsightFlowRow {
+    return expenseRow({
+      date: `${month}-10T03:00:00.000Z`,
+      amountMinor,
+    })
+  }
+
+  function byId(result: InsightReport, id: string) {
+    return result.insights.find((insight) => insight.id === id)
+  }
+
+  test("targets 6× the trailing-six-complete-months burn, excluding the current partial month", () => {
+    const result = buildReport({
+      month: JULY,
+      historyRange: FULL_HISTORY,
+      accountRows: [
+        savingsAccount({
+          id: "acc-1",
+          name: "Tabungan",
+          nativeBalance: 4_000_000n,
+        }),
+        savingsAccount({
+          id: "acc-2",
+          name: "Reksadana",
+          nativeBalance: 3_000_000n,
+        }),
+      ],
+      expenseRows: [
+        monthExpense("2026-01", 1_000_000n),
+        monthExpense("2026-02", 1_000_000n),
+        monthExpense("2026-03", 1_000_000n),
+        monthExpense("2026-04", 2_000_000n),
+        monthExpense("2026-05", 3_000_000n),
+        monthExpense("2026-06", 5_000_000n),
+        // July is still accumulating: 10M here must NOT enter the average.
+        monthExpense(JULY, 10_000_000n),
+      ],
+    })
+
+    expect(result.failedCount).toBe(0)
+    const insight = byId(result, EMERGENCY_FUND_INSIGHT_ID)
+    expect(insight).toBeDefined()
+    // 1+1+1+2+3+5 = 13M spent over 6 complete months → target = 13M×6/6.
+    expect(insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "saved")).toBe(
+      "7000000"
+    )
+    expect(insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "target")).toBe(
+      "13000000"
+    )
+    expect(insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "gap")).toBe(
+      "6000000"
+    )
+    expect(insight?.tone).toBe("attention")
+    expect(insight?.window).toEqual({
+      kind: "trailing_6_months",
+      start: "2026-01-01",
+      end: "2026-06-30",
+      timezone: "Asia/Jakarta",
+    })
+    expect(insight?.detail).toBe(
+      "Based on 6 complete months of recorded spending."
+    )
+    // Full window: no months-used disclosure.
+    expect(
+      insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "partial_window")
+    ).toBeUndefined()
+    expect(insight?.partial).toBe(false)
+  })
+
+  test("orders metrics so the generic renderer reads Saved as the headline", () => {
+    const full = buildReport({
+      month: JULY,
+      historyRange: FULL_HISTORY,
+      accountRows: [savingsAccount({ id: "acc-1", name: "Tabungan" })],
+      expenseRows: [monthExpense("2026-06", 1_000_000n)],
+    })
+    const fullInsight = byId(full, EMERGENCY_FUND_INSIGHT_ID)
+    expect(fullInsight?.metrics.map((metric) => metric.key)).toEqual([
+      "saved",
+      "target",
+      "gap",
+      "counted_accounts",
+      "fx_pending_count",
+    ])
+    // Headline contract: the FIRST money metric carries the currency.
+    expect(fullInsight?.metrics[0]).toEqual({
+      key: "saved",
+      label: "Saved",
+      value: "1000000",
+      currency: "IDR",
+    })
+
+    // A partial window inserts months-used between gap and counted accounts.
+    const partial = buildReport({
+      month: JULY,
+      historyRange: { start: "2026-04-15", end: "2026-07-05" },
+      accountRows: [savingsAccount({ id: "acc-1", name: "Tabungan" })],
+      expenseRows: [monthExpense("2026-05", 1_000_000n)],
+    })
+    expect(
+      byId(partial, EMERGENCY_FUND_INSIGHT_ID)?.metrics.map((m) => m.key)
+    ).toEqual([
+      "saved",
+      "target",
+      "gap",
+      "partial_window",
+      "counted_accounts",
+      "fx_pending_count",
+    ])
+  })
+
+  test("folds split children through the parent's stored rate, never the parent projection", () => {
+    const result = buildReport({
+      month: JULY,
+      historyRange: { start: "2026-04-01", end: "2026-06-30" },
+      accountRows: [savingsAccount({ id: "acc-1", name: "Tabungan" })],
+      expenseRows: [
+        monthExpense("2026-04", 1_000_000n),
+        monthExpense("2026-05", 1_000_000n),
+        flowRow({
+          date: new Date("2026-06-10T03:00:00.000Z"),
+          amount: 5_000_000n,
+          // Intentionally NOT the children's sum: the fold must consume the
+          // children (the cash-flow/budget rule).
+          baseAmount: -4_999_999n,
+          isSplit: true,
+          splitEntries: [{ amount: 2_000_000n }, { amount: 3_000_000n }],
+        }),
+      ],
+    })
+    // spent = 1M + 1M + 5M(children) = 7M over 3 months → 42M/3 = 14M.
+    // (The parent projection would have yielded 41_999_994/3 = 13_999_998.)
+    expect(insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "target")).toBe(
+      "14000000"
+    )
+  })
+
+  test("discloses a partial window: mid-month onboarding months are excluded, never diluted", () => {
+    const result = buildReport({
+      month: JULY,
+      // First ledger row on 2026-04-15: April is NOT covered end-to-end,
+      // so only May and June count — April's 3M burn is excluded, not
+      // averaged in as a fragment.
+      historyRange: { start: "2026-04-15", end: "2026-06-30" },
+      accountRows: [savingsAccount({ id: "acc-1", name: "Tabungan" })],
+      expenseRows: [
+        monthExpense("2026-04", 3_000_000n),
+        monthExpense("2026-05", 2_000_000n),
+        monthExpense("2026-06", 4_000_000n),
+      ],
+    })
+    // spent = 6M over 2 months → 36M/2 = 18M.
+    expect(insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "target")).toBe(
+      "18000000"
+    )
+    expect(
+      insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "partial_window")
+    ).toBe("2 of 6")
+    expect(byId(result, EMERGENCY_FUND_INSIGHT_ID)?.detail).toBe(
+      "Based on 2 complete months of recorded spending."
+    )
+  })
+
+  test("excludes months after a lapsed recording period (history ends mid-window)", () => {
+    const result = buildReport({
+      month: JULY,
+      // The family recorded Jan 1 → Mar 10 and then stopped: March is not
+      // complete, Apr–Jun have no recorded history at all.
+      historyRange: { start: "2026-01-01", end: "2026-03-10" },
+      accountRows: [savingsAccount({ id: "acc-1", name: "Tabungan" })],
+      expenseRows: [
+        monthExpense("2026-01", 1_000_000n),
+        monthExpense("2026-02", 2_000_000n),
+        monthExpense("2026-03", 9_000_000n),
+      ],
+    })
+    // spent = 3M over 2 months (Jan, Feb) → 18M/2 = 9M; March's 9M excluded.
+    expect(insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "target")).toBe(
+      "9000000"
+    )
+    expect(
+      insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "partial_window")
+    ).toBe("2 of 6")
+  })
+
+  test("counts a covered month with zero recorded rows as zero burn", () => {
+    const result = buildReport({
+      month: JULY,
+      // History covers Apr–Jun end-to-end, but only May has spending rows:
+      // April and June are honest zero-burn months, diluting the average.
+      historyRange: { start: "2026-04-01", end: "2026-06-30" },
+      accountRows: [savingsAccount({ id: "acc-1", name: "Tabungan" })],
+      expenseRows: [monthExpense("2026-05", 6_000_000n)],
+    })
+    // spent = 6M over 3 months → 36M/3 = 12M.
+    expect(insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "target")).toBe(
+      "12000000"
+    )
+  })
+
+  test("truncates the target rather than rounding the family's hurdle up", () => {
+    const result = buildReport({
+      month: JULY,
+      // Four complete months (Mar–Jun).
+      historyRange: { start: "2026-03-01", end: "2026-06-30" },
+      accountRows: [savingsAccount({ id: "acc-1", name: "Tabungan" })],
+      expenseRows: [monthExpense("2026-03", 7_000_001n)],
+    })
+    // 7_000_001×6 = 42_000_006, /4 = 10_500_001.5 → 10_500_001 (truncated).
+    expect(insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "target")).toBe(
+      "10500001"
+    )
+  })
+
+  test("skips — never a guessed average — when fewer than two complete months exist", () => {
+    const accountRows = [savingsAccount({ id: "acc-1", name: "Tabungan" })]
+
+    // Only June is covered end-to-end (first row 2026-05-15 excludes May).
+    const oneMonth = buildReport({
+      month: JULY,
+      historyRange: { start: "2026-05-15", end: "2026-06-30" },
+      accountRows,
+      expenseRows: [monthExpense("2026-06", 1_000_000n)],
+    })
+    expect(byId(oneMonth, EMERGENCY_FUND_INSIGHT_ID)).toBeUndefined()
+    expect(oneMonth.skipped).toContainEqual({
+      id: EMERGENCY_FUND_INSIGHT_ID,
+      reason: "fewer than two complete months of recorded history",
+    })
+
+    // No recorded ledger at all.
+    const noHistory = buildReport({
+      month: JULY,
+      historyRange: null,
+      accountRows,
+      expenseRows: [],
+    })
+    expect(byId(noHistory, EMERGENCY_FUND_INSIGHT_ID)).toBeUndefined()
+    expect(noHistory.skipped).toContainEqual({
+      id: EMERGENCY_FUND_INSIGHT_ID,
+      reason: "fewer than two complete months of recorded history",
+    })
+  })
+
+  test("skips when no account is designated as savings (qualification is not vacuous)", () => {
+    const result = buildReport({
+      month: JULY,
+      historyRange: FULL_HISTORY,
+      accountRows: [
+        // A checking account: ASSET but not the savings product subtype.
+        savingsAccount({
+          id: "acc-1",
+          name: "Wallet",
+          accountSubtype: "checking",
+          nativeBalance: 99_000_000n,
+        }),
+        // A savings-FLAVOURED liability is debt, never a fund.
+        savingsAccount({
+          id: "acc-2",
+          name: "Card",
+          accountClass: "LIABILITY",
+          nativeBalance: -5_000_000n,
+        }),
+        // A soft-deleted savings account has stopped being part of the fund.
+        savingsAccount({
+          id: "acc-3",
+          name: "Old savings",
+          deletedAt: new Date("2026-06-01T00:00:00.000Z"),
+          nativeBalance: 8_000_000n,
+        }),
+      ],
+      expenseRows: [monthExpense("2026-06", 1_000_000n)],
+    })
+    expect(result.insights.map((insight) => insight.id)).not.toContain(
+      EMERGENCY_FUND_INSIGHT_ID
+    )
+    expect(result.skipped).toContainEqual({
+      id: EMERGENCY_FUND_INSIGHT_ID,
+      reason: "no account is designated as savings",
+    })
+  })
+
+  test("counts exactly the designated accounts: any accountType, never deleted, never liability", () => {
+    const result = buildReport({
+      month: JULY,
+      historyRange: FULL_HISTORY,
+      accountRows: [
+        savingsAccount({
+          id: "acc-1",
+          name: "Wallet",
+          accountSubtype: "checking",
+          nativeBalance: 99_000_000n,
+        }),
+        savingsAccount({
+          id: "acc-2",
+          name: "Tabungan",
+          nativeBalance: 2_000_000n,
+        }),
+        // An INVESTMENT-class ASSET with the savings subtype counts — the
+        // emergency-fund money parked in a money-market fund.
+        savingsAccount({
+          id: "acc-3",
+          name: "Reksadana",
+          nativeBalance: 3_000_000n,
+        }),
+        savingsAccount({
+          id: "acc-4",
+          name: "Old savings",
+          deletedAt: new Date("2026-06-01T00:00:00.000Z"),
+          nativeBalance: 8_000_000n,
+        }),
+        savingsAccount({
+          id: "acc-5",
+          name: "Card",
+          accountClass: "LIABILITY",
+          nativeBalance: -5_000_000n,
+        }),
+      ],
+      expenseRows: [monthExpense("2026-06", 1_000_000n)],
+    })
+    expect(insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "saved")).toBe(
+      "5000000"
+    )
+    // The fold preserves the seam's deterministic input order (name asc).
+    expect(
+      insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "counted_accounts")
+    ).toBe("Tabungan, Reksadana")
+  })
+
+  test("caps the counted-accounts listing at three names then +n", () => {
+    const result = buildReport({
+      month: JULY,
+      historyRange: FULL_HISTORY,
+      accountRows: [
+        savingsAccount({ id: "a", name: "A", nativeBalance: 1n }),
+        savingsAccount({ id: "b", name: "B", nativeBalance: 2n }),
+        savingsAccount({ id: "c", name: "C", nativeBalance: 3n }),
+        savingsAccount({ id: "d", name: "D", nativeBalance: 4n }),
+        savingsAccount({ id: "e", name: "E", nativeBalance: 5n }),
+      ],
+      expenseRows: [monthExpense("2026-06", 1_000_000n)],
+    })
+    expect(insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "saved")).toBe("15")
+    expect(
+      insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "counted_accounts")
+    ).toBe("A, B, C +2")
+  })
+
+  test("renders a genuine zero balance as zero — not as a skip", () => {
+    const result = buildReport({
+      month: JULY,
+      historyRange: FULL_HISTORY,
+      accountRows: [
+        savingsAccount({ id: "acc-1", name: "Tabungan", nativeBalance: 0n }),
+      ],
+      expenseRows: [monthExpense("2026-06", 6_000_000n)],
+    })
+    const insight = byId(result, EMERGENCY_FUND_INSIGHT_ID)
+    expect(insight).toBeDefined()
+    expect(insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "saved")).toBe("0")
+    expect(insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "target")).toBe(
+      "6000000"
+    )
+    expect(insight?.tone).toBe("attention")
+  })
+
+  test("turns positive when the fund already covers the target", () => {
+    const result = buildReport({
+      month: JULY,
+      historyRange: FULL_HISTORY,
+      accountRows: [
+        savingsAccount({
+          id: "acc-1",
+          name: "Tabungan",
+          nativeBalance: 20_000_000n,
+        }),
+      ],
+      expenseRows: [monthExpense("2026-06", 2_000_000n)],
+    })
+    const insight = byId(result, EMERGENCY_FUND_INSIGHT_ID)
+    expect(insight?.tone).toBe("positive")
+    expect(insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "gap")).toBe(
+      "-18000000"
+    )
+  })
+
+  test("skips when every designated balance is pending an exchange rate", () => {
+    const result = buildReport({
+      month: JULY,
+      historyRange: FULL_HISTORY,
+      accountRows: [
+        savingsAccount({
+          id: "acc-1",
+          name: "USD Savings",
+          currency: "USD",
+          nativeBalance: 5_000n,
+        }),
+      ],
+      fxRateRows: [],
+      expenseRows: [monthExpense("2026-06", 1_000_000n)],
+    })
+    expect(byId(result, EMERGENCY_FUND_INSIGHT_ID)).toBeUndefined()
+    expect(result.skipped).toContainEqual({
+      id: EMERGENCY_FUND_INSIGHT_ID,
+      reason: "every designated savings balance is pending an exchange rate",
+    })
+  })
+
+  test("excludes AND counts FX-pending balances and burn rows from both sides", () => {
+    const result = buildReport({
+      month: JULY,
+      // First row 2026-05-01: May and June are the covered months (April
+      // never entered the ledger) — April's absence is dilution's job to
+      // avoid, so monthsUsed = 2.
+      historyRange: { start: "2026-05-01", end: "2026-07-05" },
+      accountRows: [
+        savingsAccount({
+          id: "acc-1",
+          name: "Tabungan",
+          nativeBalance: 5_000_000n,
+        }),
+        // USD savings with NO USD→IDR rate: excluded, counted.
+        savingsAccount({
+          id: "acc-2",
+          name: "USD Savings",
+          currency: "USD",
+          nativeBalance: 5_000n,
+        }),
+      ],
+      fxRateRows: [],
+      expenseRows: [
+        monthExpense("2026-05", 1_000_000n),
+        monthExpense("2026-06", 2_000_000n),
+        // A USD burn row with no rate: excluded, counted.
+        expenseRow({
+          date: "2026-06-12T03:00:00.000Z",
+          amountMinor: 1_000n,
+          baseAmountMinor: null,
+        }),
+      ],
+    })
+    const insight = byId(result, EMERGENCY_FUND_INSIGHT_ID)
+    expect(insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "saved")).toBe(
+      "5000000"
+    )
+    // spent = 3M over 2 months → 18M/2 = 9M.
+    expect(insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "target")).toBe(
+      "9000000"
+    )
+    // 1 saved-side pending account + 1 burn-side pending row.
+    expect(
+      insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "fx_pending_count")
+    ).toBe("2")
+    expect(insight?.partial).toBe(true)
+  })
+
+  test("converts foreign savings with the net-worth resolver — identical numbers, provably", () => {
+    const fxRateRows: InsightFxRateRow[] = [
+      {
+        fromCurrency: "USD",
+        toCurrency: "IDR",
+        rateScaled: 16_000n * RATE_SCALE,
+      },
+    ]
+    const accountRows = [
+      savingsAccount({
+        id: "acc-1",
+        name: "Tabungan",
+        nativeBalance: 1_000_000n,
+      }),
+      savingsAccount({
+        id: "acc-2",
+        name: "USD Savings",
+        currency: "USD",
+        nativeBalance: 5_000n,
+      }),
+    ]
+    const result = buildReport({
+      month: JULY,
+      historyRange: FULL_HISTORY,
+      accountRows,
+      fxRateRows,
+      expenseRows: [monthExpense("2026-06", 1_000_000n)],
+    })
+    // 5_000 USD-cents @ 16_000 IDR/USD = 80_000_000 IDR-sen, + 1M base.
+    expect(insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "saved")).toBe(
+      "81000000"
+    )
+
+    // The same balances through the net-worth engine's own fold must agree
+    // exactly — one resolver, one conversion, one truth.
+    const netWorth = normalizeNetWorthAt(
+      accountRows.map((row) => ({
+        accountClass: row.accountClass,
+        currency: row.currency,
+        native: row.nativeBalance,
+      })),
+      buildLatestRateResolver(fxRateRows, "IDR"),
+      "IDR"
+    )
+    expect(netWorth.netWorth.toString()).toBe(
+      insightMetric(result, EMERGENCY_FUND_INSIGHT_ID, "saved")
+    )
+  })
+
+  test("intersects the burn window against anchor gaps, not the report month", () => {
+    const accountRows = [savingsAccount({ id: "acc-1", name: "Tabungan" })]
+    const expenses = [monthExpense("2026-06", 1_000_000n)]
+
+    // A gap inside the burn window (Feb) marks THIS card partially recorded.
+    const burnGap = buildReport({
+      month: JULY,
+      historyRange: FULL_HISTORY,
+      accountRows,
+      expenseRows: expenses,
+      anchorGaps: [
+        {
+          accountId: "acc-gap",
+          accountName: "Gap account",
+          currency: "IDR",
+          fromDate: "2026-02-01",
+          toDate: "2026-02-28",
+          amount: 500_000n,
+          fromSource: "manual",
+          toSource: "pit_stop",
+        },
+      ],
+    })
+    expect(byId(burnGap, EMERGENCY_FUND_INSIGHT_ID)?.periodPartial).toBe(true)
+
+    // A gap in the July month only: outside the burn window (Jan–Jun), so the
+    // burn figures are fully recorded even though July is not.
+    const julyGap = buildReport({
+      month: JULY,
+      historyRange: FULL_HISTORY,
+      accountRows,
+      expenseRows: expenses,
+      anchorGaps: [
+        {
+          accountId: "acc-gap",
+          accountName: "Gap account",
+          currency: "IDR",
+          fromDate: "2026-07-12",
+          toDate: "2026-07-20",
+          amount: 500_000n,
+          fromSource: "manual",
+          toSource: "pit_stop",
+        },
+      ],
+    })
+    expect(byId(julyGap, EMERGENCY_FUND_INSIGHT_ID)?.periodPartial).toBe(false)
+  })
+
+  test("is registered under engine version 4", () => {
+    expect(INSIGHTS_ENGINE_VERSION).toBe(4)
+    const result = buildReport({
+      month: JULY,
+      historyRange: FULL_HISTORY,
+      accountRows: [savingsAccount({ id: "acc-1", name: "Tabungan" })],
+      expenseRows: [monthExpense("2026-06", 1_000_000n)],
+    })
+    // Registry order: savings_flow, since_payday, emergency_fund.
+    expect(result.insights.map((insight) => insight.id)).toEqual([
+      EMERGENCY_FUND_INSIGHT_ID,
+    ])
+    expect(byId(result, EMERGENCY_FUND_INSIGHT_ID)?.engineVersion).toBe(4)
   })
 })

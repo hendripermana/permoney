@@ -5,8 +5,10 @@ import {
   calendarMonthBounds,
   computeInsights,
   currentMonthInZone,
+  type InsightAccountRow,
   type InsightAnchorGapRow,
   type InsightFlowRow,
+  type InsightFxRateRow,
   type InsightReport,
   type InsightTransferRow,
 } from "@/lib/insights"
@@ -41,15 +43,37 @@ import { collectAnchorChainGaps } from "./valuations"
 // bound is the shared `queryRange` from reporting.ts; the fold localizes each
 // row's instant precisely, so over-fetching is harmless.
 //
-// Three loads, each for exactly one consumer:
+// Loads, each for exactly one consumer, all sequential on the one
+// interactive-transaction client (a transaction has a single connection, so
+// awaiting them in order is the only correct shape — never Promise.all):
 //   1. transfer legs, window = the requested calendar month (`savings_flow`);
-//   2. income rows, window = SIX months back — the payday anchor needs ≥3
-//      monthly occurrences with family-tz-stable gaps, and the detector drops
-//      a series whose last occurrence is more than two cadence bands (~70
-//      days) old, so six months is comfortably sufficient;
-//   3. expense rows, window = THREE months back — an anchor can be at most
-//      ~70 days old (same detector guard), and three calendar months bound
-//      that in every month-length case.
+//   2. income rows, window = SIX months back from today — the payday anchor
+//      needs ≥3 monthly occurrences with family-tz-stable gaps, and the
+//      detector drops a series whose last occurrence is more than two cadence
+//      bands (~70 days) old, so six months is comfortably sufficient;
+//   3. expense rows, window = SEVEN calendar months (month−6 → month end,
+//      anchored to the REQUESTED month, not today) — the union both consumers
+//      need: `emergency_fund` folds the trailing-six-complete-months burn
+//      from them, and `since_payday`'s window (anchor ≈ ≤70 days back through
+//      today) is a subset whenever the requested month is current (the only
+//      case that derivation runs);
+//   4. every family account, flat and UNFILTERED (`emergency_fund`'s
+//      designated-savings predicate lives in the pure fold, so the unit tests
+//      can prove it — the seam never pre-filters, and `orderBy name asc`
+//      keeps the counted-accounts listing deterministic);
+//   5. the latest foreign→base rate per pair (`emergency_fund`) — the
+//      debts.ts-style latest-per-pair query feeding the SAME
+//      `buildLatestRateResolver` the net-worth cards use, so this card can
+//      never disagree with net worth about a converted balance. (The
+//      alternative — reusing `getLatestFxOverviewForFamily` — is impossible
+//      inside this transaction: it opens its own.)
+//   6. the first and last non-deleted ledger rows (`emergency_fund`) — the
+//      recorded-history span (Rule E, ADR-0059 PER-227 amendment) deciding
+//      which trailing burn months count as COMPLETE. `family.createdAt` is
+//      unusable as a history proxy: a family can be created long before its
+//      first row is recorded (integration seeds back-date rows), and rows can
+//      post-date onboarding by months, so only the ledger itself can say what
+//      was actually recorded.
 // =============================================================================
 
 /** The flat projection both flow loads share. */
@@ -133,7 +157,13 @@ export async function getInsightsForFamily({
     const range = queryRange(bounds.start, bounds.end)
     const today = calendarDateInZone(now, timezone)
     const incomeRange = queryRange(subtractCalendarMonths(today, 6), today)
-    const expenseRange = queryRange(subtractCalendarMonths(today, 3), today)
+    // Seven calendar months anchored to the REQUESTED month (month−6 → month
+    // end): the union of `emergency_fund`'s burn lookback and
+    // `since_payday`'s anchor window (see the header's load list).
+    const expenseRange = queryRange(
+      subtractCalendarMonths(`${month}-01`, 6),
+      bounds.end
+    )
 
     // Only transfer legs are loaded: the cash-flow engine excludes
     // `type='transfer'` rows, and this engine consumes nothing else, so the
@@ -231,6 +261,68 @@ export async function getInsightsForFamily({
       toSource: gap.toSource,
     }))
 
+    // PER-227 slice #3 — `emergency_fund`'s three loads. Accounts are loaded
+    // UNFILTERED (soft-deleted rows included, class/subtype untouched): the
+    // designated-savings predicate is a locked domain rule that lives in the
+    // pure fold (src/lib/insights.ts), where the unit tests can prove it.
+    // Name-ordered so the counted-accounts metric lists deterministically.
+    const accountRows: InsightAccountRow[] = (
+      await tx.account.findMany({
+        where: { familyId },
+        select: {
+          id: true,
+          name: true,
+          accountClass: true,
+          accountSubtype: true,
+          currency: true,
+          balance: true,
+          deletedAt: true,
+        },
+        orderBy: { name: "asc" },
+      })
+    ).map((row) => ({
+      id: row.id,
+      name: row.name,
+      accountClass: row.accountClass,
+      accountSubtype: row.accountSubtype,
+      currency: row.currency,
+      nativeBalance: row.balance,
+      deletedAt: row.deletedAt,
+    }))
+
+    // Latest foreign→base rate per pair (greatest asOfDate wins — the
+    // debts.ts pattern), first-wins per pair feeding the shared
+    // `buildLatestRateResolver`, identical to the net-worth cards.
+    const fxRateRows: InsightFxRateRow[] = await tx.fxRateSnapshot.findMany({
+      where: { familyId, toCurrency: baseCurrency },
+      orderBy: [{ fromCurrency: "asc" }, { asOfDate: "desc" }],
+      select: { fromCurrency: true, toCurrency: true, rateScaled: true },
+    })
+
+    // Rule E — the recorded-history span: family-tz dates of the first and
+    // last non-deleted ledger rows (any type, excluded rows included — they
+    // were still RECORDED; exclusion hides them from figures, never from
+    // history). Two sequential findFirst queries; `null` when the family has
+    // no rows at all (the derivation then skips — no confident average over
+    // an unrecorded life).
+    const firstLedgerRow = await tx.transaction.findFirst({
+      where: { familyId, deletedAt: null },
+      orderBy: { date: "asc" },
+      select: { date: true },
+    })
+    const lastLedgerRow = await tx.transaction.findFirst({
+      where: { familyId, deletedAt: null },
+      orderBy: { date: "desc" },
+      select: { date: true },
+    })
+    const historyRange =
+      firstLedgerRow !== null && lastLedgerRow !== null
+        ? {
+            start: calendarDateInZone(firstLedgerRow.date, timezone),
+            end: calendarDateInZone(lastLedgerRow.date, timezone),
+          }
+        : null
+
     return computeInsights({
       timezone,
       month,
@@ -240,6 +332,9 @@ export async function getInsightsForFamily({
       incomeRows: incomeTransactions.map(toFlowRow),
       expenseRows: expenseTransactions.map(toFlowRow),
       anchorGaps,
+      accountRows,
+      fxRateRows,
+      historyRange,
     })
   })
 }

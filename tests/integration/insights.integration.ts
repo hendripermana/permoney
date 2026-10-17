@@ -7,7 +7,10 @@ import {
   test,
 } from "vite-plus/test"
 import type { AccountType } from "@/lib/accounts"
-import { INSIGHTS_ENGINE_VERSION } from "@/lib/insights"
+import {
+  EMERGENCY_FUND_INSIGHT_ID,
+  INSIGHTS_ENGINE_VERSION,
+} from "@/lib/insights"
 import { getInsightsForFamily } from "@/server/insights"
 import { getCashFlowReportForFamily } from "@/server/reporting"
 import {
@@ -85,6 +88,7 @@ describe("household insights (PER-227)", () => {
       accountType?: AccountType
       accountSubtype?: string
       currency?: string
+      balance?: bigint
     } = {}
   ) => {
     const accountType = opts.accountType ?? "DEPOSITORY"
@@ -95,7 +99,7 @@ describe("household insights (PER-227)", () => {
       accountType,
       accountSubtype: opts.accountSubtype,
       currency: opts.currency ?? "IDR",
-      balance: isLiability ? -100_000_000n : 100_000_000n,
+      balance: opts.balance ?? (isLiability ? -100_000_000n : 100_000_000n),
     })
   }
 
@@ -848,5 +852,375 @@ describe("household insights (PER-227)", () => {
     insight = savingsFlow(await insightsAt(owner, COMPLETENESS_NOW))
     expect(insight?.periodPartial).toBe(false)
     expect(insight?.periodGaps).toEqual([])
+  })
+
+  // ---- emergency_fund (PER-227 slice #3) -------------------------------------
+
+  // 2026-07-10 10:00 WIB — the pinned "today" for these tests. The requested
+  // month is explicit ("2026-07"), so the clock only matters for the fold's
+  // `now` passthrough.
+  const EMERGENCY_NOW = new Date("2026-07-10T03:00:00.000Z")
+
+  test("folds 6× trailing-complete-month burn against designated-savings balances", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    const wallet = await account(owner, "Wallet", {
+      accountSubtype: "checking",
+    })
+    const savings = await account(owner, "Savings 1", {
+      accountSubtype: "savings",
+      balance: 0n,
+    })
+
+    // Three COMPLETE months of burn (Apr/May/Jun) plus a July row that the
+    // current partial month must exclude from the average.
+    await create(owner, {
+      type: "expense",
+      amount: 1_000_000n,
+      accountId: wallet.id,
+      description: "April spending",
+      date: new Date("2026-04-01T03:00:00.000Z"),
+    })
+    await create(owner, {
+      type: "expense",
+      amount: 2_000_000n,
+      accountId: wallet.id,
+      description: "May spending",
+      date: new Date("2026-05-01T03:00:00.000Z"),
+    })
+    await create(owner, {
+      type: "expense",
+      amount: 3_000_000n,
+      accountId: wallet.id,
+      description: "June spending",
+      date: new Date("2026-06-01T03:00:00.000Z"),
+    })
+    await create(owner, {
+      type: "expense",
+      amount: 4_000_000n,
+      accountId: wallet.id,
+      description: "July spending",
+      date: new Date("2026-07-05T03:00:00.000Z"),
+    })
+    // Designated savings gets funded by a TRANSFER — never spending, so the
+    // same movement cannot inflate burn and deflate the gap at once.
+    await transfer(owner, {
+      from: wallet.id,
+      to: savings.id,
+      amount: 5_000_000n,
+      date: new Date("2026-06-10T03:00:00.000Z"),
+    })
+
+    const report = await insightsAt(owner, EMERGENCY_NOW, "2026-07")
+    expect(report.engineVersion).toBe(INSIGHTS_ENGINE_VERSION)
+    expect(report.failedCount).toBe(0)
+
+    const insight = report.insights.find(
+      (entry) => entry.id === EMERGENCY_FUND_INSIGHT_ID
+    )
+    expect(insight?.window).toEqual({
+      kind: "trailing_6_months",
+      start: "2026-01-01",
+      end: "2026-06-30",
+      timezone: "Asia/Jakarta",
+    })
+    // Saved first (headline money metric), then target, gap, months used,
+    // counted accounts, FX-pending — the renderer's generic contract.
+    expect(insight?.metrics.map((entry) => entry.key)).toEqual([
+      "saved",
+      "target",
+      "gap",
+      "partial_window",
+      "counted_accounts",
+      "fx_pending_count",
+    ])
+    // Saved = the current balance the 5M transfer left on the savings
+    // account; burn = 6M over Apr–Jun; target = 6M × 6 ÷ 3 months = 12M.
+    expect(insightMetric(report, EMERGENCY_FUND_INSIGHT_ID, "saved")).toBe(
+      "5000000"
+    )
+    expect(insightMetric(report, EMERGENCY_FUND_INSIGHT_ID, "target")).toBe(
+      "12000000"
+    )
+    expect(insightMetric(report, EMERGENCY_FUND_INSIGHT_ID, "gap")).toBe(
+      "7000000"
+    )
+    expect(
+      insightMetric(report, EMERGENCY_FUND_INSIGHT_ID, "partial_window")
+    ).toBe("3 of 6")
+    expect(
+      insightMetric(report, EMERGENCY_FUND_INSIGHT_ID, "counted_accounts")
+    ).toBe("Savings 1")
+    expect(
+      insightMetric(report, EMERGENCY_FUND_INSIGHT_ID, "fx_pending_count")
+    ).toBe("0")
+    expect(insight?.tone).toBe("attention")
+    expect(insight?.partial).toBe(false)
+    expect(insight?.detail).toBe(
+      "Based on 3 complete months of recorded spending."
+    )
+
+    // Cross-engine: the SAME ledger folds to the cash-flow engine's expense
+    // over the burn span — one movement, one number, two views.
+    const cashFlow = await getCashFlowReportForFamily({
+      data: { from: "2026-04-01", to: "2026-06-30", interval: "month" },
+      familyId: owner.family.id,
+      userId: owner.user.id,
+    })
+    expect(cashFlow.totals.expense).toBe("6000000")
+    expect(cashFlow.totals.income).toBe("0")
+  })
+
+  test("counts only the reader's family designated balances", async () => {
+    const seedFamily = async (
+      owner: AuthenticatedOnboardedUser,
+      savingsName: string,
+      savingsBalance: bigint,
+      expenseAmount: bigint
+    ) => {
+      const wallet = await account(owner, `${savingsName} wallet`, {
+        accountSubtype: "checking",
+      })
+      await account(owner, savingsName, {
+        accountSubtype: "savings",
+        balance: savingsBalance,
+      })
+      // Two fully-covered complete months (May + June) of recorded history.
+      await create(owner, {
+        type: "expense",
+        amount: expenseAmount,
+        accountId: wallet.id,
+        description: "May spending",
+        date: new Date("2026-05-01T03:00:00.000Z"),
+      })
+      await create(owner, {
+        type: "expense",
+        amount: expenseAmount,
+        accountId: wallet.id,
+        description: "June spending",
+        date: new Date("2026-06-30T03:00:00.000Z"),
+      })
+    }
+
+    const ownerA = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(ownerA, "IDR", "Asia/Jakarta")
+    await seedFamily(ownerA, "A savings", 5_000_000n, 300_000n)
+
+    const ownerB = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(ownerB, "IDR", "Asia/Jakarta")
+    await seedFamily(ownerB, "B savings", 3_000_000n, 300_000n)
+
+    const reportA = await insightsAt(ownerA, EMERGENCY_NOW, "2026-07")
+    expect(insightMetric(reportA, EMERGENCY_FUND_INSIGHT_ID, "saved")).toBe(
+      "5000000"
+    )
+    expect(
+      insightMetric(reportA, EMERGENCY_FUND_INSIGHT_ID, "counted_accounts")
+    ).toBe("A savings")
+
+    const reportB = await insightsAt(ownerB, EMERGENCY_NOW, "2026-07")
+    expect(insightMetric(reportB, EMERGENCY_FUND_INSIGHT_ID, "saved")).toBe(
+      "3000000"
+    )
+    expect(
+      insightMetric(reportB, EMERGENCY_FUND_INSIGHT_ID, "counted_accounts")
+    ).toBe("B savings")
+
+    // A non-member reading family A gets nothing — RLS never leaks a balance.
+    const leaked = await insights(ownerA, "2026-07", ownerB.user.id)
+    expect(leaked.insights.map((entry) => entry.id)).not.toContain(
+      EMERGENCY_FUND_INSIGHT_ID
+    )
+  })
+
+  test("excludes an FX-pending balance and burn row from the figures but counts them", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    const wallet = await account(owner, "Wallet", {
+      accountSubtype: "checking",
+    })
+    // USD account with NO USD→IDR rate seeded: both its BALANCE and its burn
+    // rows stay FX-pending.
+    const usdWallet = await account(owner, "USD Wallet", {
+      accountSubtype: "checking",
+      currency: "USD",
+    })
+    await account(owner, "Savings IDR", {
+      accountSubtype: "savings",
+      balance: 5_000_000n,
+    })
+    await account(owner, "Savings USD", {
+      accountSubtype: "savings",
+      currency: "USD",
+      balance: 5_000n,
+    })
+
+    // Burn: one IDR expense in May, one USD expense mid-June (pending), and a
+    // June 30 income row so recorded history covers May AND June end-to-end.
+    await create(owner, {
+      type: "expense",
+      amount: 3_000_000n,
+      accountId: wallet.id,
+      description: "May spending",
+      date: new Date("2026-05-01T03:00:00.000Z"),
+    })
+    await create(owner, {
+      type: "expense",
+      amount: 100_000n,
+      accountId: usdWallet.id,
+      description: "USD purchase",
+      date: new Date("2026-06-10T03:00:00.000Z"),
+    })
+    await income(owner, {
+      accountId: wallet.id,
+      amount: 1_000_000n,
+      date: new Date("2026-06-30T03:00:00.000Z"),
+      description: "June income",
+    })
+
+    const report = await insightsAt(owner, EMERGENCY_NOW, "2026-07")
+    // Saved = the IDR balance only; target = 3M × 6 ÷ 2 months = 9M.
+    expect(insightMetric(report, EMERGENCY_FUND_INSIGHT_ID, "saved")).toBe(
+      "5000000"
+    )
+    expect(insightMetric(report, EMERGENCY_FUND_INSIGHT_ID, "target")).toBe(
+      "9000000"
+    )
+    expect(insightMetric(report, EMERGENCY_FUND_INSIGHT_ID, "gap")).toBe(
+      "4000000"
+    )
+    expect(
+      insightMetric(report, EMERGENCY_FUND_INSIGHT_ID, "partial_window")
+    ).toBe("2 of 6")
+    expect(
+      insightMetric(report, EMERGENCY_FUND_INSIGHT_ID, "counted_accounts")
+    ).toBe("Savings IDR")
+    // One pending balance + one pending burn row — excluded AND counted,
+    // never silently zeroed.
+    expect(
+      insightMetric(report, EMERGENCY_FUND_INSIGHT_ID, "fx_pending_count")
+    ).toBe("2")
+    const insight = report.insights.find(
+      (entry) => entry.id === EMERGENCY_FUND_INSIGHT_ID
+    )
+    expect(insight?.partial).toBe(true)
+  })
+
+  test("skips when every designated savings balance is pending an exchange rate", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    await account(owner, "Savings USD", {
+      accountSubtype: "savings",
+      currency: "USD",
+      balance: 5_000n,
+    })
+
+    const report = await insightsAt(owner, EMERGENCY_NOW, "2026-07")
+    expect(report.insights.map((entry) => entry.id)).not.toContain(
+      EMERGENCY_FUND_INSIGHT_ID
+    )
+    expect(
+      report.skipped.find((entry) => entry.id === EMERGENCY_FUND_INSIGHT_ID)
+    ).toEqual({
+      id: EMERGENCY_FUND_INSIGHT_ID,
+      reason: "every designated savings balance is pending an exchange rate",
+    })
+  })
+
+  test("counts an INVESTMENT account designated as savings, valuation balance included", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    const wallet = await account(owner, "Wallet", {
+      accountSubtype: "checking",
+    })
+    // A money-market fund: INVESTMENT class, `savings` product subtype — the
+    // Indonesian household norm, and it MUST count.
+    const mmf = await account(owner, "MMF", {
+      accountType: "INVESTMENT",
+      accountSubtype: "savings",
+      balance: 0n,
+    })
+    // A plain brokerage: INVESTMENT class but NOT the savings subtype — it
+    // must not leak into the figure despite its 100M balance.
+    await account(owner, "Brokerage", { accountType: "INVESTMENT" })
+    // The MMF's balance is materialized from a reconciliation valuation, not
+    // a transfer — designated savings counts regardless of balance source.
+    await addAnchor(
+      owner,
+      mmf.id,
+      "25000000",
+      new Date("2026-05-01T03:00:00.000Z")
+    )
+
+    await create(owner, {
+      type: "expense",
+      amount: 3_000_000n,
+      accountId: wallet.id,
+      description: "May spending",
+      date: new Date("2026-05-01T03:00:00.000Z"),
+    })
+    await create(owner, {
+      type: "expense",
+      amount: 3_000_000n,
+      accountId: wallet.id,
+      description: "June spending",
+      date: new Date("2026-06-30T03:00:00.000Z"),
+    })
+
+    const report = await insightsAt(owner, EMERGENCY_NOW, "2026-07")
+    expect(insightMetric(report, EMERGENCY_FUND_INSIGHT_ID, "saved")).toBe(
+      "25000000"
+    )
+    // Burn 6M over two months → target 18M; saved 25M beats it.
+    expect(insightMetric(report, EMERGENCY_FUND_INSIGHT_ID, "target")).toBe(
+      "18000000"
+    )
+    expect(
+      insightMetric(report, EMERGENCY_FUND_INSIGHT_ID, "counted_accounts")
+    ).toBe("MMF")
+    const insight = report.insights.find(
+      (entry) => entry.id === EMERGENCY_FUND_INSIGHT_ID
+    )
+    expect(insight?.tone).toBe("positive")
+  })
+
+  test("skips below two complete recorded months even with savings present", async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    const wallet = await account(owner, "Wallet", {
+      accountSubtype: "checking",
+    })
+    await account(owner, "Savings 1", {
+      accountSubtype: "savings",
+      balance: 5_000_000n,
+    })
+
+    // History starts mid-May: only June is covered end-to-end — one complete
+    // month, below the two-month floor.
+    await create(owner, {
+      type: "expense",
+      amount: 200_000n,
+      accountId: wallet.id,
+      description: "Mid-May spending",
+      date: new Date("2026-05-15T03:00:00.000Z"),
+    })
+    await create(owner, {
+      type: "expense",
+      amount: 200_000n,
+      accountId: wallet.id,
+      description: "June spending",
+      date: new Date("2026-06-30T03:00:00.000Z"),
+    })
+
+    const report = await insightsAt(owner, EMERGENCY_NOW, "2026-07")
+    expect(report.insights.map((entry) => entry.id)).not.toContain(
+      EMERGENCY_FUND_INSIGHT_ID
+    )
+    expect(
+      report.skipped.find((entry) => entry.id === EMERGENCY_FUND_INSIGHT_ID)
+    ).toEqual({
+      id: EMERGENCY_FUND_INSIGHT_ID,
+      reason: "fewer than two complete months of recorded history",
+    })
   })
 })

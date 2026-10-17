@@ -1,15 +1,15 @@
 # ADR-0059 — Household insights engine (computed-on-read, registry)
 
-|                   |                                                                                                                                    |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**        | Accepted                                                                                                                           |
-| **Date**          | 2026-10-11                                                                                                                         |
-| **Accepted**      | 2026-10-11                                                                                                                         |
-| **Deciders**      | Hendri Permana                                                                                                                     |
-| **Supersedes**    | —                                                                                                                                  |
-| **Superseded by** | —                                                                                                                                  |
-| **Amends**        | —                                                                                                                                  |
-| **Amended by**    | PER-443 amendment below (period incompleteness — anchor-chain gaps as a first-class honesty qualifier, distinct from FX `partial`) |
+|                   |                                                                                                                                                                                                                                                             |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Status**        | Accepted                                                                                                                                                                                                                                                    |
+| **Date**          | 2026-10-11                                                                                                                                                                                                                                                  |
+| **Accepted**      | 2026-10-11                                                                                                                                                                                                                                                  |
+| **Deciders**      | Hendri Permana                                                                                                                                                                                                                                              |
+| **Supersedes**    | —                                                                                                                                                                                                                                                           |
+| **Superseded by** | —                                                                                                                                                                                                                                                           |
+| **Amends**        | —                                                                                                                                                                                                                                                           |
+| **Amended by**    | PER-443 amendment below (period incompleteness — anchor-chain gaps as a first-class honesty qualifier, distinct from FX `partial`); PER-227 slice #3 amendment below (`emergency_fund` — designated-savings basis, 6× burn target, recorded-history Rule E) |
 
 ## Context
 
@@ -82,7 +82,8 @@ consumer, e.g. email delivery of a digest):
   an earlier engine is incomplete for a later one), so a stored artifact is
   never read under a newer engine than produced it. Version 2 added
   `since_payday` (slice #2, below); version 3 added the period-incompleteness
-  qualifier (PER-443 amendment below).
+  qualifier (PER-443 amendment below); version 4 added `emergency_fund`
+  (slice #3 amendment below).
 - `window` is typed (`calendar_month` today; `previous_month`, `since_payday`,
   `rolling_90d` reserved) and always carries the family timezone it was cut in.
 
@@ -231,3 +232,81 @@ understated ("no silent zeros" applied to FX, not to unrecorded history).
    issues #442/#448).
 7. **Computed-on-read** (§1) applies unchanged: no new tables, no
    write-on-read, family-tz window intersection (ADR-0037).
+
+## Amendment — slice #3: `emergency_fund` (PER-227, 2026-10-15)
+
+### Problem
+
+The flagship ask names the emergency fund directly ("what should we set
+aside if income stops?"), but the ledger has no notion of one: no goal
+entity, no per-account designation flag. The card must still answer the
+question HONESTLY from rows that exist today, and it must not invent a
+basis that a future Savings Goal entity would then contradict.
+
+### Decision
+
+1. **Saved basis A (locked): designated-savings CURRENT balances.** An
+   account counts when it is ACTIVE (soft-deleted excluded), of `ASSET`
+   class, and its product subtype is `savings` — ANY `accountType`,
+   because Indonesian households park emergency money in money-market
+   mutual funds (an INVESTMENT-class ASSET with the `savings` subtype is
+   the norm here). The figure is the account's CURRENT balance — the
+   canonical `Account.balance`, whatever its balance source (transaction
+   flow, reconciliation anchor, or holdings). Alternatives rejected:
+   - **B — liquid-above-reserve** (balances minus a floor): conflates
+     safe-to-spend with saved; the "reserve" is an invented number the
+     ledger cannot know, and moving it would silently change "saved".
+   - **C — hybrid** (designated balances + excess current-account
+     cash): ambiguous provenance — the figure could no longer be audited
+     to a set of accounts the user can name.
+   - **D — an Account boolean** ("this is my emergency fund"): the right
+     durable answer, but the durable home is a future Savings GOAL
+     entity (target + assigned accounts), not a column; a boolean
+     without a target cannot answer the card's question anyway. Until
+     that entity exists, the taxonomy's `savings` subtype IS the
+     designation.
+2. **Skip-vs-zero honesty.** No qualifying account → the card SKIPS
+   ("no account is designated as savings"): absence of a designation is
+   not a fact about money. Every designated balance pending an exchange
+   rate → skip. Fewer than two COMPLETE recorded months → skip. A
+   genuine ZERO balance renders Rp 0 — a fact about the ledger, not an
+   absence of one.
+3. **Target = 6 × the average monthly spending burn over the trailing
+   six COMPLETE family-tz months**, before the requested month (the
+   current partial month is still accumulating and is excluded). The
+   burn folds byte-for-byte the budget/cash-flow money rules: split
+   children through the parent's stored rate, FX-pending rows excluded
+   AND counted, transfers neither income nor expense (so a movement
+   INTO savings can never inflate burn and deflate the gap at once).
+   Truncating division — never a rounded-up target the family must
+   beat. When fewer than six months qualified, the months-used count is
+   disclosed on the card (`partial_window`), never hidden.
+4. **Rule E — recorded-ledger interval decides "complete".** A candidate
+   month counts only when the family-tz dates of the FIRST and LAST
+   non-deleted ledger rows (any type; excluded rows included — they were
+   still RECORDED) cover it end-to-end. `family.createdAt` is unusable:
+   a family can be created long before its first row, and rows can
+   post-date onboarding by months. A month the family joined mid-way is
+   EXCLUDED, never diluted; a covered month with zero rows counts with
+   zero burn; months after a lapsed recording period drop out the same
+   way.
+5. **Auditable surface.** The counted-accounts metric names up to three
+   account names then `+n` — the figure is traceable to real balances
+   without turning the card into a roster. FX conversion reuses the
+   net-worth cards' latest-rate resolver (`buildLatestRateResolver`),
+   so this card can never disagree with net worth about a converted
+   balance.
+6. **`trailing_6_months` window kind** joins the typed vocabulary (§2):
+   the six complete calendar months strictly before the requested month,
+   anchored to the REQUESTED month (a historical digest must shift with
+   it), carrying the family timezone. `periodGaps` intersect this
+   window exactly as §PER-443 §3 prescribes.
+7. **`INSIGHTS_ENGINE_VERSION` → 4.** The registry's composition changed
+   (a third derivation), so a v3 artifact is incomplete for v4 (§2
+   applied literally). The server seam widens its expense lookback to
+   seven calendar months (six complete + the current partial, anchored
+   to the requested month) and adds three loads — accounts (UNFILTERED;
+   the qualification predicate lives in the pure fold where unit tests
+   can prove it), the latest foreign→base rate per pair, and the
+   first/last ledger rows. Still computed-on-read (§1): no new tables,
+   no write-on-read.
