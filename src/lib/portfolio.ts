@@ -4,6 +4,7 @@ import {
   computeAccountPerformance,
   type AccountPerformance,
 } from "./account-performance"
+import { formatCurrency } from "./currency"
 import { convertMinor } from "./fx"
 import type { CurrencyCode } from "./data/currencies"
 import type { RateResolver } from "./net-worth"
@@ -40,6 +41,40 @@ import type { RateResolver } from "./net-worth"
 //
 // Pure; money stays in bigint minor units, `number` only for display ratios.
 // =============================================================================
+
+/**
+ * The portfolio universe: an ACTIVE INVESTMENT / TRACKED_ASSET account.
+ *
+ * Archived accounts are deliberately excluded — this is a "what do I hold
+ * right now" question, and an archived account is a thing the household put
+ * away; its history stays visible on the accounts page. Structural input (not
+ * `AccountRecord`) so this stays pure and every surface — the /investments
+ * report and the PER-231 dashboard card — resolves the SAME universe.
+ */
+export function isPortfolioAccount(account: {
+  status: string
+  accountType: string
+}): boolean {
+  return (
+    account.status === "active" &&
+    (account.accountType === "INVESTMENT" ||
+      account.accountType === "TRACKED_ASSET")
+  )
+}
+
+/** `+Rp 1,200.00` / `− Rp 300.00` — the sign the eye needs next to a gain. */
+export function signedCurrency(amountMinor: bigint, currency: string): string {
+  const formatted = formatCurrency(
+    (amountMinor < 0n ? -amountMinor : amountMinor).toString(),
+    currency
+  )
+  return amountMinor < 0n ? `− ${formatted}` : `+ ${formatted}`
+}
+
+/** `+12.50%` / `−3.20%` — portfolio return display. */
+export function formatReturnPct(pct: number): string {
+  return `${pct >= 0 ? "+" : ""}${(pct * 100).toFixed(2)}%`
+}
 
 export interface PortfolioAccountInput {
   accountId: string
@@ -364,5 +399,162 @@ export function computePortfolio(
       (row) => ({ key: row.accountId, label: row.name }),
       totalMarketValueMinor
     ),
+  }
+}
+
+// ─── Allocation bar quantization (PER-230 rows, PER-231 mini bar) ────────────
+//
+// AGENTS.md §3 forbids inline `style=`; dynamic widths must therefore come
+// from a fixed, literal Tailwind width class (JIT only generates classes it
+// can see in source). 5% steps → the 21-entry table below; direct integer
+// arithmetic (`value × 20 ÷ total`, rounded) rather than `Math.round(pct/5)`,
+// because computed float percentages like 9.999999999999998 must never round
+// down to `w-0` and make a funded bucket visually disappear.
+
+const ALLOCATION_WIDTH_STEPS: ReadonlyArray<string> = [
+  "w-0",
+  "w-[5%]",
+  "w-[10%]",
+  "w-[15%]",
+  "w-[20%]",
+  "w-[25%]",
+  "w-[30%]",
+  "w-[35%]",
+  "w-[40%]",
+  "w-[45%]",
+  "w-[50%]",
+  "w-[55%]",
+  "w-[60%]",
+  "w-[65%]",
+  "w-[70%]",
+  "w-[75%]",
+  "w-[80%]",
+  "w-[85%]",
+  "w-[90%]",
+  "w-[95%]",
+  "w-full",
+]
+
+/** Tailwind width class for a 0–100 share, quantized to the 5% step table. */
+export function allocationWidthClass(sharePct: number): string {
+  if (!Number.isFinite(sharePct)) return "w-0"
+  const clamped = Math.min(100, Math.max(0, sharePct))
+  const step = Math.round((clamped * 20) / 100)
+  return ALLOCATION_WIDTH_STEPS[step] ?? "w-full"
+}
+
+// ─── PER-231 — compact portfolio summary input for the dashboard card ────────
+//
+// Pure allocation math (top-N subtype buckets + "Other" fold) plus the
+// honesty flags the card surfaces. Reuses computePortfolio's output, so the
+// dashboard card and the full /investments report can never disagree.
+
+export interface PortfolioAllocationSegment {
+  key: string
+  label: string
+  valueMinor: bigint
+  /** Share of the converted market value, 0–100 (display figure). */
+  sharePct: number
+  /** Width in 5% steps (0–20); Σ over all segments === 20 when total > 0. */
+  stepCount: number
+  /** Tailwind width class for `stepCount` (from the step table above). */
+  widthClass: string
+}
+
+export interface PortfolioMiniAllocation {
+  /** Top `limit` subtype buckets, then one aggregated bucket for the rest. */
+  segments: ReadonlyArray<PortfolioAllocationSegment>
+  totalMarketValueMinor: bigint
+  /** Accounts excluded for a missing FX rate (ADR-0059) — flag, never fold. */
+  missingRateAccountCount: number
+  /** Convertible accounts with no recorded cost basis (PER-229 honesty). */
+  unbasisAccountCount: number
+  /** Market value whose basis is unknown — excluded from every gain figure. */
+  unbasisMarketValueMinor: bigint
+  /** True only when a real cost basis exists — never a fabricated 0%. */
+  hasBasis: boolean
+  /** True when NO account could be converted — the card must show "—". */
+  isFullyUnconverted: boolean
+}
+
+const MINI_BAR_STEPS = 20 // 5% granularity → Σ stepCount === 100%
+
+export function buildPortfolioMiniAllocation(
+  summary: PortfolioSummary,
+  limit = 3
+): PortfolioMiniAllocation {
+  const positive = summary.bySubtype.filter((bucket) => bucket.valueMinor > 0n)
+  const top = positive.slice(0, Math.max(0, limit))
+  const rest = positive.slice(Math.max(0, limit))
+
+  type Part = { key: string; label: string; valueMinor: bigint }
+  const parts: Array<Part> = top.map((bucket) => ({
+    key: bucket.key,
+    label: bucket.label,
+    valueMinor: bucket.valueMinor,
+  }))
+  // The tail folds into one bucket — unless it is a single known subtype,
+  // which is more honest to show under its own name than as "Other".
+  if (rest.length === 1) {
+    parts.push({
+      key: rest[0].key,
+      label: rest[0].label,
+      valueMinor: rest[0].valueMinor,
+    })
+  } else if (rest.length > 1) {
+    parts.push({
+      key: "other",
+      label: `Other (${rest.length})`,
+      valueMinor: rest.reduce((sum, bucket) => sum + bucket.valueMinor, 0n),
+    })
+  }
+
+  const total = summary.totalMarketValueMinor
+  const shares = parts.map((part) =>
+    total > 0n ? Number(part.valueMinor) / Number(total) : 0
+  )
+
+  // Largest-remainder quantization: steps always sum to exactly
+  // MINI_BAR_STEPS so a stacked bar neither overflows past the track nor
+  // leaves a dead gap; segments below the 2.5% rounding threshold may get 0
+  // width (the legend still carries their exact sharePct).
+  const exact = shares.map((share) => share * MINI_BAR_STEPS)
+  const steps = exact.map((value) => Math.floor(value))
+  let leftover = MINI_BAR_STEPS - steps.reduce((sum, value) => sum + value, 0)
+  const byRemainder = exact
+    .map((value, index) => ({ index, remainder: value - Math.floor(value) }))
+    .filter((entry) => entry.remainder > 0)
+    .sort(
+      (a, b) => b.remainder - a.remainder || a.index - b.index // stable, ordered
+    )
+  for (const entry of byRemainder) {
+    if (leftover <= 0) break
+    steps[entry.index] += 1
+    leftover -= 1
+  }
+
+  const segments = parts.map((part, index) => {
+    const stepCount = steps[index]
+    return {
+      key: part.key,
+      label: part.label,
+      valueMinor: part.valueMinor,
+      sharePct: shares[index] * 100,
+      stepCount,
+      widthClass: ALLOCATION_WIDTH_STEPS[stepCount] ?? "w-full",
+    }
+  })
+
+  return {
+    segments,
+    totalMarketValueMinor: summary.totalMarketValueMinor,
+    missingRateAccountCount: summary.unconverted.reduce(
+      (count, entry) => count + entry.accountCount,
+      0
+    ),
+    unbasisAccountCount: summary.unbasisAccountCount,
+    unbasisMarketValueMinor: summary.unbasisMarketValueMinor,
+    hasBasis: summary.overallReturnPct !== null,
+    isFullyUnconverted: summary.convertibleCount === 0,
   }
 }

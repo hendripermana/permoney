@@ -27,10 +27,13 @@ import {
 import { ACCOUNT_SUBTYPE_LABEL, ACCOUNT_TYPE_LABEL } from "@/lib/accounts"
 import { formatCurrency } from "@/lib/currency"
 import { cn } from "@/lib/utils"
-import type {
-  PortfolioAllocationBucket,
-  PortfolioRow,
-  PortfolioSummary,
+import {
+  allocationWidthClass,
+  formatReturnPct,
+  signedCurrency,
+  type PortfolioAllocationBucket,
+  type PortfolioRow,
+  type PortfolioSummary,
 } from "@/lib/portfolio"
 
 // =============================================================================
@@ -74,18 +77,9 @@ function overallToneText(overallReturnPct: number | null): string {
   return FLAT_TEXT
 }
 
-/** `+Rp 1,200.00` / `−Rp 300.00` — the sign the eye needs next to a gain. */
-function signedCurrency(amountMinor: bigint, currency: string): string {
-  const formatted = formatCurrency(
-    (amountMinor < 0n ? -amountMinor : amountMinor).toString(),
-    currency
-  )
-  return amountMinor < 0n ? `− ${formatted}` : `+ ${formatted}`
-}
-
-function formatReturnPct(pct: number): string {
-  return `${pct >= 0 ? "+" : ""}${(pct * 100).toFixed(2)}%`
-}
+// `signedCurrency` and `formatReturnPct` live in src/lib/portfolio.ts (shared
+// with the PER-231 dashboard card) so the two surfaces can never format the
+// same figure differently.
 
 function subtypeLabel(subtype: string): string {
   return (
@@ -348,38 +342,9 @@ export function InvestmentsView({
 }
 
 // Allocation bars are Tailwind classes, never inline `style=` (AGENTS.md §3).
-// A static, purge-safe step table at 5% granularity keeps the fill declarative
-// while staying honest: the clamped step still rounds to the nearest real
-// width instead of inventing a pixel-perfect percentage the DOM cannot purge.
-const ALLOCATION_WIDTH_STEPS: ReadonlyArray<string> = [
-  "w-0",
-  "w-[5%]",
-  "w-[10%]",
-  "w-[15%]",
-  "w-[20%]",
-  "w-[25%]",
-  "w-[30%]",
-  "w-[35%]",
-  "w-[40%]",
-  "w-[45%]",
-  "w-[50%]",
-  "w-[55%]",
-  "w-[60%]",
-  "w-[65%]",
-  "w-[70%]",
-  "w-[75%]",
-  "w-[80%]",
-  "w-[85%]",
-  "w-[90%]",
-  "w-[95%]",
-  "w-full",
-]
-
-function allocationWidthClass(sharePct: number): string {
-  const clamped = Math.min(100, Math.max(0, sharePct))
-  const step = Math.round(clamped / 5)
-  return ALLOCATION_WIDTH_STEPS[step] ?? "w-full"
-}
+// The purge-safe 5%-step width table lives in src/lib/portfolio.ts
+// (`allocationWidthClass`) so the report rows and the PER-231 dashboard mini
+// bar render the same quantization from one source.
 
 function AllocationRow({
   bucket,

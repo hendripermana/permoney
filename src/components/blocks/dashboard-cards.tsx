@@ -1,6 +1,8 @@
 import * as React from "react"
 import { Link } from "@tanstack/react-router"
 import {
+  ArrowRight,
+  ChartPie,
   PiggyBank,
   Tags,
   TrendingDown,
@@ -30,6 +32,12 @@ import type { CurrencyCode } from "@/lib/data/currencies"
 import { formatCurrency } from "@/lib/currency"
 import { decodeMoney, formatMoney, toDisplayNumber } from "@/lib/money"
 import type { DashboardAttentionSummary } from "@/lib/dashboard-attention"
+import {
+  buildPortfolioMiniAllocation,
+  formatReturnPct,
+  signedCurrency,
+  type PortfolioSummary,
+} from "@/lib/portfolio"
 import type {
   CashFlowReportResult,
   NetWorthSeriesResult,
@@ -654,5 +662,162 @@ export function DashboardAttentionStrip({
         ))}
       </CardContent>
     </Card>
+  )
+}
+
+// ─── Portfolio summary (PER-231) ─────────────────────────────────────────────
+//
+// Compact read of computePortfolio's summary: total market value, the overall
+// unrealized gain/loss + return %, and a mini allocation bar (top subtypes +
+// "Other"). The allocation math and the honesty flags (missing FX rate,
+// missing cost basis) live in buildPortfolioMiniAllocation (src/lib/portfolio.ts)
+// so the card and the report page can never disagree. Honest empty state:
+// with no portfolio accounts the card renders NOTHING — the route decides
+// whether to mount a Section at all.
+
+const PORTFOLIO_SEGMENT_COLORS = [
+  "bg-chart-2",
+  "bg-chart-3",
+  "bg-chart-4",
+  "bg-chart-5",
+  "bg-chart-1",
+] as const
+
+const PORTFOLIO_OTHER_COLOR = "bg-muted-foreground/40"
+
+export function PortfolioSummaryCard({
+  summary,
+}: {
+  summary: PortfolioSummary
+}) {
+  // Honest empty state: no portfolio accounts → no card, never a zeroed one.
+  if (summary.accountCount === 0) return null
+
+  const mini = buildPortfolioMiniAllocation(summary)
+  const base = summary.baseCurrency as CurrencyCode
+  const hasBasis = mini.hasBasis
+  const gainMinor = summary.totalGainMinor
+  const returnPct = summary.overallReturnPct
+
+  return (
+    <Link
+      to="/investments"
+      className="block rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <Card className="@container/card transition-colors hover:bg-muted/30">
+        <CardHeader>
+          <CardDescription className="flex items-center gap-2">
+            <ChartPie className="size-4" aria-hidden />
+            Investments &amp; tracked assets in base currency (
+            {summary.baseCurrency})
+          </CardDescription>
+          <CardTitle
+            className="text-3xl tabular-nums"
+            data-testid="dashboard-portfolio-value"
+          >
+            {mini.isFullyUnconverted
+              ? "—"
+              : formatCurrency(summary.totalMarketValueMinor, base)}
+          </CardTitle>
+          <CardAction>
+            {hasBasis ? (
+              <Badge
+                variant="outline"
+                className={cn(
+                  "gap-1",
+                  gainMinor > 0n
+                    ? "text-emerald-600 dark:text-emerald-400"
+                    : gainMinor < 0n
+                      ? "text-destructive"
+                      : "text-muted-foreground"
+                )}
+              >
+                {gainMinor > 0n ? (
+                  <TrendingUp className="size-3" aria-hidden />
+                ) : gainMinor < 0n ? (
+                  <TrendingDown className="size-3" aria-hidden />
+                ) : null}
+                {signedCurrency(gainMinor, base)}
+                {returnPct !== null ? ` · ${formatReturnPct(returnPct)}` : ""}
+              </Badge>
+            ) : (
+              <span className="text-xs text-muted-foreground">
+                Return not available
+              </span>
+            )}
+          </CardAction>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {mini.segments.length > 0 && !mini.isFullyUnconverted ? (
+            <div
+              className="flex h-2 w-full overflow-hidden rounded-full bg-muted"
+              data-testid="dashboard-portfolio-allocation"
+            >
+              {mini.segments.map((segment, index) => (
+                <div
+                  key={segment.key}
+                  className={cn(
+                    "h-full shrink-0",
+                    segment.widthClass,
+                    segment.key === "other"
+                      ? PORTFOLIO_OTHER_COLOR
+                      : PORTFOLIO_SEGMENT_COLORS[
+                          index % PORTFOLIO_SEGMENT_COLORS.length
+                        ]
+                  )}
+                />
+              ))}
+            </div>
+          ) : null}
+          {mini.segments.length > 0 && !mini.isFullyUnconverted ? (
+            <ul className="flex flex-wrap gap-x-4 gap-y-1">
+              {mini.segments.map((segment, index) => (
+                <li
+                  key={segment.key}
+                  className="flex items-center gap-1.5 text-xs text-muted-foreground"
+                >
+                  <span
+                    className={cn(
+                      "size-2 rounded-full",
+                      segment.key === "other"
+                        ? PORTFOLIO_OTHER_COLOR
+                        : PORTFOLIO_SEGMENT_COLORS[
+                            index % PORTFOLIO_SEGMENT_COLORS.length
+                          ]
+                    )}
+                    aria-hidden
+                  />
+                  {segment.label}
+                  <span className="tabular-nums">
+                    {segment.sharePct.toFixed(1)}%
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <div className="flex flex-wrap items-center gap-2">
+            {mini.missingRateAccountCount > 0 ? (
+              <PartialBadge count={mini.missingRateAccountCount} />
+            ) : null}
+            {mini.isFullyUnconverted ? (
+              <EmptyHint>
+                Exchange rate pending for every account — figures appear once
+                rates are available.
+              </EmptyHint>
+            ) : mini.unbasisAccountCount > 0 ? (
+              <span className="text-xs text-muted-foreground">
+                Return excludes {mini.unbasisAccountCount} account
+                {mini.unbasisAccountCount === 1 ? "" : "s"} without a recorded
+                cost basis.
+              </span>
+            ) : null}
+          </div>
+          <span className="flex items-center gap-1 text-xs text-muted-foreground">
+            View full report
+            <ArrowRight className="size-3" aria-hidden />
+          </span>
+        </CardContent>
+      </Card>
+    </Link>
   )
 }
