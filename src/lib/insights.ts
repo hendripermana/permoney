@@ -1,5 +1,6 @@
 import {
   detectRecurringSeries,
+  type RecurringCadence,
   type RecurringSeries,
   type RecurringTxn,
 } from "./account-recurring"
@@ -28,8 +29,9 @@ import type { CurrencyCode } from "@/lib/data/currencies"
 //   - `engineVersion` — every payload states which engine produced it, so a
 //     future materialized artifact (delivered digest) can be keyed by it;
 //   - typed window kinds (`calendar_month`, `since_payday`,
-//     `trailing_6_months` in use; `previous_month`, `rolling_90d` reserved
-//     for later slices) that carry the family timezone they were resolved in
+//     `trailing_6_months`, `next_30_days` in use; `previous_month`,
+//     `rolling_90d` reserved for later slices) that carry the family timezone
+//     they were resolved in
 //     — a window is meaningless without the zone it was cut in
 //     (ADR-0037 / PER-263);
 //   - per-derivation empty / skipped states and failure isolation
@@ -70,8 +72,22 @@ import type { CurrencyCode } from "@/lib/data/currencies"
 // confident zero. The full locked basis and the rejected alternatives are in
 // the ADR-0059 PER-227 amendment.
 //
-// Later slices add derivations (recurring bills, month-over-month trend) and
-// an in-app digest page. A materialized delivered-digest artifact keyed
+// Slice #4 adds `recurring_bills`: the FIRST forward-looking card. Its window
+// is today → today+30 calendar days in the family timezone (inclusive of both
+// endpoints), and its amount is a PREDICTION — the summed mean of each
+// detected expense series' recorded amounts (`typicalAmountMinor`), never a
+// posted transaction. Honesty is therefore copy-led: the headline metric is
+// labelled "Predicted from N past payments", the summary says "an estimate
+// from recorded payments, not money already spent", and the tone is always
+// `neutral` (an advisory escalation would read as a bill REMINDER, which the
+// engine is not — see the ADR-0059 amendment for the rejected tone rules).
+// Income never reaches the detector: the derivation filters `expenseRows`
+// only, because the detector has no direction option. Overdue series still
+// count as due; a series only drops out via the detector's own staleness
+// guard (two cadence bands), so "how overdue" is bounded there, not here.
+//
+// Later slices add the month-over-month trend derivation and an in-app
+// digest page. A materialized delivered-digest artifact keyed
 // `(familyId, month, engineVersion)` is only considered once a real
 // out-of-request consumer (email delivery) exists — never the open period,
 // never write-on-read.
@@ -85,14 +101,18 @@ import type { CurrencyCode } from "@/lib/data/currencies"
  * are unchanged, but a v2 artifact carries no way to say "this window is only
  * partially recorded", so it must not be read as complete under v3. Version 4
  * adds `emergency_fund` (PER-227 slice #3): a v3 artifact simply lacks the
- * card, so it must not be read as a complete report under v4. */
-export const INSIGHTS_ENGINE_VERSION = 4
+ * card, so it must not be read as a complete report under v4. Version 5 adds
+ * `recurring_bills` and the forward-looking `next_30_days` window kind
+ * (PER-227 slice #4): a v4 artifact simply lacks the card, so it must not be
+ * read as a complete report under v5. */
+export const INSIGHTS_ENGINE_VERSION = 5
 
 export const SAVINGS_FLOW_INSIGHT_ID = "savings_flow"
 
 export const SINCE_PAYDAY_INSIGHT_ID = "since_payday"
 
 export const EMERGENCY_FUND_INSIGHT_ID = "emergency_fund"
+export const RECURRING_BILLS_INSIGHT_ID = "recurring_bills"
 
 export type InsightTone = "positive" | "neutral" | "attention"
 
@@ -102,14 +122,20 @@ export type InsightWindowKind =
   | "since_payday"
   | "rolling_90d"
   | "trailing_6_months"
+  | "next_30_days"
 
 /** The family-tz-anchored window an insight was computed over. `start`/`end`
  * are inclusive family-tz calendar dates (ADR-0037) — the same convention as
  * `BudgetPeriodInput`, so `transactionInPeriod` is the one membership rule.
  * `trailing_6_months` is the emergency-fund burn window: the six COMPLETE
  * calendar months preceding the requested month (the requested month itself
- * is still accumulating and is deliberately excluded). `previous_month` stays
- * reserved for the month-over-month trend slice. */
+ * is still accumulating and is deliberately excluded). `next_30_days` (slice
+ * #4) is the only FORWARD-looking kind: `start` is "today" and `end` is
+ * today + 30 calendar days in `timezone`, inclusive of both endpoints. It
+ * describes scheduled future obligations, not recorded activity, so no honest
+ * partial-period metadata can exist for it — such cards always report
+ * `periodPartial: false`. `previous_month` stays reserved for the
+ * month-over-month trend slice. */
 export interface InsightWindow extends BudgetPeriodInput {
   kind: InsightWindowKind
 }
@@ -210,7 +236,8 @@ export interface InsightContext {
   /** Income rows over the payday-anchor lookback (see `src/server/insights.ts`
    * for how far back, and why). */
   incomeRows: ReadonlyArray<InsightFlowRow>
-  /** Expense rows whose family-tz dates can fall inside a payday window. */
+  /** Expense rows whose family-tz dates can fall inside a payday window —
+   * and the whole detection corpus for `recurring_bills` (slice #4). */
   expenseRows: ReadonlyArray<InsightFlowRow>
   /** Every live anchor-chain hole in the family (PER-443); each derivation
    * intersects its OWN window against them, so a gap that misses
@@ -833,8 +860,9 @@ const EMERGENCY_FUND_TARGET_MONTHS = 6
  * ledger barely covers (honesty rule, not a tuning knob). */
 const EMERGENCY_FUND_MIN_MONTHS = 2
 
-/** Max account names printed in the counted-accounts metric, then `+n`. */
-const MAX_COUNTED_ACCOUNT_NAMES = 3
+/** Max names printed in a capped name-list metric (counted accounts, due
+ * bills), then `+n`. */
+const MAX_LISTED_NAMES = 3
 
 /**
  * The locked "saved" basis (PER-227 design pass, ADR-0059 amendment): an
@@ -865,16 +893,17 @@ function isDesignatedSavingsAccount(row: InsightAccountRow): boolean {
   )
 }
 
-/** The counted-account names as the card prints them: sorted LOCALLY inside
- * the fold (determinism is a local contract, never a dependency on the
- * seam's read order), at most three names, then `+n` — auditable (which
- * balances make up the figure) without turning the card into an account
- * roster. The comparator is `localeCompare`, NOT code-unit `<`/`>`: byte
- * order puts "Zakat" before "dana darurat" (uppercase sorts first), which
- * is not alphabetical to a human (Sonar S2871). */
-function formatCountedAccountNames(names: ReadonlyArray<string>): string {
+/** A capped name list as the cards print it: sorted LOCALLY inside the fold
+ * (determinism is a local contract, never a dependency on the seam's read
+ * order), at most `MAX_LISTED_NAMES` names, then `+n` — auditable (which
+ * items make up the figure) without turning the card into a roster. Shared
+ * by the emergency-fund "Counted accounts" metric and the recurring-bills
+ * "Due bills" metric. The comparator is `localeCompare`, NOT code-unit
+ * `<`/`>`: byte order puts "Zakat" before "dana darurat" (uppercase sorts
+ * first), which is not alphabetical to a human (Sonar S2871). */
+function formatSortedNameList(names: ReadonlyArray<string>): string {
   const sorted = [...names].sort((a, b) => a.localeCompare(b))
-  const shown = sorted.slice(0, MAX_COUNTED_ACCOUNT_NAMES)
+  const shown = sorted.slice(0, MAX_LISTED_NAMES)
   const rest = sorted.length - shown.length
   return rest > 0 ? `${shown.join(", ")} +${rest}` : shown.join(", ")
 }
@@ -931,11 +960,12 @@ function foldSavedFund(
  * out the same way. Pure. */
 function coveredTrailingMonths(
   month: string,
-  history: { start: string; end: string } | null
+  history: { start: string; end: string } | null,
+  lookbackMonths: number
 ): string[] {
   if (history === null) return []
   const covered: string[] = []
-  for (let i = EMERGENCY_FUND_TARGET_MONTHS; i >= 1; i -= 1) {
+  for (let i = lookbackMonths; i >= 1; i -= 1) {
     const candidate = shiftCalendarMonth(month, -i)
     const bounds = calendarMonthBounds(candidate)
     if (bounds.start >= history.start && bounds.end <= history.end) {
@@ -1032,7 +1062,7 @@ function buildEmergencyFundInsight(input: {
       {
         key: "counted_accounts",
         label: "Counted accounts",
-        value: formatCountedAccountNames(saved.countedNames),
+        value: formatSortedNameList(saved.countedNames),
       },
       { key: "fx_pending_count", value: String(fxPendingCount) },
     ],
@@ -1108,7 +1138,11 @@ function deriveEmergencyFund(context: InsightContext): DerivationOutcome {
   }
 
   // Rule E (locked, ADR-0059 amendment) lives in `coveredTrailingMonths`.
-  const usedMonths = coveredTrailingMonths(month, context.historyRange)
+  const usedMonths = coveredTrailingMonths(
+    month,
+    context.historyRange,
+    EMERGENCY_FUND_TARGET_MONTHS
+  )
   const monthsUsed = usedMonths.length
   if (monthsUsed < EMERGENCY_FUND_MIN_MONTHS) {
     return {
@@ -1146,10 +1180,341 @@ function deriveEmergencyFund(context: InsightContext): DerivationOutcome {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Slice #4 — `recurring_bills`
+// ---------------------------------------------------------------------------
+
+/** Window length in calendar days, inclusive of both endpoints: due means
+ * nextExpected on or before today + this many family-tz days. */
+const RECURRING_BILLS_WINDOW_DAYS = 30
+
+/** A series is only "predicted from recorded payments" when the ledger
+ * actually covers a run of COMPLETE months behind it; below this many, the
+ * projection rests on too little to render (honesty rule, not a tuning
+ * knob — distinct from "nothing is due", which renders the empty card). */
+const RECURRING_BILLS_MIN_MONTHS = 3
+
+/** The detection lookback in complete months (the seam's expense load spans
+ * 7 months, so at most 6 COMPLETE months can precede the current one). Also
+ * the disclosure cap for the "Months of history" metric. */
+const RECURRING_BILLS_LOOKBACK_MONTHS = 6
+
+/** Deliberately duplicated from `DAY_MS` in `src/lib/account-recurring.ts`
+ * rather than exported from there: that constant is module-private, and
+ * exporting it would widen the knip export surface purely for cosmetics
+ * (won't-do ruling, PER-227 review). */
+const MS_PER_DAY = 86_400_000
+
+/**
+ * A family-tz calendar date (YYYY-MM-DD) shifted by whole calendar days.
+ * Pure calendar arithmetic: `Date.UTC` is used only as a calendar calculator
+ * to roll the day across month/year boundaries, never to represent a
+ * wall-clock instant — the same technique as `calendarMonthBounds`.
+ */
+function addCalendarDays(date: string, days: number): string {
+  const parts = date.split("-").map(Number)
+  const shifted = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2] + days))
+  const year = shifted.getUTCFullYear()
+  const month = String(shifted.getUTCMonth() + 1).padStart(2, "0")
+  const day = String(shifted.getUTCDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
+}
+
+/**
+ * The detector's input for the bills side, with the two honest exclusions
+ * applied up front:
+ *
+ *   - EXPENSE rows only, mapped as expenses. `detectRecurringSeries` has no
+ *     direction option (the anchor helper fixes every row to "income"), so
+ *     this caller-side filter IS the direction rule: an income series (a
+ *     salary) must never appear on a bills card.
+ *   - Amounts are the frozen BASE-currency magnitudes (ADR-0035 §4), so
+ *     every series' typical amount shares ONE currency and the due-soon sum
+ *     is a valid base-minor figure. FX-pending rows (no frozen projection)
+ *     are excluded AND counted — a native magnitude could not be summed
+ *     into a base-currency prediction.
+ *   - Rows dated AFTER today are dropped: a future row is a schedule, not
+ *     an occurrence. Feeding it would drag `lastOccurrence` forward and can
+ *     hide a bill that IS actually due (the previous occurrence is what
+ *     anchors the projection).
+ *
+ * A split parent contributes its own amount (the whole receipt is one
+ * occurrence) — never its children, which would shred one bill into
+ * fragments the detector cannot cluster.
+ */
+function buildRecurringDetectionInput(context: InsightContext): {
+  txns: Array<RecurringTxn>
+  fxPendingCount: number
+} {
+  const timezone = context.window.timezone
+  const today = calendarDateInZone(context.now, timezone)
+  const txns: Array<RecurringTxn> = []
+  let fxPendingCount = 0
+  for (const row of context.expenseRows) {
+    // Order matters for the pending count: the future-date drop runs FIRST,
+    // scoped to the SAME rows detection will use — a future row is neither
+    // an occurrence nor a pending occurrence, so it must be uncounted in
+    // both branches (mirrors `emergency_fund`'s window-scoped pending count).
+    if (calendarDateInZone(row.date, timezone) > today) continue
+    if (
+      row.baseAmount === null ||
+      row.fxRateScaled === null ||
+      row.baseCurrency === null
+    ) {
+      fxPendingCount += 1
+      continue
+    }
+    const magnitude = row.baseAmount < 0n ? -row.baseAmount : row.baseAmount
+    txns.push({
+      accountId: row.accountId,
+      date: row.date,
+      amount: magnitude,
+      type: "expense",
+      merchant: row.merchantName === null ? null : { name: row.merchantName },
+      description: row.description,
+    })
+  }
+  return { txns, fxPendingCount }
+}
+
+/** Due-soon membership: the projected next occurrence's family-tz calendar
+ * date is on or before the window end — the SAME date-string rule
+ * `transactionInPeriod` uses. There is deliberately NO lower bound: an
+ * OVERDUE series (nextExpected already past) is still a bill that must be
+ * paid, and the detector's staleness guard already bounds how far past due
+ * a series can stay (two cadence bands' worth of days). Re-sorted
+ * soonest-due first with a locale label tie-break, because the detector's
+ * own sort breaks ties by grouping key — code-unit order, not human
+ * alphabetical (Sonar S2871 forbids `<`/`>` on the strings). */
+function filterDueSoon(
+  series: ReadonlyArray<RecurringSeries>,
+  windowEnd: string,
+  timezone: string
+): RecurringSeries[] {
+  const due = series.filter(
+    (candidate) =>
+      calendarDateInZone(candidate.nextExpected, timezone) <= windowEnd
+  )
+  return due.sort((a, b) => {
+    const gap = a.nextExpected.getTime() - b.nextExpected.getTime()
+    if (gap !== 0) return gap
+    return a.label.localeCompare(b.label)
+  })
+}
+
+/** Human relative-due text, computed in family-tz CALENDAR days: both dates
+ * are parsed as UTC midnights of their YYYY-MM-DD forms, so the difference
+ * is a pure date difference — never a wall-clock duration that a DST shift
+ * could smear across a day boundary. */
+function formatRelativeDue(
+  nextExpected: Date,
+  today: string,
+  timezone: string
+): string {
+  const dueDate = calendarDateInZone(nextExpected, timezone)
+  const days = Math.round(
+    (Date.parse(dueDate) - Date.parse(today)) / MS_PER_DAY
+  )
+  if (days === 0) return "due today"
+  if (days === 1) return "due tomorrow"
+  if (days > 1) return `due in ${days} days`
+  return `${-days} days overdue`
+}
+
+/** The cadence mix as the card prints it — a FIXED ladder (monthly, then
+ * biweekly, then weekly: dominant cadences first by design), never a string
+ * sort, which would print "biweekly, monthly, weekly" and bury the shape of
+ * the household's obligation load. */
+function cadenceMixText(series: ReadonlyArray<RecurringSeries>): string {
+  const counts: Record<RecurringCadence, number> = {
+    monthly: 0,
+    biweekly: 0,
+    weekly: 0,
+  }
+  for (const candidate of series) counts[candidate.cadence] += 1
+  return (["monthly", "biweekly", "weekly"] as const)
+    .filter((cadence) => counts[cadence] > 0)
+    .map((cadence) => `${counts[cadence]} ${cadence}`)
+    .join(", ")
+}
+
+/** The rendered card. Metric order is the generic renderer's contract: the
+ * FIRST money metric is the headline, every labelled metric after it a
+ * supporting line. Tone is ALWAYS `neutral`: the engine is diagnostic, and a
+ * predicted obligation is not yet a fact to escalate (the ADR-0059 amendment
+ * records why no `attention` rule exists here). `periodPartial` is always
+ * `false` with no gaps: a forward window contains no recorded activity, so
+ * PER-443's past-tense axis has nothing honest to report. Pure. */
+function buildRecurringBillsInsight(input: {
+  baseCurrency: string
+  window: InsightWindow
+  /** Full DETECTED series list (before the due-window filter) — the empty
+   * copy keys off this so "detected but nothing due" never reads as
+   * "nothing detected". */
+  detectedCount: number
+  due: ReadonlyArray<RecurringSeries>
+  historyMonths: number
+  fxPendingCount: number
+  timezone: string
+}): Insight {
+  const {
+    baseCurrency,
+    window,
+    detectedCount,
+    due,
+    historyMonths,
+    fxPendingCount,
+    timezone,
+  } = input
+  const predicted = due.reduce((sum, s) => sum + s.typicalAmountMinor, 0n)
+  const paymentCount = due.reduce((sum, s) => sum + s.occurrenceCount, 0)
+  const nearest = due[0]
+  const isEmpty = due.length === 0
+  // Interpolated so a window change cannot silently lie in the copy. The
+  // window-kind NAME (`next_30_days`) is a string-literal union type and
+  // cannot interpolate — it stays a literal by design.
+  const windowLabel = `next ${RECURRING_BILLS_WINDOW_DAYS} days`
+
+  return {
+    id: RECURRING_BILLS_INSIGHT_ID,
+    tone: "neutral",
+    title: "Bills due soon",
+    summary: isEmpty
+      ? detectedCount === 0
+        ? // Nothing DETECTED at all — a true claim about detection over the
+          // covered COMPLETE months (the current partial month is also
+          // searched, so this is a floor, never an overstatement).
+          `No recurring outflows detected in the last ${historyMonths} complete months of recorded history.`
+        : // Detected, but nothing lands inside the window — a fact about the
+          // schedule, NEVER "not detected".
+          `No recurring bills are due in the next ${RECURRING_BILLS_WINDOW_DAYS} days.`
+      : `Predicted recurring outflows over the ${windowLabel} — an estimate from recorded payments, not money already spent.`,
+    detail: isEmpty
+      ? `Nothing is predicted to be due within the ${windowLabel}.`
+      : `Based on ${paymentCount} past payments across ${historyMonths} months of recorded history.`,
+    metrics: [
+      {
+        key: "predicted_total",
+        label: isEmpty
+          ? `Predicted for the ${windowLabel}`
+          : `Predicted from ${paymentCount} past payments`,
+        value: predicted.toString(),
+        currency: baseCurrency,
+      },
+      { key: "series_count", label: "Bills due", value: String(due.length) },
+      ...(nearest
+        ? [
+            {
+              key: "nearest_bill",
+              label: `Nearest (${nearest.label}, ${formatRelativeDue(nearest.nextExpected, window.start, timezone)})`,
+              value: nearest.typicalAmountMinor.toString(),
+              currency: baseCurrency,
+            },
+          ]
+        : []),
+      ...(isEmpty
+        ? []
+        : [
+            {
+              key: "cadence_mix",
+              label: "Cadence",
+              value: cadenceMixText(due),
+            },
+            {
+              key: "due_bills",
+              label: "Due bills",
+              value: formatSortedNameList(due.map((s) => s.label)),
+            },
+          ]),
+      {
+        key: "history_months",
+        label: "Months of history",
+        value: String(historyMonths),
+      },
+      { key: "fx_pending_count", value: String(fxPendingCount) },
+    ],
+    partial: fxPendingCount > 0,
+    fxPendingCount,
+    periodPartial: false,
+    periodGaps: [],
+    window,
+    engineVersion: INSIGHTS_ENGINE_VERSION,
+  }
+}
+
+/**
+ * Slice #4 derivation — `recurring_bills`.
+ *
+ * The registry's only FORWARD-looking card: predicted recurring outflows due
+ * within the next 30 family-tz calendar days (inclusive of today and of
+ * today+30), plus anything already overdue. The amount is the summed
+ * `typicalAmountMinor` of the due series in base-minor units — a PREDICTION,
+ * so the card says so in its label-led copy; the tone is always neutral.
+ *
+ * Two guards run before detection, each with its own skip reason:
+ *   1. Current-month only (the same rule as since_payday): the window is
+ *      "now"-relative by nature, and a historical month would render a
+ *      LYING empty card — the detector's staleness guard drops series whose
+ *      last occurrence is two cadence bands old, so the further back the
+ *      month, the more bills silently vanish.
+ *   2. History floor: fewer than three COMPLETE recorded months (Rule E's
+ *      covered-months test, six-month lookback) and "predicted from recorded
+ *      payments" is a guess. With adequate history and nothing due we RENDER
+ *      the honest empty card — a fact about the schedule — never skip.
+ */
+function deriveRecurringBills(context: InsightContext): DerivationOutcome {
+  const { window: monthWindow, baseCurrency, now } = context
+  const timezone = monthWindow.timezone
+  const month = monthWindow.start.slice(0, 7)
+  const today = calendarDateInZone(now, timezone)
+
+  if (month !== currentMonthInZone(now, timezone)) {
+    return {
+      insight: null,
+      skippedReason: "recurring bills only apply to the family's current month",
+    }
+  }
+
+  const coveredMonths = coveredTrailingMonths(
+    month,
+    context.historyRange,
+    RECURRING_BILLS_LOOKBACK_MONTHS
+  )
+  if (coveredMonths.length < RECURRING_BILLS_MIN_MONTHS) {
+    return {
+      insight: null,
+      skippedReason: "fewer than three complete months of recorded history",
+    }
+  }
+
+  const { txns, fxPendingCount } = buildRecurringDetectionInput(context)
+  const detected = detectRecurringSeries(txns, { now })
+  const windowEnd = addCalendarDays(today, RECURRING_BILLS_WINDOW_DAYS)
+  const due = filterDueSoon(detected, windowEnd, timezone)
+
+  return {
+    insight: buildRecurringBillsInsight({
+      baseCurrency,
+      window: {
+        kind: "next_30_days",
+        start: today,
+        end: windowEnd,
+        timezone,
+      },
+      detectedCount: detected.length,
+      due,
+      historyMonths: coveredMonths.length,
+      fxPendingCount,
+      timezone,
+    }),
+  }
+}
+
 const REGISTERED_DERIVATIONS: ReadonlyArray<RegisteredDerivation> = [
   { id: SAVINGS_FLOW_INSIGHT_ID, run: deriveSavingsFlow },
   { id: SINCE_PAYDAY_INSIGHT_ID, run: deriveSincePayday },
   { id: EMERGENCY_FUND_INSIGHT_ID, run: deriveEmergencyFund },
+  { id: RECURRING_BILLS_INSIGHT_ID, run: deriveRecurringBills },
 ]
 
 /**

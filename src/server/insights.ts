@@ -52,11 +52,13 @@ import { collectAnchorChainGaps } from "./valuations"
 //      detector drops a series whose last occurrence is more than two cadence
 //      bands (~70 days) old, so six months is comfortably sufficient;
 //   3. expense rows, window = SEVEN calendar months (month−6 → month end,
-//      anchored to the REQUESTED month, not today) — the union both consumers
+//      anchored to the REQUESTED month, not today) — the union all consumers
 //      need: `emergency_fund` folds the trailing-six-complete-months burn
-//      from them, and `since_payday`'s window (anchor ≈ ≤70 days back through
+//      from them, `since_payday`'s window (anchor ≈ ≤70 days back through
 //      today) is a subset whenever the requested month is current (the only
-//      case that derivation runs);
+//      case that derivation runs), and `recurring_bills` (slice #4) detects
+//      series over the same span — at most six COMPLETE months can precede
+//      the requested month, which is exactly its detection lookback;
 //   4. every family account, flat and UNFILTERED (soft-deleted AND archived
 //      rows included — `emergency_fund`'s designated-savings predicate lives
 //      in the pure fold, so the unit tests can prove it — the seam never
