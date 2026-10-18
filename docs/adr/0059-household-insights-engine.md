@@ -470,7 +470,10 @@ lower number can mean a cancelled medicine, a higher one a repaired car.
    previous month is SHORTER than N (a 31-day today against February), its
    side runs to that month's actual last day and the `days_elapsed` metric
    discloses both day counts ("1–31 vs 1–28") — an honest asymmetry beats a
-   hidden one.
+   hidden one. The summary copy follows the same rule: the "the same days of
+   each month" clause renders ONLY when N is equal on both sides — when the
+   clamp fires, the copy names the shorter month instead, so the sentence
+   can never contradict the numbers printed beside it.
 2. **No projection, ever.** There is no "expected full month" figure on this
    card in any state — a projection is a fabricated number, and §3's no-
    confident-zeros rule generalizes: this engine reports what the ledger
@@ -478,7 +481,11 @@ lower number can mean a cancelled medicine, a higher one a repaired car.
    previous month total is still shown, as a `label`-led supporting metric
    explicitly marked context ("Full May 2026 — complete month, for
    context"), so the user gets the whole picture WITHOUT the comparison
-   pretending it is the baseline.
+   pretending it is the baseline. It is CURRENT-MONTH-ONLY: for a past
+   request the baseline window IS the whole previous month, so the metric
+   would duplicate `spent_previous_period` byte-identically under a second
+   label, and it is suppressed there (two labels for one number is noise,
+   not honesty).
 3. **The partial current month is unmistakable.** `partial: true` whenever
    the requested month is still accumulating (the only other case — a past
    request — is rule 4), the summary states the days outright ("Days 1–15 of
@@ -520,7 +527,13 @@ lower number can mean a cancelled medicine, a higher one a repaired car.
    request additionally requires the requested month covered end-to-end.
    The in-progress month is exempt by nature (its end has not happened).
    A comparison against nothing is fabrication; a zero-spend previous month
-   WITH recorded history covering it is not "nothing" and renders.
+   WITH recorded history covering it is not "nothing" and renders. The skip
+   reason must be TRUE in the state that produces it: the count reason is
+   used only when the recorded history genuinely spans fewer than two
+   complete months; a long-tenured family whose ledger stopped mid-month
+   fails the same coverage test for a different reason and gets its own
+   ("the requested month was not recorded end-to-end") — a false count claim
+   in that state would be exactly the kind of copy this engine forbids.
 8. **`previous_month` is finally in use — as the BASELINE window.** The
    `Insight` envelope carries ONE window and this card has two; the single
    most truthful value is the window the delta is computed against: days
@@ -553,3 +566,15 @@ lower number can mean a cancelled medicine, a higher one a repaired car.
     requested month plus the one before it, and `historyRange` was already
     loaded. Still computed-on-read (§1): no new tables, no write-on-read,
     no periodic job.
+11. **`partial` vocabulary diverges across cards — recorded, and DEFERRED
+    to a follow-up.** The generic `partial` field lists two causes (rows
+    excluded for a missing FX rate; a requested month still in progress),
+    but only this card sets the second one: `spending_trend` computes
+    `partial: fxPendingCount > 0 || isCurrentMonth`, while the other four
+    derivations still set it from `fxPendingCount` alone. Redefining a
+    shared wire field mid-milestone would silently change what a v6 artifact
+    means for four untouched cards, so the divergence is DOCUMENTED here
+    (and in the field's docstring) and unified in a follow-up ticket —
+    never silently redefined inside this slice. The generic renderer is
+    already agnostic: its exchange-rate badge keys off `fxPendingCount`, not
+    `partial`, so no consumer behavior changes either way.

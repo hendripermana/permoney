@@ -216,12 +216,19 @@ export interface Insight {
   detail?: string
   metrics: InsightMetric[]
   /** True when something user-relevant makes the shown figures smaller than
-   * reality, and the card says what: today a row excluded because no FX rate
-   * resolved (always paired with `fxPendingCount`), and — since slice #5 —
-   * a requested month still in progress (paired with copy and a metric that
-   * state the days elapsed). A partial insight may show a
-   * smaller-than-reality number — but only alongside what explains why,
-   * never as a silent understatement. */
+   * reality, and the card says what. Two causes exist TODAY, and the field
+   * does not yet encode them uniformly: a row excluded because no FX rate
+   * resolved (always paired with `fxPendingCount`) — every derivation sets
+   * `partial` from that count alone — and, since slice #5, a requested
+   * month still in progress (paired with copy and a metric that state the
+   * days elapsed) — which ONLY `spending_trend` sets
+   * (`fxPendingCount > 0 || isCurrentMonth`); the other four cards still
+   * report `false` for an in-progress period. Unifying the vocabulary is a
+   * cross-slice change DEFERRED to a follow-up (ADR-0059 slice-#5
+   * amendment) rather than a silent redefinition of a shared wire field
+   * mid-milestone. A partial insight may show a smaller-than-reality
+   * number — but only alongside what explains why, never as a silent
+   * understatement. */
   partial: boolean
   /** Rows this insight deliberately excluded because no FX rate resolved yet. */
   fxPendingCount: number
@@ -1609,20 +1616,57 @@ function buildTrendWindows(
  * The in-progress month is exempt by nature: its end has not happened yet.
  * Below this floor the delta would compare against a fragment or nothing at
  * all — a comparison against nothing is fabrication, so the card skips.
+ *
+ * Returns the skip REASON, and it must be true in the state that produces
+ * it: "fewer than two complete months of recorded history" only when the
+ * history genuinely is that short. A long-tenured family whose ledger
+ * stopped mid-month fails the same coverage test for a different reason,
+ * and the count claim would be false there — it gets its own reason.
  */
-function trendHistoryCovers(
+function trendHistorySkipReason(
   month: string,
   isCurrentMonth: boolean,
   history: { start: string; end: string } | null
-): boolean {
-  if (history === null) return false
+): string | null {
+  if (history === null) {
+    return "fewer than two complete months of recorded history"
+  }
   const required = isCurrentMonth
     ? [shiftCalendarMonth(month, -1)]
     : [shiftCalendarMonth(month, -1), month]
-  return required.every((candidate) => {
+  const missing = required.filter((candidate) => {
     const bounds = calendarMonthBounds(candidate)
-    return bounds.start >= history.start && bounds.end <= history.end
+    return bounds.start < history.start || bounds.end > history.end
   })
+  if (missing.length === 0) return null
+  if (completeMonthsInHistory(history) < 2) {
+    return "fewer than two complete months of recorded history"
+  }
+  return missing.includes(month)
+    ? "the requested month was not recorded end-to-end"
+    : "last month was not recorded end-to-end"
+}
+
+/** How many COMPLETE calendar months the recorded-history span covers
+ * end-to-end — the honest count behind the "fewer than two complete months"
+ * reason. A span that starts or stops mid-month counts only the months it
+ * actually covers. */
+function completeMonthsInHistory(history: {
+  start: string
+  end: string
+}): number {
+  let count = 0
+  for (
+    let candidate = history.start.slice(0, 7);
+    candidate <= history.end.slice(0, 7);
+    candidate = shiftCalendarMonth(candidate, 1)
+  ) {
+    const bounds = calendarMonthBounds(candidate)
+    if (bounds.start >= history.start && bounds.end <= history.end) {
+      count += 1
+    }
+  }
+  return count
 }
 
 /** Which side(s) one row's family-tz date belongs to. A row is never in
@@ -1779,11 +1823,20 @@ function trendPeriodGaps(
 
 /** The copy for an in-progress request: it MUST state the days elapsed, so
  * the card can never read as a whole-month claim (rule: the partial current
- * month is unmistakable). Past requests state the degenerate case instead. */
+ * month is unmistakable). The "same days" claim is CONDITIONAL — it is only
+ * true when the clamp did not fire; when the previous month is shorter than
+ * today's day-of-month the copy says so truthfully (naming the shorter
+ * month) instead of contradicting its own numbers. Past requests state the
+ * degenerate case instead. */
 function trendSummary(windows: TrendWindows, isCurrentMonth: boolean): string {
-  return isCurrentMonth
-    ? `Days 1–${windows.currentDays} of this month versus days 1–${windows.previousDays} of last month — the same days of each month, never a partial month against a complete one.`
-    : `${monthLabel(windows.month)} versus ${monthLabel(windows.previousMonth)} — both months are complete, so the comparison is like for like.`
+  if (!isCurrentMonth) {
+    return `${monthLabel(windows.month)} versus ${monthLabel(windows.previousMonth)} — both months are complete, so the comparison is like for like.`
+  }
+  const daysClause =
+    windows.currentDays === windows.previousDays
+      ? "the same days of each month, never a partial month against a complete one."
+      : `${monthLabel(windows.previousMonth)} has only ${windows.previousDays} days, so the comparison stops at the shorter month's length.`
+  return `Days 1–${windows.currentDays} of this month versus days 1–${windows.previousDays} of last month — ${daysClause}`
 }
 
 /** The second copy line: why the complete-previous-month figure is context,
@@ -1803,7 +1856,10 @@ function trendDetail(totals: TrendTotals, isCurrentMonth: boolean): string {
  * (the like-for-like delta) is the headline, and every metric after it —
  * support lines included — carries a `label`. Sign convention: the delta's
  * value is signed base-minor units and a POSITIVE delta means "spent MORE"
- * than the same days of the previous month; the percentage mirrors it. Pure. */
+ * than the same days of the previous month; the percentage mirrors it. The
+ * complete-previous-month context figure rides along ONLY when it is real
+ * context — an in-progress month (for a past request it would duplicate the
+ * baseline). Pure. */
 function trendMetrics(input: {
   windows: TrendWindows
   totals: TrendTotals
@@ -1815,6 +1871,22 @@ function trendMetrics(input: {
   const baselineLabel = isCurrentMonth
     ? "the same days last month"
     : monthLabel(windows.previousMonth)
+  // The context figure is CURRENT-MONTH ONLY: for a past request the baseline
+  // window IS the whole previous month, so `previous_month_total` would
+  // duplicate `spent_previous_period` byte-identically under two labels —
+  // two labels for one number is noise, not honesty.
+  const contextMetrics: InsightMetric[] = isCurrentMonth
+    ? [
+        {
+          key: "previous_month_total",
+          label: `Full ${monthLabel(
+            windows.previousMonth
+          )} — complete month, for context`,
+          value: totals.previousMonthTotal.toString(),
+          currency: baseCurrency,
+        },
+      ]
+    : []
   return [
     {
       key: "delta",
@@ -1838,14 +1910,7 @@ function trendMetrics(input: {
       value: totals.previousSpend.toString(),
       currency: baseCurrency,
     },
-    {
-      key: "previous_month_total",
-      label: `Full ${monthLabel(windows.previousMonth)} — complete month${
-        isCurrentMonth ? ", for context" : ""
-      }`,
-      value: totals.previousMonthTotal.toString(),
-      currency: baseCurrency,
-    },
+    ...contextMetrics,
     {
       key: "days_elapsed",
       label: "Days compared",
@@ -1913,15 +1978,23 @@ function buildSpendingTrendInsight(input: {
  *
  * The like-for-like month comparison: this month's spend over days 1..N
  * versus LAST month's spend over days 1..N (family tz; N = today's
- * day-of-month for the in-progress month), headline delta = current −
+ * day-of-month for the in-progress month, clamped to the previous month's
+ * length when that month is shorter — and the copy says so truthfully
+ * rather than claiming "the same days"), headline delta = current −
  * previous (positive = spent more), reported neutrally with no verdict. The
  * complete previous month total rides along as a labelled context figure —
- * never as the comparison side. For a past requested month both sides are
+ * never as the comparison side, and never for a past request where it would
+ * duplicate the baseline. For a past requested month both sides are
  * complete months and `partial` is false.
  *
- * Skips, each with a distinct reason: a month that has not started; fewer
- * than two complete months of recorded history (the previous month must be
- * covered end-to-end, Rule E); and a baseline whose only rows are FX-pending
+ * Skips, each with a distinct reason: a month that has not started; a
+ * history floor the request falls below — the previous month must be
+ * covered end-to-end (Rule E), and a past request the requested month too;
+ * the reason is truthful in its state: a genuinely short history gets
+ * "fewer than two complete months of recorded history", a long-tenured
+ * family whose ledger stopped mid-month gets the not-recorded-end-to-end
+ * reason instead (a count claim would be false there); and a baseline whose
+ * only rows are FX-pending
  * — a zero reached by excluding rows is not a fact about money, so the card
  * refuses to compare against it. A genuine zero baseline RENDERS: the delta
  * stands against 0 and the percentage says "no comparison possible".
@@ -1939,10 +2012,15 @@ function deriveSpendingTrend(context: InsightContext): DerivationOutcome {
     }
   }
   const isCurrentMonth = month === currentMonth
-  if (!trendHistoryCovers(month, isCurrentMonth, context.historyRange)) {
+  const historySkipReason = trendHistorySkipReason(
+    month,
+    isCurrentMonth,
+    context.historyRange
+  )
+  if (historySkipReason !== null) {
     return {
       insight: null,
-      skippedReason: "fewer than two complete months of recorded history",
+      skippedReason: historySkipReason,
     }
   }
 
