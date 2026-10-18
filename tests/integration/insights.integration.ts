@@ -1,16 +1,10 @@
-import {
-  afterAll,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "vite-plus/test"
+import { describe, expect, test } from "vite-plus/test"
 import type { AccountType } from "@/lib/accounts"
 import {
   EMERGENCY_FUND_INSIGHT_ID,
   INSIGHTS_ENGINE_VERSION,
   RECURRING_BILLS_INSIGHT_ID,
+  SPENDING_TREND_INSIGHT_ID,
 } from "@/lib/insights"
 import { archiveAccountForFamily } from "@/server/accounts"
 import { getInsightsForFamily } from "@/server/insights"
@@ -20,15 +14,15 @@ import {
   deleteTransactionForFamily,
 } from "@/server/transactions"
 import { createValuationForFamily } from "@/server/valuations"
+import type { IntegrationHarness } from "./support/database"
 import {
-  createIntegrationHarness,
-  type IntegrationHarness,
-} from "./support/database"
-import {
-  createTestFactories,
   type AuthenticatedOnboardedUser,
   type TestFactories,
 } from "./support/factories"
+import {
+  createFamilyDefaultsSetter,
+  useIntegrationSuite,
+} from "./support/suite"
 
 // PER-227 — real-Postgres proof of the household insights engine's first
 // derivation (`savings_flow`) over rows written by the REAL ledger path
@@ -56,32 +50,14 @@ describe("household insights (PER-227)", () => {
   let harness: IntegrationHarness
   let factories: TestFactories
 
-  beforeAll(async () => {
-    harness = await createIntegrationHarness()
-    factories = createTestFactories(harness)
-  })
-
-  beforeEach(async () => {
-    await harness.reset()
-  })
-
-  afterAll(async () => {
-    await harness.teardown()
+  useIntegrationSuite((h, f) => {
+    harness = h
+    factories = f
   })
 
   // ---- helpers ---------------------------------------------------------------
 
-  const setFamilyDefaults = (
-    owner: AuthenticatedOnboardedUser,
-    currency: string,
-    timezone: string
-  ) =>
-    harness.withFamily(owner.family.id, async (tx) =>
-      tx.family.update({
-        where: { id: owner.family.id },
-        data: { currency, timezone },
-      })
-    )
+  const setFamilyDefaults = createFamilyDefaultsSetter(() => harness)
 
   const account = (
     owner: AuthenticatedOnboardedUser,
@@ -151,12 +127,14 @@ describe("household insights (PER-227)", () => {
   const insights = (
     owner: AuthenticatedOnboardedUser,
     month?: string,
-    userId = owner.user.id
+    userId = owner.user.id,
+    now?: Date
   ) =>
     getInsightsForFamily({
       data: { month },
       familyId: owner.family.id,
       userId,
+      now,
     })
 
   /** Pinned-clock variant (payday windows are now-relative; production
@@ -165,13 +143,7 @@ describe("household insights (PER-227)", () => {
     owner: AuthenticatedOnboardedUser,
     now: Date,
     month?: string
-  ) =>
-    getInsightsForFamily({
-      data: { month },
-      familyId: owner.family.id,
-      userId: owner.user.id,
-      now,
-    })
+  ) => insights(owner, month, owner.user.id, now)
 
   /** A real-ledger income row — the payday anchor must be derivable from rows
    * written by the production path, never from a hand-built projection. */
@@ -192,6 +164,24 @@ describe("household insights (PER-227)", () => {
       date: data.date,
     })
 
+  /** A real-ledger expense row — bill occurrences, burn rows, and
+   * like-for-like spend alike must be derivable from rows written by the
+   * production path, never hand-built projections. */
+  const recordExpense = (
+    owner: AuthenticatedOnboardedUser,
+    accountId: string,
+    isoDate: string,
+    amount: bigint,
+    description: string
+  ) =>
+    create(owner, {
+      type: "expense",
+      amount,
+      accountId,
+      description,
+      date: new Date(isoDate),
+    })
+
   /** Three monthly salary rows on the 25th at 10:00 WIB (03:00Z). */
   const seedSalarySeries = async (
     owner: AuthenticatedOnboardedUser,
@@ -208,19 +198,54 @@ describe("household insights (PER-227)", () => {
     }
   }
 
+  /** The standard household under test: an onboarded family on the shared
+   * IDR/Asia-Jakarta defaults with one checking wallet. */
+  const seedWalletHousehold = async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    const wallet = await account(owner, "Wallet", {
+      accountSubtype: "checking",
+    })
+    return { owner, wallet }
+  }
+
   const insightMetric = (
     report: Awaited<ReturnType<typeof getInsightsForFamily>>,
-    insightId: string,
+    insightId: string | undefined,
     key: string
   ) =>
     report.insights
       .find((insight) => insight.id === insightId)
       ?.metrics.find((metric) => metric.key === key)?.value
 
+  /** The metric of a single-card report (its first insight). */
   const metric = (
     report: Awaited<ReturnType<typeof getInsightsForFamily>>,
     key: string
-  ) => report.insights[0]?.metrics.find((m) => m.key === key)?.value
+  ) => insightMetric(report, report.insights[0]?.id, key)
+
+  /** One named insight card from a report. */
+  const insightEntry = (
+    report: Awaited<ReturnType<typeof getInsightsForFamily>>,
+    insightId: string
+  ) => report.insights.find((entry) => entry.id === insightId)
+
+  /** The two-part skip disclosure for the since-payday card: absent from the
+   * report's insights, present in `skipped` with exactly the given reason. */
+  const expectSincePaydaySkipped = (
+    report: Awaited<ReturnType<typeof getInsightsForFamily>>,
+    reason: string
+  ) => {
+    expect(report.insights.map((entry) => entry.id)).not.toContain(
+      "since_payday"
+    )
+    expect(report.skipped.find((entry) => entry.id === "since_payday")).toEqual(
+      {
+        id: "since_payday",
+        reason,
+      }
+    )
+  }
 
   // ---- the core invariant ----------------------------------------------------
 
@@ -597,43 +622,25 @@ describe("household insights (PER-227)", () => {
     }
 
     const report = await insightsAt(owner, PAYDAY_NOW)
-    expect(report.insights.map((entry) => entry.id)).not.toContain(
-      "since_payday"
-    )
-    expect(report.skipped.find((entry) => entry.id === "since_payday")).toEqual(
-      {
-        id: "since_payday",
-        reason: "no monthly recurring income series detected",
-      }
+    expectSincePaydaySkipped(
+      report,
+      "no monthly recurring income series detected"
     )
   })
 
   test("skips the card for a month that is not the family's current month", async () => {
-    const owner = await factories.createAuthenticatedOnboardedUser()
-    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
-    const wallet = await account(owner, "Wallet", {
-      accountSubtype: "checking",
-    })
+    const { owner, wallet } = await seedWalletHousehold()
     await seedSalarySeries(owner, wallet.id)
 
     const report = await insightsAt(owner, PAYDAY_NOW, "2026-06")
-    expect(report.insights.map((entry) => entry.id)).not.toContain(
-      "since_payday"
-    )
-    expect(report.skipped.find((entry) => entry.id === "since_payday")).toEqual(
-      {
-        id: "since_payday",
-        reason: "since payday only applies to the family's current month",
-      }
+    expectSincePaydaySkipped(
+      report,
+      "since payday only applies to the family's current month"
     )
   })
 
   test("excludes an FX-pending expense from spent but counts it as partial", async () => {
-    const owner = await factories.createAuthenticatedOnboardedUser()
-    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
-    const wallet = await account(owner, "Wallet", {
-      accountSubtype: "checking",
-    })
+    const { owner, wallet } = await seedWalletHousehold()
     // USD account with NO USD→IDR rate seeded: the frozen base projection of
     // its rows stays null (FX-pending).
     const usdWallet = await account(owner, "USD Wallet", {
@@ -815,7 +822,7 @@ describe("household insights (PER-227)", () => {
 
   const savingsFlow = (
     report: Awaited<ReturnType<typeof getInsightsForFamily>>
-  ) => report.insights.find((insight) => insight.id === "savings_flow")
+  ) => insightEntry(report, "savings_flow")
 
   test("marks savings_flow partially recorded when a live gap intersects its month", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
@@ -1036,10 +1043,16 @@ describe("household insights (PER-227)", () => {
     // `recurring_bills` records its own skip here: the request month (July)
     // is not the family's current month relative to the real clock, so the
     // RLS-empty context never even reaches its history floor.
-    expect(leaked.skipped).toHaveLength(4)
+    // `spending_trend` likewise hits the same history floor (zero rows seen
+    // through the reader's empty RLS scope).
+    expect(leaked.skipped).toHaveLength(5)
     expect(leaked.skipped).toContainEqual({
       id: EMERGENCY_FUND_INSIGHT_ID,
       reason: "no account is designated as savings",
+    })
+    expect(leaked.skipped).toContainEqual({
+      id: SPENDING_TREND_INSIGHT_ID,
+      reason: "fewer than two complete months of recorded history",
     })
   })
 
@@ -1403,20 +1416,7 @@ describe("household insights (PER-227)", () => {
 
   /** A real-ledger bill occurrence — the projection must be derivable from
    * rows written by the production path, never a hand-built series. */
-  const bill = (
-    owner: AuthenticatedOnboardedUser,
-    accountId: string,
-    isoDate: string,
-    amount: bigint,
-    description: string
-  ) =>
-    create(owner, {
-      type: "expense",
-      amount,
-      accountId,
-      description,
-      date: new Date(isoDate),
-    })
+  const bill = recordExpense
 
   /** The four-occurrence Netflix cadence (30-day gaps) shared by the
    * prediction and tenant-isolation tests: mean 222,500, next expected
@@ -1623,6 +1623,294 @@ describe("household insights (PER-227)", () => {
     ).toEqual({
       id: RECURRING_BILLS_INSIGHT_ID,
       reason: "fewer than three complete months of recorded history",
+    })
+  })
+
+  // ---- spending trend (PER-227 slice #5) ------------------------------------
+
+  /** A real-ledger expense — like-for-like membership must be derivable
+   * from rows written by the production path, never a hand-built fold. */
+  const spend = recordExpense
+
+  test("compares the same days of each month against a real ledger — the previous month's later spend never leaks into the delta", async () => {
+    const { owner, wallet } = await seedWalletHousehold()
+
+    // Previous month, days 1..15 (the compared baseline window).
+    await spend(
+      owner,
+      wallet.id,
+      "2026-05-01T03:00:00.000Z",
+      50_000n,
+      "Rent share"
+    )
+    await spend(
+      owner,
+      wallet.id,
+      "2026-05-07T03:00:00.000Z",
+      200_000n,
+      "Groceries"
+    )
+    // Previous month, AFTER day 15: context figure only — if it ever leaks
+    // into `spent_previous_period`, the cutoff is gone and this test fails.
+    await spend(
+      owner,
+      wallet.id,
+      "2026-05-20T03:00:00.000Z",
+      700_000n,
+      "Laptop"
+    )
+    await spend(owner, wallet.id, "2026-05-31T03:00:00.000Z", 300_000n, "Party")
+    // Current month, days 1..15 (the clock is pinned to 2026-06-15 10:00 WIB).
+    await spend(
+      owner,
+      wallet.id,
+      "2026-06-03T03:00:00.000Z",
+      100_000n,
+      "Groceries"
+    )
+    await spend(owner, wallet.id, "2026-06-12T03:00:00.000Z", 45_000n, "Coffee")
+
+    const report = await insightsAt(owner, ON_JUNE)
+    expect(report.failedCount).toBe(0)
+    const insight = insightEntry(report, SPENDING_TREND_INSIGHT_ID)
+    expect(insight?.tone).toBe("neutral")
+    // The envelope's baseline window: days 1–15 of the PREVIOUS month.
+    expect(insight?.window).toEqual({
+      kind: "previous_month",
+      start: "2026-05-01",
+      end: "2026-05-15",
+      timezone: "Asia/Jakarta",
+    })
+    // June is in progress — `partial` says so; no FX rows, so the FX badge
+    // stays off (the renderer keys it off `fxPendingCount`, not `partial`).
+    expect(insight?.partial).toBe(true)
+    expect(insight?.fxPendingCount).toBe(0)
+    expect(
+      insightMetric(report, SPENDING_TREND_INSIGHT_ID, "spent_current_period")
+    ).toBe("145000")
+    expect(
+      insightMetric(report, SPENDING_TREND_INSIGHT_ID, "spent_previous_period")
+    ).toBe("250000")
+    expect(
+      insightMetric(report, SPENDING_TREND_INSIGHT_ID, "previous_month_total")
+    ).toBe("1250000")
+    expect(insightMetric(report, SPENDING_TREND_INSIGHT_ID, "delta")).toBe(
+      "-105000"
+    )
+    expect(
+      insightMetric(report, SPENDING_TREND_INSIGHT_ID, "percent_change")
+    ).toBe("-42%")
+    expect(
+      insightMetric(report, SPENDING_TREND_INSIGHT_ID, "days_elapsed")
+    ).toBe("1–15 vs 1–15")
+    expect(insight?.summary).toBe(
+      "Days 1–15 of this month versus days 1–15 of last month — the same days of each month, never a partial month against a complete one."
+    )
+    expect(
+      insight?.metrics.find((m) => m.key === "previous_month_total")?.label
+    ).toBe("Full May 2026 — complete month, for context")
+  })
+
+  test("counts only the reader's family spend — another tenant's month never moves the delta", async () => {
+    const a = await seedWalletHousehold()
+    // Family A: identical seed to the like-for-like test (delta −105,000).
+    await spend(
+      a.owner,
+      a.wallet.id,
+      "2026-05-01T03:00:00.000Z",
+      50_000n,
+      "Rent share"
+    )
+    await spend(
+      a.owner,
+      a.wallet.id,
+      "2026-05-07T03:00:00.000Z",
+      200_000n,
+      "Groceries"
+    )
+    await spend(
+      a.owner,
+      a.wallet.id,
+      "2026-05-20T03:00:00.000Z",
+      700_000n,
+      "Laptop"
+    )
+    await spend(
+      a.owner,
+      a.wallet.id,
+      "2026-06-03T03:00:00.000Z",
+      100_000n,
+      "Groceries"
+    )
+    await spend(
+      a.owner,
+      a.wallet.id,
+      "2026-06-12T03:00:00.000Z",
+      45_000n,
+      "Coffee"
+    )
+
+    const b = await seedWalletHousehold()
+    // Family B: bigger rows on both sides — a leak of B's spend into A's
+    // fold would move A's delta toward B's +200,000.
+    await spend(
+      b.owner,
+      b.wallet.id,
+      "2026-05-01T03:00:00.000Z",
+      400_000n,
+      "B rent share"
+    )
+    await spend(
+      b.owner,
+      b.wallet.id,
+      "2026-05-10T03:00:00.000Z",
+      400_000n,
+      "B groceries"
+    )
+    await spend(
+      b.owner,
+      b.wallet.id,
+      "2026-05-28T03:00:00.000Z",
+      400_000n,
+      "B furniture"
+    )
+    await spend(
+      b.owner,
+      b.wallet.id,
+      "2026-06-05T03:00:00.000Z",
+      500_000n,
+      "B groceries"
+    )
+    await spend(
+      b.owner,
+      b.wallet.id,
+      "2026-06-14T03:00:00.000Z",
+      500_000n,
+      "B dinner"
+    )
+
+    const reportA = await insightsAt(a.owner, ON_JUNE)
+    expect(
+      insightMetric(reportA, SPENDING_TREND_INSIGHT_ID, "spent_current_period")
+    ).toBe("145000")
+    expect(
+      insightMetric(reportA, SPENDING_TREND_INSIGHT_ID, "spent_previous_period")
+    ).toBe("250000")
+    expect(insightMetric(reportA, SPENDING_TREND_INSIGHT_ID, "delta")).toBe(
+      "-105000"
+    )
+
+    const reportB = await insightsAt(b.owner, ON_JUNE)
+    expect(
+      insightMetric(reportB, SPENDING_TREND_INSIGHT_ID, "spent_current_period")
+    ).toBe("1000000")
+    expect(
+      insightMetric(reportB, SPENDING_TREND_INSIGHT_ID, "spent_previous_period")
+    ).toBe("800000")
+    expect(insightMetric(reportB, SPENDING_TREND_INSIGHT_ID, "delta")).toBe(
+      "200000"
+    )
+    expect(
+      insightMetric(reportB, SPENDING_TREND_INSIGHT_ID, "percent_change")
+    ).toBe("+25%")
+  })
+
+  test("a past-month request renders both COMPLETE months with partial false", async () => {
+    const { owner, wallet } = await seedWalletHousehold()
+    await spend(
+      owner,
+      wallet.id,
+      "2026-03-01T03:00:00.000Z",
+      20_000n,
+      "March start"
+    )
+    await spend(
+      owner,
+      wallet.id,
+      "2026-03-05T03:00:00.000Z",
+      250_000n,
+      "March groceries"
+    )
+    await spend(
+      owner,
+      wallet.id,
+      "2026-03-30T03:00:00.000Z",
+      50_000n,
+      "March medicine"
+    )
+    await spend(
+      owner,
+      wallet.id,
+      "2026-04-10T03:00:00.000Z",
+      300_000n,
+      "April groceries"
+    )
+    await spend(
+      owner,
+      wallet.id,
+      "2026-04-25T03:00:00.000Z",
+      100_000n,
+      "April visit"
+    )
+    await spend(
+      owner,
+      wallet.id,
+      "2026-04-30T03:00:00.000Z",
+      25_000n,
+      "April close"
+    )
+
+    const report = await insightsAt(owner, ON_JUNE, "2026-04")
+    expect(report.failedCount).toBe(0)
+    const insight = insightEntry(report, SPENDING_TREND_INSIGHT_ID)
+    expect(insight).toBeDefined()
+    // Both sides COMPLETE: the baseline window is the whole previous month.
+    expect(insight?.window).toEqual({
+      kind: "previous_month",
+      start: "2026-03-01",
+      end: "2026-03-31",
+      timezone: "Asia/Jakarta",
+    })
+    expect(insight?.partial).toBe(false)
+    expect(
+      insightMetric(report, SPENDING_TREND_INSIGHT_ID, "spent_current_period")
+    ).toBe("425000")
+    expect(
+      insightMetric(report, SPENDING_TREND_INSIGHT_ID, "spent_previous_period")
+    ).toBe("320000")
+    expect(insightMetric(report, SPENDING_TREND_INSIGHT_ID, "delta")).toBe(
+      "105000"
+    )
+    expect(
+      insightMetric(report, SPENDING_TREND_INSIGHT_ID, "days_elapsed")
+    ).toBe("1–30 vs 1–31")
+    expect(insight?.summary).toBe(
+      "April 2026 versus March 2026 — both months are complete, so the comparison is like for like."
+    )
+  })
+
+  test("skips a freshly seeded family with the distinct history reason, never a comparison against nothing", async () => {
+    const { owner, wallet } = await seedWalletHousehold()
+    // Recorded history begins mid-current-month: May never existed on this
+    // ledger, so there is nothing to compare days 1–15 against.
+    await spend(
+      owner,
+      wallet.id,
+      "2026-06-05T03:00:00.000Z",
+      150_000n,
+      "Groceries"
+    )
+    await spend(owner, wallet.id, "2026-06-10T03:00:00.000Z", 45_000n, "Coffee")
+
+    const report = await insightsAt(owner, ON_JUNE)
+    expect(report.insights.map((entry) => entry.id)).not.toContain(
+      SPENDING_TREND_INSIGHT_ID
+    )
+    expect(
+      report.skipped.find((entry) => entry.id === SPENDING_TREND_INSIGHT_ID)
+    ).toEqual({
+      id: SPENDING_TREND_INSIGHT_ID,
+      reason: "fewer than two complete months of recorded history",
     })
   })
 })

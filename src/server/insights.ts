@@ -56,9 +56,11 @@ import { collectAnchorChainGaps } from "./valuations"
 //      need: `emergency_fund` folds the trailing-six-complete-months burn
 //      from them, `since_payday`'s window (anchor ≈ ≤70 days back through
 //      today) is a subset whenever the requested month is current (the only
-//      case that derivation runs), and `recurring_bills` (slice #4) detects
+//      case that derivation runs), `recurring_bills` (slice #4) detects
 //      series over the same span — at most six COMPLETE months can precede
-//      the requested month, which is exactly its detection lookback;
+//      the requested month, which is exactly its detection lookback — and
+//      `spending_trend` (slice #5) compares the requested month against the
+//      ONE month before it, comfortably inside the same span (no new load);
 //   4. every family account, flat and UNFILTERED (soft-deleted AND archived
 //      rows included — `emergency_fund`'s designated-savings predicate lives
 //      in the pure fold, so the unit tests can prove it — the seam never
@@ -69,9 +71,12 @@ import { collectAnchorChainGaps } from "./valuations"
 //      transaction because that function opens its own, feeding the SAME
 //      `buildLatestRateResolver` the net-worth cards use, so this card can
 //      never disagree with net worth about a converted balance.
-//   6. the first and last non-deleted ledger rows (`emergency_fund`) — the
+//   6. the first and last non-deleted ledger rows (`emergency_fund`,
+//      `spending_trend`) — the
 //      recorded-history span (Rule E, ADR-0059 PER-227 amendment) deciding
-//      which trailing burn months count as COMPLETE. `family.createdAt` is
+//      which trailing burn months count as COMPLETE, and (slice #5) whether
+//      the comparison's previous month was recorded end-to-end at all.
+//      `family.createdAt` is
 //      unusable as a history proxy: a family can be created long before its
 //      first row is recorded (integration seeds back-date rows), and rows can
 //      post-date onboarding by months, so only the ledger itself can say what
