@@ -14,6 +14,7 @@ import {
   IconHandStop,
   IconMoneybag,
   IconGauge,
+  IconNews,
 } from "@tabler/icons-react"
 
 import { NavMain, type NavItem } from "@/components/nav-main"
@@ -68,6 +69,13 @@ const BASE_NAV_MAIN: NavItem[] = [
     title: "Budgets",
     url: "/budgets",
     icon: IconChartBar,
+  },
+  // PER-227 — the in-app monthly digest over the household insights engine
+  // (ADR-0059): `?month=`-driven, URL-shareable.
+  {
+    title: "Digest",
+    url: "/digest",
+    icon: IconNews,
   },
   // PER-166 follow-up: "Smart Import" (/import) and "Currencies & FX"
   // (/currencies) intentionally live under Settings → "Related tools"

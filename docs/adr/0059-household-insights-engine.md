@@ -1,15 +1,15 @@
 # ADR-0059 — Household insights engine (computed-on-read, registry)
 
-|                   |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**        | Accepted                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| **Date**          | 2026-10-11                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| **Accepted**      | 2026-10-11                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| **Deciders**      | Hendri Permana                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| **Supersedes**    | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| **Superseded by** | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| **Amends**        | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| **Amended by**    | PER-443 amendment below (period incompleteness — anchor-chain gaps as a first-class honesty qualifier, distinct from FX `partial`); PER-227 slice #3 amendment below (`emergency_fund` — designated-savings basis, 6× burn target, recorded-history Rule E); PER-227 slice #4 amendment below (`recurring_bills` — predicted due-soon obligations, forward `next_30_days` window); PER-227 slice #5 amendment below (`spending_trend` — like-for-like same-days month comparison, neutral signed delta, `previous_month` window) |
+|                   |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Status**        | Accepted                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| **Date**          | 2026-10-11                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **Accepted**      | 2026-10-11                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **Deciders**      | Hendri Permana                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| **Supersedes**    | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **Superseded by** | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **Amends**        | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **Amended by**    | PER-443 amendment below (period incompleteness — anchor-chain gaps as a first-class honesty qualifier, distinct from FX `partial`); PER-227 slice #3 amendment below (`emergency_fund` — designated-savings basis, 6× burn target, recorded-history Rule E); PER-227 slice #4 amendment below (`recurring_bills` — predicted due-soon obligations, forward `next_30_days` window); PER-227 slice #5 amendment below (`spending_trend` — like-for-like same-days month comparison, neutral signed delta, `previous_month` window); PER-227 digest amendment below (the in-app `/digest` page — `?month=` semantics, skipped/failed rendering duty, cache-key coherency) |
 
 ## Context
 
@@ -578,3 +578,64 @@ lower number can mean a cancelled medicine, a higher one a repaired car.
     never silently redefined inside this slice. The generic renderer is
     already agnostic: its exchange-rate badge keys off `fxPendingCount`, not
     `partial`, so no consumer behavior changes either way.
+
+## Amendment — the in-app digest page (`/digest`, PER-227, 2026-10-18)
+
+### Problem
+
+The engine ships as ambient dashboard cards; the flagship ask also names a
+MONTHLY DIGEST ("a monthly digest" — Context, above). Rendering one forces
+concrete decisions the engine deliberately left open: where the viewed month's
+state lives, what a future month means when someone requests one, and who is
+responsible for surface-rendering the `skipped` / `failedCount` vocabulary §2
+created. That last one is a real gap, not a formality: §2 exists so "'nothing
+to say' and 'failed' … never look the same", but the generic `InsightCard`
+renders NOTHING when `insights` is empty — on a digest page, whose default is
+exactly an empty insight list, the distinction would otherwise evaporate and
+an engine failure would read as silence.
+
+### Decision
+
+1. **Route `/digest`, month state in the URL.** `?month=YYYY-MM` is the ONE
+   month input (validated, shareable, reload-stable); it never lives in
+   component state, so there is no state→URL sync to get wrong. An absent or
+   INVALID month means the param is omitted from the `getInsightsFn` call and
+   §6's server-side family-tz resolution stands unchanged — the client never
+   computes "the current month" from the device clock or zone. The month
+   picker always displays the month the SERVER resolved into
+   `report.window.start` — the surface can never display a month other than
+   the one the figures on screen describe.
+2. **Future months are honored as-is — the disabled Next button is UI
+   guidance, not a data constraint.** A hand-typed `?month=` ahead of the
+   family's current month is sent verbatim; the engine renders its honest
+   skip reasons for it (slice #5 rule 4: "the requested month has not started
+   yet"). There is NO client-side clamping, redirect, or normalization —
+   hiding the URL's true state would make the page lie about what was
+   requested. The Next button is disabled once the viewed month reaches the
+   family's current month (and for any future month, by the same rule); that
+   family current month is derived from `report.window.timezone` (the zone the
+   server cut the report in), never the browser's zone. Prev/Next step whole
+   calendar months.
+3. **The digest renders what the engine chose NOT to say — a surface duty.**
+   One generic line per `skipped` entry (derivation id + the engine's own
+   reason; zero per-insight branches in any surface), and a distinct
+   failed-count indicator whenever `failedCount > 0`, so an engine failure can
+   never masquerade as "nothing to say". A report with no insights, no skips
+   and no failures renders an explicit nothing-to-say state — never a blank
+   page. `InsightCard` itself is deliberately UNCHANGED (the dashboard's
+   null-on-empty behavior is out of scope and DEFERRED to its own follow-up).
+4. **Cache coherency by key-prefix, no hub edit.** The digest's query keys
+   live UNDER the resync hub's `["dashboard", "insights"]` prefix
+   (`src/lib/collections.ts`), one cache entry per month
+   (`[…, month ?? "default"]`); TanStack Query invalidates by key prefix, so
+   the hub's existing post-mutation invalidation marks every month's digest
+   stale — a mounted digest can never serve a pre-mutation ledger answer.
+5. **Read-only; §1 applies unchanged, restated literally.** This slice is a
+   consumer of the existing envelope: no new tables, no new server functions,
+   no write-on-read, no delivered artifact. The `(familyId, month,
+   engineVersion)` delivered-digest artifact remains reserved for a real
+   out-of-request delivery consumer (email), which does not exist yet.
+6. **`INSIGHTS_ENGINE_VERSION` is UNCHANGED (6).** No derivation was added or
+   altered and the envelope is untouched; the digest is a pure view over the
+   v6 contract. A future materialization (rule 5 above) would still have to
+   carry the version it was produced under, per §2.
