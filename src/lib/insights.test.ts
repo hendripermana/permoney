@@ -6,6 +6,7 @@ import {
   currentMonthInZone,
   EMERGENCY_FUND_INSIGHT_ID,
   INSIGHTS_ENGINE_VERSION,
+  RECURRING_BILLS_INSIGHT_ID,
   resolvePaydayAnchor,
   SAVINGS_FLOW_INSIGHT_ID,
   shiftCalendarMonth,
@@ -364,6 +365,10 @@ describe("computeInsights — savings_flow", () => {
         id: EMERGENCY_FUND_INSIGHT_ID,
         reason: "no account is designated as savings",
       },
+      {
+        id: RECURRING_BILLS_INSIGHT_ID,
+        reason: "fewer than three complete months of recorded history",
+      },
     ])
   })
 
@@ -424,6 +429,10 @@ describe("computeInsights — savings_flow", () => {
       {
         id: EMERGENCY_FUND_INSIGHT_ID,
         reason: "no account is designated as savings",
+      },
+      {
+        id: RECURRING_BILLS_INSIGHT_ID,
+        reason: "fewer than three complete months of recorded history",
       },
     ])
   })
@@ -1751,8 +1760,8 @@ describe("computeInsights — emergency_fund (PER-227 slice #3)", () => {
     expect(byId(julyGap, EMERGENCY_FUND_INSIGHT_ID)?.periodPartial).toBe(false)
   })
 
-  test("is registered under engine version 4", () => {
-    expect(INSIGHTS_ENGINE_VERSION).toBe(4)
+  test("is registered under engine version 5", () => {
+    expect(INSIGHTS_ENGINE_VERSION).toBe(5)
     const result = buildReport({
       month: JULY,
       historyRange: FULL_HISTORY,
@@ -1761,10 +1770,515 @@ describe("computeInsights — emergency_fund (PER-227 slice #3)", () => {
     })
     // The other two derivations skipped here (no qualifying rows), so this
     // pins that `emergency_fund` IS in the registry and reaches the report —
-    // not the registry's array order.
+    // not the registry's array order. (`recurring_bills` also skips: it only
+    // applies to the family's current month, and JUNE < JULY here.)
     expect(result.insights.map((insight) => insight.id)).toEqual([
       EMERGENCY_FUND_INSIGHT_ID,
     ])
-    expect(byId(result, EMERGENCY_FUND_INSIGHT_ID)?.engineVersion).toBe(4)
+    expect(byId(result, EMERGENCY_FUND_INSIGHT_ID)?.engineVersion).toBe(5)
+  })
+})
+
+describe("computeInsights — recurring_bills (PER-227 slice #4)", () => {
+  /** Mid-June in Asia/Jakarta (10:00 WIB): today is 2026-06-15, so the
+   * forward window runs 2026-06-15 → 2026-07-15 inclusive. */
+  const HISTORY: { start: string; end: string } = {
+    start: "2026-01-01",
+    end: "2026-06-15",
+  }
+
+  /** One expense row shaped like a bill occurrence: native magnitude
+   * positive, frozen base projection negative, labelled by merchant (else
+   * description) exactly as the seam's flow rows carry it. */
+  function billRow(opts: {
+    date: string
+    amountMinor?: bigint
+    label: string
+    useMerchant?: boolean
+    baseAmountMinor?: bigint | null
+  }): InsightFlowRow {
+    const amount = opts.amountMinor ?? 220_000n
+    return flowRow({
+      date: new Date(opts.date),
+      amount,
+      baseAmount:
+        opts.baseAmountMinor === undefined ? -amount : opts.baseAmountMinor,
+      merchantName: opts.useMerchant ? opts.label : null,
+      description: opts.label,
+    })
+  }
+
+  /** A cadence series of occurrences (all at 03:00Z = 10:00 WIB). */
+  function billSeries(opts: {
+    dates: ReadonlyArray<string>
+    label: string
+    amountMinor?: bigint
+    useMerchant?: boolean
+  }): InsightFlowRow[] {
+    return opts.dates.map((date) =>
+      billRow({
+        date,
+        label: opts.label,
+        amountMinor: opts.amountMinor,
+        useMerchant: opts.useMerchant,
+      })
+    )
+  }
+
+  function billsReport(options: ReportOptions = {}): InsightReport {
+    return buildReport({
+      month: JUNE,
+      now: DEFAULT_NOW,
+      historyRange: HISTORY,
+      ...options,
+    })
+  }
+
+  function byId(result: InsightReport, id: string) {
+    return result.insights.find((insight) => insight.id === id)
+  }
+
+  function metricOf(
+    result: InsightReport,
+    key: string
+  ): { value: string; label?: string; currency?: string } | undefined {
+    return byId(result, RECURRING_BILLS_INSIGHT_ID)?.metrics.find(
+      (metric) => metric.key === key
+    )
+  }
+
+  test("predicts a due-today monthly bill and labels the estimate honestly", () => {
+    const result = billsReport({
+      expenseRows: billSeries({
+        dates: [
+          "2026-03-17T03:00:00.000Z",
+          "2026-04-16T03:00:00.000Z",
+          "2026-05-16T03:00:00.000Z",
+        ],
+        label: "Netflix",
+        useMerchant: true,
+      }),
+    })
+
+    expect(result.failedCount).toBe(0)
+    // The ONLY insight: savings_flow/since_payday/emergency_fund all skip.
+    expect(result.insights.map((insight) => insight.id)).toEqual([
+      RECURRING_BILLS_INSIGHT_ID,
+    ])
+    const insight = byId(result, RECURRING_BILLS_INSIGHT_ID)
+    expect(insight?.tone).toBe("neutral")
+    expect(insight?.title).toBe("Bills due soon")
+    expect(insight?.summary).toBe(
+      "Predicted recurring outflows over the next 30 days — an estimate from recorded payments, not money already spent."
+    )
+    expect(insight?.detail).toBe(
+      "Based on 3 past payments across 5 months of recorded history."
+    )
+    expect(insight?.window).toEqual({
+      kind: "next_30_days",
+      start: "2026-06-15",
+      end: "2026-07-15",
+      timezone: "Asia/Jakarta",
+    })
+    expect(insight?.engineVersion).toBe(INSIGHTS_ENGINE_VERSION)
+    expect(insight?.periodPartial).toBe(false)
+    expect(insight?.periodGaps).toEqual([])
+    expect(insight?.partial).toBe(false)
+    expect(insight?.fxPendingCount).toBe(0)
+
+    expect(metricOf(result, "predicted_total")).toEqual({
+      key: "predicted_total",
+      label: "Predicted from 3 past payments",
+      value: "220000",
+      currency: "IDR",
+    })
+    expect(metricOf(result, "series_count")?.value).toBe("1")
+    expect(metricOf(result, "series_count")?.label).toBe("Bills due")
+    expect(metricOf(result, "nearest_bill")?.label).toBe(
+      "Nearest (Netflix, due today)"
+    )
+    expect(metricOf(result, "nearest_bill")?.value).toBe("220000")
+    expect(metricOf(result, "cadence_mix")?.value).toBe("1 monthly")
+    expect(metricOf(result, "due_bills")?.value).toBe("Netflix")
+    expect(metricOf(result, "history_months")?.value).toBe("5")
+    expect(metricOf(result, "history_months")?.label).toBe("Months of history")
+    expect(metricOf(result, "fx_pending_count")?.value).toBe("0")
+  })
+
+  test("counts a bill projected exactly to today+30 (inclusive endpoint)", () => {
+    const result = billsReport({
+      expenseRows: billSeries({
+        dates: [
+          "2026-04-16T03:00:00.000Z",
+          "2026-05-16T03:00:00.000Z",
+          "2026-06-15T03:00:00.000Z",
+        ],
+        label: "Netflix",
+      }),
+    })
+    expect(metricOf(result, "series_count")?.value).toBe("1")
+    expect(metricOf(result, "nearest_bill")?.label).toBe(
+      "Nearest (Netflix, due in 30 days)"
+    )
+  })
+
+  test("counts a bill projected to tomorrow", () => {
+    const result = billsReport({
+      expenseRows: billSeries({
+        dates: [
+          "2026-03-18T03:00:00.000Z",
+          "2026-04-17T03:00:00.000Z",
+          "2026-05-17T03:00:00.000Z",
+        ],
+        label: "Netflix",
+      }),
+    })
+    expect(metricOf(result, "nearest_bill")?.label).toBe(
+      "Nearest (Netflix, due tomorrow)"
+    )
+  })
+
+  test("excludes a bill projected past today+30, but still renders the honest empty card", () => {
+    // 31-day gaps push the projection to 2026-07-16 — one day past the
+    // window. Adequate history + nothing due must RENDER (a fact about the
+    // schedule), never skip. A series WAS detected, so the copy must say
+    // nothing is DUE — never "not detected" (false negative).
+    const result = billsReport({
+      expenseRows: billSeries({
+        dates: [
+          "2026-04-14T03:00:00.000Z",
+          "2026-05-15T03:00:00.000Z",
+          "2026-06-15T03:00:00.000Z",
+        ],
+        label: "Netflix",
+      }),
+    })
+
+    const insight = byId(result, RECURRING_BILLS_INSIGHT_ID)
+    expect(insight).toBeDefined()
+    expect(insight?.tone).toBe("neutral")
+    expect(insight?.summary).toBe(
+      "No recurring bills are due in the next 30 days."
+    )
+    expect(insight?.detail).toBe(
+      "Nothing is predicted to be due within the next 30 days."
+    )
+    expect(metricOf(result, "predicted_total")).toEqual({
+      key: "predicted_total",
+      label: "Predicted for the next 30 days",
+      value: "0",
+      currency: "IDR",
+    })
+    expect(metricOf(result, "series_count")?.value).toBe("0")
+    expect(metricOf(result, "nearest_bill")).toBeUndefined()
+    expect(metricOf(result, "cadence_mix")).toBeUndefined()
+    expect(metricOf(result, "due_bills")).toBeUndefined()
+    expect(metricOf(result, "history_months")?.value).toBe("5")
+  })
+
+  test("still counts an OVERDUE bill — no lower bound on due-soon", () => {
+    // Projection 2026-06-09: six days overdue as of today, still a bill
+    // that must be paid. The detector's staleness guard (two monthly bands
+    // = 70 days) bounds how far past due a series can linger.
+    const result = billsReport({
+      expenseRows: billSeries({
+        dates: [
+          "2026-03-11T03:00:00.000Z",
+          "2026-04-10T03:00:00.000Z",
+          "2026-05-10T03:00:00.000Z",
+        ],
+        label: "Netflix",
+      }),
+    })
+    expect(metricOf(result, "series_count")?.value).toBe("1")
+    expect(metricOf(result, "nearest_bill")?.label).toBe(
+      "Nearest (Netflix, 6 days overdue)"
+    )
+  })
+
+  test("cuts membership in the FAMILY timezone, not UTC", () => {
+    // Occurrences at 17:00Z with 31-day gaps project to 2026-07-15T17:00Z:
+    // already 2026-07-16 in Jakarta (excluded), still 2026-07-15 in UTC
+    // (included). One series, one instant — only the family zone decides.
+    const series = billSeries({
+      dates: [
+        "2026-04-13T17:00:00.000Z",
+        "2026-05-14T17:00:00.000Z",
+        "2026-06-14T17:00:00.000Z",
+      ],
+      label: "Netflix",
+    })
+    const inFamilyZone = billsReport({ expenseRows: series })
+    expect(metricOf(inFamilyZone, "series_count")?.value).toBe("0")
+
+    const inUtc = billsReport({ expenseRows: series, timezone: "UTC" })
+    expect(metricOf(inUtc, "series_count")?.value).toBe("1")
+  })
+
+  test("drops future-dated rows: a schedule is not an occurrence", () => {
+    // With the 2026-07-10 row treated as an occurrence, the projection would
+    // shift to ~2026-08-07 and the bill would VANISH from the card even
+    // though its previous occurrence (today) is due. The row must be
+    // dropped, leaving the three real occurrences → next 07-15.
+    const result = billsReport({
+      expenseRows: billSeries({
+        dates: [
+          "2026-04-16T03:00:00.000Z",
+          "2026-05-16T03:00:00.000Z",
+          "2026-06-15T03:00:00.000Z",
+          "2026-07-10T03:00:00.000Z",
+        ],
+        label: "Netflix",
+      }),
+    })
+    expect(metricOf(result, "series_count")?.value).toBe("1")
+    expect(metricOf(result, "nearest_bill")?.label).toBe(
+      "Nearest (Netflix, due in 30 days)"
+    )
+  })
+
+  test("never bills a salary: income rows never reach the detector (non-vacuity)", () => {
+    // A monthly income series projecting INSIDE the window (06-10 + 31d =
+    // 07-11). If the direction filter broke, the card would predict
+    // 20,000,000 of "bills". The payday derivation detects the SAME rows,
+    // proving they were present and detectable — only the filter keeps them
+    // off the bills card.
+    const salary = salarySeries({
+      months: ["2026-04", "2026-05", "2026-06"],
+      day: 10,
+      amountMinor: 20_000_000n,
+    })
+    const result = billsReport({ incomeRows: salary })
+
+    const insight = byId(result, RECURRING_BILLS_INSIGHT_ID)
+    expect(insight).toBeDefined()
+    expect(metricOf(result, "series_count")?.value).toBe("0")
+    expect(metricOf(result, "predicted_total")?.value).toBe("0")
+    expect(byId(result, SINCE_PAYDAY_INSIGHT_ID)).toBeDefined()
+  })
+
+  test("sorts due-bill labels with localeCompare and caps the list with +n", () => {
+    // Four monthly bills, all projecting to the same instant. Byte order
+    // would print "DanaB, Zakat, apple bill, dana darurat"; locale order is
+    // "apple bill, dana darurat, DanaB, zakat" (Sonar S2871). The nearest
+    // tie-break must pick the locale-first label although input order put
+    // "zakat" first.
+    const sameDates = [
+      "2026-04-05T03:00:00.000Z",
+      "2026-05-05T03:00:00.000Z",
+      "2026-06-05T03:00:00.000Z",
+    ]
+    const result = billsReport({
+      expenseRows: [
+        ...billSeries({ dates: sameDates, label: "zakat" }),
+        ...billSeries({ dates: sameDates, label: "DanaB" }),
+        ...billSeries({ dates: sameDates, label: "dana darurat" }),
+        ...billSeries({ dates: sameDates, label: "apple bill" }),
+      ],
+    })
+    expect(metricOf(result, "due_bills")?.label).toBe("Due bills")
+    expect(metricOf(result, "due_bills")?.value).toBe(
+      "apple bill, dana darurat, DanaB +1"
+    )
+    expect(metricOf(result, "nearest_bill")?.label).toBe(
+      "Nearest (apple bill, due in 21 days)"
+    )
+    expect(metricOf(result, "cadence_mix")?.value).toBe("4 monthly")
+  })
+
+  test("prints the cadence mix on a fixed ladder, never a string sort", () => {
+    // An alphabetical print would read "biweekly, monthly, weekly" and bury
+    // the dominant cadence; the ladder leads with monthly.
+    const result = billsReport({
+      expenseRows: [
+        ...billSeries({
+          dates: [
+            "2026-03-17T03:00:00.000Z",
+            "2026-04-16T03:00:00.000Z",
+            "2026-05-16T03:00:00.000Z",
+          ],
+          label: "Netflix",
+        }),
+        ...billSeries({
+          dates: [
+            "2026-03-20T03:00:00.000Z",
+            "2026-04-19T03:00:00.000Z",
+            "2026-05-19T03:00:00.000Z",
+          ],
+          label: "Spotify",
+        }),
+        ...billSeries({
+          dates: [
+            "2026-05-18T03:00:00.000Z",
+            "2026-06-01T03:00:00.000Z",
+            "2026-06-15T03:00:00.000Z",
+          ],
+          label: "Electricity",
+        }),
+        ...billSeries({
+          dates: [
+            "2026-06-01T03:00:00.000Z",
+            "2026-06-08T03:00:00.000Z",
+            "2026-06-15T03:00:00.000Z",
+          ],
+          label: "Gym",
+        }),
+      ],
+    })
+    expect(metricOf(result, "series_count")?.value).toBe("4")
+    expect(metricOf(result, "cadence_mix")?.value).toBe(
+      "2 monthly, 1 biweekly, 1 weekly"
+    )
+    expect(metricOf(result, "nearest_bill")?.label).toBe(
+      "Nearest (Netflix, due today)"
+    )
+  })
+
+  test("skips with the history reason when fewer than three months are covered", () => {
+    // History starts mid-April: only May is complete among Mar–May. A due
+    // bill exists, but "predicted from recorded payments" would rest on too
+    // little — the skip reason is distinct from "nothing is due".
+    const dueToday = billSeries({
+      dates: [
+        "2026-03-17T03:00:00.000Z",
+        "2026-04-16T03:00:00.000Z",
+        "2026-05-16T03:00:00.000Z",
+      ],
+      label: "Netflix",
+    })
+    const thin = billsReport({
+      expenseRows: dueToday,
+      historyRange: { start: "2026-04-15", end: "2026-06-15" },
+    })
+    expect(thin.insights.map((insight) => insight.id)).not.toContain(
+      RECURRING_BILLS_INSIGHT_ID
+    )
+    expect(thin.skipped).toContainEqual({
+      id: RECURRING_BILLS_INSIGHT_ID,
+      reason: "fewer than three complete months of recorded history",
+    })
+
+    // A family with NO recorded history at all skips the same way.
+    const none = billsReport({ expenseRows: dueToday, historyRange: null })
+    expect(none.skipped).toContainEqual({
+      id: RECURRING_BILLS_INSIGHT_ID,
+      reason: "fewer than three complete months of recorded history",
+    })
+  })
+
+  test("skips a historical month: the window is now-relative by nature", () => {
+    // Same rows and full history, but a MAY request: the detector's
+    // staleness guard would drop every series, rendering a lying empty card
+    // — so the derivation refuses instead (the same rule as since_payday).
+    const dueToday = billSeries({
+      dates: [
+        "2026-03-17T03:00:00.000Z",
+        "2026-04-16T03:00:00.000Z",
+        "2026-05-16T03:00:00.000Z",
+      ],
+      label: "Netflix",
+    })
+    const may = billsReport({ expenseRows: dueToday, month: "2026-05" })
+    expect(may.skipped).toContainEqual({
+      id: RECURRING_BILLS_INSIGHT_ID,
+      reason: "recurring bills only apply to the family's current month",
+    })
+    // The discriminating pair: the same rows in the CURRENT month render.
+    const june = billsReport({ expenseRows: dueToday })
+    expect(metricOf(june, "series_count")?.value).toBe("1")
+  })
+
+  test("excludes FX-pending expense rows from detection and counts them", () => {
+    // A complete "Adobe" cadence with NO frozen base projection cannot be
+    // summed into a base-currency prediction: excluded AND counted, never
+    // silently folded in as zero — and never clustered by the detector.
+    const pending = billSeries({
+      dates: [
+        "2026-04-16T03:00:00.000Z",
+        "2026-05-16T03:00:00.000Z",
+        "2026-06-15T03:00:00.000Z",
+      ],
+      label: "Adobe",
+    }).map((row) => ({ ...row, baseAmount: null }))
+    const solid = billSeries({
+      dates: [
+        "2026-03-17T03:00:00.000Z",
+        "2026-04-16T03:00:00.000Z",
+        "2026-05-16T03:00:00.000Z",
+      ],
+      label: "Netflix",
+    })
+
+    const result = billsReport({ expenseRows: [...pending, ...solid] })
+    expect(metricOf(result, "predicted_total")?.value).toBe("220000")
+    expect(metricOf(result, "due_bills")?.value).toBe("Netflix")
+    expect(metricOf(result, "fx_pending_count")?.value).toBe("3")
+    expect(byId(result, RECURRING_BILLS_INSIGHT_ID)?.partial).toBe(true)
+  })
+
+  test("does NOT count a future-dated FX-pending row: a schedule is neither an occurrence nor a pending occurrence", () => {
+    // The pending count must be scoped to the SAME rows detection uses. A
+    // future row is dropped before the pending check, so a future row that
+    // ALSO lacks a frozen base projection stays uncounted — otherwise the
+    // count would claim excluded detection input that detection never saw.
+    const past = billSeries({
+      dates: [
+        "2026-04-16T03:00:00.000Z",
+        "2026-05-16T03:00:00.000Z",
+        "2026-06-15T03:00:00.000Z",
+      ],
+      label: "Netflix",
+    })
+    const futurePending = billSeries({
+      dates: ["2026-07-20T03:00:00.000Z"],
+      label: "Adobe",
+    }).map((row) => ({ ...row, baseAmount: null }))
+
+    const result = billsReport({ expenseRows: [...past, ...futurePending] })
+    expect(metricOf(result, "fx_pending_count")?.value).toBe("0")
+    expect(byId(result, RECURRING_BILLS_INSIGHT_ID)?.partial).toBe(false)
+  })
+
+  test("always reports an honest forward window: no periodPartial, no gaps", () => {
+    // A live anchor-chain gap intersecting the forward window says nothing
+    // about PREDICTED future obligations — PER-443's axis is past-tense, so
+    // fabricating periodPartial here would be a lie in the other direction.
+    const result = billsReport({
+      expenseRows: billSeries({
+        dates: [
+          "2026-03-17T03:00:00.000Z",
+          "2026-04-16T03:00:00.000Z",
+          "2026-05-16T03:00:00.000Z",
+        ],
+        label: "Netflix",
+      }),
+      anchorGaps: [
+        {
+          accountId: "acc-gap",
+          accountName: "Gap account",
+          currency: "IDR",
+          fromDate: "2026-06-20",
+          toDate: "2026-07-05",
+          amount: 500_000n,
+          fromSource: "manual",
+          toSource: "pit_stop",
+        },
+      ],
+    })
+    const insight = byId(result, RECURRING_BILLS_INSIGHT_ID)
+    expect(insight?.periodPartial).toBe(false)
+    expect(insight?.periodGaps).toEqual([])
+  })
+
+  test("renders the empty card when history is adequate and no series exists at all", () => {
+    // Nothing DETECTED at all — the copy makes the true claim about
+    // detection (distinct from "detected but nothing due", which says so).
+    const result = billsReport({ expenseRows: [] })
+    const insight = byId(result, RECURRING_BILLS_INSIGHT_ID)
+    expect(insight).toBeDefined()
+    expect(insight?.summary).toBe(
+      "No recurring outflows detected in the last 5 complete months of recorded history."
+    )
+    expect(metricOf(result, "series_count")?.value).toBe("0")
   })
 })
