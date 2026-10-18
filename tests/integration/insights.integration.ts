@@ -1,11 +1,4 @@
-import {
-  afterAll,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "vite-plus/test"
+import { describe, expect, test } from "vite-plus/test"
 import type { AccountType } from "@/lib/accounts"
 import {
   EMERGENCY_FUND_INSIGHT_ID,
@@ -21,15 +14,15 @@ import {
   deleteTransactionForFamily,
 } from "@/server/transactions"
 import { createValuationForFamily } from "@/server/valuations"
+import type { IntegrationHarness } from "./support/database"
 import {
-  createIntegrationHarness,
-  type IntegrationHarness,
-} from "./support/database"
-import {
-  createTestFactories,
   type AuthenticatedOnboardedUser,
   type TestFactories,
 } from "./support/factories"
+import {
+  createFamilyDefaultsSetter,
+  useIntegrationSuite,
+} from "./support/suite"
 
 // PER-227 — real-Postgres proof of the household insights engine's first
 // derivation (`savings_flow`) over rows written by the REAL ledger path
@@ -57,32 +50,14 @@ describe("household insights (PER-227)", () => {
   let harness: IntegrationHarness
   let factories: TestFactories
 
-  beforeAll(async () => {
-    harness = await createIntegrationHarness()
-    factories = createTestFactories(harness)
-  })
-
-  beforeEach(async () => {
-    await harness.reset()
-  })
-
-  afterAll(async () => {
-    await harness.teardown()
+  useIntegrationSuite((h, f) => {
+    harness = h
+    factories = f
   })
 
   // ---- helpers ---------------------------------------------------------------
 
-  const setFamilyDefaults = (
-    owner: AuthenticatedOnboardedUser,
-    currency: string,
-    timezone: string
-  ) =>
-    harness.withFamily(owner.family.id, async (tx) =>
-      tx.family.update({
-        where: { id: owner.family.id },
-        data: { currency, timezone },
-      })
-    )
+  const setFamilyDefaults = createFamilyDefaultsSetter(() => harness)
 
   const account = (
     owner: AuthenticatedOnboardedUser,
@@ -642,11 +617,7 @@ describe("household insights (PER-227)", () => {
   })
 
   test("skips the card for a month that is not the family's current month", async () => {
-    const owner = await factories.createAuthenticatedOnboardedUser()
-    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
-    const wallet = await account(owner, "Wallet", {
-      accountSubtype: "checking",
-    })
+    const { owner, wallet } = await seedWalletHousehold()
     await seedSalarySeries(owner, wallet.id)
 
     const report = await insightsAt(owner, PAYDAY_NOW, "2026-06")
@@ -662,11 +633,7 @@ describe("household insights (PER-227)", () => {
   })
 
   test("excludes an FX-pending expense from spent but counts it as partial", async () => {
-    const owner = await factories.createAuthenticatedOnboardedUser()
-    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
-    const wallet = await account(owner, "Wallet", {
-      accountSubtype: "checking",
-    })
+    const { owner, wallet } = await seedWalletHousehold()
     // USD account with NO USD→IDR rate seeded: the frozen base projection of
     // its rows stays null (FX-pending).
     const usdWallet = await account(owner, "USD Wallet", {

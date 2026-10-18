@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-  vi,
-} from "vite-plus/test"
+import { describe, expect, test, vi } from "vite-plus/test"
 import type { AccountType } from "@/lib/accounts"
 import { convertMinor, encodeRate } from "@/lib/fx"
 import { normalizeNetWorthAt, type PointBalance } from "@/lib/net-worth"
@@ -21,46 +13,28 @@ import {
   getNetWorthSeriesForFamily,
   type SerializedNetWorthPoint,
 } from "@/server/reporting"
+import type { IntegrationHarness } from "./support/database"
 import {
-  createIntegrationHarness,
-  type IntegrationHarness,
-} from "./support/database"
-import {
-  createTestFactories,
   type AuthenticatedOnboardedUser,
   type TestFactories,
 } from "./support/factories"
+import {
+  createFamilyDefaultsSetter,
+  useIntegrationSuite,
+} from "./support/suite"
 
 describe("net-worth time series (PER-154 / ADR-0038)", () => {
   let harness: IntegrationHarness
   let factories: TestFactories
 
-  beforeAll(async () => {
-    harness = await createIntegrationHarness()
-    factories = createTestFactories(harness)
-  })
-
-  beforeEach(async () => {
-    await harness.reset()
-  })
-
-  afterAll(async () => {
-    await harness.teardown()
+  useIntegrationSuite((h, f) => {
+    harness = h
+    factories = f
   })
 
   // ---- helpers ---------------------------------------------------------------
 
-  const setFamilyDefaults = (
-    owner: AuthenticatedOnboardedUser,
-    currency: string,
-    timezone: string
-  ) =>
-    harness.withFamily(owner.family.id, async (tx) =>
-      tx.family.update({
-        where: { id: owner.family.id },
-        data: { currency, timezone },
-      })
-    )
+  const setFamilyDefaults = createFamilyDefaultsSetter(() => harness)
 
   const makeAccount = async (
     owner: AuthenticatedOnboardedUser,
