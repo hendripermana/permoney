@@ -2305,6 +2305,41 @@ describe("computeInsights — spending_trend (PER-227 slice #5)", () => {
     )?.value
   }
 
+  /** The shared prologue of every rendered-card pin: a clean report, the
+   * trend card present — and the card handle handed back so each test spells
+   * its own expected values below. */
+  function expectTrendInsight(result: InsightReport) {
+    expect(result.failedCount).toBe(0)
+    const insight = byId(result, SPENDING_TREND_INSIGHT_ID)
+    expect(insight).toBeDefined()
+    return insight
+  }
+
+  /** The baseline-window envelope shape (the reserved `previous_month` kind
+   * plus the family timezone); every caller writes its own start/end. */
+  function expectTrendWindow(
+    insight: ReturnType<typeof byId>,
+    start: string,
+    end: string
+  ) {
+    expect(insight?.window).toEqual({
+      kind: "previous_month",
+      start,
+      end,
+      timezone: "Asia/Jakarta",
+    })
+  }
+
+  /** One labelled trend metric; the expected value is written by the caller,
+   * in the caller's own order. */
+  function expectTrendMetric(
+    result: InsightReport,
+    key: string,
+    value: string
+  ) {
+    expect(metricOf(result, key)).toBe(value)
+  }
+
   function trendGap(fromDate: string, toDate: string): InsightAnchorGapRow {
     return {
       accountId: "acc-gap",
@@ -2335,24 +2370,17 @@ describe("computeInsights — spending_trend (PER-227 slice #5)", () => {
       ],
     })
 
-    expect(result.failedCount).toBe(0)
-    const insight = byId(result, SPENDING_TREND_INSIGHT_ID)
-    expect(insight).toBeDefined()
+    const insight = expectTrendInsight(result)
     expect(insight?.tone).toBe("neutral")
     // The envelope carries the BASELINE window (the reserved `previous_month`
     // kind, finally in use): days 1–15 of the previous month.
-    expect(insight?.window).toEqual({
-      kind: "previous_month",
-      start: "2026-05-01",
-      end: "2026-05-15",
-      timezone: "Asia/Jakarta",
-    })
-    expect(metricOf(result, "spent_current_period")).toBe("150000")
-    expect(metricOf(result, "spent_previous_period")).toBe("200000")
-    expect(metricOf(result, "previous_month_total")).toBe("2087000")
-    expect(metricOf(result, "delta")).toBe("-50000")
-    expect(metricOf(result, "percent_change")).toBe("-25%")
-    expect(metricOf(result, "days_elapsed")).toBe("1–15 vs 1–15")
+    expectTrendWindow(insight, "2026-05-01", "2026-05-15")
+    expectTrendMetric(result, "spent_current_period", "150000")
+    expectTrendMetric(result, "spent_previous_period", "200000")
+    expectTrendMetric(result, "previous_month_total", "2087000")
+    expectTrendMetric(result, "delta", "-50000")
+    expectTrendMetric(result, "percent_change", "-25%")
+    expectTrendMetric(result, "days_elapsed", "1–15 vs 1–15")
     // The current month is in progress — `partial` must say so.
     expect(insight?.partial).toBe(true)
     expect(insight?.summary).toBe(
@@ -2386,24 +2414,17 @@ describe("computeInsights — spending_trend (PER-227 slice #5)", () => {
       ],
     })
 
-    expect(result.failedCount).toBe(0)
-    const insight = byId(result, SPENDING_TREND_INSIGHT_ID)
-    expect(insight).toBeDefined()
+    const insight = expectTrendInsight(result)
     // The baseline stops at February's actual last day, never March 3.
-    expect(insight?.window).toEqual({
-      kind: "previous_month",
-      start: "2026-02-01",
-      end: "2026-02-28",
-      timezone: "Asia/Jakarta",
-    })
+    expectTrendWindow(insight, "2026-02-01", "2026-02-28")
     // The asymmetric "1–31 vs 1–28" disclosure.
-    expect(metricOf(result, "days_elapsed")).toBe("1–31 vs 1–28")
-    expect(metricOf(result, "spent_current_period")).toBe("150000")
+    expectTrendMetric(result, "days_elapsed", "1–31 vs 1–28")
+    expectTrendMetric(result, "spent_current_period", "150000")
     // 250000 without the clamp (the Mar 2 row would leak into the baseline).
-    expect(metricOf(result, "spent_previous_period")).toBe("200000")
-    expect(metricOf(result, "previous_month_total")).toBe("200000")
-    expect(metricOf(result, "delta")).toBe("-50000")
-    expect(metricOf(result, "percent_change")).toBe("-25%")
+    expectTrendMetric(result, "spent_previous_period", "200000")
+    expectTrendMetric(result, "previous_month_total", "200000")
+    expectTrendMetric(result, "delta", "-50000")
+    expectTrendMetric(result, "percent_change", "-25%")
     expect(insight?.partial).toBe(true)
     // The clamped copy must own the asymmetry — it may never claim "the
     // same days of each month" while printing 1–31 vs 1–28.
@@ -2593,19 +2614,12 @@ describe("computeInsights — spending_trend (PER-227 slice #5)", () => {
       ],
     })
 
-    expect(result.failedCount).toBe(0)
-    const insight = byId(result, SPENDING_TREND_INSIGHT_ID)
-    expect(insight).toBeDefined()
-    expect(insight?.window).toEqual({
-      kind: "previous_month",
-      start: "2026-06-01",
-      end: "2026-06-01",
-      timezone: "Asia/Jakarta",
-    })
-    expect(metricOf(result, "days_elapsed")).toBe("1–1 vs 1–1")
-    expect(metricOf(result, "spent_current_period")).toBe("120000")
-    expect(metricOf(result, "spent_previous_period")).toBe("0")
-    expect(metricOf(result, "percent_change")).toBe("no comparison possible")
+    const insight = expectTrendInsight(result)
+    expectTrendWindow(insight, "2026-06-01", "2026-06-01")
+    expectTrendMetric(result, "days_elapsed", "1–1 vs 1–1")
+    expectTrendMetric(result, "spent_current_period", "120000")
+    expectTrendMetric(result, "spent_previous_period", "0")
+    expectTrendMetric(result, "percent_change", "no comparison possible")
     expect(result.skipped).not.toContainEqual(
       expect.objectContaining({ id: SPENDING_TREND_INSIGHT_ID })
     )

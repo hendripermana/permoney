@@ -230,6 +230,23 @@ describe("household insights (PER-227)", () => {
     insightId: string
   ) => report.insights.find((entry) => entry.id === insightId)
 
+  /** The two-part skip disclosure for the since-payday card: absent from the
+   * report's insights, present in `skipped` with exactly the given reason. */
+  const expectSincePaydaySkipped = (
+    report: Awaited<ReturnType<typeof getInsightsForFamily>>,
+    reason: string
+  ) => {
+    expect(report.insights.map((entry) => entry.id)).not.toContain(
+      "since_payday"
+    )
+    expect(report.skipped.find((entry) => entry.id === "since_payday")).toEqual(
+      {
+        id: "since_payday",
+        reason,
+      }
+    )
+  }
+
   // ---- the core invariant ----------------------------------------------------
 
   test("counts savings + investment transfers exactly once each, never as income/expense", async () => {
@@ -605,14 +622,9 @@ describe("household insights (PER-227)", () => {
     }
 
     const report = await insightsAt(owner, PAYDAY_NOW)
-    expect(report.insights.map((entry) => entry.id)).not.toContain(
-      "since_payday"
-    )
-    expect(report.skipped.find((entry) => entry.id === "since_payday")).toEqual(
-      {
-        id: "since_payday",
-        reason: "no monthly recurring income series detected",
-      }
+    expectSincePaydaySkipped(
+      report,
+      "no monthly recurring income series detected"
     )
   })
 
@@ -621,14 +633,9 @@ describe("household insights (PER-227)", () => {
     await seedSalarySeries(owner, wallet.id)
 
     const report = await insightsAt(owner, PAYDAY_NOW, "2026-06")
-    expect(report.insights.map((entry) => entry.id)).not.toContain(
-      "since_payday"
-    )
-    expect(report.skipped.find((entry) => entry.id === "since_payday")).toEqual(
-      {
-        id: "since_payday",
-        reason: "since payday only applies to the family's current month",
-      }
+    expectSincePaydaySkipped(
+      report,
+      "since payday only applies to the family's current month"
     )
   })
 
