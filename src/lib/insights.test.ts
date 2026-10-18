@@ -223,6 +223,11 @@ function insightMetric(
     ?.metrics.find((metric) => metric.key === key)?.value
 }
 
+/** One named insight card from a report. */
+function byId(result: InsightReport, id: string) {
+  return result.insights.find((insight) => insight.id === id)
+}
+
 describe("calendarMonthBounds", () => {
   test("resolves a 30-day month", () => {
     expect(calendarMonthBounds("2026-06")).toEqual({
@@ -265,6 +270,28 @@ describe("currentMonthInZone", () => {
 })
 
 describe("computeInsights — savings_flow", () => {
+  /** The card-specific skips recorded on ANY empty report — savings_flow
+   * carries its own per-test reason below, but every other card always
+   * skips for the same fixed reason. */
+  const CARD_SKIPS = [
+    {
+      id: SINCE_PAYDAY_INSIGHT_ID,
+      reason: "no monthly recurring income series detected",
+    },
+    {
+      id: EMERGENCY_FUND_INSIGHT_ID,
+      reason: "no account is designated as savings",
+    },
+    {
+      id: RECURRING_BILLS_INSIGHT_ID,
+      reason: "fewer than three complete months of recorded history",
+    },
+    {
+      id: SPENDING_TREND_INSIGHT_ID,
+      reason: "fewer than two complete months of recorded history",
+    },
+  ]
+
   test("counts a two-leg transfer into savings exactly once, using the inflow projection", () => {
     const rows = classicTransfer({
       transferId: "tr-1",
@@ -358,22 +385,7 @@ describe("computeInsights — savings_flow", () => {
         id: SAVINGS_FLOW_INSIGHT_ID,
         reason: "no savings or investment transfers in the window",
       },
-      {
-        id: SINCE_PAYDAY_INSIGHT_ID,
-        reason: "no monthly recurring income series detected",
-      },
-      {
-        id: EMERGENCY_FUND_INSIGHT_ID,
-        reason: "no account is designated as savings",
-      },
-      {
-        id: RECURRING_BILLS_INSIGHT_ID,
-        reason: "fewer than three complete months of recorded history",
-      },
-      {
-        id: SPENDING_TREND_INSIGHT_ID,
-        reason: "fewer than two complete months of recorded history",
-      },
+      ...CARD_SKIPS,
     ])
   })
 
@@ -427,22 +439,7 @@ describe("computeInsights — savings_flow", () => {
     expect(result.insights).toHaveLength(0)
     expect(result.skipped).toEqual([
       { id: SAVINGS_FLOW_INSIGHT_ID, reason: "no transfers in the window" },
-      {
-        id: SINCE_PAYDAY_INSIGHT_ID,
-        reason: "no monthly recurring income series detected",
-      },
-      {
-        id: EMERGENCY_FUND_INSIGHT_ID,
-        reason: "no account is designated as savings",
-      },
-      {
-        id: RECURRING_BILLS_INSIGHT_ID,
-        reason: "fewer than three complete months of recorded history",
-      },
-      {
-        id: SPENDING_TREND_INSIGHT_ID,
-        reason: "fewer than two complete months of recorded history",
-      },
+      ...CARD_SKIPS,
     ])
   })
 
@@ -917,10 +914,6 @@ describe("computeInsights — period completeness (PER-443)", () => {
     }
   }
 
-  function byId(result: InsightReport, id: string) {
-    return result.insights.find((insight) => insight.id === id)
-  }
-
   test("marks savings_flow partially recorded when a live gap intersects its month", () => {
     const result = buildReport({
       transferRows: classicTransfer({
@@ -1065,10 +1058,6 @@ describe("computeInsights — emergency_fund (PER-227 slice #3)", () => {
       date: `${month}-10T03:00:00.000Z`,
       amountMinor,
     })
-  }
-
-  function byId(result: InsightReport, id: string) {
-    return result.insights.find((insight) => insight.id === id)
   }
 
   test("targets 6× the trailing-six-complete-months burn, excluding the current partial month", () => {
@@ -1844,10 +1833,6 @@ describe("computeInsights — recurring_bills (PER-227 slice #4)", () => {
     })
   }
 
-  function byId(result: InsightReport, id: string) {
-    return result.insights.find((insight) => insight.id === id)
-  }
-
   function metricOf(
     result: InsightReport,
     key: string
@@ -2312,10 +2297,6 @@ describe("computeInsights — spending_trend (PER-227 slice #5)", () => {
       historyRange: HISTORY,
       ...options,
     })
-  }
-
-  function byId(result: InsightReport, id: string) {
-    return result.insights.find((insight) => insight.id === id)
   }
 
   function metricOf(result: InsightReport, key: string): string | undefined {

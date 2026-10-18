@@ -152,12 +152,14 @@ describe("household insights (PER-227)", () => {
   const insights = (
     owner: AuthenticatedOnboardedUser,
     month?: string,
-    userId = owner.user.id
+    userId = owner.user.id,
+    now?: Date
   ) =>
     getInsightsForFamily({
       data: { month },
       familyId: owner.family.id,
       userId,
+      now,
     })
 
   /** Pinned-clock variant (payday windows are now-relative; production
@@ -166,13 +168,7 @@ describe("household insights (PER-227)", () => {
     owner: AuthenticatedOnboardedUser,
     now: Date,
     month?: string
-  ) =>
-    getInsightsForFamily({
-      data: { month },
-      familyId: owner.family.id,
-      userId: owner.user.id,
-      now,
-    })
+  ) => insights(owner, month, owner.user.id, now)
 
   /** A real-ledger income row — the payday anchor must be derivable from rows
    * written by the production path, never from a hand-built projection. */
@@ -193,6 +189,24 @@ describe("household insights (PER-227)", () => {
       date: data.date,
     })
 
+  /** A real-ledger expense row — bill occurrences, burn rows, and
+   * like-for-like spend alike must be derivable from rows written by the
+   * production path, never hand-built projections. */
+  const recordExpense = (
+    owner: AuthenticatedOnboardedUser,
+    accountId: string,
+    isoDate: string,
+    amount: bigint,
+    description: string
+  ) =>
+    create(owner, {
+      type: "expense",
+      amount,
+      accountId,
+      description,
+      date: new Date(isoDate),
+    })
+
   /** Three monthly salary rows on the 25th at 10:00 WIB (03:00Z). */
   const seedSalarySeries = async (
     owner: AuthenticatedOnboardedUser,
@@ -209,19 +223,37 @@ describe("household insights (PER-227)", () => {
     }
   }
 
+  /** The standard household under test: an onboarded family on the shared
+   * IDR/Asia-Jakarta defaults with one checking wallet. */
+  const seedWalletHousehold = async () => {
+    const owner = await factories.createAuthenticatedOnboardedUser()
+    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
+    const wallet = await account(owner, "Wallet", {
+      accountSubtype: "checking",
+    })
+    return { owner, wallet }
+  }
+
   const insightMetric = (
     report: Awaited<ReturnType<typeof getInsightsForFamily>>,
-    insightId: string,
+    insightId: string | undefined,
     key: string
   ) =>
     report.insights
       .find((insight) => insight.id === insightId)
       ?.metrics.find((metric) => metric.key === key)?.value
 
+  /** The metric of a single-card report (its first insight). */
   const metric = (
     report: Awaited<ReturnType<typeof getInsightsForFamily>>,
     key: string
-  ) => report.insights[0]?.metrics.find((m) => m.key === key)?.value
+  ) => insightMetric(report, report.insights[0]?.id, key)
+
+  /** One named insight card from a report. */
+  const insightEntry = (
+    report: Awaited<ReturnType<typeof getInsightsForFamily>>,
+    insightId: string
+  ) => report.insights.find((entry) => entry.id === insightId)
 
   // ---- the core invariant ----------------------------------------------------
 
@@ -816,7 +848,7 @@ describe("household insights (PER-227)", () => {
 
   const savingsFlow = (
     report: Awaited<ReturnType<typeof getInsightsForFamily>>
-  ) => report.insights.find((insight) => insight.id === "savings_flow")
+  ) => insightEntry(report, "savings_flow")
 
   test("marks savings_flow partially recorded when a live gap intersects its month", async () => {
     const owner = await factories.createAuthenticatedOnboardedUser()
@@ -1410,20 +1442,7 @@ describe("household insights (PER-227)", () => {
 
   /** A real-ledger bill occurrence — the projection must be derivable from
    * rows written by the production path, never a hand-built series. */
-  const bill = (
-    owner: AuthenticatedOnboardedUser,
-    accountId: string,
-    isoDate: string,
-    amount: bigint,
-    description: string
-  ) =>
-    create(owner, {
-      type: "expense",
-      amount,
-      accountId,
-      description,
-      date: new Date(isoDate),
-    })
+  const bill = recordExpense
 
   /** The four-occurrence Netflix cadence (30-day gaps) shared by the
    * prediction and tenant-isolation tests: mean 222,500, next expected
@@ -1637,27 +1656,10 @@ describe("household insights (PER-227)", () => {
 
   /** A real-ledger expense — like-for-like membership must be derivable
    * from rows written by the production path, never a hand-built fold. */
-  const spend = (
-    owner: AuthenticatedOnboardedUser,
-    accountId: string,
-    isoDate: string,
-    amount: bigint,
-    description: string
-  ) =>
-    create(owner, {
-      type: "expense",
-      amount,
-      accountId,
-      description,
-      date: new Date(isoDate),
-    })
+  const spend = recordExpense
 
   test("compares the same days of each month against a real ledger — the previous month's later spend never leaks into the delta", async () => {
-    const owner = await factories.createAuthenticatedOnboardedUser()
-    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
-    const wallet = await account(owner, "Wallet", {
-      accountSubtype: "checking",
-    })
+    const { owner, wallet } = await seedWalletHousehold()
 
     // Previous month, days 1..15 (the compared baseline window).
     await spend(
@@ -1696,9 +1698,7 @@ describe("household insights (PER-227)", () => {
 
     const report = await insightsAt(owner, ON_JUNE)
     expect(report.failedCount).toBe(0)
-    const insight = report.insights.find(
-      (entry) => entry.id === SPENDING_TREND_INSIGHT_ID
-    )
+    const insight = insightEntry(report, SPENDING_TREND_INSIGHT_ID)
     expect(insight?.tone).toBe("neutral")
     // The envelope's baseline window: days 1–15 of the PREVIOUS month.
     expect(insight?.window).toEqual({
@@ -1738,16 +1738,7 @@ describe("household insights (PER-227)", () => {
   })
 
   test("counts only the reader's family spend — another tenant's month never moves the delta", async () => {
-    const seedFamily = async () => {
-      const owner = await factories.createAuthenticatedOnboardedUser()
-      await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
-      const wallet = await account(owner, "Wallet", {
-        accountSubtype: "checking",
-      })
-      return { owner, wallet }
-    }
-
-    const a = await seedFamily()
+    const a = await seedWalletHousehold()
     // Family A: identical seed to the like-for-like test (delta −105,000).
     await spend(
       a.owner,
@@ -1785,7 +1776,7 @@ describe("household insights (PER-227)", () => {
       "Coffee"
     )
 
-    const b = await seedFamily()
+    const b = await seedWalletHousehold()
     // Family B: bigger rows on both sides — a leak of B's spend into A's
     // fold would move A's delta toward B's +200,000.
     await spend(
@@ -1851,11 +1842,7 @@ describe("household insights (PER-227)", () => {
   })
 
   test("a past-month request renders both COMPLETE months with partial false", async () => {
-    const owner = await factories.createAuthenticatedOnboardedUser()
-    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
-    const wallet = await account(owner, "Wallet", {
-      accountSubtype: "checking",
-    })
+    const { owner, wallet } = await seedWalletHousehold()
     await spend(
       owner,
       wallet.id,
@@ -1901,9 +1888,7 @@ describe("household insights (PER-227)", () => {
 
     const report = await insightsAt(owner, ON_JUNE, "2026-04")
     expect(report.failedCount).toBe(0)
-    const insight = report.insights.find(
-      (entry) => entry.id === SPENDING_TREND_INSIGHT_ID
-    )
+    const insight = insightEntry(report, SPENDING_TREND_INSIGHT_ID)
     expect(insight).toBeDefined()
     // Both sides COMPLETE: the baseline window is the whole previous month.
     expect(insight?.window).toEqual({
@@ -1931,11 +1916,7 @@ describe("household insights (PER-227)", () => {
   })
 
   test("skips a freshly seeded family with the distinct history reason, never a comparison against nothing", async () => {
-    const owner = await factories.createAuthenticatedOnboardedUser()
-    await setFamilyDefaults(owner, "IDR", "Asia/Jakarta")
-    const wallet = await account(owner, "Wallet", {
-      accountSubtype: "checking",
-    })
+    const { owner, wallet } = await seedWalletHousehold()
     // Recorded history begins mid-current-month: May never existed on this
     // ledger, so there is nothing to compare days 1–15 against.
     await spend(
