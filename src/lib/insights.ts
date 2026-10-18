@@ -29,7 +29,7 @@ import type { CurrencyCode } from "@/lib/data/currencies"
 //   - `engineVersion` — every payload states which engine produced it, so a
 //     future materialized artifact (delivered digest) can be keyed by it;
 //   - typed window kinds (`calendar_month`, `since_payday`,
-//     `trailing_6_months`, `next_30_days` in use; `previous_month`,
+//     `trailing_6_months`, `next_30_days`, `previous_month` in use;
 //     `rolling_90d` reserved for later slices) that carry the family timezone
 //     they were resolved in
 //     — a window is meaningless without the zone it was cut in
@@ -86,8 +86,27 @@ import type { CurrencyCode } from "@/lib/data/currencies"
 // count as due; a series only drops out via the detector's own staleness
 // guard (two cadence bands), so "how overdue" is bounded there, not here.
 //
-// Later slices add the month-over-month trend derivation and an in-app
-// digest page. A materialized delivered-digest artifact keyed
+// Slice #5 adds `spending_trend`: the month-over-month comparison the
+// flagship ask names directly, and the easiest card on this engine to make
+// dishonest. The headline is the DELTA between this month's spend over days
+// 1..N and LAST month's spend over days 1..N (family tz, N = today's
+// day-of-month, inclusive) — LIKE FOR LIKE: a partial current month is never
+// compared against a complete previous month as if they were equal, and no
+// projection to a full month exists anywhere on the card (a projected month
+// total is a fabricated number, and this engine does not fabricate). The
+// complete previous month total is still shown — label-led, marked as
+// context — so the user gets the full picture without the comparison
+// implying an unfair one. The delta is reported NEUTRALLY: spending more is
+// not automatically bad and spending less is not automatically good (a
+// lower number can be a cancelled medicine), so the tone is `neutral` on
+// every path; a positive delta always means "spent MORE" than the same days
+// of last month (sign convention documented in the ADR-0059 amendment). For
+// a PAST requested month both sides are complete months — the rule
+// degenerates naturally to complete-vs-complete and `partial` is false; the
+// current month being in progress is what sets `partial`, alongside copy
+// that states the days elapsed.
+//
+// Later slices add an in-app digest page. A materialized delivered-digest artifact keyed
 // `(familyId, month, engineVersion)` is only considered once a real
 // out-of-request consumer (email delivery) exists — never the open period,
 // never write-on-read.
@@ -104,8 +123,11 @@ import type { CurrencyCode } from "@/lib/data/currencies"
  * card, so it must not be read as a complete report under v4. Version 5 adds
  * `recurring_bills` and the forward-looking `next_30_days` window kind
  * (PER-227 slice #4): a v4 artifact simply lacks the card, so it must not be
- * read as a complete report under v5. */
-export const INSIGHTS_ENGINE_VERSION = 5
+ * read as a complete report under v5. Version 6 adds `spending_trend` and
+ * puts the reserved `previous_month` window kind in use (PER-227 slice #5):
+ * a v5 artifact simply lacks the card, so it must not be read as a complete
+ * report under v6. */
+export const INSIGHTS_ENGINE_VERSION = 6
 
 export const SAVINGS_FLOW_INSIGHT_ID = "savings_flow"
 
@@ -113,6 +135,7 @@ export const SINCE_PAYDAY_INSIGHT_ID = "since_payday"
 
 export const EMERGENCY_FUND_INSIGHT_ID = "emergency_fund"
 export const RECURRING_BILLS_INSIGHT_ID = "recurring_bills"
+export const SPENDING_TREND_INSIGHT_ID = "spending_trend"
 
 export type InsightTone = "positive" | "neutral" | "attention"
 
@@ -134,8 +157,14 @@ export type InsightWindowKind =
  * today + 30 calendar days in `timezone`, inclusive of both endpoints. It
  * describes scheduled future obligations, not recorded activity, so no honest
  * partial-period metadata can exist for it — such cards always report
- * `periodPartial: false`. `previous_month` stays reserved for the
- * month-over-month trend slice. */
+ * `periodPartial: false`. `previous_month` (slice #5, now in use) is the
+ * spending-trend BASELINE window: days 1..N of the month before the
+ * requested month when the request is the in-progress month (N = the same
+ * day-of-month the current side of the delta covers), or the FULL previous
+ * month for a past request, when both sides are complete. The `Insight`
+ * envelope carries only this ONE window — the baseline is the value the
+ * delta is computed against, and the compared current period is disclosed in
+ * the card's metrics (ADR-0059 slice-#5 amendment). */
 export interface InsightWindow extends BudgetPeriodInput {
   kind: InsightWindowKind
 }
@@ -186,10 +215,13 @@ export interface Insight {
    * renderer never needs to know which insight it is showing). */
   detail?: string
   metrics: InsightMetric[]
-  /** True when at least one qualifying row was excluded for a known,
-   * user-relevant reason (today: no FX rate resolved). A partial insight may
-   * show a smaller-than-reality number — but only alongside the count that
-   * explains why, never as a silent zero. */
+  /** True when something user-relevant makes the shown figures smaller than
+   * reality, and the card says what: today a row excluded because no FX rate
+   * resolved (always paired with `fxPendingCount`), and — since slice #5 —
+   * a requested month still in progress (paired with copy and a metric that
+   * state the days elapsed). A partial insight may show a
+   * smaller-than-reality number — but only alongside what explains why,
+   * never as a silent understatement. */
   partial: boolean
   /** Rows this insight deliberately excluded because no FX rate resolved yet. */
   fxPendingCount: number
@@ -525,7 +557,7 @@ export function buildInsightContext(
  */
 function periodGapsForWindow(
   anchorGaps: ReadonlyArray<InsightAnchorGapRow>,
-  window: InsightWindow
+  window: BudgetPeriodInput
 ): InsightPeriodGap[] {
   return gapsInWindow(anchorGaps, window).map((gap) => ({
     accountId: gap.accountId,
@@ -1510,11 +1542,448 @@ function deriveRecurringBills(context: InsightContext): DerivationOutcome {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Slice #5 — `spending_trend`
+// ---------------------------------------------------------------------------
+
+/** The two sides of the like-for-like delta as family-tz calendar dates.
+ * `currentStart..currentEnd` is the current side: days 1..N of the REQUESTED
+ * month (N = today's day-of-month for the in-progress month; the whole month
+ * for a past request). `previousStart..previousCompareEnd` is the previous
+ * month's SAME-DAYS baseline (clipped to that month's actual length, so a
+ * 31-day today against a 28-day February compares honestly); `previousEnd`
+ * additionally spans the whole previous month for the context figure. */
+interface TrendWindows {
+  month: string
+  previousMonth: string
+  currentStart: string
+  currentEnd: string
+  previousStart: string
+  previousEnd: string
+  previousCompareEnd: string
+  currentDays: number
+  previousDays: number
+}
+
+/** Day-of-month of an inclusive family-tz calendar date (YYYY-MM-DD). */
+function dayOfDate(date: string): number {
+  return Number(date.slice(8, 10))
+}
+
+/**
+ * Resolve both comparison windows for the requested month. `isCurrentMonth`
+ * is what makes this card either PARTIAL (the in-progress month cuts both
+ * sides at today, and `partial: true` follows) or COMPLETE (a past request
+ * degenerates to full-month-vs-full-month — see `previousDays`). Pure calendar
+ * arithmetic; `today` is the family-tz date, injected with `now`.
+ */
+function buildTrendWindows(
+  month: string,
+  today: string,
+  isCurrentMonth: boolean
+): TrendWindows {
+  const current = calendarMonthBounds(month)
+  const previous = calendarMonthBounds(shiftCalendarMonth(month, -1))
+  const currentDays = isCurrentMonth ? dayOfDate(today) : dayOfDate(current.end)
+  const previousDays = isCurrentMonth
+    ? Math.min(currentDays, dayOfDate(previous.end))
+    : dayOfDate(previous.end)
+  return {
+    month,
+    previousMonth: shiftCalendarMonth(month, -1),
+    currentStart: current.start,
+    currentEnd: isCurrentMonth ? today : current.end,
+    previousStart: previous.start,
+    previousEnd: previous.end,
+    previousCompareEnd: addCalendarDays(previous.start, previousDays - 1),
+    currentDays,
+    previousDays,
+  }
+}
+
+/**
+ * History floor (rule, not a tuning knob): every COMPLETE month the
+ * comparison touches must be covered end-to-end by recorded history — the
+ * previous month always, and the requested month too when it is a past
+ * request (Rule E's coverage test, the same one `emergency_fund` uses).
+ * The in-progress month is exempt by nature: its end has not happened yet.
+ * Below this floor the delta would compare against a fragment or nothing at
+ * all — a comparison against nothing is fabrication, so the card skips.
+ */
+function trendHistoryCovers(
+  month: string,
+  isCurrentMonth: boolean,
+  history: { start: string; end: string } | null
+): boolean {
+  if (history === null) return false
+  const required = isCurrentMonth
+    ? [shiftCalendarMonth(month, -1)]
+    : [shiftCalendarMonth(month, -1), month]
+  return required.every((candidate) => {
+    const bounds = calendarMonthBounds(candidate)
+    return bounds.start >= history.start && bounds.end <= history.end
+  })
+}
+
+/** Which side(s) one row's family-tz date belongs to. A row is never in
+ * both months, but `inPrevious` (full context month) is a superset of
+ * `inPreviousCompare` (the like-for-like baseline). */
+interface TrendMembership {
+  inCurrent: boolean
+  inPrevious: boolean
+  inPreviousCompare: boolean
+}
+
+function classifyTrendDate(
+  date: string,
+  windows: TrendWindows
+): TrendMembership {
+  return {
+    inCurrent: date >= windows.currentStart && date <= windows.currentEnd,
+    inPrevious: date >= windows.previousStart && date <= windows.previousEnd,
+    inPreviousCompare:
+      date >= windows.previousStart && date <= windows.previousCompareEnd,
+  }
+}
+
+/** Fold totals of the three displayed money figures, plus the two
+ * FX-pending counts: `fxPendingCount` covers every row excluded from ANY
+ * displayed figure (the current window and the complete previous month), and
+ * `previousPeriodPendingCount` is scoped to the baseline window alone — it
+ * exists only to keep a zero baseline honest (the skip guard below). */
+interface TrendTotals {
+  currentSpend: bigint
+  previousSpend: bigint
+  previousMonthTotal: bigint
+  fxPendingCount: number
+  previousPeriodPendingCount: number
+}
+
+/** One row into the totals. Money rules are byte-for-byte `addFlowRow`'s
+ * (split parents contribute via their children at the parent's stored rate;
+ * FX-pending rows excluded AND counted, counted ONCE even when the row
+ * touches two of the figures). A row outside both months never reaches the
+ * fold — notably the previous month's days after the cutoff: they feed the
+ * context figure, never the like-for-like comparison. */
+function foldTrendRow(
+  totals: TrendTotals,
+  row: InsightFlowRow,
+  windows: TrendWindows,
+  timezone: string
+): void {
+  const membership = classifyTrendDate(
+    calendarDateInZone(row.date, timezone),
+    windows
+  )
+  if (!membership.inCurrent && !membership.inPrevious) return
+
+  const rowTotals: FlowTotals = { income: 0n, spent: 0n, fxPendingCount: 0 }
+  addFlowRow(rowTotals, row, false)
+  if (rowTotals.fxPendingCount > 0) {
+    totals.fxPendingCount += rowTotals.fxPendingCount
+    if (membership.inPreviousCompare) {
+      totals.previousPeriodPendingCount += rowTotals.fxPendingCount
+    }
+    return
+  }
+  if (membership.inCurrent) totals.currentSpend += rowTotals.spent
+  if (membership.inPrevious) totals.previousMonthTotal += rowTotals.spent
+  if (membership.inPreviousCompare) totals.previousSpend += rowTotals.spent
+}
+
+/** Expense-rows fold over both windows — one pass, no double counting. Pure;
+ * no clock (the dates were cut in `timezone`, the zone injected upstream). */
+function foldTrendTotals(
+  expenseRows: ReadonlyArray<InsightFlowRow>,
+  windows: TrendWindows,
+  timezone: string
+): TrendTotals {
+  const totals: TrendTotals = {
+    currentSpend: 0n,
+    previousSpend: 0n,
+    previousMonthTotal: 0n,
+    fxPendingCount: 0,
+    previousPeriodPendingCount: 0,
+  }
+  for (const row of expenseRows) {
+    foldTrendRow(totals, row, windows, timezone)
+  }
+  return totals
+}
+
+/** Delta as a percentage of the previous period, in TENTHS of a percent —
+ * integer bigint math, never a float. `null` when the previous period
+ * recorded nothing: zero is not a denominator, and Infinity/NaN must never
+ * reach the wire (the zero-denominator rule, ADR-0059 slice-#5 amendment). */
+function percentChangeTenths(
+  delta: bigint,
+  previousSpend: bigint
+): bigint | null {
+  if (previousSpend === 0n) return null
+  return (delta * 1000n) / previousSpend
+}
+
+/** The percentage as the card prints it: an explicit `+` for "spent more"
+ * (mirroring the delta's sign convention), one truncated decimal max, and
+ * the documented no-comparison marker when there is no denominator. */
+function formatPercentTenths(tenths: bigint | null): string {
+  if (tenths === null) return "no comparison possible"
+  if (tenths === 0n) return "0%"
+  const sign = tenths < 0n ? "-" : "+"
+  const magnitude = tenths < 0n ? -tenths : tenths
+  const whole = magnitude / 10n
+  const fraction = magnitude % 10n
+  return fraction === 0n ? `${sign}${whole}%` : `${sign}${whole}.${fraction}%`
+}
+
+/** "June 2026" from "2026-06" — a fixed en-US locale so card copy is
+ * deterministic (the same Intl discipline as `calendarDateInZone`). */
+function monthLabel(month: string): string {
+  const date = new Date(
+    Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 1, 1)
+  )
+  const name = date.toLocaleString("en-US", { month: "long", timeZone: "UTC" })
+  return `${name} ${month.slice(0, 4)}`
+}
+
+/**
+ * The gaps intersecting EITHER side of the delta, deduped by account+start:
+ * a hole on either side understates the comparison, so both sides qualify
+ * `periodPartial` — PER-443 §3 applied to this derivation's two COMPARED
+ * windows with the same shared intersection `emergency_fund` uses for its
+ * burn window. A gap that only overlaps the previous month AFTER the cutoff
+ * touches the context figure alone, not the comparison, so it deliberately
+ * does not flag the card (the context metric is labelled as context).
+ */
+function trendPeriodGaps(
+  anchorGaps: ReadonlyArray<InsightAnchorGapRow>,
+  windows: TrendWindows,
+  timezone: string
+): InsightPeriodGap[] {
+  const sides: BudgetPeriodInput[] = [
+    { start: windows.currentStart, end: windows.currentEnd, timezone },
+    { start: windows.previousStart, end: windows.previousCompareEnd, timezone },
+  ]
+  const seen = new Set<string>()
+  const merged: InsightPeriodGap[] = []
+  for (const side of sides) {
+    for (const gap of periodGapsForWindow(anchorGaps, side)) {
+      const key = `${gap.accountId}:${gap.fromDate}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      merged.push(gap)
+    }
+  }
+  return merged
+}
+
+/** The copy for an in-progress request: it MUST state the days elapsed, so
+ * the card can never read as a whole-month claim (rule: the partial current
+ * month is unmistakable). Past requests state the degenerate case instead. */
+function trendSummary(windows: TrendWindows, isCurrentMonth: boolean): string {
+  return isCurrentMonth
+    ? `Days 1–${windows.currentDays} of this month versus days 1–${windows.previousDays} of last month — the same days of each month, never a partial month against a complete one.`
+    : `${monthLabel(windows.month)} versus ${monthLabel(windows.previousMonth)} — both months are complete, so the comparison is like for like.`
+}
+
+/** The second copy line: why the complete-previous-month figure is context,
+ * and (when the baseline is genuinely zero) that there is no percentage to
+ * show. */
+function trendDetail(totals: TrendTotals, isCurrentMonth: boolean): string {
+  if (!isCurrentMonth) {
+    return "Both months are fully elapsed, so the figures compare two complete months."
+  }
+  const contextNote =
+    "Last month's complete total is shown for context — a whole month versus part of one is not a fair comparison."
+  if (totals.previousSpend !== 0n) return contextNote
+  return `No spending was recorded in the comparison period last month, so the percentage change has no base. ${contextNote}`
+}
+
+/** Metric order is the generic renderer's contract: the FIRST money metric
+ * (the like-for-like delta) is the headline, and every metric after it —
+ * support lines included — carries a `label`. Sign convention: the delta's
+ * value is signed base-minor units and a POSITIVE delta means "spent MORE"
+ * than the same days of the previous month; the percentage mirrors it. Pure. */
+function trendMetrics(input: {
+  windows: TrendWindows
+  totals: TrendTotals
+  baseCurrency: string
+  isCurrentMonth: boolean
+}): InsightMetric[] {
+  const { windows, totals, baseCurrency, isCurrentMonth } = input
+  const delta = totals.currentSpend - totals.previousSpend
+  const baselineLabel = isCurrentMonth
+    ? "the same days last month"
+    : monthLabel(windows.previousMonth)
+  return [
+    {
+      key: "delta",
+      label: `Difference versus ${baselineLabel}`,
+      value: delta.toString(),
+      currency: baseCurrency,
+    },
+    {
+      key: "spent_current_period",
+      label: isCurrentMonth
+        ? `Spent, days 1–${windows.currentDays} this month`
+        : `Spent in ${monthLabel(windows.month)}`,
+      value: totals.currentSpend.toString(),
+      currency: baseCurrency,
+    },
+    {
+      key: "spent_previous_period",
+      label: isCurrentMonth
+        ? `Spent, days 1–${windows.previousDays} of last month`
+        : `Spent in ${monthLabel(windows.previousMonth)}`,
+      value: totals.previousSpend.toString(),
+      currency: baseCurrency,
+    },
+    {
+      key: "previous_month_total",
+      label: `Full ${monthLabel(windows.previousMonth)} — complete month${
+        isCurrentMonth ? ", for context" : ""
+      }`,
+      value: totals.previousMonthTotal.toString(),
+      currency: baseCurrency,
+    },
+    {
+      key: "days_elapsed",
+      label: "Days compared",
+      value: `1–${windows.currentDays} vs 1–${windows.previousDays}`,
+    },
+    {
+      key: "percent_change",
+      label: `Difference versus ${baselineLabel}, in percent`,
+      value: formatPercentTenths(
+        percentChangeTenths(delta, totals.previousSpend)
+      ),
+    },
+    {
+      key: "fx_pending_count",
+      label: "Rows pending an exchange rate",
+      value: String(totals.fxPendingCount),
+    },
+  ]
+}
+
+/** The rendered card. Tone is ALWAYS `neutral` — spending more is not
+ * automatically bad and spending less is not automatically good (a lower
+ * number can be a cancelled medicine), so the card reports the delta and the
+ * percentage as facts with no verdict (ADR-0059 slice-#5 amendment).
+ * `partial` covers both honest causes: rows excluded for a missing FX rate,
+ * and the requested month still in progress (the copy and `days_elapsed`
+ * explain that one). Pure. */
+function buildSpendingTrendInsight(input: {
+  windows: TrendWindows
+  totals: TrendTotals
+  baseCurrency: string
+  anchorGaps: ReadonlyArray<InsightAnchorGapRow>
+  timezone: string
+  isCurrentMonth: boolean
+}): Insight {
+  const { windows, totals, baseCurrency, timezone, isCurrentMonth } = input
+  const periodGaps = trendPeriodGaps(input.anchorGaps, windows, timezone)
+  return {
+    id: SPENDING_TREND_INSIGHT_ID,
+    tone: "neutral",
+    title: "Spending trend",
+    summary: trendSummary(windows, isCurrentMonth),
+    detail: trendDetail(totals, isCurrentMonth),
+    metrics: trendMetrics({ windows, totals, baseCurrency, isCurrentMonth }),
+    partial: totals.fxPendingCount > 0 || isCurrentMonth,
+    fxPendingCount: totals.fxPendingCount,
+    periodPartial: periodGaps.length > 0,
+    periodGaps,
+    // The BASELINE window — see `InsightWindow`: the envelope carries one
+    // window, and the value the delta is computed against is the honest
+    // single description of this comparison. The compared current period is
+    // disclosed in the metrics.
+    window: {
+      kind: "previous_month",
+      start: windows.previousStart,
+      end: windows.previousCompareEnd,
+      timezone,
+    },
+    engineVersion: INSIGHTS_ENGINE_VERSION,
+  }
+}
+
+/**
+ * Slice #5 derivation — `spending_trend`.
+ *
+ * The like-for-like month comparison: this month's spend over days 1..N
+ * versus LAST month's spend over days 1..N (family tz; N = today's
+ * day-of-month for the in-progress month), headline delta = current −
+ * previous (positive = spent more), reported neutrally with no verdict. The
+ * complete previous month total rides along as a labelled context figure —
+ * never as the comparison side. For a past requested month both sides are
+ * complete months and `partial` is false.
+ *
+ * Skips, each with a distinct reason: a month that has not started; fewer
+ * than two complete months of recorded history (the previous month must be
+ * covered end-to-end, Rule E); and a baseline whose only rows are FX-pending
+ * — a zero reached by excluding rows is not a fact about money, so the card
+ * refuses to compare against it. A genuine zero baseline RENDERS: the delta
+ * stands against 0 and the percentage says "no comparison possible".
+ */
+function deriveSpendingTrend(context: InsightContext): DerivationOutcome {
+  const { window: monthWindow, baseCurrency, now } = context
+  const timezone = monthWindow.timezone
+  const month = monthWindow.start.slice(0, 7)
+  const currentMonth = currentMonthInZone(now, timezone)
+
+  if (month > currentMonth) {
+    return {
+      insight: null,
+      skippedReason: "the requested month has not started yet",
+    }
+  }
+  const isCurrentMonth = month === currentMonth
+  if (!trendHistoryCovers(month, isCurrentMonth, context.historyRange)) {
+    return {
+      insight: null,
+      skippedReason: "fewer than two complete months of recorded history",
+    }
+  }
+
+  const windows = buildTrendWindows(
+    month,
+    calendarDateInZone(now, timezone),
+    isCurrentMonth
+  )
+  const totals = foldTrendTotals(context.expenseRows, windows, timezone)
+
+  // Skip-vs-zero, baseline side (the `emergency_fund` burn-guard precedent):
+  // the previous period recorded rows, but every one of them is pending an
+  // FX rate, so its 0 is an artifact of missing rates — "no spending was
+  // recorded" would be false, and comparing against a fabricated zero would
+  // be exactly the confidence §3 forbids.
+  if (totals.previousSpend === 0n && totals.previousPeriodPendingCount > 0) {
+    return {
+      insight: null,
+      skippedReason:
+        "every spending row in the comparison period is pending an exchange rate",
+    }
+  }
+
+  return {
+    insight: buildSpendingTrendInsight({
+      windows,
+      totals,
+      baseCurrency,
+      anchorGaps: context.anchorGaps,
+      timezone,
+      isCurrentMonth,
+    }),
+  }
+}
+
 const REGISTERED_DERIVATIONS: ReadonlyArray<RegisteredDerivation> = [
   { id: SAVINGS_FLOW_INSIGHT_ID, run: deriveSavingsFlow },
   { id: SINCE_PAYDAY_INSIGHT_ID, run: deriveSincePayday },
   { id: EMERGENCY_FUND_INSIGHT_ID, run: deriveEmergencyFund },
   { id: RECURRING_BILLS_INSIGHT_ID, run: deriveRecurringBills },
+  { id: SPENDING_TREND_INSIGHT_ID, run: deriveSpendingTrend },
 ]
 
 /**

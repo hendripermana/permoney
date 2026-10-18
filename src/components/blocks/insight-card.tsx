@@ -68,9 +68,6 @@ export function InsightCard({ report }: { report: InsightReport }) {
 function InsightCardItem({ insight }: { insight: Insight }) {
   const headline = headlineMetric(insight)
   const supporting = supportingMetrics(insight, headline)
-  const pendingCount = insight.metrics.find(
-    (metric) => metric.key === "fx_pending_count"
-  )?.value
 
   return (
     <Card data-testid={`insight-${insight.id}`}>
@@ -80,7 +77,7 @@ function InsightCardItem({ insight }: { insight: Insight }) {
           {insight.title}
         </CardTitle>
         <CardDescription>{insight.summary}</CardDescription>
-        {insight.partial || insight.periodPartial ? (
+        {insight.periodPartial || insight.fxPendingCount > 0 ? (
           <CardAction>
             <div className="flex flex-wrap justify-end gap-1">
               {insight.periodPartial ? (
@@ -108,15 +105,17 @@ function InsightCardItem({ insight }: { insight: Insight }) {
                   </TooltipContent>
                 </Tooltip>
               ) : null}
-              {insight.partial ? (
+              {/* Keys off the COUNT, not `partial`: `partial` also means "the
+                  month is still in progress" (slice #5), which has nothing to
+                  do with exchange rates — the days-elapsed copy explains that
+                  one on the card itself. */}
+              {insight.fxPendingCount > 0 ? (
                 <Badge
                   variant="outline"
                   className="gap-1 text-amber-600 dark:text-amber-400"
                 >
                   <TriangleAlert className="size-3" aria-hidden />
-                  {pendingCount && pendingCount !== "0"
-                    ? `${pendingCount} pending exchange rate`
-                    : "Exchange rate pending"}
+                  {insight.fxPendingCount} pending exchange rate
                 </Badge>
               ) : null}
             </div>

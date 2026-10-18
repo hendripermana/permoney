@@ -1,15 +1,15 @@
 # ADR-0059 — Household insights engine (computed-on-read, registry)
 
-|                   |                                                                                                                                                                                                                                                                                                                                                                                   |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Status**        | Accepted                                                                                                                                                                                                                                                                                                                                                                          |
-| **Date**          | 2026-10-11                                                                                                                                                                                                                                                                                                                                                                        |
-| **Accepted**      | 2026-10-11                                                                                                                                                                                                                                                                                                                                                                        |
-| **Deciders**      | Hendri Permana                                                                                                                                                                                                                                                                                                                                                                    |
-| **Supersedes**    | —                                                                                                                                                                                                                                                                                                                                                                                 |
-| **Superseded by** | —                                                                                                                                                                                                                                                                                                                                                                                 |
-| **Amends**        | —                                                                                                                                                                                                                                                                                                                                                                                 |
-| **Amended by**    | PER-443 amendment below (period incompleteness — anchor-chain gaps as a first-class honesty qualifier, distinct from FX `partial`); PER-227 slice #3 amendment below (`emergency_fund` — designated-savings basis, 6× burn target, recorded-history Rule E); PER-227 slice #4 amendment below (`recurring_bills` — predicted due-soon obligations, forward `next_30_days` window) |
+|                   |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Status**        | Accepted                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| **Date**          | 2026-10-11                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **Accepted**      | 2026-10-11                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **Deciders**      | Hendri Permana                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **Supersedes**    | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| **Superseded by** | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| **Amends**        | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| **Amended by**    | PER-443 amendment below (period incompleteness — anchor-chain gaps as a first-class honesty qualifier, distinct from FX `partial`); PER-227 slice #3 amendment below (`emergency_fund` — designated-savings basis, 6× burn target, recorded-history Rule E); PER-227 slice #4 amendment below (`recurring_bills` — predicted due-soon obligations, forward `next_30_days` window); PER-227 slice #5 amendment below (`spending_trend` — like-for-like same-days month comparison, neutral signed delta, `previous_month` window) |
 
 ## Context
 
@@ -84,12 +84,15 @@ consumer, e.g. email delivery of a digest):
   `since_payday` (slice #2, below); version 3 added the period-incompleteness
   qualifier (PER-443 amendment below); version 4 added `emergency_fund`
   (slice #3 amendment below); version 5 added `recurring_bills` and the
-  forward-looking `next_30_days` window kind (slice #4 amendment below).
+  forward-looking `next_30_days` window kind (slice #4 amendment below);
+  version 6 added `spending_trend` and put `previous_month` in use (slice #5
+  amendment below).
 - `window` is typed and always carries the family timezone it was cut in.
   Its kind draws on a fixed vocabulary: `calendar_month` (slice #1),
-  `since_payday` (slice #2), `trailing_6_months` (slice #3) and
-  `next_30_days` (slice #4, the only forward-looking kind) are in use;
-  `previous_month` and `rolling_90d` remain reserved for later slices.
+  `since_payday` (slice #2), `trailing_6_months` (slice #3),
+  `next_30_days` (slice #4, the only forward-looking kind) and
+  `previous_month` (slice #5, the like-for-like baseline) are in use;
+  `rolling_90d` remains reserved for later slices.
 
 ### 3. Money honesty rules
 
@@ -437,3 +440,116 @@ window has no recorded period to be partial about.
    merchant/description for the detector's labels. Still
    computed-on-read (§1): no new tables, no write-on-read, no periodic
    job.
+
+## Amendment — slice #5: `spending_trend` (PER-227, 2026-10-18)
+
+### Problem
+
+The flagship ask names month-over-month comparison directly ("how this
+month compares to the last"), and it is the comparison most easily made
+dishonest while every number in it stays individually true. On the 5th of
+the month, "this month Rp 500k vs last month Rp 2.1M" is a true pair of
+figures that answers a FALSE question: one side covers five days, the other
+thirty. The trap is structural — the current month is almost always partial
+and the previous month is complete, so the naive subtraction bakes the
+mismatch into the headline. The tempting repair, projecting the partial
+month to a full month ("on pace for…"), fabricates a figure the ledger has
+not recorded — the opposite of this engine. And a spending delta carries an
+implicit verdict (up = bad, down = good) that the ledger cannot support: a
+lower number can mean a cancelled medicine, a higher one a repaired car.
+
+### Decision
+
+1. **Like-for-like: the headline compares the SAME days elapsed on both
+   sides.** The delta is current month days 1..N minus PREVIOUS month days
+   1..N, in the family timezone, N = today's day-of-month inclusive (so both
+   sides are "so far into their month", never a part against a whole). Both
+   individual numbers being true does not make the comparison true: a
+   partial-vs-complete subtraction answers a question neither number
+   speaks to, and the card must never imply the unfair one. When the
+   previous month is SHORTER than N (a 31-day today against February), its
+   side runs to that month's actual last day and the `days_elapsed` metric
+   discloses both day counts ("1–31 vs 1–28") — an honest asymmetry beats a
+   hidden one.
+2. **No projection, ever.** There is no "expected full month" figure on this
+   card in any state — a projection is a fabricated number, and §3's no-
+   confident-zeros rule generalizes: this engine reports what the ledger
+   recorded over a stated window, or it does not report. The complete
+   previous month total is still shown, as a `label`-led supporting metric
+   explicitly marked context ("Full May 2026 — complete month, for
+   context"), so the user gets the whole picture WITHOUT the comparison
+   pretending it is the baseline.
+3. **The partial current month is unmistakable.** `partial: true` whenever
+   the requested month is still accumulating (the only other case — a past
+   request — is rule 4), the summary states the days outright ("Days 1–15 of
+   this month versus days 1–15 of last month — …"), and a `days_elapsed`
+   metric prints both windows. `partial` here means "a known reason makes
+   the shown figures smaller than the month will be", which is the SAME
+   honesty axis as the FX exclusion it already covered; the generic
+   renderer's exchange-rate badge now keys off `fxPendingCount` instead of
+   `partial` (a generic fix, zero per-insight branches), because an
+   in-progress month is not an exchange-rate problem.
+4. **Past requests degenerate honestly.** `getInsightsFn` takes a month; for
+   a month in the past BOTH sides are complete (N = each month's full
+   length), the like-for-like rule collapses to complete-vs-complete by
+   construction, and `partial` is `false` — the copy says "both months are
+   complete" and never claims "partial" for a fully elapsed month. A
+   requested month that has NOT started is refused with its own skip reason
+   ("the requested month has not started yet"): there is nothing to compare.
+5. **Tone is `neutral` on every path — the delta is reported, not judged.**
+   Spending more than last month is not automatically bad and spending less
+   is not automatically good, so no `attention`/`positive` rule exists for a
+   delta; the card states the signed difference and the percentage as facts.
+   **Sign convention: a POSITIVE delta (and a `+` percentage) means "spent
+   MORE than the same days of the previous month"** — the value is
+   `current − previous` in base-currency minor units, documented on the
+   headline metric and asserted in both directions by tests.
+6. **Zero denominator → "no comparison possible".** When the previous
+   period recorded zero spend, the percentage has no base: the metric
+   prints the literal marker "no comparison possible" — never Infinity,
+   never NaN, never a throw. The delta STILL renders against 0 (a real
+   finding: "No spending was recorded in the comparison period last month")
+   and the card renders rather than skips — a genuine zero baseline is a
+   fact. It only skips when the zero was reached by EXCLUDING rows: if every
+   comparison-period row is FX-pending, "no spending recorded" would be
+   false, so the derivation skips with its own reason (the `emergency_fund`
+   burn-guard precedent applied to the baseline).
+7. **History floor: fewer than two complete months of recorded history →
+   skip** with a distinct reason — the previous month must be covered
+   end-to-end by `historyRange` (Rule E's test, slice #3), and a past
+   request additionally requires the requested month covered end-to-end.
+   The in-progress month is exempt by nature (its end has not happened).
+   A comparison against nothing is fabrication; a zero-spend previous month
+   WITH recorded history covering it is not "nothing" and renders.
+8. **`previous_month` is finally in use — as the BASELINE window.** The
+   `Insight` envelope carries ONE window and this card has two; the single
+   most truthful value is the window the delta is computed against: days
+   1..N of the previous month for an in-progress request, the full previous
+   month for a past request. (The requested month itself is already the
+   report-level window `InsightReport.window` carries, and the compared
+   current period is exposed in the metrics — `spent_current_period` and
+   `days_elapsed` — so nothing is hidden by the single-envelope choice.) The
+   envelope contract is unchanged. `periodPartial`/`periodGaps` intersect
+   the TWO COMPARED windows (previous side + current side) through the same
+   shared `gapsInWindow` machinery `emergency_fund` uses for its burn
+   window, deduped by account+start: a hole on either side of a delta
+   understates the delta. A gap that overlaps only the previous month AFTER
+   the cutoff touches the context figure alone, not the comparison, so it
+   deliberately does not flag the card — the badge answers "is the
+   COMPARISON fully recorded".
+9. **Money rules are byte-for-byte the engine's.** Split children fold
+   through the parent's stored rate; FX-pending rows are excluded AND
+   counted (`fxPendingCount` counts every row excluded from any displayed
+   figure — the current window and the complete previous month); transfers
+   are neither income nor expense (the fold consumes expense rows only);
+   all figures are bigint base-currency minor units. The previous month's
+   days after the cutoff feed the context figure and NOTHING else — a
+   non-vacuity test pins that removing the cutoff fails.
+10. **`INSIGHTS_ENGINE_VERSION` → 6.** The registry's composition changed
+    (a fifth derivation) and the typed vocabulary put `previous_month` in
+    use, so a v5 artifact is incomplete for v6 (§2 applied literally). The
+    server seam needed NO new load: the slice-#3 expense lookback (seven
+    calendar months anchored to the requested month) already spans the
+    requested month plus the one before it, and `historyRange` was already
+    loaded. Still computed-on-read (§1): no new tables, no write-on-read,
+    no periodic job.

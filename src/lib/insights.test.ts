@@ -11,6 +11,7 @@ import {
   SAVINGS_FLOW_INSIGHT_ID,
   shiftCalendarMonth,
   SINCE_PAYDAY_INSIGHT_ID,
+  SPENDING_TREND_INSIGHT_ID,
   type InsightAccountRow,
   type InsightAnchorGapRow,
   type InsightContextInput,
@@ -369,6 +370,10 @@ describe("computeInsights — savings_flow", () => {
         id: RECURRING_BILLS_INSIGHT_ID,
         reason: "fewer than three complete months of recorded history",
       },
+      {
+        id: SPENDING_TREND_INSIGHT_ID,
+        reason: "fewer than two complete months of recorded history",
+      },
     ])
   })
 
@@ -433,6 +438,10 @@ describe("computeInsights — savings_flow", () => {
       {
         id: RECURRING_BILLS_INSIGHT_ID,
         reason: "fewer than three complete months of recorded history",
+      },
+      {
+        id: SPENDING_TREND_INSIGHT_ID,
+        reason: "fewer than two complete months of recorded history",
       },
     ])
   })
@@ -1760,22 +1769,23 @@ describe("computeInsights — emergency_fund (PER-227 slice #3)", () => {
     expect(byId(julyGap, EMERGENCY_FUND_INSIGHT_ID)?.periodPartial).toBe(false)
   })
 
-  test("is registered under engine version 5", () => {
-    expect(INSIGHTS_ENGINE_VERSION).toBe(5)
+  test("is registered under engine version 6", () => {
+    expect(INSIGHTS_ENGINE_VERSION).toBe(6)
     const result = buildReport({
       month: JULY,
       historyRange: FULL_HISTORY,
       accountRows: [savingsAccount({ id: "acc-1", name: "Tabungan" })],
       expenseRows: [monthExpense("2026-06", 1_000_000n)],
     })
-    // The other two derivations skipped here (no qualifying rows), so this
+    // The other derivations skipped here (no qualifying rows), so this
     // pins that `emergency_fund` IS in the registry and reaches the report —
     // not the registry's array order. (`recurring_bills` also skips: it only
-    // applies to the family's current month, and JUNE < JULY here.)
+    // applies to the family's current month, and JUNE < JULY here;
+    // `spending_trend` skips too: JULY has not started at the June clock.)
     expect(result.insights.map((insight) => insight.id)).toEqual([
       EMERGENCY_FUND_INSIGHT_ID,
     ])
-    expect(byId(result, EMERGENCY_FUND_INSIGHT_ID)?.engineVersion).toBe(5)
+    expect(byId(result, EMERGENCY_FUND_INSIGHT_ID)?.engineVersion).toBe(6)
   })
 })
 
@@ -1861,9 +1871,12 @@ describe("computeInsights — recurring_bills (PER-227 slice #4)", () => {
     })
 
     expect(result.failedCount).toBe(0)
-    // The ONLY insight: savings_flow/since_payday/emergency_fund all skip.
+    // savings_flow/since_payday/emergency_fund all skip; `spending_trend`
+    // renders beside the bills card (May's only row sits after day 15, so
+    // its baseline is a genuine zero — see the slice-#5 zero-baseline rule).
     expect(result.insights.map((insight) => insight.id)).toEqual([
       RECURRING_BILLS_INSIGHT_ID,
+      SPENDING_TREND_INSIGHT_ID,
     ])
     const insight = byId(result, RECURRING_BILLS_INSIGHT_ID)
     expect(insight?.tone).toBe("neutral")
@@ -2280,5 +2293,433 @@ describe("computeInsights — recurring_bills (PER-227 slice #4)", () => {
       "No recurring outflows detected in the last 5 complete months of recorded history."
     )
     expect(metricOf(result, "series_count")?.value).toBe("0")
+  })
+})
+
+describe("computeInsights — spending_trend (PER-227 slice #5)", () => {
+  /** Recorded history covering the comparison month end-to-end; the clock is
+   * 2026-06-15 in Asia/Jakarta, so June (the requested month) is in progress
+   * and N = 15 on both sides of the delta. */
+  const HISTORY: { start: string; end: string } = {
+    start: "2026-05-01",
+    end: "2026-06-15",
+  }
+
+  function trendReport(options: ReportOptions = {}): InsightReport {
+    return buildReport({
+      month: JUNE,
+      now: DEFAULT_NOW,
+      historyRange: HISTORY,
+      ...options,
+    })
+  }
+
+  function byId(result: InsightReport, id: string) {
+    return result.insights.find((insight) => insight.id === id)
+  }
+
+  function metricOf(result: InsightReport, key: string): string | undefined {
+    return byId(result, SPENDING_TREND_INSIGHT_ID)?.metrics.find(
+      (metric) => metric.key === key
+    )?.value
+  }
+
+  function trendGap(fromDate: string, toDate: string): InsightAnchorGapRow {
+    return {
+      accountId: "acc-gap",
+      accountName: "Bank Jago",
+      currency: "IDR",
+      fromDate,
+      toDate,
+      amount: 1_000_000n,
+      fromSource: "manual",
+      toSource: "pit_stop",
+    }
+  }
+
+  /** The non-vacuity pin for the like-for-like rule: previous-month rows
+   * after day 15 must NOT reach the comparison. Removing the same-days
+   * cutoff makes `spent_previous_period` fold 2,087,000 instead of 200,000
+   * and fails every delta assertion below. */
+  test("compares day N of the current month against day N of the previous month — later spend never leaks in", () => {
+    const result = trendReport({
+      expenseRows: [
+        expenseRow({ date: "2026-06-03T03:00:00.000Z", amountMinor: 100_000n }),
+        expenseRow({ date: "2026-06-15T03:00:00.000Z", amountMinor: 50_000n }),
+        expenseRow({ date: "2026-05-05T03:00:00.000Z", amountMinor: 200_000n }),
+        // Previous month AFTER day 15: inside the complete-month context
+        // figure, outside the like-for-like comparison.
+        expenseRow({ date: "2026-05-20T03:00:00.000Z", amountMinor: 999_000n }),
+        expenseRow({ date: "2026-05-31T03:00:00.000Z", amountMinor: 888_000n }),
+      ],
+    })
+
+    expect(result.failedCount).toBe(0)
+    const insight = byId(result, SPENDING_TREND_INSIGHT_ID)
+    expect(insight).toBeDefined()
+    expect(insight?.tone).toBe("neutral")
+    // The envelope carries the BASELINE window (the reserved `previous_month`
+    // kind, finally in use): days 1–15 of the previous month.
+    expect(insight?.window).toEqual({
+      kind: "previous_month",
+      start: "2026-05-01",
+      end: "2026-05-15",
+      timezone: "Asia/Jakarta",
+    })
+    expect(metricOf(result, "spent_current_period")).toBe("150000")
+    expect(metricOf(result, "spent_previous_period")).toBe("200000")
+    expect(metricOf(result, "previous_month_total")).toBe("2087000")
+    expect(metricOf(result, "delta")).toBe("-50000")
+    expect(metricOf(result, "percent_change")).toBe("-25%")
+    expect(metricOf(result, "days_elapsed")).toBe("1–15 vs 1–15")
+    // The current month is in progress — `partial` must say so.
+    expect(insight?.partial).toBe(true)
+    expect(insight?.summary).toBe(
+      "Days 1–15 of this month versus days 1–15 of last month — the same days of each month, never a partial month against a complete one."
+    )
+    expect(insight?.detail).toBe(
+      "Last month's complete total is shown for context — a whole month versus part of one is not a fair comparison."
+    )
+  })
+
+  test("orders metrics with the like-for-like delta first and a label on every supporting line", () => {
+    const result = trendReport({
+      expenseRows: [
+        expenseRow({ date: "2026-06-03T03:00:00.000Z", amountMinor: 100_000n }),
+        expenseRow({ date: "2026-05-05T03:00:00.000Z", amountMinor: 200_000n }),
+      ],
+    })
+    const insight = byId(result, SPENDING_TREND_INSIGHT_ID)
+    expect(insight?.metrics.map((metric) => metric.key)).toEqual([
+      "delta",
+      "spent_current_period",
+      "spent_previous_period",
+      "previous_month_total",
+      "days_elapsed",
+      "percent_change",
+      "fx_pending_count",
+    ])
+    // Headline contract: the FIRST money metric is the signed delta —
+    // positive would mean "spent MORE than the same days last month".
+    expect(insight?.metrics[0]).toEqual({
+      key: "delta",
+      label: "Difference versus the same days last month",
+      value: "-100000",
+      currency: "IDR",
+    })
+    for (const metric of insight?.metrics.slice(1) ?? []) {
+      expect(metric.label).toBeDefined()
+    }
+    for (const metric of insight?.metrics ?? []) {
+      if (
+        [
+          "delta",
+          "spent_current_period",
+          "spent_previous_period",
+          "previous_month_total",
+        ].includes(metric.key)
+      ) {
+        expect(metric.currency).toBe("IDR")
+      }
+    }
+  })
+
+  test("renders a delta against zero when the comparison period recorded no spending — never NaN, never a skip", () => {
+    // History still COVERS May (its first recorded row is on or before
+    // May 1 — e.g. an income row): zero spend in the window is a fact about
+    // the ledger, not an absence of history.
+    const result = trendReport({
+      expenseRows: [
+        expenseRow({ date: "2026-06-05T03:00:00.000Z", amountMinor: 150_000n }),
+      ],
+    })
+    const insight = byId(result, SPENDING_TREND_INSIGHT_ID)
+    expect(insight).toBeDefined()
+    expect(metricOf(result, "spent_previous_period")).toBe("0")
+    expect(metricOf(result, "previous_month_total")).toBe("0")
+    expect(metricOf(result, "delta")).toBe("150000")
+    expect(metricOf(result, "percent_change")).toBe("no comparison possible")
+    expect(insight?.detail).toContain(
+      "No spending was recorded in the comparison period last month, so the percentage change has no base."
+    )
+    expect(result.skipped).not.toContainEqual(
+      expect.objectContaining({ id: SPENDING_TREND_INSIGHT_ID })
+    )
+  })
+
+  test("a past requested month compares two COMPLETE months and reports partial false", () => {
+    const result = buildReport({
+      month: "2026-04",
+      now: DEFAULT_NOW,
+      historyRange: { start: "2026-03-01", end: "2026-04-30" },
+      expenseRows: [
+        expenseRow({ date: "2026-03-05T03:00:00.000Z", amountMinor: 250_000n }),
+        expenseRow({ date: "2026-03-31T03:00:00.000Z", amountMinor: 50_000n }),
+        expenseRow({ date: "2026-04-10T03:00:00.000Z", amountMinor: 300_000n }),
+        expenseRow({ date: "2026-04-30T03:00:00.000Z", amountMinor: 100_000n }),
+      ],
+    })
+
+    expect(result.insights.map((insight) => insight.id)).toEqual([
+      SPENDING_TREND_INSIGHT_ID,
+    ])
+    const insight = result.insights[0]
+    expect(insight.tone).toBe("neutral")
+    // Both sides COMPLETE: the baseline window is the whole previous month.
+    expect(insight.window).toEqual({
+      kind: "previous_month",
+      start: "2026-03-01",
+      end: "2026-03-31",
+      timezone: "Asia/Jakarta",
+    })
+    expect(insight.partial).toBe(false)
+    expect(
+      insightMetric(result, SPENDING_TREND_INSIGHT_ID, "spent_current_period")
+    ).toBe("400000")
+    expect(
+      insightMetric(result, SPENDING_TREND_INSIGHT_ID, "spent_previous_period")
+    ).toBe("300000")
+    expect(
+      insightMetric(result, SPENDING_TREND_INSIGHT_ID, "previous_month_total")
+    ).toBe("300000")
+    expect(insightMetric(result, SPENDING_TREND_INSIGHT_ID, "delta")).toBe(
+      "100000"
+    )
+    expect(
+      insightMetric(result, SPENDING_TREND_INSIGHT_ID, "percent_change")
+    ).toBe("+33.3%")
+    expect(
+      insightMetric(result, SPENDING_TREND_INSIGHT_ID, "days_elapsed")
+    ).toBe("1–30 vs 1–31")
+    // The copy must NOT claim "partial" for a fully elapsed past month.
+    expect(insight.summary).toBe(
+      "April 2026 versus March 2026 — both months are complete, so the comparison is like for like."
+    )
+    expect(insight.detail).toBe(
+      "Both months are fully elapsed, so the figures compare two complete months."
+    )
+  })
+
+  test("splits BOTH months at the family-tz boundary — never a UTC slice", () => {
+    // Each row sits on the Jakarta day AFTER the UTC day it was stamped on
+    // (17:30Z = 00:30 WIB the next day), one per side of each cutoff. A
+    // UTC-slicing refactor flips every one of them.
+    const result = trendReport({
+      historyRange: { start: "2026-04-30", end: "2026-06-16" },
+      expenseRows: [
+        // Jakarta 2026-06-01 00:30 → day 1 → INSIDE the current window.
+        expenseRow({ date: "2026-05-31T17:30:00.000Z", amountMinor: 10_000n }),
+        // Jakarta 2026-06-16 → day 16 → outside (a UTC slice says 06-15).
+        expenseRow({ date: "2026-06-15T17:30:00.000Z", amountMinor: 900_000n }),
+        // Jakarta 2026-05-01 00:30 → day 1 → INSIDE the baseline window.
+        expenseRow({ date: "2026-04-30T17:30:00.000Z", amountMinor: 20_000n }),
+        // Jakarta 2026-05-16 → day 16 → context figure only (UTC: 05-15).
+        expenseRow({ date: "2026-05-15T17:30:00.000Z", amountMinor: 800_000n }),
+      ],
+    })
+
+    expect(byId(result, SPENDING_TREND_INSIGHT_ID)?.window).toEqual({
+      kind: "previous_month",
+      start: "2026-05-01",
+      end: "2026-05-15",
+      timezone: "Asia/Jakarta",
+    })
+    expect(metricOf(result, "spent_current_period")).toBe("10000")
+    expect(metricOf(result, "spent_previous_period")).toBe("20000")
+    expect(metricOf(result, "previous_month_total")).toBe("820000")
+    expect(metricOf(result, "delta")).toBe("-10000")
+    expect(metricOf(result, "days_elapsed")).toBe("1–15 vs 1–15")
+  })
+
+  test("skips below two complete months of recorded history — a comparison against nothing is fabrication", () => {
+    const juneRow = expenseRow({
+      date: "2026-06-05T03:00:00.000Z",
+      amountMinor: 150_000n,
+    })
+    const noHistory = trendReport({
+      historyRange: null,
+      expenseRows: [juneRow],
+    })
+    expect(noHistory.insights.map((insight) => insight.id)).not.toContain(
+      SPENDING_TREND_INSIGHT_ID
+    )
+    expect(noHistory.skipped).toContainEqual({
+      id: SPENDING_TREND_INSIGHT_ID,
+      reason: "fewer than two complete months of recorded history",
+    })
+
+    // Family started recording mid-current-month: May never existed on the
+    // ledger, so there is nothing to compare day 15 against.
+    const freshFamily = trendReport({
+      historyRange: { start: "2026-06-01", end: "2026-06-15" },
+      expenseRows: [juneRow],
+    })
+    expect(freshFamily.skipped).toContainEqual({
+      id: SPENDING_TREND_INSIGHT_ID,
+      reason: "fewer than two complete months of recorded history",
+    })
+  })
+
+  test("skips a requested month that has not started yet", () => {
+    const result = trendReport({ month: "2026-07" })
+    expect(result.insights.map((insight) => insight.id)).not.toContain(
+      SPENDING_TREND_INSIGHT_ID
+    )
+    expect(result.skipped).toContainEqual({
+      id: SPENDING_TREND_INSIGHT_ID,
+      reason: "the requested month has not started yet",
+    })
+  })
+
+  test("skips when the baseline's only rows are FX-pending — never a fabricated zero to compare against", () => {
+    const result = trendReport({
+      expenseRows: [
+        expenseRow({ date: "2026-06-05T03:00:00.000Z", amountMinor: 150_000n }),
+        expenseRow({
+          date: "2026-05-05T03:00:00.000Z",
+          amountMinor: 400_000n,
+          baseAmountMinor: null,
+        }),
+      ],
+    })
+    expect(result.insights.map((insight) => insight.id)).not.toContain(
+      SPENDING_TREND_INSIGHT_ID
+    )
+    expect(result.skipped).toContainEqual({
+      id: SPENDING_TREND_INSIGHT_ID,
+      reason:
+        "every spending row in the comparison period is pending an exchange rate",
+    })
+  })
+
+  test("excludes FX-pending rows from BOTH sides and counts them (non-vacuity)", () => {
+    const result = trendReport({
+      expenseRows: [
+        expenseRow({ date: "2026-06-05T03:00:00.000Z", amountMinor: 100_000n }),
+        expenseRow({
+          date: "2026-06-07T03:00:00.000Z",
+          amountMinor: 500_000n,
+          baseAmountMinor: null,
+        }),
+        expenseRow({ date: "2026-05-05T03:00:00.000Z", amountMinor: 300_000n }),
+        expenseRow({
+          date: "2026-05-06T03:00:00.000Z",
+          amountMinor: 900_000n,
+          baseAmountMinor: null,
+        }),
+      ],
+    })
+    const insight = byId(result, SPENDING_TREND_INSIGHT_ID)
+    expect(insight?.fxPendingCount).toBe(2)
+    expect(insight?.partial).toBe(true)
+    // FOLDING the pending rows in (the vacuous version) would yield 600000 /
+    // 1200000 and a POSITIVE delta — exclusion is the pinned behavior.
+    expect(metricOf(result, "spent_current_period")).toBe("100000")
+    expect(metricOf(result, "spent_previous_period")).toBe("300000")
+    expect(metricOf(result, "previous_month_total")).toBe("300000")
+    expect(metricOf(result, "delta")).toBe("-200000")
+    expect(metricOf(result, "fx_pending_count")).toBe("2")
+  })
+
+  test("folds split children through the parent's stored rate, never the parent projection", () => {
+    const result = trendReport({
+      expenseRows: [
+        flowRow({
+          date: new Date("2026-06-05T03:00:00.000Z"),
+          amount: 5_000_000n,
+          // Intentionally NOT the children's sum: the fold must consume the
+          // children (the budget/cash-flow rule).
+          baseAmount: -999_999n,
+          isSplit: true,
+          splitEntries: [{ amount: 60_000n }, { amount: 40_000n }],
+        }),
+        expenseRow({ date: "2026-05-05T03:00:00.000Z", amountMinor: 30_000n }),
+      ],
+    })
+    expect(metricOf(result, "spent_current_period")).toBe("100000")
+    expect(metricOf(result, "delta")).toBe("70000")
+  })
+
+  test("reports the delta neutrally — more spent and less spent are both just facts", () => {
+    const more = trendReport({
+      expenseRows: [
+        expenseRow({ date: "2026-06-05T03:00:00.000Z", amountMinor: 300_000n }),
+        expenseRow({ date: "2026-05-05T03:00:00.000Z", amountMinor: 100_000n }),
+      ],
+    })
+    const moreInsight = byId(more, SPENDING_TREND_INSIGHT_ID)
+    expect(moreInsight?.tone).toBe("neutral")
+    expect(metricOf(more, "delta")).toBe("200000")
+    expect(metricOf(more, "percent_change")).toBe("+200%")
+
+    const less = trendReport({
+      expenseRows: [
+        expenseRow({ date: "2026-06-05T03:00:00.000Z", amountMinor: 50_000n }),
+        expenseRow({ date: "2026-05-05T03:00:00.000Z", amountMinor: 100_000n }),
+      ],
+    })
+    const lessInsight = byId(less, SPENDING_TREND_INSIGHT_ID)
+    expect(lessInsight?.tone).toBe("neutral")
+    expect(metricOf(less, "delta")).toBe("-50000")
+    expect(metricOf(less, "percent_change")).toBe("-50%")
+    // No verdict on either side — a lower number can be a cancelled medicine.
+    expect(lessInsight?.summary).toContain(
+      "never a partial month against a complete one"
+    )
+  })
+
+  test("marks the card partially recorded when a gap intersects EITHER compared window, deduped", () => {
+    const rows = [
+      expenseRow({ date: "2026-06-05T03:00:00.000Z", amountMinor: 100_000n }),
+      expenseRow({ date: "2026-05-05T03:00:00.000Z", amountMinor: 100_000n }),
+    ]
+
+    // Inside the current compared window: the current side is understated.
+    const currentGap = trendReport({
+      expenseRows: rows,
+      anchorGaps: [trendGap("2026-06-03", "2026-06-10")],
+    })
+    expect(byId(currentGap, SPENDING_TREND_INSIGHT_ID)?.periodPartial).toBe(
+      true
+    )
+    expect(
+      byId(currentGap, SPENDING_TREND_INSIGHT_ID)?.periodGaps
+    ).toHaveLength(1)
+
+    // Only AFTER the previous cutoff: it touches the context figure alone,
+    // never the comparison — the badge must not claim the delta is affected.
+    const afterCutoff = trendReport({
+      expenseRows: rows,
+      anchorGaps: [trendGap("2026-05-16", "2026-05-25")],
+    })
+    expect(byId(afterCutoff, SPENDING_TREND_INSIGHT_ID)?.periodPartial).toBe(
+      false
+    )
+    expect(byId(afterCutoff, SPENDING_TREND_INSIGHT_ID)?.periodGaps).toEqual([])
+
+    // One gap spanning BOTH compared windows is disclosed exactly once.
+    const spanning = trendReport({
+      expenseRows: rows,
+      anchorGaps: [trendGap("2026-05-10", "2026-06-10")],
+    })
+    expect(byId(spanning, SPENDING_TREND_INSIGHT_ID)?.periodPartial).toBe(true)
+    expect(byId(spanning, SPENDING_TREND_INSIGHT_ID)?.periodGaps).toHaveLength(
+      1
+    )
+  })
+
+  test("is registered under engine version 6", () => {
+    expect(INSIGHTS_ENGINE_VERSION).toBe(6)
+    const result = trendReport({
+      expenseRows: [
+        expenseRow({ date: "2026-06-05T03:00:00.000Z", amountMinor: 100_000n }),
+      ],
+    })
+    // The other four derivations skip in this fixture, so reaching the
+    // report pins that `spending_trend` IS in the registry.
+    expect(result.insights.map((insight) => insight.id)).toEqual([
+      SPENDING_TREND_INSIGHT_ID,
+    ])
+    expect(byId(result, SPENDING_TREND_INSIGHT_ID)?.engineVersion).toBe(6)
   })
 })
