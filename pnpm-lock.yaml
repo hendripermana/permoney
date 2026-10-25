@@ -119,7 +119,7 @@ importers:
         version: 0.4.6(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       nitro:
         specifier: 3.0.260610-beta
-        version: 3.0.260610-beta(@electric-sql/pglite@0.4.3)(@libsql/client@0.17.3)(@upstash/redis@1.39.0)(@voidzero-dev/vite-plus-core@1.1.0(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(typescript@6.0.3))(chokidar@5.0.0)(dotenv@17.4.2)(giget@3.3.1)(jiti@2.7.0)(lru-cache@11.5.3)(mysql2@3.24.4(@types/node@26.6.5))
+        version: 3.0.260610-beta(@electric-sql/pglite@0.4.3)(@libsql/client@0.17.3)(@upstash/redis@1.39.0)(@voidzero-dev/vite-plus-core@1.1.0(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(typescript@6.0.3))(chokidar@5.0.0)(dotenv@18.0.8)(giget@3.3.1)(jiti@2.7.0)(lru-cache@11.5.3)(mysql2@3.24.4(@types/node@26.6.5))
       papaparse:
         specifier: ^5.7.0
         version: 5.7.0
@@ -212,8 +212,8 @@ importers:
         specifier: ^7.0.130
         version: 7.0.130(zod@4.6.5)
       dotenv:
-        specifier: ^17.4.2
-        version: 17.4.2
+        specifier: ^18.0.8
+        version: 18.0.8
       e2e:
         specifier: ^0.21.2
         version: 0.21.2(ai@7.0.130(zod@4.6.5))
@@ -4801,6 +4801,11 @@ packages:
   dotenv@17.4.2:
     resolution: {integrity: sha512-nI4U3TottKAcAD9LLud4Cb7b2QztQMUEfHbvhTH09bqXTxnSie8WnjPALV/WMCrJZ6UV/qHJ6L03OqO3LcdYZw==}
     engines: {node: '>=12'}
+
+  dotenv@18.0.8:
+    resolution: {integrity: sha512-2KDeoFoK/zRtcnbunCDlLG5VWVMcyqeQc6iK65o231nfNAcuGrKoqUQfJFUtBI+QlShk5HKIHxwebBtUl3rEfA==}
+    engines: {node: '>=12'}
+    hasBin: true
 
   dunder-proto@1.0.1:
     resolution: {integrity: sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==}
@@ -11331,6 +11336,8 @@ snapshots:
 
   dotenv@17.4.2: {}
 
+  dotenv@18.0.8: {}
+
   dunder-proto@1.0.1:
     dependencies:
       call-bind-apply-helpers: 1.0.2
@@ -12340,7 +12347,7 @@ snapshots:
 
   nf3@0.3.17: {}
 
-  nitro@3.0.260610-beta(@electric-sql/pglite@0.4.3)(@libsql/client@0.17.3)(@upstash/redis@1.39.0)(@voidzero-dev/vite-plus-core@1.1.0(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(typescript@6.0.3))(chokidar@5.0.0)(dotenv@17.4.2)(giget@3.3.1)(jiti@2.7.0)(lru-cache@11.5.3)(mysql2@3.24.4(@types/node@26.6.5)):
+  nitro@3.0.260610-beta(@electric-sql/pglite@0.4.3)(@libsql/client@0.17.3)(@upstash/redis@1.39.0)(@voidzero-dev/vite-plus-core@1.1.0(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(typescript@6.0.3))(chokidar@5.0.0)(dotenv@18.0.8)(giget@3.3.1)(jiti@2.7.0)(lru-cache@11.5.3)(mysql2@3.24.4(@types/node@26.6.5)):
     dependencies:
       consola: 3.4.2
       crossws: 0.4.6(srvx@0.11.17)
@@ -12357,7 +12364,7 @@ snapshots:
       unenv: 2.0.0-rc.24
       unstorage: 2.0.0-alpha.7(@upstash/redis@1.39.0)(chokidar@5.0.0)(db0@0.3.4(@electric-sql/pglite@0.4.3)(@libsql/client@0.17.3)(mysql2@3.24.4(@types/node@26.6.5)))(lru-cache@11.5.3)(ofetch@2.0.0-alpha.3)
     optionalDependencies:
-      dotenv: 17.4.2
+      dotenv: 18.0.8
       giget: 3.3.1
       jiti: 2.7.0
       vite: '@voidzero-dev/vite-plus-core@1.1.0(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(typescript@6.0.3)'
