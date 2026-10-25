@@ -60,6 +60,21 @@ export type ServerFnOutcome =
   | { ok: true; result: unknown }
   | { ok: false; error: unknown }
 
+/**
+ * Marker left in `outcome` when the server entry never reported a result or an
+ * error. It means the request never reached `__executeServer`'s own return —
+ * e.g. the framework's error handler replaced a thrown value with a Response.
+ */
+const SERVER_FN_DID_NOT_RUN = "server function did not run"
+
+function isSentinelOutcome(outcome: ServerFnOutcome): boolean {
+  return (
+    outcome.ok === false &&
+    outcome.error instanceof Error &&
+    outcome.error.message === SERVER_FN_DID_NOT_RUN
+  )
+}
+
 /** The server entry `createServerFn` exposes for an incoming RPC. */
 type ServerEntry = (options: {
   data?: unknown
@@ -138,7 +153,7 @@ export async function callServerFnAs(
 
   let outcome: ServerFnOutcome = {
     ok: false,
-    error: new Error("server function did not run"),
+    error: new Error(SERVER_FN_DID_NOT_RUN),
   }
 
   const handler = createServerEntry({
@@ -151,6 +166,24 @@ export async function callServerFnAs(
       }),
   }).fetch
 
-  await handler(user.request, undefined)
+  const response = await handler(user.request, undefined)
+
+  // `createServerEntry` converts anything the entry throws into a framework
+  // error Response via `handleStartError`: the thrown cause is dropped and the
+  // reply is a generic JSON 500 (no logging is attached to it). Without this
+  // branch a real framework failure — a validator that threw, a start context
+  // the framework rejected — would leave `outcome` at the sentinel above, and
+  // the test would only ever see "did not run" instead of the status and body.
+  if (!response.ok && isSentinelOutcome(outcome)) {
+    const body = await response.text()
+    const statusLabel =
+      response.statusText === ""
+        ? `HTTP ${response.status}`
+        : `HTTP ${response.status} ${response.statusText}`
+    throw new Error(
+      `callServerFnAs: server function entry failed with ${statusLabel}: ${body}`
+    )
+  }
+
   return outcome
 }
