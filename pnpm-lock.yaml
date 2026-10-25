@@ -221,7 +221,7 @@ importers:
         specifier: ^4.10.2
         version: 4.10.2
       jscpd:
-        specifier: ^5.4.2
+        specifier: 5.4.2
         version: 5.4.2
       jsdom:
         specifier: ^30.1.3

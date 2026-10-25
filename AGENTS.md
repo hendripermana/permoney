@@ -95,6 +95,7 @@ Agent context is portable across coding tools through versioned repository guida
 - [ ] Run `vp run test:unit:coverage` to validate behaviour. That is the gate CI runs; bare `vp test` skips the coverage threshold.
 - [ ] Run the integration files you touched: `vp test run --config vitest.integration.config.ts <files>` (real Postgres on :5433; see `docs/testing.md`). Unset `NODE_ENV` and `DATABASE_URL` first — a stray `NODE_ENV=production` fails React tests for unrelated reasons, and the harness refuses to run against a non-test `DATABASE_URL`.
 - [ ] If any of the above fails, stop and report the first failing command and error excerpt. Do not claim the task is done until the failure is fixed or the user explicitly approves a partial workaround.
+- [ ] Duplication baseline changes are earned: lowering `scripts/jscpd-baseline.json` / `BASELINE_CLONES` requires removing real duplication; never raise either without reviewer sign-off.
 
 ## Migration Safety — destructive DDL needs a marker
 
