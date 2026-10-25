@@ -309,7 +309,7 @@ export async function getFamilyTimezone(
 
 export const getNetWorthSeriesFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: GetNetWorthSeriesInput) =>
+  .validator((data: GetNetWorthSeriesInput) =>
     getNetWorthSeriesInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -537,7 +537,7 @@ export async function getCashFlowReportForFamily({
 
 export const getCashFlowReportFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: GetCashFlowReportInput) =>
+  .validator((data: GetCashFlowReportInput) =>
     getCashFlowReportInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {

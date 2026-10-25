@@ -29,7 +29,7 @@ export const getSessionGuardFn = createServerFn({ method: "GET" })
 
 export const signupFn = createServerFn({ method: "POST" })
   .middleware([errorLogMiddleware])
-  .inputValidator(signupSchema)
+  .validator(signupSchema)
   .handler(async ({ data }) => {
     const [{ getRequest }, { auth }, { checkRateLimit }] = await Promise.all([
       import("@tanstack/react-start/server"),
@@ -86,7 +86,7 @@ export const signupFn = createServerFn({ method: "POST" })
 
 export const loginFn = createServerFn({ method: "POST" })
   .middleware([errorLogMiddleware])
-  .inputValidator(loginSchema)
+  .validator(loginSchema)
   .handler(async ({ data }) => {
     const [{ getRequest }, { auth }, { checkRateLimit }] = await Promise.all([
       import("@tanstack/react-start/server"),
@@ -141,9 +141,7 @@ export const logoutFn = createServerFn({ method: "POST" })
  */
 export const onboardFn = createServerFn({ method: "POST" })
   .middleware([errorLogMiddleware])
-  .inputValidator((data: unknown) =>
-    initializeOnboardingInputSchema.parse(data)
-  )
+  .validator((data: unknown) => initializeOnboardingInputSchema.parse(data))
   .handler(async ({ data }) => {
     const [{ user }, { prisma }, { initializeOnboardingForUser }] =
       await Promise.all([

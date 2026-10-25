@@ -1066,7 +1066,7 @@ const createTransactionTransportInputSchema = transactionInputSchema.extend({
 // Merchant/Transaction's externalProvider/externalId columns). Deliberately
 // added ONLY to this INTERNAL schema, never to `transactionInputSchema` /
 // `createTransactionTransportInputSchema` — those back the public
-// `createTransactionFn` `.inputValidator`, so a client can never set or spoof
+// `createTransactionFn` `.validator`, so a client can never set or spoof
 // a provider binding. Only internal server-side callers (e.g. Sure-migration
 // transfer-pair promotion) construct a `data` object with these fields and
 // call `createTransactionForFamily` directly, bypassing the public transport
@@ -3311,9 +3311,8 @@ export async function createTransactionForFamily({
  */
 export const createTransactionFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator(
-    (data: z.input<typeof createTransactionTransportInputSchema>) =>
-      createTransactionTransportInputSchema.parse(data)
+  .validator((data: z.input<typeof createTransactionTransportInputSchema>) =>
+    createTransactionTransportInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
     return await createTransactionForFamily({
@@ -3926,9 +3925,8 @@ export async function deleteTransactionForFamily({
  */
 export const deleteTransactionFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator(
-    (data: z.input<typeof deleteTransactionTransportInputSchema>) =>
-      deleteTransactionTransportInputSchema.parse(data)
+  .validator((data: z.input<typeof deleteTransactionTransportInputSchema>) =>
+    deleteTransactionTransportInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
     const normalized = await normalizeDeleteTransactionTransportInput(data)
@@ -4600,9 +4598,8 @@ export async function updateTransactionForFamily({
  */
 export const updateTransactionFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator(
-    (data: z.input<typeof updateTransactionTransportInputSchema>) =>
-      updateTransactionTransportInputSchema.parse(data)
+  .validator((data: z.input<typeof updateTransactionTransportInputSchema>) =>
+    updateTransactionTransportInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
     const normalized = await normalizeUpdateTransactionTransportInput(data)
@@ -4775,7 +4772,7 @@ export async function bulkDeleteTransactionsForFamily({
  */
 export const bulkDeleteTransactionsFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator(
+  .validator(
     (data: z.input<typeof bulkDeleteTransactionsTransportInputSchema>) =>
       bulkDeleteTransactionsTransportInputSchema.parse(data)
   )
@@ -4909,7 +4906,7 @@ export async function bulkUpdateTransactionsForFamily({
  */
 export const bulkUpdateTransactionsFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator(
+  .validator(
     (data: z.input<typeof bulkUpdateTransactionsTransportInputSchema>) =>
       bulkUpdateTransactionsTransportInputSchema.parse(data)
   )
@@ -5077,7 +5074,7 @@ export async function bulkCreateTransactionsForFamily({
  */
 export const bulkCreateTransactionsFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator(
+  .validator(
     (data: z.input<typeof bulkCreateTransactionsTransportInputSchema>) =>
       bulkCreateTransactionsTransportInputSchema.parse(data)
   )

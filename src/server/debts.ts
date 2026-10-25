@@ -131,7 +131,7 @@ export async function createPersonForFamily({
 
 export const createPersonFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof createPersonInputSchema>) =>
+  .validator((data: z.input<typeof createPersonInputSchema>) =>
     createPersonInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -545,7 +545,7 @@ export async function recordRepaymentForFamily({
 
 export const recordLendFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof recordLendInputSchema>) =>
+  .validator((data: z.input<typeof recordLendInputSchema>) =>
     recordLendInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -558,7 +558,7 @@ export const recordLendFn = createServerFn({ method: "POST" })
 
 export const recordBorrowFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof recordBorrowInputSchema>) =>
+  .validator((data: z.input<typeof recordBorrowInputSchema>) =>
     recordBorrowInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -571,7 +571,7 @@ export const recordBorrowFn = createServerFn({ method: "POST" })
 
 export const recordRepaymentFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof recordRepaymentInputSchema>) =>
+  .validator((data: z.input<typeof recordRepaymentInputSchema>) =>
     recordRepaymentInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -902,7 +902,7 @@ export async function getPersonDebtDetailForFamily({
 
 export const getPersonDebtDetailFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: z.input<typeof getPersonDebtDetailInputSchema>) =>
+  .validator((data: z.input<typeof getPersonDebtDetailInputSchema>) =>
     getPersonDebtDetailInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {

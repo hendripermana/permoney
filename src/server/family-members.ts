@@ -341,7 +341,7 @@ export async function updateMemberRoleForFamily({
 
 export const updateMemberRoleFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("member:manage")])
-  .inputValidator((data: UpdateMemberRoleInput) =>
+  .validator((data: UpdateMemberRoleInput) =>
     updateMemberRoleInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -513,9 +513,7 @@ export async function removeMemberForFamily({
 
 export const removeMemberFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("member:manage")])
-  .inputValidator((data: RemoveMemberInput) =>
-    removeMemberInputSchema.parse(data)
-  )
+  .validator((data: RemoveMemberInput) => removeMemberInputSchema.parse(data))
   .handler(async ({ data, context }) => {
     return await removeMemberForFamily({
       data,
@@ -636,7 +634,7 @@ export async function transferOwnershipForFamily({
 
 export const transferOwnershipFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ownership:transfer")])
-  .inputValidator((data: TransferOwnershipInput) =>
+  .validator((data: TransferOwnershipInput) =>
     transferOwnershipInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {

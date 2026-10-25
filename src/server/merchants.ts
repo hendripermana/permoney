@@ -213,7 +213,7 @@ export async function createMerchantForFamily({
 
 export const createMerchantFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof createMerchantInputSchema>) =>
+  .validator((data: z.input<typeof createMerchantInputSchema>) =>
     createMerchantInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {

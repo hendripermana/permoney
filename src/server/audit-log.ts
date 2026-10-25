@@ -91,7 +91,7 @@ export async function getAuditLogForFamily({
  */
 export const getAuditLogFn = createServerFn({ method: "GET" })
   .middleware([requireCapability("audit:read")])
-  .inputValidator((data: z.infer<typeof getAuditLogInputSchema>) =>
+  .validator((data: z.infer<typeof getAuditLogInputSchema>) =>
     getAuditLogInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {

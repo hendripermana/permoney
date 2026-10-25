@@ -295,7 +295,7 @@ export async function setTransactionReconciledForFamily({
 
 export const setTransactionReconciledFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof setTransactionReconciledInputSchema>) =>
+  .validator((data: z.input<typeof setTransactionReconciledInputSchema>) =>
     setTransactionReconciledInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {

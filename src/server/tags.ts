@@ -212,7 +212,7 @@ export async function createTagForFamily({
 
 export const createTagFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof createTagInputSchema>) =>
+  .validator((data: z.input<typeof createTagInputSchema>) =>
     createTagInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -327,7 +327,7 @@ export async function renameTagForFamily({
 
 export const renameTagFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof renameTagInputSchema>) =>
+  .validator((data: z.input<typeof renameTagInputSchema>) =>
     renameTagInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -439,7 +439,7 @@ export async function archiveTagForFamily({
 
 export const archiveTagFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof archiveTagInputSchema>) =>
+  .validator((data: z.input<typeof archiveTagInputSchema>) =>
     archiveTagInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -641,7 +641,7 @@ export async function setTransactionTagsForFamily({
 
 export const setTransactionTagsFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof setTransactionTagsInputSchema>) =>
+  .validator((data: z.input<typeof setTransactionTagsInputSchema>) =>
     setTransactionTagsInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {

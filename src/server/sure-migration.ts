@@ -923,7 +923,7 @@ const sureImportProgressInputSchema = z.object({
 // GET, not POST — this is a pure, cheap, idempotent read (no DB, no mutation).
 export const getSureImportProgressFn = createServerFn({ method: "GET" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: unknown) => sureImportProgressInputSchema.parse(data))
+  .validator((data: unknown) => sureImportProgressInputSchema.parse(data))
   .handler(
     async ({ data, context }): Promise<SureImportProgressSnapshot | null> => {
       const entry = importProgress.get(data.importId)
@@ -2008,7 +2008,7 @@ async function persistSureHeldReason(
 
 export const runSureMigrationFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: unknown) => sureMigrationInputSchema.parse(data))
+  .validator((data: unknown) => sureMigrationInputSchema.parse(data))
   .handler(async ({ data, context }) =>
     runSureMigrationForFamily({
       data,

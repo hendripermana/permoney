@@ -413,9 +413,7 @@ export async function createFamilyInviteForFamily({
 
 export const createFamilyInviteFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("member:manage")])
-  .inputValidator((data: CreateInviteInput) =>
-    createInviteInputSchema.parse(data)
-  )
+  .validator((data: CreateInviteInput) => createInviteInputSchema.parse(data))
   .handler(async ({ data, context }) => {
     const { getRequest } = await import("@tanstack/react-start/server")
     return await createFamilyInviteForFamily({
@@ -579,9 +577,7 @@ export async function revokeFamilyInviteForFamily({
 
 export const revokeFamilyInviteFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("member:manage")])
-  .inputValidator((data: RevokeInviteInput) =>
-    revokeInviteInputSchema.parse(data)
-  )
+  .validator((data: RevokeInviteInput) => revokeInviteInputSchema.parse(data))
   .handler(async ({ data, context }) => {
     return await revokeFamilyInviteForFamily({
       data,
@@ -722,9 +718,7 @@ export async function resendFamilyInviteForFamily({
 
 export const resendFamilyInviteFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("member:manage")])
-  .inputValidator((data: ResendInviteInput) =>
-    resendInviteInputSchema.parse(data)
-  )
+  .validator((data: ResendInviteInput) => resendInviteInputSchema.parse(data))
   .handler(async ({ data, context }) => {
     const { getRequest } = await import("@tanstack/react-start/server")
     return await resendFamilyInviteForFamily({
@@ -820,9 +814,7 @@ export const getInviteByTokenFn = createServerFn({ method: "POST" })
   // behind authMiddleware — compose the error logger directly, otherwise a
   // failing invite lookup leaves no server-side trace at all.
   .middleware([errorLogMiddleware])
-  .inputValidator((data: { token: string }) =>
-    lookupInviteInputSchema.parse(data)
-  )
+  .validator((data: { token: string }) => lookupInviteInputSchema.parse(data))
   .handler(
     async ({
       data,
@@ -1089,9 +1081,7 @@ type AcceptInviteInput = z.input<typeof acceptInviteInputSchema>
 // no family yet), so this is `authMiddleware`, never `familyMiddleware`.
 export const acceptFamilyInviteFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .inputValidator((data: AcceptInviteInput) =>
-    acceptInviteInputSchema.parse(data)
-  )
+  .validator((data: AcceptInviteInput) => acceptInviteInputSchema.parse(data))
   .handler(async ({ data, context }) => {
     const { prisma } = await import("./db.server")
     return await acceptFamilyInviteForUser(prisma, {

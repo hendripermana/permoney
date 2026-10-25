@@ -224,7 +224,7 @@ export async function createCategoryForFamily({
 
 export const createCategoryFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof createCategoryInputSchema>) =>
+  .validator((data: z.input<typeof createCategoryInputSchema>) =>
     createCategoryInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {

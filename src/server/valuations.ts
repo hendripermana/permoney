@@ -1130,7 +1130,7 @@ export async function createValuationForFamily({
 
 export const createValuationFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof createValuationInputSchema>) =>
+  .validator((data: z.input<typeof createValuationInputSchema>) =>
     createValuationInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -1251,7 +1251,7 @@ export async function rebuildFamilyBalances({
 
 export const rebuildAccountBalanceFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.infer<typeof rebuildAccountBalanceInputSchema>) =>
+  .validator((data: z.infer<typeof rebuildAccountBalanceInputSchema>) =>
     rebuildAccountBalanceInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -1590,7 +1590,7 @@ export async function getPeriodCompletenessForFamily({
 
 export const getPeriodCompletenessFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: GetPeriodCompletenessInput) =>
+  .validator((data: GetPeriodCompletenessInput) =>
     getPeriodCompletenessInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -1691,7 +1691,7 @@ function computeAvailable(
 
 export const getAccountBalanceFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: z.infer<typeof accountBalanceQuerySchema>) =>
+  .validator((data: z.infer<typeof accountBalanceQuerySchema>) =>
     accountBalanceQuerySchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -1781,7 +1781,7 @@ export async function getLatestGroundTruthAnchorForFamily({
 
 export const getLatestGroundTruthAnchorFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: z.infer<typeof accountBalanceQuerySchema>) =>
+  .validator((data: z.infer<typeof accountBalanceQuerySchema>) =>
     accountBalanceQuerySchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -1867,7 +1867,7 @@ export async function getAccountOpeningAsOfForFamily({
 
 export const getAccountOpeningAsOfFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: z.infer<typeof accountBalanceQuerySchema>) =>
+  .validator((data: z.infer<typeof accountBalanceQuerySchema>) =>
     accountBalanceQuerySchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -1909,7 +1909,7 @@ export async function getAccountOpeningValueForFamily({
 
 export const getAccountOpeningValueFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: z.infer<typeof accountBalanceQuerySchema>) =>
+  .validator((data: z.infer<typeof accountBalanceQuerySchema>) =>
     accountBalanceQuerySchema.parse(data)
   )
   .handler(async ({ data, context }) => {
