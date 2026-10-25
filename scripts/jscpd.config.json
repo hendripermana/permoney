@@ -1,0 +1,8 @@
+{
+  "minTokens": 75,
+  "minLines": 5,
+  "mode": "mild",
+  "format": ["typescript", "tsx"],
+  "pattern": "src/**/*.{ts,tsx}",
+  "ignore": ["**/*.gen.ts"]
+}

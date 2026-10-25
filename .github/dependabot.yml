@@ -40,6 +40,15 @@ updates:
     # fails closed on exactly this drift). Pin it to the bundled version by hand
     # whenever vite-plus itself moves.
     ignore:
+      # The duplication guard pins jscpd EXACTLY and asserts the resolved
+      # version: clone fingerprints are engine-specific, so a bot bump must be
+      # a deliberate re-measure (`node scripts/check-duplicate-code.mjs
+      # --update-baseline`), never a silent weekly update.
+      - dependency-name: "jscpd"
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
       - dependency-name: "@vitest/coverage-v8"
         # vite-plus, not npm, decides this version. See AGENTS.md ("Do not
         # install Vitest, Oxlint, Oxfmt or tsdown directly") and the
