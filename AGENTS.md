@@ -251,7 +251,7 @@ skills:
   use: "@tanstack/start-client-core#start-core/execution-model"
 - when: "createMiddleware, request middleware (.server only), server function middleware (.client + .server), context passing via next({ context }), sendContext for client-server transfer, global middleware via createStart in src/start.ts, middleware factories, method order enforcement, fetch override precedence."
   use: "@tanstack/start-client-core#start-core/middleware"
-- when: "createServerFn (GET/POST), inputValidator (Zod or function), useServerFn hook, server context utilities (getRequest, getRequestHeader, setResponseHeader, setResponseStatus), error handling (throw errors, redirect, notFound), streaming, FormData handling, file organization (.functions.ts, .server.ts)."
+- when: "createServerFn (GET/POST), validator (Zod or function), useServerFn hook, server context utilities (getRequest, getRequestHeader, setResponseHeader, setResponseStatus), error handling (throw errors, redirect, notFound), streaming, FormData handling, file organization (.functions.ts, .server.ts)."
   use: "@tanstack/start-client-core#start-core/server-functions"
 - when: "Server-side API endpoints using the server property on createFileRoute, HTTP method handlers (GET, POST, PUT, DELETE), createHandlers for per-handler middleware, handler context (request, params, context), request body parsing, response helpers, file naming for API routes."
   use: "@tanstack/start-client-core#start-core/server-routes"
@@ -381,7 +381,7 @@ For every new server file, the model must obey these rules:
 
 - **MUST NOT** add `"use server"` at the top of any file. It disables the `createServerFn` splitter and leaks server code into the client bundle.
 - **MUST** wrap every database access, secret API key read, and filesystem operation in `createServerFn(...).handler(...)`. Do not perform those operations in route loaders, because loaders are isomorphic during navigation.
-- **MUST** validate server function input with `.inputValidator(z.object({...}))` and derive client-side types from `Awaited<ReturnType<typeof serverFn>>`. Do not import Prisma model types into UI code.
+- **MUST** validate server function input with `.validator(z.object({...}))` and derive client-side types from `Awaited<ReturnType<typeof serverFn>>`. Do not import Prisma model types into UI code.
 - **MUST** use the `*.server.ts` suffix for any module that imports `@prisma/client`, secrets, Node built-ins, or filesystem APIs. Consumers must import it with the explicit `.server` suffix.
 - **MUST** keep `*.server.ts` top-level code side-effect free. Do not call `new PrismaClient(...)`, `new PrismaPg(...)`, `throw new Error(...)`, or assign to `globalThis` at module scope.
 
@@ -475,7 +475,7 @@ import { prisma } from "./db.server" // <-- explicit .server suffix
 
 ### F. The `import-protection` Warning — Expected Behavior, Not a Bug
 
-- **Input validation is mandatory.** Use `.inputValidator(z.object({...}))` with Zod. Never trust a client-sent `id`, `amount`, or `userId`.
+- **Input validation is mandatory.** Use `.validator(z.object({...}))` with Zod. Never trust a client-sent `id`, `amount`, or `userId`.
 - **Return values are the type contract.** Derive client-side types via `Awaited<ReturnType<typeof serverFn>>` — NEVER import Prisma model types directly into UI code. Example pattern:
 
   ```ts
