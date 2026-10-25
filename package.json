@@ -91,7 +91,7 @@
   "devDependencies": {
     "@e2e-dev/web": "^0.12.0",
     "@playwright/test": "^1.63.0",
-    "@rsbuild/core": "^2.2.12",
+    "@rsbuild/core": "^2.2.14",
     "@tanstack/devtools-vite": "^0.8.5",
     "@tanstack/eslint-config": "^0.4.0",
     "@tanstack/react-query-devtools": "^5.104.1",
