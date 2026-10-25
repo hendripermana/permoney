@@ -673,7 +673,7 @@ export async function getBudgetForPeriodForFamily({
 
 export const getBudgetForPeriodFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: GetBudgetForPeriodInput | undefined) =>
+  .validator((data: GetBudgetForPeriodInput | undefined) =>
     getBudgetForPeriodInputSchema.parse(data ?? {})
   )
   .handler(async ({ data, context }) => {
@@ -736,9 +736,7 @@ export async function listBudgetsForFamily({
 
 export const listBudgetsFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: ListBudgetsInput) =>
-    listBudgetsInputSchema.parse(data)
-  )
+  .validator((data: ListBudgetsInput) => listBudgetsInputSchema.parse(data))
   .handler(async ({ data, context }) => {
     return await listBudgetsForFamily({
       data,
@@ -1008,7 +1006,7 @@ export async function setBudgetAllocationsForFamily({
 
 export const setBudgetAllocationsFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("budget:write")])
-  .inputValidator((data: SetBudgetAllocationsInput) =>
+  .validator((data: SetBudgetAllocationsInput) =>
     setBudgetAllocationsInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -1125,9 +1123,7 @@ export async function archiveBudgetForFamily({
 
 export const archiveBudgetFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("budget:write")])
-  .inputValidator((data: ArchiveBudgetInput) =>
-    archiveBudgetInputSchema.parse(data)
-  )
+  .validator((data: ArchiveBudgetInput) => archiveBudgetInputSchema.parse(data))
   .handler(async ({ data, context }) => {
     return await archiveBudgetForFamily({
       data,
@@ -1361,7 +1357,7 @@ export async function moveBudgetAllocationForFamily({
 
 export const moveBudgetAllocationFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("budget:write")])
-  .inputValidator((data: MoveAllocationInput) =>
+  .validator((data: MoveAllocationInput) =>
     moveAllocationInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {

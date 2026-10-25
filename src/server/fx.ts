@@ -325,7 +325,7 @@ export async function upsertFxRateSnapshotForFamily({
 
 export const upsertFxRateSnapshotFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("settings:write")])
-  .inputValidator((data: z.input<typeof upsertFxRateSnapshotInputSchema>) =>
+  .validator((data: z.input<typeof upsertFxRateSnapshotInputSchema>) =>
     upsertFxRateSnapshotInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -370,7 +370,7 @@ export async function listFxRateSnapshotsForFamily({
 
 export const listFxRateSnapshotsFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: z.infer<typeof listFxRateSnapshotsInputSchema>) =>
+  .validator((data: z.infer<typeof listFxRateSnapshotsInputSchema>) =>
     listFxRateSnapshotsInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -635,7 +635,7 @@ export async function rebuildFxProjectionsForFamily({
 
 export const rebuildFxProjectionsFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("settings:write")])
-  .inputValidator((data: z.infer<typeof rebuildFxProjectionsInputSchema>) =>
+  .validator((data: z.infer<typeof rebuildFxProjectionsInputSchema>) =>
     rebuildFxProjectionsInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -705,7 +705,7 @@ export async function setBaseCurrencyForFamily({
 
 export const setBaseCurrencyFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("settings:write")])
-  .inputValidator((data: z.infer<typeof setBaseCurrencyInputSchema>) =>
+  .validator((data: z.infer<typeof setBaseCurrencyInputSchema>) =>
     setBaseCurrencyInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {

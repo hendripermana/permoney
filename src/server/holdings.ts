@@ -827,7 +827,7 @@ export async function upsertHoldingForFamily({
 
 export const upsertHoldingFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof upsertHoldingInputSchema>) =>
+  .validator((data: z.input<typeof upsertHoldingInputSchema>) =>
     upsertHoldingInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -959,7 +959,7 @@ export async function deleteHoldingForFamily({
 
 export const deleteHoldingFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof deleteHoldingInputSchema>) =>
+  .validator((data: z.input<typeof deleteHoldingInputSchema>) =>
     deleteHoldingInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -1057,7 +1057,7 @@ export async function getAccountHoldingsForFamily({
 
 export const getAccountHoldingsFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: z.infer<typeof accountHoldingsQuerySchema>) =>
+  .validator((data: z.infer<typeof accountHoldingsQuerySchema>) =>
     accountHoldingsQuerySchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -1655,7 +1655,7 @@ export async function recordTradeForFamily({
 
 export const recordTradeFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof recordTradeInputSchema>) =>
+  .validator((data: z.input<typeof recordTradeInputSchema>) =>
     recordTradeInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -2322,7 +2322,7 @@ export async function deleteTradeForFamily({
 
 export const deleteTradeFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof deleteTradeInputSchema>) =>
+  .validator((data: z.input<typeof deleteTradeInputSchema>) =>
     deleteTradeInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -2559,7 +2559,7 @@ export async function correctTradeForFamily({
 
 export const correctTradeFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof correctTradeInputSchema>) =>
+  .validator((data: z.input<typeof correctTradeInputSchema>) =>
     correctTradeInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -2690,7 +2690,7 @@ export async function getTradeForCorrectionForFamily({
 
 export const getTradeForCorrectionFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: z.infer<typeof getTradeForCorrectionInputSchema>) =>
+  .validator((data: z.infer<typeof getTradeForCorrectionInputSchema>) =>
     getTradeForCorrectionInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -3203,7 +3203,7 @@ export async function recordDistributionForFamily({
 
 export const recordDistributionFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof recordDistributionInputSchema>) =>
+  .validator((data: z.input<typeof recordDistributionInputSchema>) =>
     recordDistributionInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -3517,7 +3517,7 @@ export async function recordFeeForFamily({
 
 export const recordFeeFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof recordFeeInputSchema>) =>
+  .validator((data: z.input<typeof recordFeeInputSchema>) =>
     recordFeeInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -4004,7 +4004,7 @@ export async function recordSwitchForFamily({
 
 export const recordSwitchFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof recordSwitchInputSchema>) =>
+  .validator((data: z.input<typeof recordSwitchInputSchema>) =>
     recordSwitchInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -4416,7 +4416,7 @@ export async function recordPositionMoveForFamily({
 
 export const recordPositionMoveFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof recordPositionMoveInputSchema>) =>
+  .validator((data: z.input<typeof recordPositionMoveInputSchema>) =>
     recordPositionMoveInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -4921,7 +4921,7 @@ export async function deleteHoldingEventForFamily({
 
 export const deleteHoldingEventFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof deleteHoldingEventInputSchema>) =>
+  .validator((data: z.input<typeof deleteHoldingEventInputSchema>) =>
     deleteHoldingEventInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -5145,7 +5145,7 @@ export async function correctHoldingEventForFamily({
 
 export const correctHoldingEventFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof correctHoldingEventInputSchema>) =>
+  .validator((data: z.input<typeof correctHoldingEventInputSchema>) =>
     correctHoldingEventInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -5296,7 +5296,7 @@ export async function listAccountHoldingEventsForFamily({
 
 export const listAccountHoldingEventsFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: z.infer<typeof accountHoldingEventsQuerySchema>) =>
+  .validator((data: z.infer<typeof accountHoldingEventsQuerySchema>) =>
     accountHoldingEventsQuerySchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -5415,9 +5415,8 @@ export async function getHoldingEventForCorrectionForFamily({
 
 export const getHoldingEventForCorrectionFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator(
-    (data: z.infer<typeof getHoldingEventForCorrectionInputSchema>) =>
-      getHoldingEventForCorrectionInputSchema.parse(data)
+  .validator((data: z.infer<typeof getHoldingEventForCorrectionInputSchema>) =>
+    getHoldingEventForCorrectionInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
     return await getHoldingEventForCorrectionForFamily({
@@ -5521,7 +5520,7 @@ export async function listMarketInstrumentsForFamily({
 
 export const listMarketInstrumentsFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: z.infer<typeof listMarketInstrumentsQuerySchema>) =>
+  .validator((data: z.infer<typeof listMarketInstrumentsQuerySchema>) =>
     listMarketInstrumentsQuerySchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -5596,9 +5595,8 @@ export async function ensureReksadanaInstrumentForFamily({
 
 export const ensureReksadanaInstrumentFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator(
-    (data: z.input<typeof ensureReksadanaInstrumentInputSchema>) =>
-      ensureReksadanaInstrumentInputSchema.parse(data)
+  .validator((data: z.input<typeof ensureReksadanaInstrumentInputSchema>) =>
+    ensureReksadanaInstrumentInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
     return await ensureReksadanaInstrumentForFamily({
@@ -5871,7 +5869,7 @@ export async function refreshHoldingPricesForFamily({
 
 export const refreshHoldingPricesFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof refreshHoldingPricesInputSchema>) =>
+  .validator((data: z.input<typeof refreshHoldingPricesInputSchema>) =>
     refreshHoldingPricesInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {

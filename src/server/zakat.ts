@@ -258,7 +258,7 @@ export async function upsertZakatSettingsForFamily({
 
 export const upsertZakatSettingsFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("settings:write")])
-  .inputValidator((data: z.input<typeof upsertZakatSettingsInputSchema>) =>
+  .validator((data: z.input<typeof upsertZakatSettingsInputSchema>) =>
     upsertZakatSettingsInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -429,7 +429,7 @@ export async function createZakatPayerForFamily({
 
 export const createZakatPayerFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("settings:write")])
-  .inputValidator((data: z.input<typeof createZakatPayerInputSchema>) =>
+  .validator((data: z.input<typeof createZakatPayerInputSchema>) =>
     createZakatPayerInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -529,7 +529,7 @@ export async function renameZakatPayerForFamily({
 
 export const renameZakatPayerFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("settings:write")])
-  .inputValidator((data: z.input<typeof renameZakatPayerInputSchema>) =>
+  .validator((data: z.input<typeof renameZakatPayerInputSchema>) =>
     renameZakatPayerInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -652,7 +652,7 @@ export async function deleteZakatPayerForFamily({
 
 export const deleteZakatPayerFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("settings:write")])
-  .inputValidator((data: z.input<typeof deleteZakatPayerInputSchema>) =>
+  .validator((data: z.input<typeof deleteZakatPayerInputSchema>) =>
     deleteZakatPayerInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -856,7 +856,7 @@ export async function setAccountZakatOwnershipForFamily({
 
 export const setAccountZakatOwnershipFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("account:write")])
-  .inputValidator((data: z.input<typeof setAccountZakatOwnershipInputSchema>) =>
+  .validator((data: z.input<typeof setAccountZakatOwnershipInputSchema>) =>
     setAccountZakatOwnershipInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {

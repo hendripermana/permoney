@@ -493,7 +493,7 @@ export async function batchReconcileForFamily({
 
 export const batchReconcileFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.input<typeof batchReconcileInputSchema>) =>
+  .validator((data: z.input<typeof batchReconcileInputSchema>) =>
     batchReconcileInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {

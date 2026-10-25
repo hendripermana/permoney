@@ -704,7 +704,7 @@ export async function createAccountForFamily({
 
 export const createAccountFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("account:write")])
-  .inputValidator((data: z.input<typeof createAccountInputSchema>) =>
+  .validator((data: z.input<typeof createAccountInputSchema>) =>
     createAccountInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -898,7 +898,7 @@ export async function updateAccountForFamily({
 
 export const updateAccountFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("account:write")])
-  .inputValidator((data: z.input<typeof updateAccountInputSchema>) =>
+  .validator((data: z.input<typeof updateAccountInputSchema>) =>
     updateAccountInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -1061,7 +1061,7 @@ export async function enableHoldingsTrackingForFamily({
 
 export const enableHoldingsTrackingFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("account:write")])
-  .inputValidator((data: z.input<typeof enableHoldingsTrackingInputSchema>) =>
+  .validator((data: z.input<typeof enableHoldingsTrackingInputSchema>) =>
     enableHoldingsTrackingInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -1216,7 +1216,7 @@ export async function reactivateAccountForFamily({
 
 export const archiveAccountFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("account:write")])
-  .inputValidator((data: z.input<typeof accountIdActionInputSchema>) =>
+  .validator((data: z.input<typeof accountIdActionInputSchema>) =>
     accountIdActionInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -1229,7 +1229,7 @@ export const archiveAccountFn = createServerFn({ method: "POST" })
 
 export const reactivateAccountFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("account:write")])
-  .inputValidator((data: z.input<typeof accountIdActionInputSchema>) =>
+  .validator((data: z.input<typeof accountIdActionInputSchema>) =>
     accountIdActionInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -1392,7 +1392,7 @@ export async function getAccountDeletionImpactForFamily({
 
 export const getAccountDeletionImpactFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: z.input<typeof accountIdQuerySchema>) =>
+  .validator((data: z.input<typeof accountIdQuerySchema>) =>
     accountIdQuerySchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -1640,7 +1640,7 @@ export async function deleteAccountForFamily({
 
 export const deleteAccountFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("account:write")])
-  .inputValidator((data: z.input<typeof accountIdActionInputSchema>) =>
+  .validator((data: z.input<typeof accountIdActionInputSchema>) =>
     accountIdActionInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {

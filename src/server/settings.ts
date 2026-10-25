@@ -210,7 +210,7 @@ export const getSettingsOverviewFn = createServerFn({ method: "GET" })
 
 export const updateFamilyPreferencesFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("settings:write")])
-  .inputValidator((data: UpdateFamilyPreferencesInput) =>
+  .validator((data: UpdateFamilyPreferencesInput) =>
     updateFamilyPreferencesInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -223,9 +223,7 @@ export const updateFamilyPreferencesFn = createServerFn({ method: "POST" })
 
 export const updateProfileFn = createServerFn({ method: "POST" })
   .middleware([familyMiddleware])
-  .inputValidator((data: UpdateProfileInput) =>
-    updateProfileInputSchema.parse(data)
-  )
+  .validator((data: UpdateProfileInput) => updateProfileInputSchema.parse(data))
   .handler(async ({ data, context }) => {
     return await updateProfileForUser({
       data,

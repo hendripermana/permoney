@@ -125,7 +125,7 @@ export async function deleteSmartRuleForFamily({
 
 export const createSmartRuleFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.infer<typeof createRuleSchema>) =>
+  .validator((data: z.infer<typeof createRuleSchema>) =>
     createRuleSchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -141,7 +141,7 @@ export const createSmartRuleFn = createServerFn({ method: "POST" })
  */
 export const deleteSmartRuleFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator(z.object({ id: z.string() }))
+  .validator(z.object({ id: z.string() }))
   .handler(async ({ data, context }) => {
     return await deleteSmartRuleForFamily({
       id: data.id,
@@ -166,7 +166,7 @@ const suggestSmartRuleSchema = z.object({ description: z.string() })
 
 export const suggestSmartRuleFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: z.infer<typeof suggestSmartRuleSchema>) =>
+  .validator((data: z.infer<typeof suggestSmartRuleSchema>) =>
     suggestSmartRuleSchema.parse(data)
   )
   .handler(async ({ data, context }) => {

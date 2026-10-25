@@ -257,7 +257,7 @@ export async function getPendingBalanceCorrectionForFamily({
 
 export const getPendingBalanceCorrectionFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: z.infer<typeof pendingBalanceCorrectionQuerySchema>) =>
+  .validator((data: z.infer<typeof pendingBalanceCorrectionQuerySchema>) =>
     pendingBalanceCorrectionQuerySchema.parse(data)
   )
   .handler(async ({ data, context }) => {
@@ -430,7 +430,7 @@ export const applyBalanceCorrectionInputSchema = z.object({
 
 export const applyBalanceCorrectionFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: z.infer<typeof applyBalanceCorrectionInputSchema>) =>
+  .validator((data: z.infer<typeof applyBalanceCorrectionInputSchema>) =>
     applyBalanceCorrectionInputSchema.parse(data)
   )
   .handler(async ({ data, context }) => {

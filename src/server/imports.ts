@@ -1074,7 +1074,7 @@ export async function getImportBatchForFamily({
 
 export const createImportBatchFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: unknown) => createImportBatchInputSchema.parse(data))
+  .validator((data: unknown) => createImportBatchInputSchema.parse(data))
   .handler(async ({ data, context }) =>
     createImportBatchForFamily({
       data,
@@ -1085,7 +1085,7 @@ export const createImportBatchFn = createServerFn({ method: "POST" })
 
 export const reviewImportRowsFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: unknown) => reviewImportRowsInputSchema.parse(data))
+  .validator((data: unknown) => reviewImportRowsInputSchema.parse(data))
   .handler(async ({ data, context }) =>
     reviewImportRowsForFamily({
       data,
@@ -1096,7 +1096,7 @@ export const reviewImportRowsFn = createServerFn({ method: "POST" })
 
 export const promoteImportBatchFn = createServerFn({ method: "POST" })
   .middleware([requireCapability("ledger:write")])
-  .inputValidator((data: unknown) => promoteImportBatchInputSchema.parse(data))
+  .validator((data: unknown) => promoteImportBatchInputSchema.parse(data))
   .handler(async ({ data, context }) =>
     promoteImportBatchForFamily({
       data,
@@ -1107,7 +1107,7 @@ export const promoteImportBatchFn = createServerFn({ method: "POST" })
 
 export const getImportBatchFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: unknown) => getImportBatchInputSchema.parse(data))
+  .validator((data: unknown) => getImportBatchInputSchema.parse(data))
   .handler(async ({ data, context }) =>
     getImportBatchForFamily({
       data,

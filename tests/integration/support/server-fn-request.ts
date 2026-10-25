@@ -1,4 +1,4 @@
-import { requestHandler } from "@tanstack/react-start/server"
+import { createServerEntry } from "@tanstack/react-start/server"
 
 // =============================================================================
 // Execute a REAL createServerFn through its SERVER path inside an integration
@@ -16,10 +16,10 @@ import { requestHandler } from "@tanstack/react-start/server"
 // `__executeServer`, which is what an incoming RPC invokes. This helper calls
 // that, inside the two request-scoped stores the framework sets up per request:
 //
-//   1. the h3 event store — provided by the framework's public `requestHandler`
-//      wrapper. `getRequest()` (used by `authMiddleware`) reads it, so the
-//      factory's authenticated `Request` (session cookie headers) flows through
-//      the same path a browser call would.
+//   1. the Start request-scope store — established by the framework's public
+//      `createServerEntry` wrapper. `getRequest()` (used by `authMiddleware`)
+//      reads it, so the factory's authenticated `Request` (session cookie
+//      headers) flows through the same path a browser call would.
 //   2. TanStack Start's storage context — a per-process AsyncLocalStorage keyed
 //      by the registered symbol below. `createServerFn` reads it for start
 //      options and the request context. Because it is a `globalThis` singleton
@@ -141,14 +141,15 @@ export async function callServerFnAs(
     error: new Error("server function did not run"),
   }
 
-  const handler = requestHandler(async () =>
-    getStartStorage().run(createStartContext(user.request), async () => {
-      const { result, error } = await execute({ data })
-      outcome =
-        error === undefined ? { ok: true, result } : { ok: false, error }
-      return new Response(null, { status: 204 })
-    })
-  )
+  const handler = createServerEntry({
+    fetch: async () =>
+      getStartStorage().run(createStartContext(user.request), async () => {
+        const { result, error } = await execute({ data })
+        outcome =
+          error === undefined ? { ok: true, result } : { ok: false, error }
+        return new Response(null, { status: 204 })
+      }),
+  }).fetch
 
   await handler(user.request, undefined)
   return outcome

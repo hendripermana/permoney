@@ -379,9 +379,7 @@ export async function getInsightsForFamily({
 
 export const getInsightsFn = createServerFn({ method: "GET" })
   .middleware([familyMiddleware])
-  .inputValidator((data: GetInsightsInput) =>
-    getInsightsInputSchema.parse(data)
-  )
+  .validator((data: GetInsightsInput) => getInsightsInputSchema.parse(data))
   .handler(async ({ data, context }) => {
     return await getInsightsForFamily({
       data,
