@@ -424,14 +424,29 @@ function main() {
     const jscpd = resolveJscpd()
 
     let baseline = null
+    let baselineWasUnreadable = false
     if (existsSync(BASELINE_PATH)) {
-      baseline = parseBaseline(readFileSync(BASELINE_PATH, "utf8"))
-      if (!UPDATE_BASELINE && baseline.cloneCount !== BASELINE_CLONES) {
-        throw new GuardError(
-          `baseline ${BASELINE_PATH} sums to ${baseline.cloneCount} clone fingerprint(s), ` +
-            `but BASELINE_CLONES is ${BASELINE_CLONES}. Update both in the same reviewed change; ` +
-            "never edit one without the other."
-        )
+      if (UPDATE_BASELINE) {
+        // The documented recovery from a corrupt baseline is this command.
+        // Regenerate from scratch (loudly) instead of dead-ending on the
+        // corrupt file; the source-floor check below still guards scope.
+        try {
+          baseline = parseBaseline(readFileSync(BASELINE_PATH, "utf8"))
+        } catch (error) {
+          baselineWasUnreadable = true
+          console.error(
+            `⚠️  Existing baseline is unreadable (${error.message}); regenerating it from the current scan.`
+          )
+        }
+      } else {
+        baseline = parseBaseline(readFileSync(BASELINE_PATH, "utf8"))
+        if (baseline.cloneCount !== BASELINE_CLONES) {
+          throw new GuardError(
+            `baseline ${BASELINE_PATH} sums to ${baseline.cloneCount} clone fingerprint(s), ` +
+              `but BASELINE_CLONES is ${BASELINE_CLONES}. Update both in the same reviewed change; ` +
+              "never edit one without the other."
+          )
+        }
       }
     } else if (!UPDATE_BASELINE) {
       throw new GuardError(
@@ -491,6 +506,11 @@ function main() {
       )
       if (scan.stdout) {
         console.log(scan.stdout)
+      }
+      if (baselineWasUnreadable) {
+        console.log(
+          "   ℹ️  The previous baseline was unreadable; every current fingerprint was written fresh. Review the baseline diff carefully."
+        )
       }
       if (report.sources > BASELINE_SOURCES) {
         console.log(
