@@ -104,7 +104,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "@vitest/coverage-v8": "5.0.3",
-    "ai": "^7.0.130",
+    "ai": "^7.0.148",
     "dotenv": "^17.4.2",
     "e2e": "^0.21.2",
     "fast-check": "^4.10.2",
