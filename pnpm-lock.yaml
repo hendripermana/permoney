@@ -120,7 +120,7 @@ importers:
         version: 0.4.6(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       nitro:
         specifier: 3.0.260610-beta
-        version: 3.0.260610-beta(@electric-sql/pglite@0.4.3)(@libsql/client@0.17.3)(@upstash/redis@1.39.0)(@voidzero-dev/vite-plus-core@1.1.0(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(typescript@6.0.3))(chokidar@5.0.0)(dotenv@17.4.2)(giget@3.3.1)(jiti@2.7.0)(lru-cache@11.5.3)(mysql2@3.24.4(@types/node@26.6.5))
+        version: 3.0.260610-beta(@electric-sql/pglite@0.4.3)(@libsql/client@0.17.3)(@upstash/redis@1.39.0)(@voidzero-dev/vite-plus-core@1.1.0(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(typescript@6.0.3))(chokidar@5.0.0)(dotenv@18.0.9)(giget@3.3.1)(jiti@2.7.0)(lru-cache@11.5.3)(mysql2@3.24.4(@types/node@26.6.5))
       papaparse:
         specifier: ^5.7.0
         version: 5.7.0
@@ -213,8 +213,8 @@ importers:
         specifier: ^7.0.130
         version: 7.0.130(zod@4.6.7)
       dotenv:
-        specifier: ^17.4.2
-        version: 17.4.2
+        specifier: ^18.0.9
+        version: 18.0.9
       e2e:
         specifier: ^0.21.2
         version: 0.21.2(ai@7.0.130(zod@4.6.7))
@@ -3617,6 +3617,9 @@ packages:
   '@types/esrecurse@4.3.1':
     resolution: {integrity: sha512-xJBAbDifo5hpffDBuHl0Y8ywswbiAp/Wi7Y/GtAgSlZyIABppyurxVueOPE8LUQOxdlgi6Zqce7uoEpqNTeiUw==}
 
+  '@types/estree@1.0.10':
+    resolution: {integrity: sha512-lTyOMnOcmRBzdCv6/4zUZCrEhV0xrqQiUZBZtVcbmLHBXKLnN8q89v/wKRF/Q0HbwVsqbIG3o5HDoFl9sduM+g==}
+
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
 
@@ -3631,6 +3634,9 @@ packages:
 
   '@types/node@26.6.5':
     resolution: {integrity: sha512-uMzsv9stDdofIZBx4UGh4Z9ZgXnGC9seRDscilBcTHAeOFk67MZg/k9bWVfO+bk4qZmG+l52hRnLwUiH2LnJTg==}
+
+  '@types/node@26.6.6':
+    resolution: {integrity: sha512-MzQj+8Kx3XI40OmUAE6Qoh58ZMNstNNMwn2nfd3qWsfe7nDNSqJNzes4njhz6AHwrSHOffSLwXU6yb474Q4aog==}
 
   '@types/papaparse@5.5.2':
     resolution: {integrity: sha512-gFnFp/JMzLHCwRf7tQHrNnfhN4eYBVYYI897CGX4MY1tzY9l2aLkVyx2IlKZ/SAqDbB3I1AOZW5gTMGGsqWliA==}
@@ -4786,6 +4792,11 @@ packages:
     resolution: {integrity: sha512-nI4U3TottKAcAD9LLud4Cb7b2QztQMUEfHbvhTH09bqXTxnSie8WnjPALV/WMCrJZ6UV/qHJ6L03OqO3LcdYZw==}
     engines: {node: '>=12'}
 
+  dotenv@18.0.9:
+    resolution: {integrity: sha512-3fVOW4cB02R066PUSwn8O4TJyz9NckQl7F81blIbaq9jKBm2tSmOKky7ZHIXzGvkVPXCSn6jkpziBPZdGFs8Tw==}
+    engines: {node: '>=12'}
+    hasBin: true
+
   dunder-proto@1.0.1:
     resolution: {integrity: sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==}
     engines: {node: '>= 0.4'}
@@ -5454,8 +5465,8 @@ packages:
   jose@6.2.13:
     resolution: {integrity: sha512-7TIg10ZE1x82YediN+lcrPNvGMKge9yFHQD+Qho/b8y2adfugU3AsvvHfxV0fzyFllT6l9xCjf4RWY9g/Z9PJQ==}
 
-  js-base64@3.9.4:
-    resolution: {integrity: sha512-PtOMXpEGuP0RRiRXsjzHzl44dMHxSu2CPvAhinupR1tBa88me+1DPqsobl7eupn5UukjLkln1ZnAOAOXOrYG0Q==}
+  js-base64@3.9.5:
+    resolution: {integrity: sha512-u0CFDUca8BbBRkMkF/fDcuoLCx9nTNbXdVtbjVnBqySA9E221u0uYKbACiYGOEk1heY69qM4caeX3OwjSyxevw==}
 
   js-tokens@10.0.0:
     resolution: {integrity: sha512-lM/UBzQmfJRo9ABXbPWemivdCW8V2G8FHaHdypQaIy523snUjog0W71ayWXTjiR+ixeMyVHN2XcpnTd/liPg/Q==}
@@ -7848,7 +7859,7 @@ snapshots:
     dependencies:
       '@libsql/core': 0.17.4
       '@libsql/hrana-client': 0.10.0
-      js-base64: 3.9.4
+      js-base64: 3.9.5
       libsql: 0.5.29
       promise-limit: 2.7.0
     transitivePeerDependencies:
@@ -7858,7 +7869,7 @@ snapshots:
 
   '@libsql/core@0.17.4':
     dependencies:
-      js-base64: 3.9.4
+      js-base64: 3.9.5
     optional: true
 
   '@libsql/darwin-arm64@0.5.29':
@@ -7870,7 +7881,7 @@ snapshots:
   '@libsql/hrana-client@0.10.0':
     dependencies:
       '@libsql/isomorphic-ws': 0.1.5
-      js-base64: 3.9.4
+      js-base64: 3.9.5
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -10311,6 +10322,8 @@ snapshots:
 
   '@types/esrecurse@4.3.1': {}
 
+  '@types/estree@1.0.10': {}
+
   '@types/estree@1.0.9': {}
 
   '@types/geojson@7946.0.16': {}
@@ -10322,6 +10335,11 @@ snapshots:
   '@types/node@26.6.5':
     dependencies:
       undici-types: 8.9.0
+
+  '@types/node@26.6.6':
+    dependencies:
+      undici-types: 8.9.0
+    optional: true
 
   '@types/papaparse@5.5.2':
     dependencies:
@@ -10347,7 +10365,7 @@ snapshots:
 
   '@types/ws@8.18.2':
     dependencies:
-      '@types/node': 26.6.5
+      '@types/node': 26.6.6
     optional: true
 
   '@typescript-eslint/eslint-plugin@8.62.0(@typescript-eslint/parser@8.62.0(eslint@10.2.1(jiti@2.7.0))(typescript@6.0.3))(eslint@10.2.1(jiti@2.7.0))(typescript@6.0.3)':
@@ -11268,6 +11286,8 @@ snapshots:
 
   dotenv@17.4.2: {}
 
+  dotenv@18.0.9: {}
+
   dunder-proto@1.0.1:
     dependencies:
       call-bind-apply-helpers: 1.0.2
@@ -11457,7 +11477,7 @@ snapshots:
       '@humanfs/node': 0.16.8
       '@humanwhocodes/module-importer': 1.0.1
       '@humanwhocodes/retry': 0.4.3
-      '@types/estree': 1.0.9
+      '@types/estree': 1.0.10
       ajv: 6.15.0
       cross-spawn: 7.0.6
       debug: 4.4.3
@@ -11921,7 +11941,7 @@ snapshots:
 
   jose@6.2.13: {}
 
-  js-base64@3.9.4:
+  js-base64@3.9.5:
     optional: true
 
   js-tokens@10.0.0: {}
@@ -12275,7 +12295,7 @@ snapshots:
 
   nf3@0.3.17: {}
 
-  nitro@3.0.260610-beta(@electric-sql/pglite@0.4.3)(@libsql/client@0.17.3)(@upstash/redis@1.39.0)(@voidzero-dev/vite-plus-core@1.1.0(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(typescript@6.0.3))(chokidar@5.0.0)(dotenv@17.4.2)(giget@3.3.1)(jiti@2.7.0)(lru-cache@11.5.3)(mysql2@3.24.4(@types/node@26.6.5)):
+  nitro@3.0.260610-beta(@electric-sql/pglite@0.4.3)(@libsql/client@0.17.3)(@upstash/redis@1.39.0)(@voidzero-dev/vite-plus-core@1.1.0(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(typescript@6.0.3))(chokidar@5.0.0)(dotenv@18.0.9)(giget@3.3.1)(jiti@2.7.0)(lru-cache@11.5.3)(mysql2@3.24.4(@types/node@26.6.5)):
     dependencies:
       consola: 3.4.2
       crossws: 0.4.6(srvx@0.11.17)
@@ -12292,7 +12312,7 @@ snapshots:
       unenv: 2.0.0-rc.24
       unstorage: 2.0.0-alpha.7(@upstash/redis@1.39.0)(chokidar@5.0.0)(db0@0.3.4(@electric-sql/pglite@0.4.3)(@libsql/client@0.17.3)(mysql2@3.24.4(@types/node@26.6.5)))(lru-cache@11.5.3)(ofetch@2.0.0-alpha.3)
     optionalDependencies:
-      dotenv: 17.4.2
+      dotenv: 18.0.9
       giget: 3.3.1
       jiti: 2.7.0
       vite: '@voidzero-dev/vite-plus-core@1.1.0(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(typescript@6.0.3)'
