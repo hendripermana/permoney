@@ -40,8 +40,8 @@ What the triage found:
   `dependencies`, pulling `express`, `@modelcontextprotocol/sdk`, `socks`, and
   `undici` into the "production" graph. The structural fix (move it to
   `devDependencies`, and audit `tailwindcss`/`@tailwindcss/vite`/
-  `@tanstack/router-plugin`/`tw-animate-css` for the same class) is tracked
-  separately.
+  `@tanstack/router-plugin`/`tw-animate-css` for the same class) landed on
+  2026-11-01 — see the re-scan below.
 - `vite-plus` 1.1.0 → 1.3.0 (which carries the `@vitest/ui` +
   `@vitest/browser` patches) stays blocked pending the documented ARM64
   build-and-boot gate (`.github/dependabot.yml`), as does anything that
@@ -66,7 +66,9 @@ ranges. Two deliberate `package.json` edits were made — raising the `zod`
 declared floor to the patched line, and one scoped override (`e2e>zod`:
 `>=4.6.6`) because the `e2e@0.21.2` dev dependency hard-pins
 `"zod": "4.6.1"` exactly, which alert #26 (`GHSA-mrhx-c7xc-m3w5`, fixed in
-4.6.6) would otherwise have survived the merge. Everything below moved only
+4.6.6) would otherwise have survived the merge. The override drops as soon
+as `e2e`'s own manifest pins zod ≥ 4.6.6; until then it is deliberately
+stronger than upstream. Everything below moved only
 because a parent required it:
 
 - `content-disposition` 1.1.0 → 2.0.1 (**major**) — required by
@@ -81,6 +83,39 @@ because a parent required it:
 - Patch drift: express-rate-limit, open, qs, on-finished, bundle-name;
   `@hono/node-server` peer widened (`^4 || ^5.0.0-0`); powershell-utils →
   wsl-utils package swap below `open`.
+
+### Post-refresh re-scan (2026-11-01)
+
+The re-locked manifest dropped the open Dependabot alert count **32 → 8**
+(zod alert #26 confirmed cleared). All eight are dev/build chains. The
+2026-11-01 branch then reclassified the build-only tooling (`shadcn`,
+`tailwindcss`, `@tailwindcss/vite`, `@tanstack/router-plugin`,
+`tw-animate-css` — none imported by `src/` at runtime) to `devDependencies`,
+so the whole `shadcn` subtree is dev-only, and refreshed the remaining
+in-range transitive resolution:
+
+- **systeminformation 5.33.8** — GHSA-3f7j-7jwc-fxfj (high),
+  GHSA-7648-jmwf-vw7j (medium), GHSA-4vjg-vx72-qq4g (low): **cleared here**.
+  Parent `@dotenvx/dotenvx@1.75.1` (sole caller: the `shadcn` CLI subtree)
+  declares `^5.22.11`, so the resolution was refreshed to 5.33.19 directly —
+  no override, and deliberately only that edge re-resolved (an `pnpm update`
+  sweep would have drifted four unrelated dev chains: js-base64, ws,
+  @types/estree, @types/node).
+- **minimatch 10.2.5/10.2.6** — GHSA-g3hv-75wg-m249 (medium), fixed only at
+  **11.0.1** (semver-major for its dev-tooling parents: `@tanstack/
+  eslint-config` chain and `@ts-morph/common` under `shadcn`). Not forced;
+  scheduled through the next Dependabot PR cycle or a scoped-override
+  decision.
+- **deepmerge 4.3.1** — GHSA-gcqx-w48m-w2h4 (low): **no fixed version exists**
+  (`first_patched_version: null`). Sole parent is the `shadcn` CLI subtree,
+  dev-only since 2026-11-01. Standing watch item; revisit when upstream ships.
+- **vitest trio** (`@vitest/ui`, `@vitest/browser`, `vite-plus`, medium
+  GHSA-p458-7748-mcp3) — accepted by design: vite-plus owns vitest and its
+  upgrades ride the ARM64 build-and-boot gate (`.github/dependabot.yml`).
+
+Net after this landing: the open-alert set should sit at **5** — the vitest
+trio (excluded by design), minimatch (major fix scheduled), deepmerge (no fix
+upstream yet).
 
 ### The trigger decision
 
