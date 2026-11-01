@@ -59,6 +59,29 @@ ingress markers (`node_modules/.pnpm/<pkg>@…` regions in the traced bundle).
 In the 2026-10-25 triage, exactly one critical/high package had non-zero
 markers (`zod`, 20 refs); every other critical/high package had 0.
 
+### Collateral transitive drift — unrequested, range-honoring (2026-11-01 refresh)
+
+The lockfile refresh also re-resolved upstream manifests inside their declared
+ranges. Two deliberate `package.json` edits were made — raising the `zod`
+declared floor to the patched line, and one scoped override (`e2e>zod`:
+`>=4.6.6`) because the `e2e@0.21.2` dev dependency hard-pins
+`"zod": "4.6.1"` exactly, which alert #26 (`GHSA-mrhx-c7xc-m3w5`, fixed in
+4.6.6) would otherwise have survived the merge. Everything below moved only
+because a parent required it:
+
+- `content-disposition` 1.1.0 → 2.0.1 (**major**) — required by
+  `express@5.3.0`, whose sole caller chain is the `shadcn` CLI subtree
+  (dev-CLI; never imported by `src/`, never shipped in `.output`).
+- `express` 5.2.1 → 5.3.0, `shadcn` 4.21.3 → 4.22.1 and `@shadcn/registry`
+  0.1.2 → 0.2.0 — the registry/shadcn bump is what retires the last resolved
+  `zod@3.25.76` instance (their zod spec flipped `^3.24.1` → `^4.2.0`).
+  This, not the zod floor-raise alone, is what removed zod 3 from the tree.
+- Data-only widths: browserslist 4.28.9 → 4.29.4 (+ caniuse-lite /
+  electron-to-chromium / node-releases / baseline-browser-mapping series).
+- Patch drift: express-rate-limit, open, qs, on-finished, bundle-name;
+  `@hono/node-server` peer widened (`^4 || ^5.0.0-0`); powershell-utils →
+  wsl-utils package swap below `open`.
+
 ### The trigger decision
 
 The trigger was evaluated and **the no-CI-audit-job decision stands**:

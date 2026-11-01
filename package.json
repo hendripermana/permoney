@@ -126,7 +126,8 @@
       "@tanstack/react-router": "$@tanstack/react-router",
       "@tanstack/react-start": "$@tanstack/react-start",
       "@tanstack/start-server-core": "1.169.44",
-      "kysely": "0.28.17"
+      "kysely": "0.28.17",
+      "e2e>zod": ">=4.6.6"
     },
     "onlyBuiltDependencies": [
       "@prisma/engines",

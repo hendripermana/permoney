@@ -10,6 +10,7 @@ overrides:
   '@tanstack/react-start': ^1.169.3
   '@tanstack/start-server-core': 1.169.44
   kysely: 0.28.17
+  e2e>zod: '>=4.6.6'
 
 importers:
 
@@ -7207,9 +7208,6 @@ packages:
     peerDependencies:
       zod: ^3.25.28 || ^4
 
-  zod@4.6.1:
-    resolution: {integrity: sha512-341aRWQsve0rvronKNTqZpjmzdbUDlFuzHaI/XLg/Ej82qffDJRRfBTCuv7+9q/rMjB6LSLyEBnW4InJeMtt/Q==}
-
   zod@4.6.7:
     resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
 
@@ -11291,7 +11289,7 @@ snapshots:
       oxc-transform: 0.153.0
       picocolors: 1.1.1
       pixelmatch: 8.0.0
-      zod: 4.6.1
+      zod: 4.6.7
     optionalDependencies:
       ai: 7.0.130(zod@4.6.7)
 
@@ -13690,7 +13688,5 @@ snapshots:
   zod-to-json-schema@3.25.2(zod@4.6.7):
     dependencies:
       zod: 4.6.7
-
-  zod@4.6.1: {}
 
   zod@4.6.7: {}
