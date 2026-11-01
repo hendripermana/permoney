@@ -445,9 +445,12 @@ Dependabot group:
 
 ## Dependency audit
 
-There is no dependency-audit step in CI, on purpose — the findings are all
-transitive dev-tooling dependencies (most of them owned by `vite-plus` or
-`prisma`, and unfixable from this repository), the set is permanently red
-rather than flaky, and Dependabot's security alerts are the actionable
-channel. The measurement, the rule for when a finding _is_ actioned, and the
-re-check triggers are in [`docs/dependency-audit.md`](./dependency-audit.md).
+There is no dependency-audit step in CI, on purpose — Dependabot's security
+alerts plus the four guards in `vp run check` remain the actionable channel.
+The runtime-reachable `zod` finding was fixed via a lockfile refresh; findings
+must be triaged against the shipped `.output` artifact rather than treating
+`pnpm audit --prod` as proof of runtime reachability. The no-CI-audit-job
+decision stands; revisit if another runtime-direct finding appears outside a
+scheduled lockfile refresh. The measurement, the rule for when a finding _is_
+actioned, and the re-check triggers are in
+[`docs/dependency-audit.md`](./dependency-audit.md).
