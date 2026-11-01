@@ -3,6 +3,9 @@
 Measured **2026-09-20** with `vp pm audit -- --audit-level high`:
 **13 findings — 1 critical, 8 high, 4 moderate** (`pnpm audit` exits 1).
 
+_(The claim below held in September 2026. **Superseded by the
+2026-10-25 update below** — keep reading before acting on it.)_
+
 Every finding is a **transitive dependency of dev/build tooling**, not a
 runtime dependency:
 
@@ -17,6 +20,54 @@ runtime dependency:
 dependency that exists for Prisma's MySQL support. This deployment is
 Postgres-only (`@prisma/adapter-pg`, ADR-0003/ADR-0047), so no code path can
 reach it at runtime.
+
+## Update — 2026-10-25: the trigger above fired
+
+Dependabot alerts were enabled on 2026-10-24/25 and immediately reported
+**32 open alerts** (2 critical, 11 high) against the then-current lockfile —
+the finding set had grown well past the September measurement, and the
+central claim above was no longer true.
+
+What the triage found:
+
+- **`zod` is a direct production dependency and ships in the prod artifact**
+  (`.output/server/_libs/zod.mjs`). Alert GHSA-mrhx-c7xc-m3w5 (`zod`
+  4.6.5 → 4.6.6) was the exactly-one runtime-reachable finding of the 32. Per
+  the rule ("actioned immediately as a normal individually-reviewed upgrade"),
+  it was fixed via a lockfile refresh (zod ≥4.6.7 declared and resolved).
+- 19 of the 32 alerts trace to a single misclassification: `shadcn` — a
+  code-generation CLI, imported by no code under `src/` — sits in
+  `dependencies`, pulling `express`, `@modelcontextprotocol/sdk`, `socks`, and
+  `undici` into the "production" graph. The structural fix (move it to
+  `devDependencies`, and audit `tailwindcss`/`@tailwindcss/vite`/
+  `@tanstack/router-plugin`/`tw-animate-css` for the same class) is tracked
+  separately.
+- `vite-plus` 1.1.0 → 1.3.0 (which carries the `@vitest/ui` +
+  `@vitest/browser` patches) stays blocked pending the documented ARM64
+  build-and-boot gate (`.github/dependabot.yml`), as does anything that
+  needs to reinstall vitest through it.
+
+### Reachability method for this repo
+
+`pnpm audit --prod` is **not** a trustable runtime signal here: optional-peer
+edges (`better-auth ┄ vitest`, `@better-auth/prisma-adapter ┄ prisma`)
+promote dev-only tooling into the prod graph, and the flag disagrees with its
+own full mode on individual findings. The authoritative check is the shipped
+artifact: the prod image contains only `.output` (no `node_modules`), so
+reachability is measured by grepping the built `.output` for a package's
+ingress markers (`node_modules/.pnpm/<pkg>@…` regions in the traced bundle).
+In the 2026-10-25 triage, exactly one critical/high package had non-zero
+markers (`zod`, 20 refs); every other critical/high package had 0.
+
+### The trigger decision
+
+The trigger was evaluated and **the no-CI-audit-job decision stands**:
+Dependabot alerts plus the four guards in `vp run check` remain the
+actionable channel. A permanently-red `pnpm audit` job would still train
+reviewers to ignore red, and alert triage (installed vs reachable) is a
+judgment call that a nightly job would render either always-green or noisy.
+Revisit only if another runtime-direct finding appears outside a scheduled
+lockfile refresh.
 
 ## Why there is deliberately no audit step in CI
 
@@ -71,4 +122,6 @@ vp pm audit -- --audit-level high
 
 If a **runtime** dependency ever appears in the list, that is the trigger to
 reconsider a blocking CI gate — at that point the finding is actionable, which
-is what the gate is for.
+is what the gate is for. This trigger fired on 2026-10-25 (`zod` — direct
+production dependency, bundled in `.output`); see the update section above
+for what was done and what was decided.
