@@ -115,7 +115,45 @@ in-range transitive resolution:
 
 Net after this landing: the open-alert set should sit at **5** — the vitest
 trio (excluded by design), minimatch (major fix scheduled), deepmerge (no fix
-upstream yet).
+upstream yet). In practice it settled at **4**: `minimatch` stopped being
+reported before the next refresh even though the resolved versions did not
+move (see below), so that change came from the advisory side.
+
+### Second refresh — weekly Dependabot wave (2026-11-08)
+
+The 2026-11-01 cycle left ten Dependabot PRs queued. Nine were applied in one
+hand-authored refresh; the tenth (`vite-plus`) stays excluded by the ARM64
+build-and-boot gate. One `vp install` from the then-current `main` regenerated
+the lockfile, so the stale-base textual-merge class described in
+`.github/dependabot.yml` cannot occur: there is no second writer to the file.
+
+Direct bumps: `dotenv` 18.0.9 (no `src/` import; reachable only as
+`nitro`'s optional dependency, plus the dev scripts `prisma/seed*.ts`,
+`prisma.config.ts`, `scripts/verify-money-migration.mjs`),
+`@upstash/ratelimit` 2.2.0, `resend` 6.34.1, `@daypicker/react` 10.0.2,
+`@e2e-dev/web` 0.15.3, `ai` 7.0.156, `@playwright/test` 1.64.1,
+`@node-rs/argon2` 2.2.2, `shadcn` 4.23.0.
+
+Collateral changes worth recording:
+
+- `shadcn@4.23.0` **replaced its express-based MCP server dependency**
+  (`@modelcontextprotocol/sdk` → `@modelcontextprotocol/server`). The whole
+  `express` subtree leaves the lockfile, including
+  `content-disposition@2.0.1` — the only major called out in the previous
+  drift note. Nothing under `src/`, `prisma/`, `scripts/`, or `tests/`
+  imports `express`; the shadcn CLI is dev-only.
+- Range-honoring drift past the PR targets: `resend` 6.37.0,
+  `@playwright/test` 1.65.0, `ai` 7.0.165. These are the highest versions
+  satisfying the ranges Dependabot proposed at lockfile-generation time, not
+  extra decisions.
+- `@e2e-dev/web` is **exact-pinned at 0.15.3**, not range-bumped: 0.15.4
+  raised its peer floor to `e2e >=0.22.1 <1`, while this repository pins
+  `e2e@0.21.2`. A caret here resolves to 0.15.5 and breaks the
+  `test:e2e-army` lane. Lift the pin when `e2e` itself moves.
+
+Alert set after the wave: **4 open** — the vitest trio (excluded by design)
+and `deepmerge` (no fix upstream). `minimatch` is absent from the open set
+while the resolved versions remain 10.2.5/10.2.6.
 
 ### The trigger decision
 
