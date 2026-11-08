@@ -115,9 +115,11 @@ in-range transitive resolution:
 
 Net after this landing: the open-alert set should sit at **5** — the vitest
 trio (excluded by design), minimatch (major fix scheduled), deepmerge (no fix
-upstream yet). In practice it settled at **4**: `minimatch` stopped being
-reported before the next refresh even though the resolved versions did not
-move (see below), so that change came from the advisory side.
+upstream yet). That is where it stands: Dependabot briefly reported four
+during the refresh window, then its post-merge re-scan created a fresh
+`minimatch` alert (GHSA-g3hv-75wg-m249, 2026-11-08) while the resolved
+versions stayed at 10.2.5/10.2.6. The advisory's vulnerable range is
+`>=7.0.0, <11.0.1`, so the original assessment holds.
 
 ### Second refresh — weekly Dependabot wave (2026-11-08)
 
@@ -151,9 +153,10 @@ Collateral changes worth recording:
   `e2e@0.21.2`. A caret here resolves to 0.15.5 and breaks the
   `test:e2e-army` lane. Lift the pin when `e2e` itself moves.
 
-Alert set after the wave: **4 open** — the vitest trio (excluded by design)
-and `deepmerge` (no fix upstream). `minimatch` is absent from the open set
-while the resolved versions remain 10.2.5/10.2.6.
+Alert set after the wave: **5 open** — the vitest trio (excluded by design),
+`minimatch` (fixed only at 11.0.1, semver-major for its dev-tooling parents),
+and `deepmerge` (no fix upstream). `minimatch` was re-reported by Dependabot's
+post-merge re-scan even though the resolved versions did not move.
 
 ### The trigger decision
 
