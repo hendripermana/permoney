@@ -57,6 +57,15 @@ updates:
           - version-update:semver-major
           - version-update:semver-minor
           - version-update:semver-patch
+      - dependency-name: "@e2e-dev/web"
+        # Exact-pinned at 0.15.3: 0.15.5 raised its peer floor to
+        # `e2e >=0.22.1 <1`, while this repository pins e2e@0.21.2. A bot bump
+        # re-proposes the known-bad version every week. Remove this ignore
+        # when e2e itself moves.
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
     # Group all non-major updates into one PR per week to reduce noise;
     # majors and security patches still come as individual PRs.
     groups:

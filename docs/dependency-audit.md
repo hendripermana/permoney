@@ -148,7 +148,7 @@ Collateral changes worth recording:
   `@playwright/test` 1.65.0, `ai` 7.0.165. These are the highest versions
   satisfying the ranges Dependabot proposed at lockfile-generation time, not
   extra decisions.
-- `@e2e-dev/web` is **exact-pinned at 0.15.3**, not range-bumped: 0.15.4
+- `@e2e-dev/web` is **exact-pinned at 0.15.3**, not range-bumped: 0.15.5
   raised its peer floor to `e2e >=0.22.1 <1`, while this repository pins
   `e2e@0.21.2`. A caret here resolves to 0.15.5 and breaks the
   `test:e2e-army` lane. Lift the pin when `e2e` itself moves.
