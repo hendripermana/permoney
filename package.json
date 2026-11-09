@@ -86,7 +86,7 @@
   "devDependencies": {
     "@e2e-dev/web": "0.15.3",
     "@playwright/test": "^1.64.1",
-    "@rsbuild/core": "^2.2.14",
+    "@rsbuild/core": "^2.3.1",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/devtools-vite": "^0.8.5",
     "@tanstack/eslint-config": "^0.4.0",
@@ -99,7 +99,7 @@
     "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.1.2",
+    "@vitejs/plugin-react": "^6.2.1",
     "@vitest/coverage-v8": "5.0.3",
     "ai": "^7.0.156",
     "dotenv": "^18.0.9",
