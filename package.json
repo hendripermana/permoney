@@ -45,7 +45,7 @@
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
     "@remixicon/react": "^4.9.0",
-    "@tabler/icons-react": "^3.49.0",
+    "@tabler/icons-react": "^3.50.0",
     "@tanstack/db": "^0.15.2",
     "@tanstack/query-db-collection": "^1.4.8",
     "@tanstack/react-db": "^0.5.12",
