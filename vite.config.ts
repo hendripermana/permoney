@@ -75,6 +75,7 @@ const config = defineConfig({
       skipFull: false,
       include: [
         "src/lib/currency.ts",
+        "src/lib/holdings-nav.ts",
         "src/lib/money.ts",
         "src/lib/split-parity.ts",
         "src/lib/transaction-filters.ts",
@@ -87,10 +88,11 @@ const config = defineConfig({
         "scripts/**",
       ],
       thresholds: {
-        "src/lib/{currency,money,split-parity,transaction-filters}.ts": {
-          branches: 90,
-          lines: 90,
-        },
+        "src/lib/{currency,holdings-nav,money,split-parity,transaction-filters}.ts":
+          {
+            branches: 90,
+            lines: 90,
+          },
       },
     },
   },
