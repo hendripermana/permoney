@@ -145,3 +145,43 @@ idempotent replay, and holding revaluation from NAV.
   degrades, never corrupts or crashes.
 - The two-mode contract + weekend invariant are the non-obvious correctness edges
   a naive "fetch today's price" worker would get wrong.
+
+## Amendment — consumer contract for the NAV of the selected trade date (2026-11-08, #460)
+
+The worker above decides where NAV _comes from_. This amendment fixes how a
+CONSUMER (the Buy/Sell and Switch dialogs) asks for "the NAV of the day the trade
+happened", because `Holding.lastPriceMinor` is only "the newest quote a refresh
+has ever seen" — pricing a backdated trade from it is wrong.
+
+**The contract:**
+
+1. **The dialog's date is a local calendar day, sent as `asOfDate:
+   "YYYY-MM-DD"`.** The server compares it as **UTC midnight of that day**:
+   `MarketQuote.asOf <= <UTC midnight>`. A quote later in the same UTC day is
+   already outside the cutoff, and a quote from a future day is **never**
+   eligible. The time-of-day the user typed never influences the NAV.
+2. **A weekend/holiday needs no special case.** The newest eligible quote _is_
+   the previous trading day's NAV — the same flat-weekend invariant §3 already
+   gives the ingestion engine. The lookup never errors on a non-trading day.
+3. **The label names the RESOLVED quote's `asOf`, never the requested day** —
+   e.g. a Sunday trade priced by Friday's quote reads `NAV 14 Aug 2026 (from
+   market data)`. A request that resolves to nothing says so honestly
+   (`Last known price (newest quote 20 Aug 2026) — no NAV on or before 15 Aug
+   2026`); a later quote is a diagnostic, never a price.
+4. **Same-currency only; no FX conversion.** A cross-currency series resolves to
+   "no NAV", never to a silently mis-priced trade.
+5. **A Buy of an instrument the family does not hold yet has no NAV source** —
+   the price field stays manual (empty and typeable), exactly like a holding
+   with no market series behind it.
+6. **The cutoff is a DAY boundary, so an intraday series resolves to the
+   previous session.** A quote stored at 14:30Z on 14 Aug is OUTSIDE its own
+   day's cutoff (14 Aug 00:00Z), so a trade dated 14 Aug is priced by the
+   previous session's close. The primary case — a reksadana NAV — is stored at
+   UTC midnight, so a trade dated D includes D's own NAV. An intraday series
+   (a live last-price feed) therefore prices a trade at D-1's close, never at
+   D's intraday print.
+7. **Read-only.** The lookup mutates nothing — no ledger row, no balance, no
+   audit row, no idempotency record — and it never changes what
+   `recordTradeForFamily` / `recordSwitchForFamily` mean. It only _prefills_ a
+   price field; the user can always override it, and a failed or slow lookup
+   never blocks the trade.

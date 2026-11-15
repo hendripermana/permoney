@@ -134,8 +134,15 @@ const BASELINE_CLONES = 40
  * Analyzed source count at 1f86b13 (main). Scope anchor: printed on every run;
  * ratchet advice is only offered when the current scan saw at least this many
  * sources.
+ *
+ * Raised 305 -> 310 for the #460 NAV-prefill change, which added 5 analyzed
+ * source files (`src/lib/holdings-nav.ts`, `src/hooks/use-holding-nav.ts`,
+ * `src/lib/holdings-nav.test.ts`, `src/server/holdings-nav.test.ts`,
+ * `src/components/blocks/switch-dialog.test.tsx`). This is the scope anchor
+ * only -- `BASELINE_CLONES` and `scripts/jscpd-baseline.json` are untouched, so
+ * the gate still reports zero new clone fingerprints.
  */
-const BASELINE_SOURCES = 305
+const BASELINE_SOURCES = 310
 
 /** The engine that produced the fingerprints; baseline files are engine-specific. */
 const PINNED_JSCPD_VERSION = "5.4.2"

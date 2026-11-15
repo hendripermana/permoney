@@ -20,7 +20,10 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { DialogDateTimeField } from "@/components/blocks/dialog-date-time-field"
+import {
+  DialogDateTimeField,
+  toLocalDateInputValue,
+} from "@/components/blocks/dialog-date-time-field"
 import { MoneyInput } from "@/components/blocks/money-input"
 import { QuantityInput } from "@/components/blocks/quantity-input"
 import { formatCurrency } from "@/lib/currency"
@@ -33,10 +36,11 @@ import {
   unitsFromAmountScaled,
 } from "@/lib/holdings"
 import { INSTRUMENT_KIND_OPTIONS, type InstrumentKind } from "@/lib/instruments"
-import { parseMoneyInput, toDecimalString } from "@/lib/money"
+import { parseMoneyInput } from "@/lib/money"
 import { parseQuantityInput } from "@/lib/quantity-input"
 import { cn } from "@/lib/utils"
 import { createUuidV7 } from "@/lib/uuid-v7"
+import { useHoldingNavField } from "@/hooks/use-holding-nav"
 import type { HoldingRecord } from "@/routes/_protected/-account-holdings"
 import { recordTradeFn } from "@/server/holdings"
 
@@ -129,24 +133,16 @@ export function TradeDialog({
   const [basis, setBasis] = React.useState<Basis>("quantity")
   const [quantity, setQuantity] = React.useState<string>("")
   const [amount, setAmount] = React.useState<string>("")
-  // `null` = the user has not touched the Unit price field, so it shows the
-  // selected position's last known price as its DEFAULT (see `unitPrice`
-  // below). Derived-during-render instead of an effect that writes state when
-  // the instrument changes (CLAUDE.md §1 useEffect ban): once the user types,
-  // the draft wins and nothing ever clobbers their input.
-  const [unitPriceDraft, setUnitPriceDraft] = React.useState<string | null>(
-    null
-  )
   // SELL fee — ONE total number for every charge the platform takes on the
   // sale (platform fee + withdrawal/transfer fee combined — the single field
   // creators asked for). `feePayerDraft === null` = "same as the destination
   // account" (fee comes out of the proceeds → destination receives NET — the
   // common full-sell/withdraw-all case); an explicit pick = "charge this
   // cash account instead" (the platform debited elsewhere → destination
-  // receives the GROSS sale value). Sticky-draft pattern (like
-  // `unitPriceDraft`): derived during render, no effect, user's pick wins.
-  // State persists across a Buy↔Sell side flip, but is only ever READ (and
-  // submitted) while on Sell — a Buy cannot carry a fee (the server would
+  // receives the GROSS sale value). Sticky-draft pattern (like the unit-price
+  // draft the NAV hook owns): derived during render, no effect, user's pick
+  // wins. State persists across a Buy↔Sell side flip, but is only ever READ
+  // (and submitted) while on Sell — a Buy cannot carry a fee (the server would
   // reject it too, fail loud).
   const [feeDraft, setFeeDraft] = React.useState<string>("")
   const [feePayerDraft, setFeePayerDraft] = React.useState<string | null>(null)
@@ -183,25 +179,24 @@ export function TradeDialog({
     ) ?? null
   const heldQuantity = selectedHolding?.quantity ?? null
 
-  // The position's LAST KNOWN price — the same fallback chain the holdings list
-  // and `switch-dialog.tsx` already use (a fetched/manual last price, else the
-  // average unit cost). Deliberately NOT called a "live market price": not
-  // every instrument has fresh market data, so this is only the newest figure
-  // Permoney holds.
-  const lastKnownPriceMinor =
-    selectedHolding === null
-      ? null
-      : BigInt(
-          selectedHolding.lastPriceMinor ?? selectedHolding.avgUnitCostMinor
-        )
-  const lastKnownPriceInput =
-    lastKnownPriceMinor === null
-      ? ""
-      : toDecimalString(lastKnownPriceMinor, currencyCode)
-
-  // Default, never a lock: prefilled from the position while untouched, fully
-  // editable the moment the user types.
-  const unitPrice = unitPriceDraft ?? lastKnownPriceInput
+  // Issue #460 / ADR-0053 amendment — price THIS trade at the NAV of the date
+  // the user picked, not the holding's stale `lastPriceMinor`. The hook owns the
+  // non-blocking lookup, the per-instrument sticky override, and the label /
+  // restore copy; a pending or failed lookup simply leaves the fallback price in
+  // the field and submit enabled.
+  const navField = useHoldingNavField({
+    // The SELECTION (an instrument id, or the "new instrument" sentinel) — the
+    // draft belongs to it. A "new instrument" selection has NO holding and
+    // therefore NO NAV source: the price field is empty and fully typeable.
+    selectionKey: selectedInstrumentId,
+    instrumentId: selectedHolding?.instrument.id ?? null,
+    marketInstrumentId: selectedHolding?.instrument.marketInstrumentId ?? null,
+    lastPriceMinor: selectedHolding?.lastPriceMinor ?? null,
+    avgUnitCostMinor: selectedHolding?.avgUnitCostMinor ?? null,
+    currency: currencyCode,
+    asOfDate: toLocalDateInputValue(date),
+  })
+  const unitPrice = navField.value
 
   const unitPriceMinor = React.useMemo<bigint | null>(() => {
     if (unitPrice.trim() === "") return null
@@ -694,7 +689,7 @@ export function TradeDialog({
             <div className="flex flex-col gap-2">
               <Label
                 htmlFor="trade-unit-price"
-                title="Price per unit for THIS trade. Prefilled with the last price Permoney knows for this position — overwrite it with the price you actually traded at."
+                title="Price per unit for THIS trade. Prefilled with the fund's NAV on the date above when market data exists — overwrite it with the price you actually traded at."
               >
                 Unit price ({currency})
               </Label>
@@ -702,25 +697,17 @@ export function TradeDialog({
                 id="trade-unit-price"
                 currency={currencyCode}
                 value={unitPrice}
-                onChange={setUnitPriceDraft}
+                onChange={navField.onChange}
                 placeholder="0"
                 required
+                hint={navField.descriptor?.label ?? null}
+                restoreLabel={
+                  navField.isModified
+                    ? (navField.descriptor?.restoreLabel ?? null)
+                    : null
+                }
+                onRestore={navField.restore}
               />
-              {lastKnownPriceMinor === null ? null : unitPrice ===
-                lastKnownPriceInput ? (
-                <p className="text-xs text-muted-foreground">
-                  Last known price — edit if this trade used a different one.
-                </p>
-              ) : (
-                <button
-                  type="button"
-                  className="w-fit text-xs text-muted-foreground underline-offset-2 hover:underline"
-                  onClick={() => setUnitPriceDraft(lastKnownPriceInput)}
-                >
-                  Use last known:{" "}
-                  {formatCurrency(lastKnownPriceMinor, currency)}
-                </button>
-              )}
             </div>
           </div>
 

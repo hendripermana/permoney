@@ -60,9 +60,9 @@ test.describe("switch fund UI (PER-259 Slice 4)", () => {
     // Switch by quantity (the default basis) — all 2 units of A.
     await dialog.getByLabel("Quantity").fill("2")
 
-    // Use A's current price (its average cost, 1,000,000/unit) so this switch
-    // realizes NO gain — proceeds equal A's removed cost basis exactly.
-    await dialog.getByRole("button", { name: /Use current/ }).click()
+    // A's price is prefilled from its last known price (here its average cost,
+    // 1,000,000/unit) so this switch realizes NO gain — proceeds equal A's
+    // removed cost basis exactly. No "Use current" click is needed.
 
     // B's price: 500,000/unit -> proceeds 2,000,000 buys exactly 4 units.
     await dialog.getByLabel(/^B's price/).fill("500000")

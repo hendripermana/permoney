@@ -34,6 +34,19 @@ type MoneyInputProps = {
    * input to make room for it (the transaction form's money fields).
    */
   readonly inputClassName?: string
+  /**
+   * The line that explains WHERE this number came from (e.g. "NAV 14 Aug 2026
+   * (from market data)"). Rendered under the preview; `null` renders nothing.
+   */
+  readonly hint?: string | null
+  /**
+   * When the typed value differs from the field's default, the caller offers a
+   * one-click way back to that default ("Use NAV 14 Aug 2026: Rp 1,234.56").
+   * The button REPLACES the hint line while it is set.
+   */
+  readonly restoreLabel?: string | null
+  /** Click handler for the restore button (required when `restoreLabel` is set). */
+  readonly onRestore?: () => void
 } & Omit<
   React.ComponentProps<typeof Input>,
   "value" | "onChange" | "type" | "inputMode" | "className"
@@ -45,6 +58,9 @@ export function MoneyInput({
   currency,
   className,
   inputClassName,
+  hint,
+  restoreLabel,
+  onRestore,
   ...inputProps
 }: MoneyInputProps) {
   // Pure derivation of the preview — recomputed only when the text or currency
@@ -90,6 +106,31 @@ export function MoneyInput({
             ? "Enter a valid amount"
             : ""}
       </p>
+      {/* WHERE this number came from — and the one-click way back to the
+          default once the user overrides it (the Buy/Sell + Switch price
+          field's NAV contract, issue #460).
+
+          The line's height is RESERVED (like the preview line above it) so
+          swapping the label for the restore button — or the hint appearing for
+          the first time — never pushes the dialog's footer button down
+          mid-interaction (the CI #379 "element is not stable" flake). The
+          container only exists for fields that opted into a hint, so every
+          other money field keeps its current layout. */}
+      {hint !== undefined || restoreLabel !== undefined ? (
+        <div className="min-h-[1rem]">
+          {restoreLabel !== null && restoreLabel !== undefined && onRestore ? (
+            <button
+              type="button"
+              className="w-fit text-xs text-muted-foreground underline-offset-2 hover:underline"
+              onClick={onRestore}
+            >
+              {restoreLabel}
+            </button>
+          ) : hint !== null && hint !== undefined ? (
+            <p className="text-xs text-muted-foreground">{hint}</p>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   )
 }

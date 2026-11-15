@@ -57,7 +57,8 @@ test.describe("position-event correction UI (PER-259 Slice 5)", () => {
     dialog = page.getByRole("dialog")
     await dialog.getByLabel("Fund name").fill(fundBName)
     await dialog.getByLabel("Quantity").fill("2")
-    await dialog.getByRole("button", { name: /Use current/ }).click()
+    // A's price is prefilled from its last known price (= its average cost
+    // here); no "Use current" click exists any more (issue #460).
     await dialog.getByLabel(/^B's price/).fill("500000")
     await dialog.getByRole("button", { name: "Record switch" }).click()
     await expect(page.getByRole("dialog")).toHaveCount(0)

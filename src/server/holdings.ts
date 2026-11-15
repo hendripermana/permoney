@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start"
 import type { Holding, Instrument, Valuation } from "@prisma/client"
 import { z } from "zod"
 import { CURRENCIES, type CurrencyCode } from "@/lib/data/currencies"
+import { parseCalendarDateUtcMidnight } from "@/lib/holdings-nav"
 import {
   isMarketInstrumentKind,
   marketQuoteToHoldingPriceMinor,
@@ -5877,5 +5878,222 @@ export const refreshHoldingPricesFn = createServerFn({ method: "POST" })
       data,
       familyId: context.familyId,
       user: context.user,
+    })
+  })
+
+// -----------------------------------------------------------------------------
+// GET — the NAV for the trade's SELECTED DATE (issue #460 / ADR-0053 amendment).
+// -----------------------------------------------------------------------------
+//
+// The Buy/Sell and Switch dialogs need "what was this fund's NAV on the day the
+// trade happened", not `Holding.lastPriceMinor` (which is merely the newest
+// quote a refresh has ever seen). The contract is deliberately the WEAKER,
+// read-only one:
+//
+//   * `asOfDate` is the user's LOCAL calendar day ("YYYY-MM-DD"). The server
+//     compares it as UTC midnight, so the cutoff is strictly
+//     `MarketQuote.asOf <= UTC midnight of that day` — a quote from later in the
+//     same day is impossible, and a quote from a FUTURE day is NEVER returned.
+//   * Weekends/holidays need no special case: the latest quote on/before the day
+//     IS the previous trading day's NAV (ADR-0053 §3's flat-weekend invariant).
+//   * Same-currency only (the same constraint linking already enforces). No FX
+//     conversion is attempted — a mismatch resolves to `none`, never a
+//     silently mis-priced trade.
+//
+// Read-only: no ledger mutation, no balance change, no audit row, no
+// idempotency record. It may safely be re-run by every dialog render/date
+// change. An absent quote on/before the day is a normal `fallback`, with the
+// newest quote's as-of surfaced ONLY as a diagnostic (never as a price).
+
+export const getNavForDateInputSchema = z.object({
+  /** The holdings `Instrument` (family-owned), not the global market series. */
+  instrumentId: z.string().min(1),
+  /** The dialog's local calendar day; the server interprets it as UTC midnight. */
+  asOfDate: z
+    .string()
+    .refine(
+      (value) => parseCalendarDateUtcMidnight(value) !== null,
+      "asOfDate must be a valid YYYY-MM-DD calendar day"
+    ),
+})
+
+/** Why a lookup could not produce a NAV — diagnostics, never a price. */
+export type NavUnavailableReason =
+  | "not_linked"
+  | "missing_market_instrument"
+  | "not_priceable"
+  | "currency_mismatch"
+  | "no_quote_on_or_before"
+  | "invalid_quote"
+
+export interface NavForDateResult {
+  /**
+   * `nav`      — a quote on/before the requested day exists and prices the
+   *              holding.
+   * `none`     — no usable NAV for that day (no quote on/before it, or the
+   *              series cannot price this holding at all).
+   * `unlinked` — the holding has no market series behind it.
+   */
+  status: "nav" | "none" | "unlinked"
+  /** The requested local calendar day, echoed back ("YYYY-MM-DD"). */
+  requestedDate: string
+  /**
+   * NAV per holding unit, MINOR units of the holding's currency (null unless
+   * `status === "nav"`).
+   */
+  priceMinor: string | null
+  /**
+   * The RESOLVED quote's as-of instant (ISO string) — the quote's own day, never
+   * the requested one (null unless `status === "nav"`).
+   */
+  asOf: string | null
+  /**
+   * As-of of the NEWEST quote at all, or null when the series has no quotes.
+   *
+   * Populated ONLY on the "no eligible quote" path, where it is the newest
+   * quote AFTER the requested day — a DIAGNOSTIC, never a price. It stays null
+   * on the happy path (no extra query is spent to find it).
+   */
+  newestQuoteAsOf: string | null
+  /** What produced the price ("market_quote"), or null when there is none. */
+  source: "market_quote" | null
+  /** Why there is no price (diagnostic), or null when there is one. */
+  reason: NavUnavailableReason | null
+}
+
+export async function getNavForDateForFamily({
+  data: rawData,
+  familyId,
+  userId,
+  runInTenantTransaction = scopedTenantTransaction,
+}: {
+  data: z.input<typeof getNavForDateInputSchema>
+  familyId: string
+  userId: string
+  runInTenantTransaction?: RunInTenantTransaction
+}): Promise<NavForDateResult> {
+  const data = getNavForDateInputSchema.parse(rawData)
+  // Re-parse after schema validation: the schema only proves the SHAPE, this
+  // is the actual cutoff instant (and rejects impossible days the regex allows,
+  // e.g. 2026-02-31 — the schema's refine already did too, belt and braces).
+  const asOfCutoff = parseCalendarDateUtcMidnight(data.asOfDate)
+  if (asOfCutoff === null) {
+    throw new HoldingError(`Invalid NAV date ${data.asOfDate}`)
+  }
+
+  const unavailable = (
+    reason: NavUnavailableReason,
+    newestQuoteAsOf: string | null = null
+  ): NavForDateResult => ({
+    status: reason === "not_linked" ? "unlinked" : "none",
+    requestedDate: data.asOfDate,
+    priceMinor: null,
+    asOf: null,
+    newestQuoteAsOf,
+    source: null,
+    reason,
+  })
+
+  return await runInTenantTransaction(familyId, userId, async (tx) => {
+    // Family-owned instrument (RLS + explicit familyId). A foreign or unknown
+    // id is the same rejection — never leak another tenant's instrument.
+    const instrument = await tx.instrument.findFirst({
+      where: { id: data.instrumentId, familyId },
+      select: { marketInstrumentId: true, quoteCurrency: true },
+    })
+    if (!instrument) {
+      throw new HoldingError(
+        `Instrument ${data.instrumentId} not found for this family`
+      )
+    }
+    if (instrument.marketInstrumentId === null) {
+      return unavailable("not_linked")
+    }
+
+    // MarketInstrument/MarketQuote are GLOBAL (no RLS, no tenant data).
+    const market = await tx.marketInstrument.findUnique({
+      where: { id: instrument.marketInstrumentId },
+      select: { id: true, kind: true, quoteCurrency: true },
+    })
+    if (!market) {
+      return unavailable("missing_market_instrument")
+    }
+    if (!isMarketInstrumentKind(market.kind) || market.kind === "fx") {
+      return unavailable("not_priceable")
+    }
+    // SAME-CURRENCY constraint, matching the link validation and the refresh
+    // path: cross-currency NAV would need FX, which this slice never guesses.
+    if (market.quoteCurrency !== instrument.quoteCurrency) {
+      return unavailable("currency_mismatch")
+    }
+
+    // The cutoff quote: newest observation at or before UTC midnight of the
+    // selected day. The createdAt tie-break keeps same-instant rows (concurrent
+    // providers) deterministic and picks the most recently written observation.
+    const cutoffQuote = await tx.marketQuote.findFirst({
+      where: {
+        marketInstrumentId: market.id,
+        asOf: { lte: asOfCutoff },
+      },
+      orderBy: [{ asOf: "desc" }, { createdAt: "desc" }],
+      select: { price: true, priceScale: true, asOf: true },
+    })
+
+    if (cutoffQuote) {
+      const marketKind: MarketPricedHoldingKind = market.kind
+      const currency = assertKnownCurrency(instrument.quoteCurrency)
+      const minorUnitConversion = BigInt(
+        CURRENCIES[currency].minorUnitConversion
+      )
+      try {
+        const priceMinor = marketQuoteToHoldingPriceMinor({
+          kind: marketKind,
+          priceScaled: cutoffQuote.price,
+          priceScale: cutoffQuote.priceScale,
+          minorUnitConversion,
+        })
+        return {
+          status: "nav",
+          requestedDate: data.asOfDate,
+          priceMinor: priceMinor.toString(),
+          asOf: cutoffQuote.asOf.toISOString(),
+          newestQuoteAsOf: null,
+          source: "market_quote",
+          reason: null,
+        }
+      } catch {
+        // A CORRUPT quote (non-positive price, or an fx `priceScale` 12 on a
+        // spot series) must DEGRADE, never 500 (ADR-0050 §4 graceful
+        // degradation): the dialog keeps its last-known/average-cost fallback
+        // and says there is no NAV for that day.
+        return unavailable("invalid_quote")
+      }
+    }
+
+    // No quote on/before the day. Surface the newest quote (if any) as a
+    // diagnostic so the dialog can say data has since arrived — but NEVER use
+    // its price for this trade.
+    const newestQuote = await tx.marketQuote.findFirst({
+      where: { marketInstrumentId: market.id },
+      orderBy: [{ asOf: "desc" }, { createdAt: "desc" }],
+      select: { asOf: true },
+    })
+    return unavailable(
+      "no_quote_on_or_before",
+      newestQuote?.asOf.toISOString() ?? null
+    )
+  })
+}
+
+export const getNavForDateFn = createServerFn({ method: "GET" })
+  .middleware([familyMiddleware])
+  .validator((data: z.input<typeof getNavForDateInputSchema>) =>
+    getNavForDateInputSchema.parse(data)
+  )
+  .handler(async ({ data, context }) => {
+    return await getNavForDateForFamily({
+      data,
+      familyId: context.familyId,
+      userId: context.user.id,
     })
   })

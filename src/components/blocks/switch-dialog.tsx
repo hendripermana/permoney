@@ -19,7 +19,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { DialogDateTimeField } from "@/components/blocks/dialog-date-time-field"
+import {
+  DialogDateTimeField,
+  toLocalDateInputValue,
+} from "@/components/blocks/dialog-date-time-field"
 import { MoneyInput } from "@/components/blocks/money-input"
 import { QuantityInput } from "@/components/blocks/quantity-input"
 import { formatCurrency } from "@/lib/currency"
@@ -31,10 +34,11 @@ import {
   unitsFromAmountScaled,
 } from "@/lib/holdings"
 import { INSTRUMENT_KIND_OPTIONS, type InstrumentKind } from "@/lib/instruments"
-import { parseMoneyInput, toDecimalString } from "@/lib/money"
+import { parseMoneyInput } from "@/lib/money"
 import { parseQuantityInput } from "@/lib/quantity-input"
 import { cn } from "@/lib/utils"
 import { createUuidV7 } from "@/lib/uuid-v7"
+import { useHoldingNavField } from "@/hooks/use-holding-nav"
 import type { HoldingRecord } from "@/routes/_protected/-account-holdings"
 import { recordSwitchFn } from "@/server/holdings"
 
@@ -99,7 +103,6 @@ export function SwitchDialog({
   const [basis, setBasis] = React.useState<Basis>("quantity")
   const [quantity, setQuantity] = React.useState<string>("")
   const [amount, setAmount] = React.useState<string>("")
-  const [fromUnitPrice, setFromUnitPrice] = React.useState<string>("")
   const [toInstrumentChoice, setToInstrumentChoice] = React.useState<string>(
     toHoldingOptions[0]?.instrument.id ?? NEW_INSTRUMENT
   )
@@ -113,11 +116,26 @@ export function SwitchDialog({
   const isQuantityBasis = basis === "quantity"
   const creatingInstrument = toInstrumentChoice === NEW_INSTRUMENT
 
-  // A's current price, for the "use current price" hint — the same fallback
-  // the server/holdings list uses (manual last price, else average cost).
-  const fromHoldingPriceHintMinor = fromHolding
-    ? BigInt(fromHolding.lastPriceMinor ?? fromHolding.avgUnitCostMinor)
-    : null
+  // Issue #460 / ADR-0053 amendment — SIDE A ONLY is pre-filled from the NAV of
+  // the selected trade date. B's price stays a manual input: the destination
+  // fund's own trade-day NAV is the same market series without a holding row
+  // yet, and pricing the buy leg from A's proceeds must stay an explicit user
+  // choice in this slice. The shared hook keeps this dialog's behavior identical
+  // to the Buy/Sell dialog's (query, sticky per-holding override, labels).
+  const navField = useHoldingNavField({
+    // The SOURCE selection — the draft belongs to it, so switching the source
+    // holding mid-dialog drops the typed price (the new source shows ITS own
+    // default) while changing the date keeps it.
+    selectionKey: fromHoldingId,
+    instrumentId: fromHolding?.instrument.id ?? null,
+    marketInstrumentId: fromHolding?.instrument.marketInstrumentId ?? null,
+    lastPriceMinor: fromHolding?.lastPriceMinor ?? null,
+    avgUnitCostMinor: fromHolding?.avgUnitCostMinor ?? null,
+    currency: currencyCode,
+    asOfDate: toLocalDateInputValue(date),
+  })
+
+  const fromUnitPrice = navField.value
 
   const fromUnitPriceMinor = React.useMemo<bigint | null>(() => {
     if (fromUnitPrice.trim() === "") return null
@@ -420,29 +438,27 @@ export function SwitchDialog({
               </div>
             )}
             <div className="flex flex-col gap-2">
-              <Label htmlFor="switch-from-price">A's price ({currency})</Label>
+              <Label
+                htmlFor="switch-from-price"
+                title="A's price for THIS switch. Prefilled with the fund's NAV on the date above when market data exists — overwrite it with the price you actually switched at."
+              >
+                A's price ({currency})
+              </Label>
               <MoneyInput
                 id="switch-from-price"
                 currency={currencyCode}
                 value={fromUnitPrice}
-                onChange={setFromUnitPrice}
+                onChange={navField.onChange}
                 placeholder="0"
                 required
+                hint={navField.descriptor?.label ?? null}
+                restoreLabel={
+                  navField.isModified
+                    ? (navField.descriptor?.restoreLabel ?? null)
+                    : null
+                }
+                onRestore={navField.restore}
               />
-              {fromHoldingPriceHintMinor !== null ? (
-                <button
-                  type="button"
-                  className="w-fit text-xs text-muted-foreground underline-offset-2 hover:underline"
-                  onClick={() =>
-                    setFromUnitPrice(
-                      toDecimalString(fromHoldingPriceHintMinor, currencyCode)
-                    )
-                  }
-                >
-                  Use current:{" "}
-                  {formatCurrency(fromHoldingPriceHintMinor, currency)}
-                </button>
-              ) : null}
             </div>
           </div>
 
